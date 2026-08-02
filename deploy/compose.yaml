@@ -1,0 +1,62 @@
+name: zont-analyzer
+
+services:
+  worker:
+    image: zont-analyzer:${ZONT_ANALYZER_IMAGE_TAG:-manual}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    user: "10001:10001"
+    env_file:
+      - ${ZONT_ANALYZER_ENV_FILE:-/opt/zont-analyzer/.env}
+    environment:
+      ZONT_ANALYZER_CONFIG: /config/config.yaml
+      ZONT_ANALYZER_DATA_DIR: /data
+    volumes:
+      - type: bind
+        source: /opt/zont-analyzer/data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /opt/zont-analyzer/config.yaml
+        target: /config/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /opt/zont-analyzer/secrets/zontaccesstoken.json
+        target: /app/zontaccesstoken.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /opt/zont-analyzer/secrets/openai_access_token.txt
+        target: /app/.access/.openai_access_token.txt
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 128
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "zont-analyzer", "--config", "/config/config.yaml", "--data-dir", "/data", "healthcheck"]
+      interval: 1m
+      timeout: 20s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

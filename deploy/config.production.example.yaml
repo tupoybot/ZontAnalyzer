@@ -1,0 +1,46 @@
+home:
+  timezone: Europe/Samara
+
+preferences:
+  objective: balanced
+  comfort_band_c: 0.5
+
+analysis:
+  daily_ai_when_normal: false
+  max_recommendations_per_report: 3
+  minimum_quality_score: 0.70
+
+storage:
+  backend: sqlite
+  path: zont-analyzer.sqlite3
+  backup_dir: backups
+  warn_disk_usage_pct: 25
+
+zont:
+  base_url: https://my.zont.online/api
+  sync_chunk_hours: 24
+
+openai:
+  # Enable only after the owner explicitly approves sending the compact fact packet
+  # to OpenAI. The test deployment can still publish an already-created AI report.
+  enabled: false
+  daily_model: gpt-5.6-luna
+  review_model: gpt-5.6-terra
+  reasoning_effort: low
+  prompt_version: analyst-v2
+  monthly_token_budget: 100000
+
+scheduler:
+  sync_every_minutes: 5
+  overlap_minutes: 15
+
+pilot:
+  reports_dir: /publish
+  worker_status_file: worker-status.json
+  max_catchup_days: 90
+
+notifications:
+  log:
+    enabled: true
+  telegram:
+    enabled: false

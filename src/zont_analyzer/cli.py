@@ -11,6 +11,7 @@ from typing import Annotated, Any
 
 import typer
 
+from zont_analyzer.application.pilot import PilotService, worker_health, worker_status_path
 from zont_analyzer.config import explain_config
 from zont_analyzer.doctor import run_doctor
 from zont_analyzer.logging import configure_logging
@@ -88,6 +89,22 @@ def doctor(ctx: typer.Context, live: Annotated[bool, typer.Option("--live")] = F
 @app.command()
 def status(ctx: typer.Context) -> None:
     _json(_runtime(ctx).db.status())
+
+
+@app.command()
+def healthcheck(
+    ctx: typer.Context,
+    max_age_seconds: Annotated[
+        int | None,
+        typer.Option("--max-age-seconds", min=1, help="Maximum acceptable worker status age"),
+    ] = None,
+) -> None:
+    runtime = _runtime(ctx)
+    maximum = max_age_seconds or max(runtime.config.scheduler.sync_every_minutes * 180, 300)
+    result = worker_health(worker_status_path(runtime), max_age_seconds=maximum)
+    _json(result)
+    if not result["ok"]:
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -295,6 +312,7 @@ def db_backup(ctx: typer.Context) -> None:
 @app.command()
 def run(ctx: typer.Context, once: Annotated[bool, typer.Option("--once")] = False) -> None:
     runtime = _runtime(ctx)
+    worker = PilotService(runtime)
     stopping = threading.Event()
 
     def stop(_signum: int, _frame: Any) -> None:
@@ -304,20 +322,14 @@ def run(ctx: typer.Context, once: Annotated[bool, typer.Option("--once")] = Fals
     signal.signal(signal.SIGINT, stop)
     while not stopping.is_set():
         try:
-            with runtime.zont_client() as client:
-                result = runtime.ingestion(client).sync()
-            logging.getLogger("zont_analyzer.worker").info("sync complete: %s", result)
-            analysis = runtime.analysis()
-            yesterday = analysis.local_today() - timedelta(days=1)
-            start, _end = analysis.local_day_window(yesterday)
-            report_id = analysis.report_id_for("daily", start)
-            if runtime.db.report(report_id) is None:
-                analysis.analyze_daily(yesterday)
-            for message in runtime.db.flush_log_outbox():
-                logging.getLogger("zont_analyzer.report").info(message)
+            result = worker.run_cycle()
+            logging.getLogger("zont_analyzer.worker").info("worker cycle complete: %s", result)
+            if once:
+                _json(result)
         except Exception as exc:
             logging.getLogger("zont_analyzer.worker").exception("worker iteration failed")
             if once:
+                typer.echo(f"Worker cycle failed: {type(exc).__name__}: {exc}", err=True)
                 raise typer.Exit(1) from exc
         if once:
             break

@@ -32,6 +32,20 @@ METRIC_LABELS = {
     "dhw_burner_duty_cycle_pct": "Доля работы горелки на ГВС",
     "dhw_short_cycle_share_pct": "Доля коротких циклов ГВС",
     "dhw_median_burner_cycle_minutes": "Медианная длительность цикла ГВС",
+    "dhw_episode_count": "Эпизоды догрева ГВС",
+    "dhw_priority_time_pct": "Доля наблюдаемого времени с приоритетом ГВС",
+    "dhw_concurrent_or_ambiguous_time_pct": "Время с неоднозначными одновременными флагами ГВС/отопления",
+    "dhw_target_evaluation_time_pct": "Доля времени с известной активной целью ГВС",
+    "dhw_time_below_target_pct": "Время температуры ГВС ниже активной цели",
+    "dhw_degree_hours_below_target": "Накопленный дефицит температуры ГВС",
+    "dhw_mean_recovery_minutes": "Среднее время восстановления температуры ГВС",
+    "dhw_mean_overshoot_c": "Средний перелёт температуры ГВС",
+    "dhw_confirmed_heating_pause_count": "Подтверждённые паузы отопления из-за приоритета ГВС",
+    "dhw_mean_confirmed_heating_pause_minutes": "Средняя длительность подтверждённой паузы отопления",
+    "dhw_mean_heating_return_delay_minutes": "Средняя задержка возврата отопления после ГВС",
+    "dhw_long_heating_return_count": "Долгие возвраты отопления при подтверждённом запросе",
+    "dhw_residual_heat_return_count": "Возвраты отопительной активности без пламени",
+    "dhw_long_hot_flow_tail_count": "Долгие горячие хвосты подачи после ГВС",
 }
 
 SPACE_HEATING_METRIC_LABELS = {
@@ -52,6 +66,9 @@ EVENT_LABELS = {
     "burner_cycle": "Цикл горелки",
     "automatic_summer_mode_entered": "Контур автоматически перешёл в летнее состояние",
     "automatic_summer_mode_exited": "Контур автоматически вышел из летнего состояния",
+    "dhw_reheat_episode": "Эпизод догрева ГВС",
+    "dhw_concurrent_or_ambiguous": "Неоднозначные одновременные флаги ГВС и отопления",
+    "dhw_long_heating_return": "Долгий возврат отопления после ГВС при подтверждённом запросе",
 }
 
 
@@ -63,6 +80,38 @@ def _metric_label(name: str, context: dict[str, Any] | None = None) -> str:
 
 def _event_label(kind: str) -> str:
     return EVENT_LABELS.get(kind, kind.replace("_", " "))
+
+
+def _event_details(item: Any) -> str:
+    if not isinstance(item, dict) or "facts" not in item:
+        return json.dumps(item, ensure_ascii=False, sort_keys=True)
+    facts = item.get("facts", {})
+    inference = item.get("inference", {})
+    observed: list[str] = []
+    if isinstance(facts, dict):
+        mappings = (
+            ("dhw_temperature_start_c", "ГВС в начале", "°C"),
+            ("dhw_target_c", "цель", "°C"),
+            ("recovery_minutes", "восстановление", "мин"),
+            ("heating_return_delay_minutes", "возврат отопления", "мин"),
+            ("hot_flow_tail_minutes", "горячий хвост подачи", "мин"),
+        )
+        for key, label, unit in mappings:
+            if facts.get(key) is not None:
+                observed.append(f"{label}: {facts[key]} {unit}")
+    inferred: list[str] = []
+    if isinstance(inference, dict):
+        if inference.get("heating_demand") is not None:
+            inferred.append(f"запрос отопления: {inference['heating_demand']}")
+        if inference.get("temperature_drop_pattern") is not None:
+            inferred.append(f"тип снижения температуры: {inference['temperature_drop_pattern']}")
+    hypothesis = item.get("hypothesis")
+    chunks = ["Наблюдалось: " + "; ".join(observed or ["см. канонический JSON"])]
+    if inferred:
+        chunks.append("Выведено из нескольких сигналов: " + "; ".join(inferred))
+    if hypothesis:
+        chunks.append("Гипотеза: " + str(hypothesis))
+    return " | ".join(chunks)
 
 
 def _local(value: datetime, timezone: str) -> str:
@@ -101,6 +150,24 @@ def render_text(report: Report) -> str:
         lines.append(
             f"Контроль отопительной уставки был активен {active_time_pct:g}% периода."
         )
+    dhw_interaction = report.context.get("dhw_interaction")
+    if isinstance(dhw_interaction, dict):
+        dhw_circuit = dhw_interaction.get("dhw_circuit", {})
+        dhw_quality = dhw_interaction.get("data_quality", {})
+        mode = dhw_circuit.get("current_mode") if isinstance(dhw_circuit, dict) else None
+        mode_name = mode.get("name") if isinstance(mode, dict) else None
+        target = dhw_circuit.get("current_target_c") if isinstance(dhw_circuit, dict) else None
+        score = dhw_quality.get("score") if isinstance(dhw_quality, dict) else None
+        lines.append(
+            "ГВС: "
+            + (f"режим {mode_name}; " if mode_name else "режим неизвестен; ")
+            + (f"активная цель {target:g} °C; " if isinstance(target, (int, float)) else "активная цель неизвестна; ")
+            + (f"качество данных {float(score):.0%}." if isinstance(score, (int, float)) else "качество неизвестно.")
+        )
+        lines.append(
+            "Доказательность эпизодов ГВС: отдельно показаны наблюдавшиеся факты, "
+            "выводы из нескольких сигналов и недоказанные гидравлические гипотезы."
+        )
     if report.context.get("mode_change_count") or report.context.get("target_change_count"):
         lines.append(
             f"Изменения контекста: режим — {report.context.get('mode_change_count', 0)}, "
@@ -118,7 +185,7 @@ def render_text(report: Report) -> str:
         lines.append(f"События (показано до 20 из {len(report.events)}):")
         lines.extend(
             f"- [{event.severity}] {_local(event.started_at, report.timezone)} — {_event_label(event.kind)}: "
-            f"{json.dumps(event.details, ensure_ascii=False, sort_keys=True)}"
+            f"{_event_details(event.details)}"
             for event in report.events[:20]
         )
     if report.recommendations:
@@ -172,6 +239,28 @@ def render_html(report: Report) -> str:
             f"Контроль отопительной уставки активен "
             f"{100 - float(heating_circuit.get('inactive_time_pct', 0)):g}% периода.</p>"
         )
+    dhw_interaction = report.context.get("dhw_interaction")
+    dhw_context = ""
+    if isinstance(dhw_interaction, dict):
+        dhw_circuit = dhw_interaction.get("dhw_circuit", {})
+        dhw_quality = dhw_interaction.get("data_quality", {})
+        current_mode = dhw_circuit.get("current_mode") if isinstance(dhw_circuit, dict) else None
+        current_mode_name = current_mode.get("name") if isinstance(current_mode, dict) else None
+        current_target = dhw_circuit.get("current_target_c") if isinstance(dhw_circuit, dict) else None
+        quality_score = dhw_quality.get("score") if isinstance(dhw_quality, dict) else None
+        target_text = f"{current_target:g} °C" if isinstance(current_target, (int, float)) else "неизвестна"
+        quality_text = f"{float(quality_score):.0%}" if isinstance(quality_score, (int, float)) else "неизвестно"
+        dhw_context = (
+            "<section class=\"dhw\"><h2>ГВС ↔ отопление</h2><p>"
+            f"<strong>Режим ГВС:</strong> {html.escape(str(current_mode_name or 'неизвестен'))}; "
+            f"<strong>активная цель:</strong> "
+            f"{html.escape(target_text)}; "
+            f"<strong>качество данных ГВС:</strong> "
+            f"{html.escape(quality_text)}.</p>"
+            "<p><small>Наблюдавшиеся факты отделены от выводов из нескольких сигналов и гипотез. "
+            "Без прямых сигналов клапана, насоса и расхода гидравлическая причина не считается доказанной.</small></p>"
+            "</section>"
+        )
     metrics = "".join(
         f"<tr><td>{html.escape(_metric_label(metric.name, metric.context))}</td><td>{metric.value:g}</td>"
         f"<td>{html.escape(metric.unit)}</td></tr>"
@@ -180,7 +269,7 @@ def render_html(report: Report) -> str:
     events = "".join(
         f"<tr><td>{html.escape(_local(item.started_at, report.timezone))}</td>"
         f"<td>{html.escape(item.severity)}</td><td>{html.escape(_event_label(item.kind))}</td>"
-        f"<td><code>{html.escape(json.dumps(item.details, ensure_ascii=False, sort_keys=True))}</code></td></tr>"
+        f"<td>{html.escape(_event_details(item.details))}</td></tr>"
         for item in report.events[:50]
     )
 
@@ -211,12 +300,14 @@ h1{{font-size:1.6rem}}table{{border-collapse:collapse;width:100%}}
 td,th{{padding:.55rem;border-bottom:1px solid #ddd;text-align:left}}
 .quality{{padding:.8rem;background:#eef6ff;border-radius:.5rem}}
 article{{border-left:4px solid #568;padding:0 1rem;margin:1rem 0}}
+.dhw{{padding:.8rem 1rem;background:#fff8e8;border-radius:.5rem}}
 </style></head><body><h1>{title}</h1>
 <p><strong>ID:</strong> <code>{html.escape(report.id)}</code></p>
 <p><strong>Период:</strong> {period}</p>
 <p><strong>AI-интерпретация:</strong> {'да' if report.ai_used else 'нет'}</p>
 {mode_context}
 {summer_context}
+{dhw_context}
 <p class="quality">Качество данных: {report.quality.score:.0%}; покрытие {report.quality.coverage_pct:.1f}%</p>
 <p>{html.escape(report.summary)}</p><h2>Метрики</h2><table><tr><th>Метрика</th><th>Значение</th><th>Единица</th></tr>{metrics}</table>
 <h2>События</h2><p>Показано до 50 из {len(report.events)}.</p>

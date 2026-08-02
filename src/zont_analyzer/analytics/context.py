@@ -113,9 +113,12 @@ def build_heating_circuit_config(
     if circuit is None:
         return {}
     threshold = circuit.get("summer_threshold")
+    hysteresis = circuit.get("hysteresis")
     return {
         "id": int(circuit["id"]),
         "name": str(circuit.get("name") or circuit_id),
+        "circuit_type": int(circuit["type"]) if circuit.get("type") is not None else None,
+        "hysteresis_c": float(hysteresis) if hysteresis is not None else None,
         "automatic_summer_mode_enabled": bool(circuit.get("winter_summer_switch")),
         "summer_threshold_c": float(threshold) if threshold is not None else None,
     }
@@ -182,7 +185,7 @@ def detect_heating_availability(
                 kind = "automatic_summer_mode_entered" if active else "automatic_summer_mode_exited"
                 events.append(
                     DetectedEvent(
-                        id=f"event:{period_id}:{kind}:{int(timestamp.timestamp())}:events-v1",
+                        id=f"event:{period_id}:{kind}:{int(timestamp.timestamp())}:events-v2",
                         kind=kind,
                         started_at=timestamp,
                         ended_at=timestamp,
@@ -282,7 +285,7 @@ def detect_control_context(
             source = "scheduled" if _near_mode_selection_schedule(timestamp, after, timezone) else "likely_manual"
             events.append(
                 DetectedEvent(
-                    id=f"event:{period_id}:heating_mode_change:{int(timestamp.timestamp())}:events-v1",
+                    id=f"event:{period_id}:heating_mode_change:{int(timestamp.timestamp())}:events-v2",
                     kind="heating_mode_change",
                     started_at=timestamp,
                     ended_at=timestamp,
@@ -319,7 +322,7 @@ def detect_control_context(
             )
             events.append(
                 DetectedEvent(
-                    id=f"event:{period_id}:target_temperature_change:{int(timestamp.timestamp())}:events-v1",
+                    id=f"event:{period_id}:target_temperature_change:{int(timestamp.timestamp())}:events-v2",
                     kind="target_temperature_change",
                     started_at=timestamp,
                     ended_at=timestamp,

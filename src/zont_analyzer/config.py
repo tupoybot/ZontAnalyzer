@@ -93,13 +93,27 @@ class OpenAIConfig(StrictModel):
     daily_model: str = "gpt-5.6-luna"
     review_model: str = "gpt-5.6-terra"
     reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "low"
-    prompt_version: str = "analyst-v1"
+    prompt_version: str = "analyst-v2"
     monthly_token_budget: int = Field(default=100_000, ge=0)
 
 
 class SchedulerConfig(StrictModel):
     sync_every_minutes: int = Field(default=5, ge=1, le=1440)
     overlap_minutes: int = Field(default=15, ge=1, le=1440)
+
+
+class PilotConfig(StrictModel):
+    reports_dir: str = Field(default="reports", min_length=1)
+    worker_status_file: str = Field(default="worker-status.json", min_length=1)
+    max_catchup_days: int = Field(default=90, ge=1, le=3660)
+
+    @field_validator("reports_dir", "worker_status_file")
+    @classmethod
+    def valid_path_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value or "\x00" in value:
+            raise ValueError("path must be a non-empty filesystem path")
+        return value
 
 
 class AppConfig(StrictModel):
@@ -112,6 +126,7 @@ class AppConfig(StrictModel):
     zont: ZontConfig = Field(default_factory=ZontConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
+    pilot: PilotConfig = Field(default_factory=PilotConfig)
     entity_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 

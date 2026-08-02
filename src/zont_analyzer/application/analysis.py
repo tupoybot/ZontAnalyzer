@@ -3,13 +3,16 @@ from __future__ import annotations
 import ast
 import calendar
 import logging
+from collections.abc import Collection
 from datetime import UTC, date, datetime, time, timedelta
 from statistics import median
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.adapters.openai.provider import Analyst, analysis_packet
 from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.analytics import (
+    analyze_dhw_interactions,
     assess_quality,
     build_heating_circuit_config,
     build_mode_catalog,
@@ -41,7 +44,7 @@ class AnalysisService:
 
     @staticmethod
     def report_id_for(kind: str, start: datetime) -> str:
-        return f"report:{kind}:{int(start.timestamp())}:report-v1"
+        return f"report:{kind}:{int(start.timestamp())}:report-v2"
 
     def analyze_daily(self, selected: date, *, use_ai: bool = True, kind: str = "daily") -> Report:
         start, end = self.local_day_window(selected)
@@ -86,6 +89,7 @@ class AnalysisService:
 
     def _analyze(self, start: datetime, end: datetime, *, kind: str, use_ai: bool) -> Report:
         period_id = f"{kind}:{int(start.timestamp())}"
+        context_start = start - timedelta(days=7)
         series = self.db.list_series()
         temperature_series = next(
             (item for item in series if item["role"] == "indoor_temperature"),
@@ -115,6 +119,60 @@ class AnalysisService:
             None,
         )
         outdoor_series = next((item for item in series if item["role"] == "outdoor_temperature"), None)
+        dhw_temperature_series = next((item for item in series if item["role"] == "dhw_temperature"), None)
+        dhw_device_id = str(dhw_temperature_series["device_id"]) if dhw_temperature_series else ""
+
+        def is_dhw_circuit(item: dict[str, Any]) -> bool:
+            if item["source_type"] != "z3k_heating_circuit" or str(item["device_id"]) != dhw_device_id:
+                return False
+            label = f"{item.get('display_name', '')} {item.get('role', '')}".casefold()
+            return any(term in label for term in ("гвс", "dhw", "hot water", "бойлер", "boiler tank"))
+
+        dhw_target_series = next(
+            (
+                item
+                for item in series
+                if item["metric_key"] == "target_temp"
+                and (item["role"] == "dhw_target_temperature" or is_dhw_circuit(item))
+            ),
+            None,
+        )
+        dhw_circuit_entity = str(dhw_target_series["entity_id"]) if dhw_target_series else ""
+
+        def circuit_series(metric_key: str) -> dict[str, Any] | None:
+            return next(
+                (
+                    item
+                    for item in series
+                    if dhw_circuit_entity
+                    and item["entity_id"] == dhw_circuit_entity
+                    and item["metric_key"] == metric_key
+                ),
+                None,
+            )
+
+        dhw_mode_series = circuit_series("mode_id")
+        dhw_status_series = circuit_series("status")
+        dhw_worktime_series = circuit_series("worktime")
+        heating_worktime_series = next(
+            (
+                item
+                for item in series
+                if target_series is not None
+                and item["entity_id"] == target_series["entity_id"]
+                and item["metric_key"] == "worktime"
+            ),
+            None,
+        )
+        flow_temperature_series = next(
+            (
+                item
+                for item in series
+                if item["role"] == "flow_temperature"
+                and (not dhw_device_id or str(item["device_id"]) == dhw_device_id)
+            ),
+            None,
+        )
         temperature_samples = (
             self.db.fetch_samples(int(temperature_series["id"]), start, end) if temperature_series else []
         )
@@ -147,6 +205,17 @@ class AnalysisService:
             device_id=device_id,
             circuit_id=circuit_id,
         )
+        dhw_circuit_id = dhw_circuit_entity.rsplit(":", 1)[-1] if dhw_circuit_entity else ""
+        dhw_mode_catalog = build_mode_catalog(
+            devices,
+            device_id=dhw_device_id,
+            circuit_id=dhw_circuit_id,
+        )
+        dhw_circuit_config = build_heating_circuit_config(
+            devices,
+            device_id=dhw_device_id,
+            circuit_id=dhw_circuit_id,
+        )
         control_events, control_context, transition_windows = detect_control_context(
             mode_samples=mode_samples,
             target_samples=target_samples,
@@ -164,7 +233,6 @@ class AnalysisService:
             ),
             None,
         )
-        context_start = start - timedelta(days=7)
         availability_modes = (
             self.db.fetch_samples(int(mode_series["id"]), context_start, end) if mode_series else mode_samples
         )
@@ -186,6 +254,46 @@ class AnalysisService:
         )
         control_context["heating_circuit"] = availability_context
         control_context["burner_activity_scope"] = burner_activity_scope
+        dhw_temperature_samples = (
+            self.db.fetch_samples(int(dhw_temperature_series["id"]), start, end)
+            if dhw_temperature_series
+            else []
+        )
+        dhw_target_samples = (
+            self.db.fetch_samples(int(dhw_target_series["id"]), context_start, end) if dhw_target_series else []
+        )
+        dhw_mode_samples = (
+            self.db.fetch_samples(int(dhw_mode_series["id"]), context_start, end) if dhw_mode_series else []
+        )
+        dhw_status_samples = (
+            self.db.fetch_samples(int(dhw_status_series["id"]), context_start, end) if dhw_status_series else []
+        )
+        dhw_worktime_samples = (
+            self.db.fetch_samples(int(dhw_worktime_series["id"]), context_start, end) if dhw_worktime_series else []
+        )
+        heating_worktime_samples = (
+            self.db.fetch_samples(int(heating_worktime_series["id"]), context_start, end)
+            if heating_worktime_series
+            else []
+        )
+        heating_target_context_samples = (
+            self.db.fetch_samples(int(target_series["id"]), context_start, end) if target_series else []
+        )
+        flow_temperature_samples = (
+            self.db.fetch_samples(int(flow_temperature_series["id"]), start, end)
+            if flow_temperature_series
+            else []
+        )
+        interaction_state_samples: list[tuple[datetime, str | Collection[str]]] = list(
+            self.db.fetch_text_samples(int(boiler_state_series["id"]), context_start, end)
+            if boiler_state_series
+            else []
+        )
+        availability_by_time: dict[datetime, float | bool] = {start: True}
+        for inactive_start, inactive_end in inactive_windows:
+            availability_by_time[inactive_start] = False
+            availability_by_time[inactive_end] = True
+        heating_available_samples = sorted(availability_by_time.items())
         target_c = self.config.preferences.target_temperature_c
         if target_c is None and target_series and target_samples:
             target_c = median(value for _timestamp, value in target_samples)
@@ -249,12 +357,47 @@ class AnalysisService:
                     context_windows=transition_windows,
                 )
             )
+        if dhw_temperature_series and boiler_state_series:
+            dhw_quality = assess_quality(dhw_temperature_samples, start, end)
+            dhw_analysis = analyze_dhw_interactions(
+                period_id=period_id,
+                period_start=start,
+                period_end=end,
+                boiler_state_samples=interaction_state_samples,
+                dhw_temperature_samples=dhw_temperature_samples,
+                dhw_target_samples=dhw_target_samples,
+                dhw_mode_samples=dhw_mode_samples,
+                dhw_status_samples=dhw_status_samples,
+                dhw_worktime_samples=dhw_worktime_samples,
+                dhw_mode_catalog=dhw_mode_catalog,
+                dhw_circuit_config=dhw_circuit_config,
+                heating_mode_samples=availability_modes,
+                heating_status_samples=status_samples,
+                heating_worktime_samples=heating_worktime_samples,
+                heating_mode_catalog=mode_catalog,
+                heating_available_samples=heating_available_samples,
+                indoor_temperature_samples=temperature_samples,
+                heating_target_samples=heating_target_context_samples,
+                flow_temperature_samples=flow_temperature_samples,
+                quality_score=dhw_quality.score,
+                minimum_quality_score=self.config.analysis.minimum_quality_score,
+                comfort_band_c=self.config.preferences.comfort_band_c,
+            )
+            metrics.extend(dhw_analysis.metrics)
+            events.extend(dhw_analysis.events)
+            control_context["dhw_interaction"] = {
+                **dhw_analysis.context,
+                "data_quality": dhw_quality.model_dump(mode="json"),
+            }
         temperature_interpretation = self._annotate_temperature_attribution(metrics, events)
         if temperature_interpretation:
             control_context["temperature_above_setpoint_interpretation"] = temperature_interpretation
         events.sort(key=lambda item: item.started_at)
         recommendations = self._local_recommendations(quality, metrics, events)
         summary = self._local_summary(quality, metrics, events)
+        dhw_summary = self._local_dhw_summary(metrics, control_context)
+        if dhw_summary:
+            summary = f"{summary} {dhw_summary}"
         if temperature_interpretation:
             duty = temperature_interpretation["burner_duty_cycle_pct"]
             summary = (
@@ -329,7 +472,12 @@ class AnalysisService:
             except (SyntaxError, ValueError):
                 continue
             if isinstance(flags, list):
-                result.append((timestamp, float(purpose in flags and "fl" in flags)))
+                selected = purpose in flags and "fl" in flags
+                if purpose == "ch":
+                    selected = selected and "dhw" not in flags
+                elif purpose == "dhw":
+                    selected = selected and "ch" not in flags
+                result.append((timestamp, float(selected)))
         return result
 
     @staticmethod
@@ -368,6 +516,37 @@ class AnalysisService:
         if metrics:
             return "Данные достаточного качества; значимых локальных аномалий не обнаружено."
         return "Нет подходящих температурных рядов для расчёта метрик."
+
+    @staticmethod
+    def _local_dhw_summary(metrics: list[MetricValue], context: dict[str, Any]) -> str:
+        dhw_context = context.get("dhw_interaction")
+        if not isinstance(dhw_context, dict):
+            return ""
+        metric_values = {item.name: item.value for item in metrics}
+        episodes = int(metric_values.get("dhw_episode_count", 0))
+        quality = dhw_context.get("data_quality", {})
+        quality_score = float(quality.get("score", 0)) if isinstance(quality, dict) else 0.0
+        episode_word = (
+            "эпизод"
+            if episodes % 10 == 1 and episodes % 100 != 11
+            else "эпизода"
+            if episodes % 10 in {2, 3, 4} and episodes % 100 not in {12, 13, 14}
+            else "эпизодов"
+        )
+        if not dhw_context.get("quality_sufficient_for_alerts", False):
+            return (
+                f"По ГВС найдено {episodes} {episode_word}, но отдельное качество данных ГВС "
+                f"({quality_score:.0%}) недостаточно для предупреждений."
+            )
+        parts = [f"По ГВС найдено {episodes} {episode_word} догрева"]
+        if "dhw_mean_recovery_minutes" in metric_values:
+            parts.append(f"среднее восстановление {metric_values['dhw_mean_recovery_minutes']:g} мин")
+        long_returns = int(metric_values.get("dhw_long_heating_return_count", 0))
+        if long_returns:
+            parts.append(f"подтверждённых долгих возвратов отопления: {long_returns}")
+        else:
+            parts.append("подтверждённых долгих возвратов отопления не найдено")
+        return "; ".join(parts) + "."
 
     def _local_recommendations(
         self, quality: QualityResult, metrics: list[MetricValue], events: list[DetectedEvent]

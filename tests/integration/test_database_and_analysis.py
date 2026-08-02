@@ -152,6 +152,99 @@ def test_online_backup_passes_integrity_check(tmp_path: Path) -> None:
     assert restored.integrity_check() == "ok"
 
 
+def test_analysis_integrates_dhw_episode_and_heating_return(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    start = datetime(2026, 7, 31, 20, tzinfo=UTC)
+
+    def numeric_points(
+        entity: str,
+        metric: str,
+        values: list[float],
+        *,
+        source_type: str,
+        unit: str | None = None,
+    ) -> list[TelemetryPoint]:
+        return [
+            TelemetryPoint(
+                device_id="1",
+                source_type=source_type,
+                entity_id=entity,
+                metric_key=metric,
+                timestamp_utc=start + timedelta(minutes=5 * index),
+                value_num=value,
+                unit=unit,
+            )
+            for index, value in enumerate(values)
+        ]
+
+    room = [21.0] * 288
+    dhw_temperature = [55.0 + (0.1 if index % 2 else 0.0) for index in range(288)]
+    for index, value in enumerate((48.0, 50.0, 53.0, 55.0), start=100):
+        dhw_temperature[index] = value
+    states = ["['ch', 'fl']"] * 288
+    for index in range(100, 104):
+        states[index] = "['dhw', 'fl']"
+    text_points = [
+        TelemetryPoint(
+            device_id="1",
+            source_type="z3k_boiler_adapter",
+            entity_id="boiler",
+            metric_key="s",
+            timestamp_utc=start + timedelta(minutes=5 * index),
+            value_text=value,
+        )
+        for index, value in enumerate(states)
+    ]
+    batches = [
+        (numeric_points("room", "temperature", room, source_type="synthetic", unit="°C"), "indoor_temperature"),
+        (
+            numeric_points("heating", "target_temp", [22.0] * 288, source_type="z3k_heating_circuit", unit="°C"),
+            "target_temperature",
+        ),
+        (
+            numeric_points("heating", "worktime", [1.0] * 288, source_type="z3k_heating_circuit"),
+            "heating_activity",
+        ),
+        (
+            numeric_points("dhw", "target_temp", [55.0] * 288, source_type="z3k_heating_circuit", unit="°C"),
+            "dhw_target_temperature",
+        ),
+        (
+            numeric_points("dhw", "worktime", [1.0] * 288, source_type="z3k_heating_circuit"),
+            "dhw_activity",
+        ),
+        (
+            numeric_points(
+                "boiler", "dt", dhw_temperature, source_type="z3k_boiler_adapter", unit="°C"
+            ),
+            "dhw_temperature",
+        ),
+        (
+            numeric_points("boiler", "bt", [50.0] * 288, source_type="z3k_boiler_adapter", unit="°C"),
+            "flow_temperature",
+        ),
+        (text_points, "unknown"),
+    ]
+    for points, role in batches:
+        db.upsert_samples(points)
+        row = next(
+            item
+            for item in db.list_series()
+            if item["entity_id"] == points[0].entity_id and item["metric_key"] == points[0].metric_key
+        )
+        db.update_series_role(int(row["id"]), role)
+
+    report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
+
+    assert report.context["dhw_interaction"]["data_quality"]["score"] >= 0.7
+    assert next(item.value for item in report.metrics if item.name == "dhw_episode_count") == 1
+    episode = next(item for item in report.events if item.kind == "dhw_reheat_episode")
+    assert episode.details["inference"]["heating_demand"] == "confirmed"
+    assert "По ГВС найдено 1 эпизод" in report.summary
+    assert "ГВС ↔ отопление" in render_html(report)
+
+
 def test_partial_sync_does_not_advance_cursor(tmp_path: Path) -> None:
     class PartialClient:
         def discover_devices(self):

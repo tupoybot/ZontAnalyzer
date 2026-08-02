@@ -669,7 +669,7 @@ class Database:
                 payload=rendered_text,
                 status="pending",
                 attempts=0,
-                idempotency_key=f"report:{report.id}:log:v1",
+                idempotency_key=f"report:{report.id}:log:v2",
             )
             session.execute(statement.on_conflict_do_nothing(index_elements=["idempotency_key"]))
 

@@ -1,0 +1,10 @@
+# Temporary publication policy for tupoybot.ru/za. Keep this host-specific path
+# out of application code and the reusable base Compose file.
+services:
+  worker:
+    volumes:
+      - type: bind
+        source: /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za
+        target: /publish
+        bind:
+          create_host_path: false

@@ -7,7 +7,7 @@ from zont_analyzer.domain import MetricValue
 
 
 def _metric_id(period_id: str, name: str) -> str:
-    return f"metric:{period_id}:{name}:metrics-v1"
+    return f"metric:{period_id}:{name}:metrics-v2"
 
 
 def _segments(samples: list[tuple[datetime, float]]) -> list[tuple[datetime, datetime, float]]:

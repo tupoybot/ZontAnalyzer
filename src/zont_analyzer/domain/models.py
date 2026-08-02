@@ -37,7 +37,7 @@ class MetricValue(DomainModel):
     name: str
     value: float
     unit: str
-    algorithm_version: str = "metrics-v1"
+    algorithm_version: str = "metrics-v2"
     context: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -48,7 +48,7 @@ class DetectedEvent(DomainModel):
     ended_at: datetime | None = None
     severity: Literal["info", "warning", "critical"] = "info"
     details: dict[str, Any] = Field(default_factory=dict)
-    algorithm_version: str = "events-v1"
+    algorithm_version: str = "events-v2"
 
 
 RecommendationCategory = Literal[
@@ -114,4 +114,4 @@ class Report(DomainModel):
     recommendations: list[Recommendation] = Field(default_factory=list)
     summary: str
     ai_used: bool = False
-    algorithm_version: str = "report-v1"
+    algorithm_version: str = "report-v2"

@@ -63,7 +63,7 @@ def detect_temperature_events(
             if active_kind and active_start:
                 events.append(
                     DetectedEvent(
-                        id=f"event:{period_id}:{active_kind}:{int(active_start.timestamp())}:events-v1",
+                        id=f"event:{period_id}:{active_kind}:{int(active_start.timestamp())}:events-v2",
                         kind=active_kind,
                         started_at=active_start,
                         ended_at=timestamp,
@@ -80,7 +80,7 @@ def detect_temperature_events(
     if active_kind and active_start and ordered:
         events.append(
             DetectedEvent(
-                id=f"event:{period_id}:{active_kind}:{int(active_start.timestamp())}:events-v1",
+                id=f"event:{period_id}:{active_kind}:{int(active_start.timestamp())}:events-v2",
                 kind=active_kind,
                 started_at=active_start,
                 ended_at=ordered[-1][0],
@@ -127,7 +127,7 @@ def detect_burner_events(
             )
             events.append(
                 DetectedEvent(
-                    id=f"event:{period_id}:{kind}:{int(active_start.timestamp())}:events-v1",
+                    id=f"event:{period_id}:{kind}:{int(active_start.timestamp())}:events-v2",
                     kind=kind,
                     started_at=active_start,
                     ended_at=timestamp,

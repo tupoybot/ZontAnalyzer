@@ -145,6 +145,17 @@ def infer_role(source_type: str, entity_id: str, metric_key: str, display_name: 
         if metric_key in boiler_roles:
             return boiler_roles[metric_key], 0.95
     if source_type == "z3k_heating_circuit":
+        is_dhw = any(term in text for term in ("гвс", "dhw", "hot water", "бойлер", "boiler tank"))
+        if is_dhw:
+            dhw_roles = {
+                "target_temp": "dhw_target_temperature",
+                "setpoint_temp": "dhw_setpoint_temperature",
+                "worktime": "dhw_activity",
+                "status": "dhw_status",
+                "mode_id": "dhw_operating_mode",
+            }
+            if metric_key in dhw_roles:
+                return dhw_roles[metric_key], 0.95
         if metric_key == "target_temp" and any(term in text for term in ("отоп", "room", "комнат")):
             return "target_temperature", 0.9
         if metric_key == "worktime" and any(term in text for term in ("отоп", "котел", "boiler")):

@@ -24,6 +24,7 @@ openai:
   daily_model: gpt-5.6-luna
   review_model: gpt-5.6-terra
   reasoning_effort: low
+  prompt_version: analyst-v2
   monthly_token_budget: 100000
 
 notifications:
@@ -36,5 +37,12 @@ storage:
   backend: sqlite
   path: zont-analyzer.sqlite3
   backup_dir: backups
+
+# Relative paths stay inside ZONT_ANALYZER_DATA_DIR. Absolute paths are supported
+# for a bind-mounted publish directory; deployment-specific web paths do not belong here.
+pilot:
+  reports_dir: reports
+  worker_status_file: worker-status.json
+  max_catchup_days: 90
 
 entity_overrides: {}

@@ -23,6 +23,13 @@ Write the summary and all recommendation text in Russian.
 Use control_context and heating_mode_change/target_temperature_change events when
 interpreting temperature episodes. Do not call an expected response inside a
 transition window an anomaly. Treat source=likely_manual as a hypothesis, not proof.
+Use the dhw_interaction context and DHW episode evidence when discussing hot-water
+quality or a pause in space heating. Concurrent OpenTherm flags are ambiguous, not
+two proven burner cycles. A long return after DHW is a problem only when the local
+classifier confirms space-heating demand; summer/off/unknown demand must not become
+a heating alarm. Preserve the supplied epistemic level: observed facts, multi-signal
+inferences, and hypotheses must be described differently. Never infer water draw,
+three-way-valve position, pump operation, or hydraulic flow without a direct signal.
 """
 
 
