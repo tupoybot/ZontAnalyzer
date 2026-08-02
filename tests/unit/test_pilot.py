@@ -128,11 +128,13 @@ def test_pilot_catches_up_recomputes_yesterday_and_publishes_atomically(tmp_path
     ]
     publish_dir = tmp_path / "published"
     assert (publish_dir / "latest.html").is_file()
+    assert (publish_dir / "latest.html").stat().st_mode & 0o777 == 0o644
     for selected in ("2026-08-01", "2026-08-02", "2026-08-03"):
         assert (publish_dir / "daily" / f"{selected}.html").is_file()
         assert (publish_dir / "daily" / f"{selected}.json").is_file()
     assert not list(tmp_path.rglob("*.tmp"))
     status = read_worker_status(tmp_path / "state" / "worker.json")
+    assert (tmp_path / "state" / "worker.json").stat().st_mode & 0o777 == 0o600
     assert status["state"] == "ok"
     assert status["latest_report_id"] == existing_yesterday.id
 

@@ -58,7 +58,7 @@ def worker_status_path(runtime: Runtime) -> Path:
     return path
 
 
-def atomic_write_text(path: Path, content: str) -> None:
+def atomic_write_text(path: Path, content: str, *, mode: int = 0o600) -> None:
     """Durably replace a public artifact without exposing a partially written file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and path.is_dir():
@@ -67,6 +67,7 @@ def atomic_write_text(path: Path, content: str) -> None:
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+            os.fchmod(stream.fileno(), mode)
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
@@ -165,8 +166,8 @@ class PilotService:
 
     def _publish_archive(self, report_date: date, report: Report) -> tuple[Path, Path]:
         html_path, json_path = self._archive_paths(report_date)
-        atomic_write_text(html_path, render_html(report))
-        atomic_write_text(json_path, report.model_dump_json(indent=2) + "\n")
+        atomic_write_text(html_path, render_html(report), mode=0o644)
+        atomic_write_text(json_path, report.model_dump_json(indent=2) + "\n", mode=0o644)
         return html_path, json_path
 
     def run_cycle(self) -> dict[str, Any]:
@@ -241,7 +242,7 @@ class PilotService:
                 latest_report_id=latest_report.id,
                 sync=sync_result,
             )
-            atomic_write_text(latest_path, render_html(latest_report))
+            atomic_write_text(latest_path, render_html(latest_report), mode=0o644)
             delivered = self.runtime.db.flush_log_outbox()
             for message in delivered:
                 logger.info(message)
