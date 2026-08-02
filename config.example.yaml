@@ -1,0 +1,40 @@
+# Every value is optional. Secrets must be provided through environment variables
+# or private token files (mode 0600), never in this file. Local OpenAI fallback:
+# .access/.openai_access_token.txt
+home:
+  timezone: Europe/Samara
+
+preferences:
+  objective: neutral
+  comfort_band_c: 0.5
+  # target_temperature_c: 22.0
+  quiet_hours:
+    from: "23:00"
+    to: "08:00"
+
+analysis:
+  daily_ai_when_normal: false
+  max_recommendations_per_report: 3
+  default_experiment_days: 7
+  minimum_quality_score: 0.70
+  short_cycle_minutes: 5
+
+openai:
+  enabled: false
+  daily_model: gpt-5.6-luna
+  review_model: gpt-5.6-terra
+  reasoning_effort: low
+  monthly_token_budget: 100000
+
+notifications:
+  log:
+    enabled: true
+  telegram:
+    enabled: false
+
+storage:
+  backend: sqlite
+  path: zont-analyzer.sqlite3
+  backup_dir: backups
+
+entity_overrides: {}

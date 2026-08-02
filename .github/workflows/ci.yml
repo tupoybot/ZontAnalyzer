@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e '.[dev]'
+      - run: ruff check .
+      - run: mypy src/zont_analyzer
+      - run: pytest --cov=zont_analyzer --cov-report=term-missing
+      - run: python -m build --wheel
+      - run: pip install --force-reinstall --no-deps dist/*.whl
+      - run: python -c "from zont_analyzer.cli import app; from zont_analyzer.reports import render_html"
+      - run: zont-analyzer --data-dir "$(mktemp -d)" init
+      - run: docker build -t zont-analyzer:test .

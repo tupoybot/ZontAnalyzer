@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from zont_analyzer.config import load_config
+
+
+def test_config_is_optional_and_secrets_are_not_in_dump(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ZONT_TOKEN", "very-secret")
+    monkeypatch.setenv("ZONT_CLIENT_EMAIL", "owner@example.test")
+    loaded = load_config(data_dir=tmp_path / "data")
+    assert loaded.config.home.timezone == "Europe/Samara"
+    assert loaded.secrets.zont_token is not None
+    assert "very-secret" not in loaded.config.model_dump_json()
+
+
+def test_unknown_yaml_fields_are_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "config.yaml"
+    config.write_text("unknown_section:\n  enabled: true\n", encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load_config(config, tmp_path / "data")
+
+
+def test_token_file_must_be_private(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    token = tmp_path / "zontaccesstoken.json"
+    token.write_text(json.dumps({"token": "secret", "email": "a@example.test"}), encoding="utf-8")
+    token.chmod(0o644)
+    with pytest.raises(ValueError, match="0600"):
+        load_config(data_dir=tmp_path / "data")
+    token.chmod(0o600)
+    assert load_config(data_dir=tmp_path / "data").secrets.zont_token is not None
+
+
+def test_openai_key_can_come_from_private_access_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    access = tmp_path / ".access"
+    access.mkdir()
+    key = access / ".openai_access_token.txt"
+    key.write_text("test-openai-key\n", encoding="utf-8")
+    key.chmod(0o600)
+
+    loaded = load_config(data_dir=tmp_path / "data")
+
+    assert loaded.secrets.openai_api_key is not None
+    assert loaded.secrets.openai_api_key.get_secret_value() == "test-openai-key"
+    assert loaded.openai_key_path == key
