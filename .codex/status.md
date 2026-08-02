@@ -15,6 +15,19 @@ P0 и вертикальный срез P1 реализованы. Инжене�
 догоняет пропущенные дни, обновляет `latest.html`, пишет heartbeat и не повторяет AI-вызов при
 каждом poll. Формально P2 остаётся незавершённым до 2–4 недель наблюдения и обратной связи.
 
+## P2 deployment checkpoint
+
+- Ручной test deployment запущен на `217.60.10.224` отдельным Compose project без публичных
+  портов; worker image — `zont-analyzer:p2-20260803-1`.
+- Persistent SQLite: `/opt/zont-analyzer/data/zont-analyzer.sqlite3`; первый catch-up создал
+  90 daily HTML и довёл БД до 96 отчётов. После явного restart inode SQLite сохранился.
+- Публичный test-канал: `https://tupoybot.ru/za/`, новый P1 daily — `latest.html`, ранее
+  созданный AI-отчёт — `ai-latest.html`. Все три URL возвращают HTTP 200.
+- Worker heartbeat `ok`, online backup создан в `/opt/zont-analyzer/data/backups`; root сайта и
+  Nightscout status также возвращают HTTP 200, существующие контейнеры остались healthy.
+- Новые OpenAI-вызовы в deployment выключены: перед отправкой компактного пакета домашней
+  телеметрии требуется отдельное явное подтверждение владельца.
+
 ## Проверенный факт
 
 - Локальная БД: 40,624,128 байт, integrity `ok`, revision `dd4272b6d030`.
