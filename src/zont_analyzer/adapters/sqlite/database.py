@@ -17,6 +17,7 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -35,7 +36,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-from zont_analyzer.domain import Report, TelemetryPoint
+from zont_analyzer.domain import Report, SourceEvent, TelemetryPoint
 
 
 def utcnow() -> datetime:
@@ -125,6 +126,18 @@ class DataGapRow(Base):
     started_at: Mapped[int] = mapped_column(Integer)
     ended_at: Mapped[int] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(String)
+
+
+class SourceEventRow(Base):
+    __tablename__ = "source_events"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    device_id: Mapped[str] = mapped_column(String, index=True)
+    event_type: Mapped[str] = mapped_column(String, index=True)
+    timestamp_utc: Mapped[int] = mapped_column(Integer, index=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    details_json: Mapped[str] = mapped_column(Text, default="{}")
+    important: Mapped[bool] = mapped_column(Boolean, default=False)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class AnalysisPeriodRow(Base):
@@ -553,6 +566,74 @@ class Database:
             )
             return [(datetime.fromtimestamp(ts, UTC), str(value)) for ts, value in session.execute(query).all()]
 
+    def fetch_sample_timestamps(self, series_id: int, start: datetime, end: datetime) -> list[datetime]:
+        with self.session() as session:
+            query = (
+                select(TelemetrySampleRow.timestamp_utc)
+                .where(
+                    TelemetrySampleRow.series_id == series_id,
+                    TelemetrySampleRow.timestamp_utc >= int(start.timestamp()),
+                    TelemetrySampleRow.timestamp_utc < int(end.timestamp()),
+                    TelemetrySampleRow.quality == "valid",
+                )
+                .order_by(TelemetrySampleRow.timestamp_utc)
+            )
+            return [datetime.fromtimestamp(ts, UTC) for (ts,) in session.execute(query).all()]
+
+    def upsert_source_events(self, events: Iterable[SourceEvent]) -> int:
+        rows = [
+            {
+                "id": item.id,
+                "device_id": item.device_id,
+                "event_type": item.event_type,
+                "timestamp_utc": int(item.timestamp_utc.timestamp()),
+                "duration_seconds": item.duration_seconds,
+                "details_json": json.dumps(item.details, ensure_ascii=False, sort_keys=True),
+                "important": item.important,
+                "ingested_at": utcnow(),
+            }
+            for item in events
+        ]
+        if not rows:
+            return 0
+        with self.session() as session:
+            statement = sqlite_insert(SourceEventRow).values(rows)
+            session.execute(
+                statement.on_conflict_do_update(
+                    index_elements=["id"],
+                    set_={
+                        "duration_seconds": statement.excluded.duration_seconds,
+                        "details_json": statement.excluded.details_json,
+                        "important": statement.excluded.important,
+                        "ingested_at": statement.excluded.ingested_at,
+                    },
+                )
+            )
+        return len(rows)
+
+    def list_source_events(self, start: datetime, end: datetime) -> list[SourceEvent]:
+        with self.session() as session:
+            rows = session.scalars(
+                select(SourceEventRow)
+                .where(
+                    SourceEventRow.timestamp_utc >= int(start.timestamp()),
+                    SourceEventRow.timestamp_utc < int(end.timestamp()),
+                )
+                .order_by(SourceEventRow.timestamp_utc, SourceEventRow.id)
+            ).all()
+            return [
+                SourceEvent(
+                    id=row.id,
+                    device_id=row.device_id,
+                    event_type=row.event_type,
+                    timestamp_utc=datetime.fromtimestamp(row.timestamp_utc, UTC),
+                    duration_seconds=row.duration_seconds,
+                    details=json.loads(row.details_json),
+                    important=row.important,
+                )
+                for row in rows
+            ]
+
     def latest_sample_time(self) -> datetime | None:
         with self.session() as session:
             value = session.scalar(select(func.max(TelemetrySampleRow.timestamp_utc)))
@@ -802,6 +883,7 @@ class Database:
                 "devices": int(session.scalar(select(func.count()).select_from(DeviceRow)) or 0),
                 "series": int(session.scalar(select(func.count()).select_from(TelemetrySeriesRow)) or 0),
                 "samples": int(session.scalar(select(func.count()).select_from(TelemetrySampleRow)) or 0),
+                "source_events": int(session.scalar(select(func.count()).select_from(SourceEventRow)) or 0),
                 "reports": int(session.scalar(select(func.count()).select_from(ReportRow)) or 0),
                 "pending_notifications": int(
                     session.scalar(

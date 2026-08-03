@@ -96,7 +96,7 @@ class OpenAIConfig(StrictModel):
     enabled: bool = False
     daily_model: str = "gpt-5.6-luna"
     review_model: str = "gpt-5.6-terra"
-    reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "low"
+    reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "medium"
     prompt_version: str = "analyst-v2"
     monthly_token_budget: int = Field(default=100_000, ge=0)
 

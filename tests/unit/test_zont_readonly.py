@@ -59,7 +59,7 @@ def test_client_can_only_call_audited_endpoints() -> None:
         )
         points, entities = client.normalize_history(responses[0])
 
-    assert {"devices", "load_data"} == ALLOWED_METHODS
+    assert {"devices", "load_data", "raw_events"} == ALLOWED_METHODS
     assert requested == ["/api/devices", "/api/load_data"]
     assert len(points) == 6
     assert points[1].timestamp_utc.timestamp() - points[0].timestamp_utc.timestamp() == 60
@@ -83,10 +83,66 @@ def test_public_api_contains_no_mutating_or_generic_request_method() -> None:
         "close",
         "discover_devices",
         "healthcheck",
+        "load_events",
         "load_config_snapshot",
         "load_history",
+        "normalize_events",
         "normalize_history",
     }
+
+
+def test_reliability_events_are_privacy_minimized_and_stable() -> None:
+    rows = [
+        [
+            "legacy-not-unique",
+            1_700_000_000,
+            "LossConnectionBoiler",
+            43.1,
+            56.2,
+            None,
+            {"object_id": 42, "object_name": "Котёл", "phone": "+70000000000"},
+            True,
+        ],
+        ["ignored", 1_700_000_001, "OutSMS", 43.1, 56.2, None, {"phone": "+70000000000"}, False],
+    ]
+
+    first = ZontReadOnlyClient.normalize_events("7", rows)
+    second = ZontReadOnlyClient.normalize_events("7", rows)
+
+    assert len(first) == 1
+    assert first[0].id == second[0].id
+    assert first[0].event_type == "LossConnectionBoiler"
+    assert first[0].details == {"object_id": 42, "object_name": "Котёл"}
+    assert "+70000000000" not in first[0].model_dump_json()
+    assert "43.1" not in first[0].model_dump_json()
+
+
+def test_load_events_uses_filtered_read_only_endpoint() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = request.read().decode()
+        return httpx.Response(
+            200,
+            json={"ok": True, "events": [["id", 1_700_000_000, "OTFound", None, None, None, None, False]]},
+        )
+
+    with ZontReadOnlyClient(
+        token="secret",
+        client_email="owner@example.test",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        events = client.load_events(
+            device_id="7",
+            start=datetime(2023, 1, 1, tzinfo=UTC),
+            end=datetime(2023, 1, 2, tzinfo=UTC),
+        )
+
+    assert captured["path"] == "/api/raw_events"
+    assert '"only"' in str(captured["body"])
+    assert "LossConnectionBoiler" in str(captured["body"])
+    assert events[0][2] == "OTFound"
 
 
 def test_redaction_covers_nested_network_and_identity_fields() -> None:
@@ -123,11 +179,14 @@ def test_history_retries_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
         transport=httpx.MockTransport(handler),
         history_request_interval_seconds=0,
     ) as client:
-        assert client.load_history(
-            device_ids=["7"],
-            start=datetime(2023, 1, 1, tzinfo=UTC),
-            end=datetime(2023, 1, 2, tzinfo=UTC),
-            data_types=["temperature"],
-        ) == []
+        assert (
+            client.load_history(
+                device_ids=["7"],
+                start=datetime(2023, 1, 1, tzinfo=UTC),
+                end=datetime(2023, 1, 2, tzinfo=UTC),
+                data_types=["temperature"],
+            )
+            == []
+        )
 
     assert calls == 2

@@ -11,7 +11,7 @@ from zont_analyzer.adapters.sqlite.database import Base
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.ingestion import IngestionService
 from zont_analyzer.config import AppConfig
-from zont_analyzer.domain import TelemetryPoint
+from zont_analyzer.domain import MetricValue, SourceEvent, TelemetryPoint
 from zont_analyzer.reports import render_html, render_text
 
 
@@ -101,6 +101,73 @@ def test_html_escapes_report_content(tmp_path: Path) -> None:
     rendered = render_html(report)
     assert "<script>" not in rendered
     assert "&lt;script&gt;" in rendered
+
+
+def test_reliability_events_persist_and_uptime_is_prominent(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    start = datetime(2026, 7, 30, 20, tzinfo=UTC)
+    points: list[TelemetryPoint] = []
+    for index in range(3 * 24 * 12):
+        timestamp = start + timedelta(minutes=index * 5)
+        points.extend(
+            [
+                TelemetryPoint(
+                    device_id="1",
+                    source_type="z3k_boiler_adapter",
+                    entity_id="boiler",
+                    metric_key="s",
+                    timestamp_utc=timestamp,
+                    value_text="[]",
+                ),
+                TelemetryPoint(
+                    device_id="1",
+                    source_type="ztc_state",
+                    entity_id="zont",
+                    metric_key="status_flags",
+                    timestamp_utc=timestamp,
+                    value_num=73,
+                ),
+            ]
+        )
+    db.upsert_samples(points)
+    restored = start + timedelta(hours=2)
+    source = SourceEvent(
+        id="restore",
+        device_id="1",
+        event_type="ReconnectingBoiler",
+        timestamp_utc=restored,
+    )
+    assert db.upsert_source_events([source, source]) == 2
+    assert len(db.list_source_events(start, start + timedelta(days=3))) == 1
+
+    report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
+    metrics = {item.name: item for item in report.metrics}
+    assert metrics["boiler_uptime_seconds"].value == pytest.approx(46 * 3600)
+    assert metrics["zont_uptime_seconds"].value == pytest.approx(48 * 3600)
+    rendered_text = render_text(report)
+    rendered_html = render_html(report)
+    assert "Аптайм котла: 01:22:00 дд:чч:мм" in rendered_text
+    assert "Аптайм ZONT: 02:00:00 дд:чч:мм" in rendered_text
+    assert rendered_html.index("Аптайм котла") < rendered_html.index("Качество данных")
+    assert rendered_html.index("Аптайм ZONT") < rendered_html.index("Качество данных")
+
+
+def test_uptime_renderer_does_not_wrap_days_after_99(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
+    report.metrics.append(
+        MetricValue(
+            id="uptime",
+            name="zont_uptime_seconds",
+            value=(123 * 24 + 4) * 3600 + 5 * 60 + 59,
+            unit="s",
+        )
+    )
+
+    assert "Аптайм ZONT: 123:04:05 дд:чч:мм" in render_text(report)
+    assert "123:04:05" in render_html(report)
 
 
 def test_renderers_show_disabled_dhw_target_as_inactive(tmp_path: Path) -> None:
@@ -345,7 +412,7 @@ def test_fresh_database_is_created_at_alembic_head(tmp_path: Path) -> None:
     result = db.initialize()
 
     assert result.previous_revision is None
-    assert result.revision == "dd4272b6d030"
+    assert result.revision == "5a9ce2bd8b34"
     assert result.backup_path is None
     assert db.current_revision() == result.revision
     assert db.status()["schema_revision"] == result.revision

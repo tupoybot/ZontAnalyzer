@@ -5,6 +5,7 @@ from .models import (
     QualityResult,
     Recommendation,
     Report,
+    SourceEvent,
     TelemetryPoint,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "QualityResult",
     "Recommendation",
     "Report",
+    "SourceEvent",
     "TelemetryPoint",
 ]

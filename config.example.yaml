@@ -28,7 +28,7 @@ openai:
   enabled: false
   daily_model: gpt-5.6-luna
   review_model: gpt-5.6-terra
-  reasoning_effort: low
+  reasoning_effort: medium
   prompt_version: analyst-v2
   monthly_token_budget: 100000
 

@@ -13,6 +13,7 @@ from zont_analyzer.adapters.openai.provider import Analyst, analysis_packet
 from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.analytics import (
     analyze_dhw_interactions,
+    analyze_reliability,
     assess_quality,
     build_heating_circuit_config,
     build_mode_catalog,
@@ -107,6 +108,14 @@ class AnalysisService:
         boiler_state_series = next(
             (item for item in series if item["source_type"] == "z3k_boiler_adapter" and item["metric_key"] == "s"),
             None,
+        )
+        zont_status_series = next(
+            (item for item in series if item["source_type"] == "ztc_state" and item["metric_key"] == "status_flags"),
+            None,
+        )
+        zont_heartbeat_series = next(
+            (item for item in series if item["source_type"] == "ztc_state" and item["metric_key"] == "voltage"),
+            zont_status_series,
         )
         target_series = next((item for item in series if item["role"] == "target_temperature"), None)
         mode_series = next(
@@ -345,6 +354,41 @@ class AnalysisService:
         )
         events.extend(flame_noise_events)
         events.extend(control_events)
+        history_start = self.db.earliest_sample_time() or context_start
+        reliability_device_id = str(
+            (boiler_state_series or burner_series or zont_status_series or {}).get("device_id", "")
+        )
+        source_events = [
+            item
+            for item in self.db.list_source_events(history_start, end)
+            if not reliability_device_id or item.device_id == reliability_device_id
+        ]
+        boiler_reliability_series = boiler_state_series or burner_series or flow_temperature_series
+        boiler_metric_timestamps = (
+            self.db.fetch_sample_timestamps(int(boiler_reliability_series["id"]), history_start, end)
+            if boiler_reliability_series
+            else []
+        )
+        zont_status_samples = (
+            self.db.fetch_samples(int(zont_status_series["id"]), history_start, end) if zont_status_series else []
+        )
+        zont_metric_timestamps = (
+            self.db.fetch_sample_timestamps(int(zont_heartbeat_series["id"]), history_start, end)
+            if zont_heartbeat_series
+            else []
+        )
+        reliability = analyze_reliability(
+            period_id=period_id,
+            period_start=start,
+            as_of=end,
+            source_events=source_events,
+            boiler_metric_timestamps=boiler_metric_timestamps,
+            zont_status_samples=zont_status_samples,
+            zont_metric_timestamps=zont_metric_timestamps,
+        )
+        metrics.extend(reliability.metrics)
+        events.extend(reliability.events)
+        control_context["reliability"] = reliability.context
         if burner_samples:
             space_heating_metrics = burner_metrics(
                 burner_samples,

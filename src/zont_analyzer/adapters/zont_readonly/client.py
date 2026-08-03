@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import time
 from collections.abc import Iterable, Iterator, Sequence
@@ -8,9 +10,22 @@ from typing import Any, Literal
 
 import httpx
 
-from zont_analyzer.domain import TelemetryPoint
+from zont_analyzer.domain import SourceEvent, TelemetryPoint
 
-ALLOWED_METHODS = frozenset({"devices", "load_data"})
+ALLOWED_METHODS = frozenset({"devices", "load_data", "raw_events"})
+RELIABILITY_EVENT_TYPES = frozenset(
+    {
+        "LossConnectionBoiler",
+        "ReconnectingBoiler",
+        "OTLost",
+        "OTFound",
+        "MainPowerLost",
+        "MainPowerFound",
+        "MainPowerRestored",
+        "PowerOff",
+        "PowerOn",
+    }
+)
 _SENSITIVE_KEY_PARTS = frozenset(
     {
         "token",
@@ -293,6 +308,72 @@ class ZontReadOnlyClient:
         if not isinstance(responses, list):
             raise ZontApiError("ZONT load_data response does not contain responses")
         return [item for item in responses if isinstance(item, dict)]
+
+    def load_events(
+        self,
+        *,
+        device_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[list[Any]]:
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("Event boundaries must be timezone-aware")
+        payload = self._post_allowed(
+            "raw_events",
+            {
+                "device_id": int(device_id) if device_id.isdigit() else device_id,
+                "mintime": int(start.timestamp()),
+                "maxtime": int(end.timestamp()),
+                "only": sorted(RELIABILITY_EVENT_TYPES),
+            },
+        )
+        events = payload.get("events", [])
+        if not isinstance(events, list):
+            raise ZontApiError("ZONT raw_events response does not contain a list")
+        return [item for item in events if isinstance(item, list)]
+
+    @staticmethod
+    def normalize_events(device_id: str, rows: Sequence[Sequence[Any]]) -> list[SourceEvent]:
+        result: list[SourceEvent] = []
+        safe_detail_keys = {"object_id", "object_name", "reason"}
+        for row in rows:
+            if len(row) < 3 or str(row[2]) not in RELIABILITY_EVENT_TYPES:
+                continue
+            try:
+                timestamp = datetime.fromtimestamp(int(row[1]), UTC)
+            except (TypeError, ValueError, OverflowError, OSError):
+                continue
+            event_type = str(row[2])
+            duration = row[5] if len(row) > 5 else None
+            duration_seconds = (
+                int(duration) if isinstance(duration, (int, float)) and not isinstance(duration, bool) else None
+            )
+            raw_details = row[6] if len(row) > 6 else None
+            details = (
+                {str(key): value for key, value in raw_details.items() if str(key) in safe_detail_keys}
+                if isinstance(raw_details, dict)
+                else {}
+            )
+            important = bool(row[7]) if len(row) > 7 else False
+            canonical = json.dumps(
+                [device_id, int(timestamp.timestamp()), event_type, duration_seconds, details, important],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            digest = hashlib.sha256(canonical.encode()).hexdigest()[:24]
+            result.append(
+                SourceEvent(
+                    id=f"zont-event:{digest}",
+                    device_id=device_id,
+                    event_type=event_type,
+                    timestamp_utc=timestamp,
+                    duration_seconds=duration_seconds,
+                    details=details,
+                    important=important,
+                )
+            )
+        return result
 
     @staticmethod
     def normalize_history(response: dict[str, Any]) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:

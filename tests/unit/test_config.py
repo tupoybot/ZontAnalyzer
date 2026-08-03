@@ -16,6 +16,7 @@ def test_config_is_optional_and_secrets_are_not_in_dump(tmp_path: Path, monkeypa
     loaded = load_config(data_dir=tmp_path / "data")
     assert loaded.config.home.timezone == "Europe/Samara"
     assert loaded.config.dhw.recirculation_present is True
+    assert loaded.config.openai.reasoning_effort == "medium"
     assert loaded.secrets.zont_token is not None
     assert "very-secret" not in loaded.config.model_dump_json()
 

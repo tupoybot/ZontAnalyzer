@@ -22,6 +22,16 @@ class TelemetryPoint(DomainModel):
     quality: Literal["valid", "invalid"] = "valid"
 
 
+class SourceEvent(DomainModel):
+    id: str
+    device_id: str
+    event_type: str
+    timestamp_utc: datetime
+    duration_seconds: int | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+    important: bool = False
+
+
 class QualityResult(DomainModel):
     score: float = Field(ge=0, le=1)
     coverage_pct: float = Field(ge=0, le=100)

@@ -38,6 +38,10 @@ is a possible cause of irregular autonomous recirculation timing, not proof of a
 installed at this home. Treat dhw_antilegionella_cycle as an expected autonomous boiler
 service cycle, not a fault. Treat unconfirmed_burner_pulse as telemetry noise already
 excluded from burner/DHW cycle statistics, not as a start, short cycle, or failure.
+Use the reliability context when interpreting boiler connection losses. A loss classified
+as power_outage or zont_restart is not a boiler failure and is already excluded from the
+boiler MTBF/MTBR statistics. Main-power loss alone does not reset ZONT uptime while stable
+controller telemetry continues on the built-in battery.
 recommendation_feedback contains owner-confirmed outcomes from earlier recommendations.
 Treat owner_note as authoritative manual context. Do not repeat a rejected recommendation
 unless the current packet contains materially new contradictory evidence; if revisiting it,

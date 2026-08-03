@@ -50,6 +50,10 @@ METRIC_LABELS = {
     "dhw_antilegionella_cycle_count": "Вероятные циклы антилегионеллы",
     "dhw_possible_recirculation_activity_count": "Кандидаты косвенной активности рециркуляции",
     "unconfirmed_burner_pulse_count": "Отсечённые шумовые сигналы горелки",
+    "boiler_uptime_seconds": "Аптайм котла",
+    "zont_uptime_seconds": "Аптайм ZONT",
+    "boiler_mtbf_hours": "MTBF котла без отключений питания",
+    "boiler_mtbr_hours": "Среднее восстановление связи котла (MTTR/MTBR)",
 }
 
 SPACE_HEATING_METRIC_LABELS = {
@@ -77,6 +81,8 @@ EVENT_LABELS = {
     "dhw_antilegionella_cycle": "Вероятный штатный цикл антилегионеллы",
     "dhw_possible_recirculation_activity": "Возможная активность рециркуляции ГВС",
     "unconfirmed_burner_pulse": "Шумовой сигнал включения горелки",
+    "boiler_connection_loss": "Потеря связи с котлом",
+    "main_power_outage": "Пропадание основного питания",
 }
 
 
@@ -132,15 +138,36 @@ def _local(value: datetime, timezone: str) -> str:
     return value.astimezone(ZoneInfo(timezone)).strftime("%Y-%m-%d %H:%M %Z")
 
 
+def _duration_dd_hh_mm(seconds: float) -> str:
+    total_minutes = max(0, int(seconds) // 60)
+    days, remaining = divmod(total_minutes, 24 * 60)
+    hours, minutes = divmod(remaining, 60)
+    return f"{days:02d}:{hours:02d}:{minutes:02d}"
+
+
+def _metric_display(metric: Any) -> tuple[str, str]:
+    if metric.name in {"boiler_uptime_seconds", "zont_uptime_seconds"}:
+        return _duration_dd_hh_mm(float(metric.value)), "дд:чч:мм"
+    return f"{metric.value:g}", str(metric.unit)
+
+
 def render_text(report: Report) -> str:
     lines = [
         f"ZontAnalyzer — {report.kind}",
         f"ID отчёта: {report.id}",
         f"Период: {_local(report.period_start, report.timezone)} — {_local(report.period_end, report.timezone)}",
         f"AI-интерпретация: {'да' if report.ai_used else 'нет'}",
-        f"Качество данных: {report.quality.score:.0%} (покрытие {report.quality.coverage_pct:.1f}%)",
-        report.summary,
     ]
+    for metric in report.metrics:
+        if metric.name in {"boiler_uptime_seconds", "zont_uptime_seconds"}:
+            value, unit = _metric_display(metric)
+            lines.append(f"{_metric_label(metric.name, metric.context)}: {value} {unit}")
+    lines.extend(
+        [
+            f"Качество данных: {report.quality.score:.0%} (покрытие {report.quality.coverage_pct:.1f}%)",
+            report.summary,
+        ]
+    )
     current_mode = report.context.get("current_mode")
     if isinstance(current_mode, dict):
         lines.append(
@@ -213,10 +240,9 @@ def render_text(report: Report) -> str:
         lines.append("Флаги качества: " + ", ".join(report.quality.flags))
     if report.metrics:
         lines.append("Метрики:")
-        lines.extend(
-            f"- {_metric_label(metric.name, metric.context)}: {metric.value:g} {metric.unit}"
-            for metric in report.metrics
-        )
+        for metric in report.metrics:
+            value, unit = _metric_display(metric)
+            lines.append(f"- {_metric_label(metric.name, metric.context)}: {value} {unit}")
     if report.events:
         lines.append(f"События (показано до 20 из {len(report.events)}):")
         lines.extend(
@@ -310,11 +336,21 @@ def render_html(report: Report) -> str:
             "Без прямых сигналов клапана, насоса и расхода гидравлическая причина не считается доказанной.</small></p>"
             "</section>"
         )
-    metrics = "".join(
-        f"<tr><td>{html.escape(_metric_label(metric.name, metric.context))}</td><td>{metric.value:g}</td>"
-        f"<td>{html.escape(metric.unit)}</td></tr>"
-        for metric in report.metrics
-    )
+    metric_rows: list[str] = []
+    uptime_cards: list[str] = []
+    for metric in report.metrics:
+        value, unit = _metric_display(metric)
+        label = _metric_label(metric.name, metric.context)
+        metric_rows.append(
+            f"<tr><td>{html.escape(label)}</td><td>{html.escape(value)}</td><td>{html.escape(unit)}</td></tr>"
+        )
+        if metric.name in {"boiler_uptime_seconds", "zont_uptime_seconds"}:
+            uptime_cards.append(
+                f'<article class="uptime-card"><span>{html.escape(label)}</span>'
+                f"<strong>{html.escape(value)}</strong><small>{html.escape(unit)}</small></article>"
+            )
+    metrics = "".join(metric_rows)
+    uptime = f'<section class="uptime-grid">{"".join(uptime_cards)}</section>' if uptime_cards else ""
     events = "".join(
         f"<tr><td>{html.escape(_local(item.started_at, report.timezone))}</td>"
         f"<td>{html.escape(item.severity)}</td><td>{html.escape(_event_label(item.kind))}</td>"
@@ -350,10 +386,15 @@ td,th{{padding:.55rem;border-bottom:1px solid #ddd;text-align:left}}
 .quality{{padding:.8rem;background:#eef6ff;border-radius:.5rem}}
 article{{border-left:4px solid #568;padding:0 1rem;margin:1rem 0}}
 .dhw{{padding:.8rem 1rem;background:#fff8e8;border-radius:.5rem}}
+.uptime-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.8rem;margin:1rem 0}}
+.uptime-card{{display:grid;gap:.25rem;border:0;background:#edf8f1;border-radius:.7rem;padding:1rem;margin:0}}
+.uptime-card strong{{font-size:1.8rem;font-variant-numeric:tabular-nums}}
+.uptime-card small{{color:#53635a}}
 </style></head><body><h1>{title}</h1>
 <p><strong>ID:</strong> <code>{html.escape(report.id)}</code></p>
 <p><strong>Период:</strong> {period}</p>
 <p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"}</p>
+{uptime}
 {mode_context}
 {summer_context}
 {dhw_context}

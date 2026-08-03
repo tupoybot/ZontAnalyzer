@@ -239,8 +239,32 @@ class IngestionService:
                     logger.info("ZONT sync progress: %d/%d windows", windows, total_windows)
         finally:
             self._refresh_series_roles(devices, inferred_entities, config_names)
+        source_events = 0
+        if failed_windows == 0 and cursor >= now:
+            retained_start = now - backfill if backfill is not None else self.db.earliest_sample_time()
+            retained_start = retained_start or now - timedelta(days=1)
+            for device_id in device_ids:
+                event_cursor = self.db.get_cursor(device_id, "raw_events")
+                event_start = retained_start
+                if event_cursor is not None:
+                    event_start = max(
+                        retained_start,
+                        event_cursor - timedelta(minutes=self.config.scheduler.overlap_minutes),
+                    )
+                if event_start >= now:
+                    continue
+                try:
+                    raw_events = self.client.load_events(device_id=device_id, start=event_start, end=now)
+                    normalized_events = self.client.normalize_events(device_id, raw_events)
+                    source_events += self.db.upsert_source_events(normalized_events)
+                    self.db.set_cursor(device_id, "raw_events", now)
+                except Exception as exc:
+                    failed_windows += 1
+                    errors.append(f"raw events device {device_id}: {type(exc).__name__}: {exc}")
+                    logger.warning("ZONT raw event sync failed for device %s: %s", device_id, type(exc).__name__)
         return {
             "samples": samples,
+            "source_events": source_events,
             "series": len(self.db.list_series()),
             "windows": windows,
             "total_windows": total_windows,

@@ -11,7 +11,7 @@ contains no host-specific publishing policy.
 First audit, without changing anything:
 
 ```sh
-ssh 217.60.10.224 'hostname; date -Is; docker version 2>/dev/null || true; docker compose version 2>/dev/null || true; systemctl is-active nginx 2>/dev/null || true; ss -ltnp; df -h /opt; test -d /opt/nightscout-compose/certbot/www/tupoybot.ru/html && echo webroot-ok'
+ssh hk.tupoybot.ru 'hostname; date -Is; docker version 2>/dev/null || true; docker compose version 2>/dev/null || true; systemctl is-active nginx 2>/dev/null || true; ss -ltnp; df -h /opt; test -d /var/www/html && echo webroot-ok'
 ```
 
 If Docker is absent, install the distribution's Docker Engine and Compose plugin.
@@ -25,12 +25,12 @@ runs as UID/GID 10001; nginx only needs read access to the published file.
 ```sh
 install -d -m 0750 -o 10001 -g 10001 /opt/zont-analyzer/data
 install -d -m 0700 -o 10001 -g 10001 /opt/zont-analyzer/secrets
-install -d -m 0755 -o 10001 -g 10001 /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za
+install -d -m 0755 -o 10001 -g 10001 /var/www/html/za
 install -m 0644 RELEASE/deploy/config.production.example.yaml /opt/zont-analyzer/config.yaml
 install -m 0600 RELEASE/deploy/env.example /opt/zont-analyzer/.env
-test -e /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za/index.html || \
+test -e /var/www/html/za/index.html || \
   install -m 0644 RELEASE/deploy/site-index.html \
-    /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za/index.html
+    /var/www/html/za/index.html
 ```
 
 Edit `/opt/zont-analyzer/config.yaml` for the home. Put the ZONT JSON containing
@@ -53,6 +53,8 @@ stat -c '%a %u:%g %n' /opt/zont-analyzer/.env /opt/zont-analyzer/secrets/*
 ```
 
 Never put secrets in either Compose file or the release directory.
+The production `.env` must keep `ZONT_ANALYZER_PUBLISH_DIR=/var/www/html/za`;
+do not replace it with the example file during an upgrade.
 
 ## Release layout and preflight
 
@@ -134,10 +136,10 @@ Verify `worker` is healthy, the stable report files are non-empty, the site
 returns the landing page, and unrelated workloads remain unchanged:
 
 ```sh
-test -s /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za/index.html
-test -s /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za/latest.html
-test -s /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za/ai-latest.html
-curl -fsS https://tupoybot.ru/za/ >/dev/null
+test -s /var/www/html/za/index.html
+test -s /var/www/html/za/latest.html
+test -s /var/www/html/za/ai-latest.html
+curl -fsS https://hk.tupoybot.ru/za/ >/dev/null
 docker ps --format '{{.Names}} {{.Status}}'
 ```
 
