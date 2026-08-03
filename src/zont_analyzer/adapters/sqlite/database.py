@@ -697,6 +697,43 @@ class Database:
                 return None
             return {"status": row.status, "report_id": row.report_id, **json.loads(row.payload_json)}
 
+    def recommendation_feedback(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Return compact owner-confirmed outcomes for future analysis packets."""
+        if limit < 1:
+            return []
+        with self.session() as session:
+            rows = session.scalars(
+                select(RecommendationRow)
+                .where(RecommendationRow.status.in_(("applied", "rejected")))
+                .order_by(RecommendationRow.updated_at.desc())
+                .limit(limit)
+            ).all()
+            feedback: list[dict[str, Any]] = []
+            for row in rows:
+                payload = json.loads(row.payload_json)
+                owner_note = row.rejection_reason
+                if row.status == "applied":
+                    intervention = session.scalar(
+                        select(InterventionRow)
+                        .where(InterventionRow.recommendation_id == row.id)
+                        .order_by(InterventionRow.applied_at.desc())
+                        .limit(1)
+                    )
+                    owner_note = intervention.note if intervention else None
+                feedback.append(
+                    {
+                        "recommendation_id": row.id,
+                        "report_id": row.report_id,
+                        "status": row.status,
+                        "title": payload.get("title"),
+                        "category": payload.get("category", row.category),
+                        "hypothesis": payload.get("hypothesis"),
+                        "owner_note": owner_note,
+                        "updated_at": row.updated_at.isoformat(),
+                    }
+                )
+            return feedback
+
     def mark_applied(self, recommendation_id: str, note: str) -> str:
         with self.session() as session:
             row = session.get(RecommendationRow, recommendation_id)

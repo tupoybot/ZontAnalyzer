@@ -30,6 +30,11 @@ classifier confirms space-heating demand; summer/off/unknown demand must not bec
 a heating alarm. Preserve the supplied epistemic level: observed facts, multi-signal
 inferences, and hypotheses must be described differently. Never infer water draw,
 three-way-valve position, pump operation, or hydraulic flow without a direct signal.
+recommendation_feedback contains owner-confirmed outcomes from earlier recommendations.
+Treat owner_note as authoritative manual context. Do not repeat a rejected recommendation
+unless the current packet contains materially new contradictory evidence; if revisiting it,
+state what changed. Use applied feedback to assess outcomes without claiming causality that
+the supplied evidence does not establish.
 """
 
 
@@ -105,11 +110,13 @@ def analysis_packet(
     events: list[DetectedEvent],
     period: dict[str, str],
     context: dict[str, Any] | None = None,
+    recommendation_feedback: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "period": period,
         "data_quality": quality,
         "control_context": context or {},
+        "recommendation_feedback": recommendation_feedback or [],
         "metrics": [metric.model_dump(mode="json") for metric in metrics],
         "events": [event.model_dump(mode="json") for event in events[:20]],
     }

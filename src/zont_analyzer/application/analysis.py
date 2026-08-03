@@ -434,6 +434,7 @@ class AnalysisService:
                             "timezone": self.config.home.timezone,
                         },
                         context=control_context,
+                        recommendation_feedback=self.db.recommendation_feedback(),
                     )
                 )
                 summary = result.summary
