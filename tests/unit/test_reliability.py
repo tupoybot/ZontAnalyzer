@@ -75,7 +75,7 @@ def test_power_related_boiler_loss_is_excluded_and_does_not_reset_zont_uptime() 
     assert result.context["boiler"]["power_related_losses"] == 1  # type: ignore[index]
 
 
-def test_power_on_uses_first_sustained_metrics_and_open_boiler_loss_has_no_uptime() -> None:
+def test_power_on_and_missing_restore_event_use_first_sustained_metrics() -> None:
     zont_times = [START, START + timedelta(minutes=20), *_timestamps(30, 60)]
     result = analyze_reliability(
         period_id="day",
@@ -93,5 +93,21 @@ def test_power_on_uses_first_sustained_metrics_and_open_boiler_loss_has_no_uptim
     metrics = {item.name: item for item in result.metrics}
 
     assert metrics["zont_uptime_seconds"].value == 30 * 60
-    assert "boiler_uptime_seconds" not in metrics
+    assert metrics["boiler_uptime_seconds"].value == 10 * 60
+    assert result.context["boiler"]["online"] is True  # type: ignore[index]
+    loss = next(item for item in result.events if item.kind == "boiler_connection_loss")
+    assert loss.details["restore_inferred_from_stable_metrics"] is True
+
+
+def test_open_boiler_loss_without_stable_metrics_has_no_uptime() -> None:
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(minutes=60),
+        source_events=[_event(10, "ReconnectingBoiler"), _event(50, "LossConnectionBoiler")],
+        boiler_metric_timestamps=_timestamps(0, 49),
+        zont_status_samples=_status(0, 60),
+    )
+
+    assert "boiler_uptime_seconds" not in {item.name for item in result.metrics}
     assert result.context["boiler"]["online"] is False  # type: ignore[index]

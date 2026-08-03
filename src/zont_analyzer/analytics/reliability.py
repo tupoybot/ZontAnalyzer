@@ -28,6 +28,7 @@ class _BoilerIncident:
     restored_at: datetime | None
     previous_restore_at: datetime | None
     cause: Literal["power_outage", "zont_restart", "boiler_or_adapter"] = "boiler_or_adapter"
+    restore_inferred_from_metrics: bool = False
 
 
 def _metric(period_id: str, name: str, value: float, unit: str, **context: object) -> MetricValue:
@@ -203,6 +204,14 @@ def analyze_reliability(
     incidents, last_boiler_restore = _boiler_incidents(ordered_events)
     for incident in incidents:
         _classify_incident(incident, power_intervals, controller_intervals)
+    open_incident = incidents[-1] if incidents and incidents[-1].restored_at is None else None
+    if open_incident is not None:
+        inferred_restore = _first_sustained_at(boiler_timestamps, after=open_incident.lost_at)
+        if inferred_restore is not None:
+            open_incident.restored_at = inferred_restore
+            open_incident.restore_inferred_from_metrics = True
+            last_boiler_restore = inferred_restore
+            open_incident = None
 
     metrics: list[MetricValue] = []
     detected: list[DetectedEvent] = []
@@ -243,7 +252,6 @@ def analyze_reliability(
             )
         )
 
-    open_incident = incidents[-1] if incidents and incidents[-1].restored_at is None else None
     boiler_anchor = last_boiler_restore
     boiler_basis = "boiler_connection_restored"
     boiler_lower_bound = False
@@ -273,7 +281,9 @@ def analyze_reliability(
         item for item in incidents if item.cause == "boiler_or_adapter" and item.restored_at is not None
     ]
     restore_seconds = [
-        (item.restored_at - item.lost_at).total_seconds() for item in intrinsic_closed if item.restored_at
+        (item.restored_at - item.lost_at).total_seconds()
+        for item in intrinsic_closed
+        if item.restored_at and not item.restore_inferred_from_metrics
     ]
     operating_seconds: list[float] = []
     excluded_intervals = _merge_intervals([*power_intervals, *controller_intervals])
@@ -322,6 +332,7 @@ def analyze_reliability(
                     "cause": item.cause,
                     "duration_seconds": duration,
                     "excluded_from_boiler_reliability": item.cause != "boiler_or_adapter",
+                    "restore_inferred_from_stable_metrics": item.restore_inferred_from_metrics,
                 },
                 algorithm_version="reliability-v1",
             )

@@ -234,6 +234,39 @@ def test_openai_failure_keeps_deterministic_report(tmp_path: Path) -> None:
     assert db.latest_report() is not None
 
 
+def test_openai_refresh_failure_reuses_last_valid_interpretation(tmp_path: Path) -> None:
+    class SuccessfulAnalyst:
+        def analyze(self, _packet):
+            from zont_analyzer.domain import AnalysisResult
+
+            return AnalysisResult(summary="Последняя валидная AI-интерпретация")
+
+    class FailingAnalyst:
+        def analyze(self, _packet):
+            raise RuntimeError("invalid structured output")
+
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    start = datetime(2026, 7, 31, 20, tzinfo=UTC)
+    db.upsert_samples(
+        list(_points(start, [22.0] * 288, entity="room")),
+        {"room": "indoor_temperature"},
+    )
+    config = AppConfig.model_validate(
+        {
+            "preferences": {"target_temperature_c": 22},
+            "analysis": {"daily_ai_when_normal": True},
+        }
+    )
+    first = AnalysisService(db, config, SuccessfulAnalyst()).analyze_daily(date(2026, 8, 1))
+    refreshed = AnalysisService(db, config, FailingAnalyst()).analyze_daily(date(2026, 8, 1))
+
+    assert first.ai_used is True
+    assert refreshed.ai_used is True
+    assert refreshed.summary == "Последняя валидная AI-интерпретация"
+    assert refreshed.context["ai_interpretation_reuse"]["source_generated_at"] == first.generated_at.isoformat()
+
+
 def test_online_backup_passes_integrity_check(tmp_path: Path) -> None:
     db = Database(tmp_path / "state.sqlite3")
     db.initialize()

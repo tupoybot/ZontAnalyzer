@@ -471,6 +471,8 @@ class AnalysisService:
             )
         if temperature_series is None:
             summary = f"{summary} Комнатный температурный ряд не определён; метрики комфорта не рассчитаны."
+        report_id = self.report_id_for(kind, start)
+        previous_report = self.db.report(report_id)
         ai_used = False
         should_use_ai = (
             use_ai
@@ -506,8 +508,16 @@ class AnalysisService:
                 ai_used = True
             except Exception as exc:
                 logger.warning("OpenAI analysis failed; keeping deterministic report: %s", type(exc).__name__)
-                summary = f"{summary} AI-интерпретация недоступна; сохранён локальный детерминированный отчёт."
-        report_id = self.report_id_for(kind, start)
+                if previous_report is not None and previous_report.ai_used:
+                    summary = previous_report.summary
+                    recommendations = previous_report.recommendations
+                    ai_used = True
+                    control_context["ai_interpretation_reuse"] = {
+                        "source_generated_at": previous_report.generated_at.isoformat(),
+                        "reason": "AI refresh failed validation; retained last valid interpretation",
+                    }
+                else:
+                    summary = f"{summary} AI-интерпретация недоступна; сохранён локальный детерминированный отчёт."
         report = Report(
             id=report_id,
             kind=kind,  # type: ignore[arg-type]
