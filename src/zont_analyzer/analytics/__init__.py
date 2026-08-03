@@ -14,6 +14,7 @@ from .dhw import (
     classify_opentherm_state,
 )
 from .events import detect_burner_events, detect_temperature_events
+from .flame import detect_unconfirmed_burner_pulses
 from .metrics import burner_metrics, temperature_metrics
 from .quality import assess_quality
 
@@ -31,6 +32,7 @@ __all__ = [
     "detect_control_context",
     "detect_heating_availability",
     "detect_temperature_events",
+    "detect_unconfirmed_burner_pulses",
     "DhwAnalysis",
     "HeatingDemand",
     "temperature_metrics",

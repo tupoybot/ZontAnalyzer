@@ -103,6 +103,30 @@ def test_html_escapes_report_content(tmp_path: Path) -> None:
     assert "&lt;script&gt;" in rendered
 
 
+def test_renderers_show_disabled_dhw_target_as_inactive(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
+    report.context["dhw_interaction"] = {
+        "dhw_circuit": {
+            "current_mode": {"name": "Эконом"},
+            "current_enabled": False,
+            "current_target_c": None,
+            "configured_or_last_target_c": 35.0,
+        },
+        "data_quality": {"score": 0.8},
+        "recirculation": {"configured_present": True},
+    }
+
+    text = render_text(report)
+    html = render_html(report)
+    assert "ГВС: отключена выбранным режимом Эконом" in text
+    assert "сохранённая неактивная уставка 35 °C" in text
+    assert "активная цель 35" not in text
+    assert "OFF; сохранённая неактивная уставка 35 °C" in html
+    assert "прямого датчика насоса нет" in html
+
+
 def test_initial_report_uses_latest_sample_and_stable_id(tmp_path: Path) -> None:
     db = Database(tmp_path / "state.sqlite3")
     db.initialize()
@@ -215,9 +239,7 @@ def test_analysis_integrates_dhw_episode_and_heating_return(tmp_path: Path) -> N
             "dhw_activity",
         ),
         (
-            numeric_points(
-                "boiler", "dt", dhw_temperature, source_type="z3k_boiler_adapter", unit="°C"
-            ),
+            numeric_points("boiler", "dt", dhw_temperature, source_type="z3k_boiler_adapter", unit="°C"),
             "dhw_temperature",
         ),
         (
@@ -243,6 +265,57 @@ def test_analysis_integrates_dhw_episode_and_heating_return(tmp_path: Path) -> N
     assert episode.details["inference"]["heating_demand"] == "confirmed"
     assert "По ГВС найдено 1 эпизод" in report.summary
     assert "ГВС ↔ отопление" in render_html(report)
+
+
+def test_analysis_filters_only_short_flame_pulse_without_flow_response(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    start = datetime(2026, 7, 31, 20, tzinfo=UTC)
+    state_values = ["[]"] * 17
+    state_values[1] = "['dhw', 'fl']"
+    state_values[10] = "['dhw', 'fl']"
+    states = [
+        TelemetryPoint(
+            device_id="1",
+            source_type="z3k_boiler_adapter",
+            entity_id="boiler",
+            metric_key="s",
+            timestamp_utc=start + timedelta(minutes=index),
+            value_text=value,
+        )
+        for index, value in enumerate(state_values)
+    ]
+    flow = [25.0] * 17
+    flow[15] = 34.8
+    flow[16] = 35.0
+    dhw = [45.0] * 17
+    dhw[15] = 48.0
+    for points, role in (
+        (states, "unknown"),
+        (list(_points(start, flow, entity="boiler", metric="bt")), "flow_temperature"),
+        (list(_points(start, dhw, entity="boiler", metric="dt")), "dhw_temperature"),
+    ):
+        # _points uses five-minute spacing; rebuild numeric boiler timestamps at one minute.
+        if points is not states:
+            for index, point in enumerate(points):
+                point.timestamp_utc = start + timedelta(minutes=index)
+                point.source_type = "z3k_boiler_adapter"
+        db.upsert_samples(points)
+        row = next(
+            item
+            for item in db.list_series()
+            if item["entity_id"] == points[0].entity_id and item["metric_key"] == points[0].metric_key
+        )
+        db.update_series_role(int(row["id"]), role)
+
+    report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
+    by_name = {item.name: item.value for item in report.metrics}
+
+    assert by_name["unconfirmed_burner_pulse_count"] == 1
+    assert by_name["dhw_burner_starts"] == 1
+    assert by_name["dhw_episode_count"] == 1
+    noise = next(item for item in report.events if item.kind == "unconfirmed_burner_pulse")
+    assert noise.severity == "info"
 
 
 def test_partial_sync_does_not_advance_cursor(tmp_path: Path) -> None:

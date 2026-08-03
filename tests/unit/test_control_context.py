@@ -74,6 +74,8 @@ def test_mode_catalog_uses_parameters_before_name_hints() -> None:
     assert catalog[10]["target_policy"] == "fixed"
     assert catalog[10]["intent"] == "comfort"
     assert catalog[11]["heating_enabled"] is False
+    assert catalog[11]["circuit_enabled"] is False
+    assert catalog[11]["temperature_setting_id"] == 0
     assert catalog[11]["target_policy"] == "off"
     assert catalog[12]["target_policy"] == "scheduled"
     assert catalog[12]["schedule"][0]["start"] == "07:00"

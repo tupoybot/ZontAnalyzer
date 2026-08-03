@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from zont_analyzer.analytics.events import detect_burner_events
+from zont_analyzer.analytics.flame import detect_unconfirmed_burner_pulses
 from zont_analyzer.analytics.metrics import burner_metrics, temperature_metrics
 from zont_analyzer.analytics.quality import assess_quality
 
@@ -100,3 +101,74 @@ def test_burner_cycle_during_control_transition_is_context_not_anomaly() -> None
     assert events[0].severity == "info"
     assert next(item for item in metrics if item.name == "burner_starts").value == 1
     assert next(item for item in metrics if item.name == "short_cycle_share_pct").value == 0
+
+
+def test_short_flame_pulse_without_flow_rise_is_reported_and_filtered() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    result = detect_unconfirmed_burner_pulses(
+        period_id="noise",
+        boiler_state_samples=[
+            (start, "[]"),
+            (start + timedelta(minutes=1), "['dhw', 'fl']"),
+            (start + timedelta(minutes=2), "[]"),
+        ],
+        flow_temperature_samples=[
+            (start, 30.0),
+            (start + timedelta(minutes=2), 30.1),
+            (start + timedelta(minutes=7), 30.0),
+        ],
+        maximum_pulse_minutes=2,
+    )
+
+    assert result.ignored_windows == [(start + timedelta(minutes=1), start + timedelta(minutes=2))]
+    assert result.events[0].severity == "info"
+    assert result.events[0].details["inference"]["excluded_from_burner_and_dhw_cycle_statistics"] is True
+    assert result.metrics[0].value == 1
+
+
+def test_short_flame_pulse_with_delayed_flow_rise_is_retained() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    result = detect_unconfirmed_burner_pulses(
+        period_id="real",
+        boiler_state_samples=[
+            (start, "[]"),
+            (start + timedelta(minutes=1), "['dhw', 'fl']"),
+            (start + timedelta(minutes=2), "[]"),
+        ],
+        flow_temperature_samples=[
+            (start, 25.0),
+            (start + timedelta(minutes=2), 25.1),
+            (start + timedelta(minutes=7), 34.8),
+        ],
+        maximum_pulse_minutes=2,
+    )
+
+    assert not result.ignored_windows
+    assert not result.events
+
+
+def test_flame_noise_filter_is_conservative_without_response_data_or_for_long_cycle() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    insufficient = detect_unconfirmed_burner_pulses(
+        period_id="missing",
+        boiler_state_samples=[
+            (start, "[]"),
+            (start + timedelta(minutes=1), "['fl']"),
+            (start + timedelta(minutes=2), "[]"),
+        ],
+        flow_temperature_samples=[(start, 30.0)],
+        maximum_pulse_minutes=2,
+    )
+    long_cycle = detect_unconfirmed_burner_pulses(
+        period_id="long",
+        boiler_state_samples=[
+            (start, "[]"),
+            (start + timedelta(minutes=1), "['fl']"),
+            (start + timedelta(minutes=4), "[]"),
+        ],
+        flow_temperature_samples=[(start, 30.0), (start + timedelta(minutes=5), 30.0)],
+        maximum_pulse_minutes=2,
+    )
+
+    assert not insufficient.ignored_windows
+    assert not long_cycle.ignored_windows

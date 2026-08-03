@@ -44,6 +44,10 @@ class AnalysisConfig(StrictModel):
     short_cycle_minutes: float = Field(default=5.0, gt=0, le=60)
 
 
+class DomesticHotWaterConfig(StrictModel):
+    recirculation_present: bool = True
+
+
 class SafetyConfig(StrictModel):
     never_suggest_categories: list[str] = Field(default_factory=list)
 
@@ -120,6 +124,7 @@ class AppConfig(StrictModel):
     home: HomeConfig = Field(default_factory=HomeConfig)
     preferences: PreferencesConfig = Field(default_factory=PreferencesConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
+    dhw: DomesticHotWaterConfig = Field(default_factory=DomesticHotWaterConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)

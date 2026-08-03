@@ -28,8 +28,16 @@ quality or a pause in space heating. Concurrent OpenTherm flags are ambiguous, n
 two proven burner cycles. A long return after DHW is a problem only when the local
 classifier confirms space-heating demand; summer/off/unknown demand must not become
 a heating alarm. Preserve the supplied epistemic level: observed facts, multi-signal
-inferences, and hypotheses must be described differently. Never infer water draw,
-three-way-valve position, pump operation, or hydraulic flow without a direct signal.
+inferences, and hypotheses must be described differently. A ZONT mode with the DHW
+circuit disabled is authoritative over a stale target sample: do not call that sample
+an active target. Do not state water draw, three-way-valve position, pump operation,
+or hydraulic flow as an observed fact without a direct signal. You may discuss possible
+recirculation only when a supplied dhw_possible_recirculation_activity event supports it,
+and must keep water draw, mixing, heat loss, and sensor noise as alternatives. AUTOADAPT
+is a possible cause of irregular autonomous recirculation timing, not proof of a feature
+installed at this home. Treat dhw_antilegionella_cycle as an expected autonomous boiler
+service cycle, not a fault. Treat unconfirmed_burner_pulse as telemetry noise already
+excluded from burner/DHW cycle statistics, not as a start, short cycle, or failure.
 recommendation_feedback contains owner-confirmed outcomes from earlier recommendations.
 Treat owner_note as authoritative manual context. Do not repeat a rejected recommendation
 unless the current packet contains materially new contradictory evidence; if revisiting it,

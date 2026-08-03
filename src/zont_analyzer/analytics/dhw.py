@@ -10,7 +10,7 @@ from typing import Any, NamedTuple, TypeVar
 
 from zont_analyzer.domain import DetectedEvent, MetricValue
 
-ALGORITHM_VERSION = "dhw-v1"
+ALGORITHM_VERSION = "dhw-v2"
 _T = TypeVar("_T")
 
 
@@ -109,7 +109,10 @@ def _maximum_gap(timestamps: list[datetime], *, floor_seconds: float = 300.0) ->
 
 
 def _state_intervals(
-    samples: list[BoilerStateSample], period_start: datetime, period_end: datetime
+    samples: list[BoilerStateSample],
+    period_start: datetime,
+    period_end: datetime,
+    ignored_windows: list[tuple[datetime, datetime]] | None = None,
 ) -> tuple[list[_StateInterval], float]:
     if not samples:
         return [], 0.0
@@ -120,7 +123,10 @@ def _state_intervals(
     for current, following in zip(ordered, ordered[1:], strict=False):
         start = max(current.timestamp, period_start)
         end = min(following.timestamp, period_end)
-        if start < end and (following.timestamp - current.timestamp).total_seconds() <= maximum_gap:
+        ignored = any(
+            start < ignored_end and end > ignored_start for ignored_start, ignored_end in ignored_windows or []
+        )
+        if not ignored and start < end and (following.timestamp - current.timestamp).total_seconds() <= maximum_gap:
             intervals.append(_StateInterval(start=start, end=end, sample=current))
     return intervals, maximum_gap
 
@@ -176,9 +182,80 @@ def _mode_enabled_at(
 ) -> bool | None:
     mode_id = _mode_at(mode_samples, timestamp)
     mode = mode_catalog.get(mode_id) if mode_id is not None else None
-    if mode is None or "heating_enabled" not in mode:
+    if mode is None:
         return None
-    return bool(mode["heating_enabled"])
+    enabled = mode.get("circuit_enabled", mode.get("heating_enabled"))
+    return bool(enabled) if enabled is not None else None
+
+
+def _possible_recirculation_events(
+    *,
+    period_id: str,
+    temperatures: list[tuple[datetime, float]],
+    states: list[BoilerStateSample],
+    configured_present: bool,
+    minimum_drop_c: float = 0.5,
+    minimum_drop_rate_c_per_hour: float = 3.0,
+    maximum_interval_minutes: float = 30.0,
+    maximum_events: int = 5,
+) -> list[DetectedEvent]:
+    if not configured_present:
+        return []
+    ordered = sorted({timestamp: value for timestamp, value in temperatures}.items())
+    candidates: list[DetectedEvent] = []
+    state_by_time = [(sample.timestamp, sample) for sample in states]
+    for (start, before), (end, after) in zip(ordered, ordered[1:], strict=False):
+        duration_seconds = (end - start).total_seconds()
+        if duration_seconds <= 0 or duration_seconds > maximum_interval_minutes * 60:
+            continue
+        drop_c = before - after
+        rate = drop_c / duration_seconds * 3600
+        if drop_c < minimum_drop_c or rate < minimum_drop_rate_c_per_hour:
+            continue
+        state = _value_at(state_by_time, start)
+        if state is not None and state.flame_on:
+            continue
+        candidates.append(
+            DetectedEvent(
+                id=(
+                    f"event:{period_id}:dhw_possible_recirculation_activity:"
+                    f"{int(start.timestamp())}:{ALGORITHM_VERSION}"
+                ),
+                kind="dhw_possible_recirculation_activity",
+                started_at=start,
+                ended_at=end,
+                severity="info",
+                details={
+                    "facts": {
+                        "dhw_temperature_start_c": round(before, 3),
+                        "dhw_temperature_end_c": round(after, 3),
+                        "temperature_drop_c": round(drop_c, 3),
+                        "duration_minutes": round(duration_seconds / 60, 3),
+                        "burner_flame_observed": False,
+                        "direct_pump_signal_available": False,
+                    },
+                    "inference": {
+                        "possible_recirculation_pump_activity": True,
+                        "confidence": "low",
+                        "alternatives": [
+                            "water_draw",
+                            "tank_stratification_or_mixing",
+                            "ordinary_heat_loss",
+                            "temperature_sensor_noise",
+                        ],
+                    },
+                    "hypothesis": (
+                        "Температурное возмущение без пламени совместимо с работой рециркуляции, "
+                        "но не доказывает её. Нерегулярное время может объясняться самообучающимся "
+                        "управлением насоса, например AUTOADAPT, если оно предусмотрено насосом."
+                    ),
+                },
+                algorithm_version=ALGORITHM_VERSION,
+            )
+        )
+        if len(candidates) >= maximum_events:
+            break
+    return candidates
 
 
 def _recent_positive(
@@ -387,6 +464,8 @@ def analyze_dhw_interactions(
     long_return_minutes: float = 15.0,
     hot_flow_threshold_c: float = 45.0,
     long_hot_tail_minutes: float = 15.0,
+    recirculation_present: bool = True,
+    ignored_state_windows: list[tuple[datetime, datetime]] | None = None,
 ) -> DhwAnalysis:
     """Build deterministic DHW episodes and their observed interaction with space heating."""
 
@@ -400,7 +479,12 @@ def analyze_dhw_interactions(
     heating_worktime = heating_worktime_samples or []
     flow_temperatures = flow_temperature_samples or []
     states = classify_boiler_states(boiler_state_samples)
-    intervals, maximum_state_gap = _state_intervals(states, period_start, period_end)
+    intervals, maximum_state_gap = _state_intervals(
+        states,
+        period_start,
+        period_end,
+        ignored_windows=ignored_state_windows,
+    )
     episodes = _dhw_episodes(intervals)
     observed_state_seconds = sum((item.end - item.start).total_seconds() for item in intervals)
     dhw_seconds = sum(
@@ -429,6 +513,9 @@ def analyze_dhw_interactions(
     return_delays: list[float] = []
     confirmed_long_returns = residual_returns = hot_tails = 0
     events: list[DetectedEvent] = []
+    ordinary_episode_count = 0
+    disabled_activity_count = 0
+    antilegionella_count = 0
 
     for episode in episodes:
         selected_mode_id = _mode_at(mode_samples, episode.start)
@@ -466,14 +553,10 @@ def analyze_dhw_interactions(
             else None
         )
         recovery = (achieved_at - episode.start).total_seconds() / 60 if achieved_at else None
-        if recovery is not None:
-            recovery_minutes.append(recovery)
         peak_temperature_c = max((value for _, value in temperatures), default=None)
         overshoot_c = (
             max(0.0, peak_temperature_c - target_c) if target_c is not None and peak_temperature_c is not None else None
         )
-        if overshoot_c is not None:
-            overshoots.append(overshoot_c)
         returned_at, return_source, returned_without_flame = _first_return(
             episode_end=episode.end,
             states=states,
@@ -481,14 +564,104 @@ def analyze_dhw_interactions(
             window_end=followup_end,
         )
         return_delay = (returned_at - episode.end).total_seconds() / 60 if returned_at else None
-        if return_delay is not None:
-            return_delays.append(return_delay)
         episode_data_reliable = data_reliable and _observation_window_is_continuous(
             states,
             episode.start,
             returned_at or episode.end,
             maximum_state_gap,
         )
+        flame_observed = any(interval.sample.flame_on for interval in episode.intervals)
+        enabled_after = _mode_enabled_at(mode_samples, mode_catalog, episode.end)
+        temperature_rise_c = (
+            peak_temperature_c - start_temperature_c
+            if peak_temperature_c is not None and start_temperature_c is not None
+            else None
+        )
+        probable_antilegionella = (
+            dhw_enabled is False
+            and enabled_after is False
+            and flame_observed
+            and episode_data_reliable
+            and peak_temperature_c is not None
+            and 55.0 <= peak_temperature_c <= 65.0
+            and temperature_rise_c is not None
+            and temperature_rise_c >= 3.0
+        )
+        if probable_antilegionella:
+            assert temperature_rise_c is not None
+            antilegionella_count += 1
+            events.append(
+                DetectedEvent(
+                    id=(
+                        f"event:{period_id}:dhw_antilegionella_cycle:"
+                        f"{int(episode.start.timestamp())}:{ALGORITHM_VERSION}"
+                    ),
+                    kind="dhw_antilegionella_cycle",
+                    started_at=episode.start,
+                    ended_at=episode.end,
+                    severity="info",
+                    details={
+                        "facts": {
+                            "selected_system_mode_id": selected_mode_id,
+                            "selected_system_mode_name": selected_mode.get("name") if selected_mode else None,
+                            "dhw_enabled_before_cycle": False,
+                            "dhw_enabled_after_cycle": False,
+                            "dhw_temperature_start_c": start_temperature_c,
+                            "dhw_temperature_peak_c": peak_temperature_c,
+                            "temperature_rise_c": round(temperature_rise_c, 3),
+                            "flame_observed": True,
+                        },
+                        "inference": {
+                            "cycle_classification": "probable_antilegionella",
+                            "expected_service_cycle": True,
+                        },
+                        "hypothesis": (
+                            "Нагрев отключённого режимом ГВС до санитарного диапазона 55–65 °C с возвратом "
+                            "в OFF похож на автономный цикл антилегионеллы котла, не управляемый ZONT."
+                        ),
+                    },
+                    algorithm_version=ALGORITHM_VERSION,
+                )
+            )
+            continue
+        if dhw_enabled is False:
+            disabled_activity_count += 1
+            events.append(
+                DetectedEvent(
+                    id=(
+                        f"event:{period_id}:dhw_activity_while_disabled:"
+                        f"{int(episode.start.timestamp())}:{ALGORITHM_VERSION}"
+                    ),
+                    kind="dhw_activity_while_disabled",
+                    started_at=episode.start,
+                    ended_at=episode.end,
+                    severity="info",
+                    details={
+                        "facts": {
+                            "selected_system_mode_id": selected_mode_id,
+                            "selected_system_mode_name": selected_mode.get("name") if selected_mode else None,
+                            "dhw_enabled_by_selected_mode": False,
+                            "dhw_temperature_start_c": start_temperature_c,
+                            "dhw_temperature_peak_c": peak_temperature_c,
+                            "flame_observed": flame_observed,
+                        },
+                        "inference": {"cycle_classification": "external_or_unmanaged_dhw_activity"},
+                        "hypothesis": (
+                            "ZONT-режим отключает ГВС, поэтому это не обычный догрев по его активной уставке. "
+                            "Возможны автономная функция котла, внешний запрос или остаточный шум сигналов."
+                        ),
+                    },
+                    algorithm_version=ALGORITHM_VERSION,
+                )
+            )
+            continue
+        ordinary_episode_count += 1
+        if recovery is not None:
+            recovery_minutes.append(recovery)
+        if overshoot_c is not None:
+            overshoots.append(overshoot_c)
+        if return_delay is not None:
+            return_delays.append(return_delay)
         if returned_without_flame and episode_data_reliable:
             residual_returns += 1
         pause_minutes = (returned_at - episode.start).total_seconds() / 60 if returned_at else None
@@ -558,7 +731,7 @@ def analyze_dhw_interactions(
                 else None
             ),
             "temperature_drop_pattern": drop_pattern,
-            "dhw_mode_consistency": "conflicting" if dhw_enabled is False else "consistent_or_unknown",
+            "dhw_mode_consistency": "consistent_or_unknown",
             "residual_heat_return": episode_data_reliable and returned_without_flame,
             "long_heating_return": episode_data_reliable and demand == HeatingDemand.CONFIRMED and long_return,
             "long_hot_flow_tail": episode_data_reliable and long_hot_tail,
@@ -570,8 +743,7 @@ def analyze_dhw_interactions(
             else "Наблюдалось быстрое снижение температуры ГВС; водоразбор возможен, но не доказан."
             if drop_pattern == "rapid_temperature_decline"
             else (
-                "Нет прямого сигнала клапана ГВС, насоса или расхода воды; "
-                "гидравлическая причина остаётся неизвестной."
+                "Нет прямого сигнала клапана ГВС, насоса или расхода воды; гидравлическая причина остаётся неизвестной."
             )
         )
         event_id = f"event:{period_id}:dhw_episode:{int(episode.start.timestamp())}:{ALGORITHM_VERSION}"
@@ -622,7 +794,24 @@ def analyze_dhw_interactions(
                 )
             )
 
-    metrics: list[MetricValue] = [_metric(period_id, "dhw_episode_count", float(len(episodes)), "count")]
+    recirculation_events = _possible_recirculation_events(
+        period_id=period_id,
+        temperatures=dhw_temperature_samples,
+        states=states,
+        configured_present=recirculation_present,
+    )
+    events.extend(recirculation_events)
+    metrics: list[MetricValue] = [
+        _metric(period_id, "dhw_episode_count", float(ordinary_episode_count), "count"),
+        _metric(period_id, "dhw_activity_while_disabled_count", float(disabled_activity_count), "count"),
+        _metric(period_id, "dhw_antilegionella_cycle_count", float(antilegionella_count), "count"),
+        _metric(
+            period_id,
+            "dhw_possible_recirculation_activity_count",
+            float(len(recirculation_events)),
+            "count",
+        ),
+    ]
     if observed_state_seconds:
         metrics.extend(
             [
@@ -675,6 +864,8 @@ def analyze_dhw_interactions(
 
     current_mode_id = _mode_at(mode_samples, period_end)
     current_mode = mode_catalog.get(current_mode_id) if current_mode_id is not None else None
+    current_enabled = _mode_enabled_at(mode_samples, mode_catalog, period_end)
+    reported_target_c = _value_at(dhw_target_samples, period_end)
     context: dict[str, Any] = {
         "algorithm_version": ALGORITHM_VERSION,
         "quality_sufficient_for_alerts": data_reliable,
@@ -684,13 +875,23 @@ def analyze_dhw_interactions(
             **circuit_config,
             "current_mode_id": current_mode_id,
             "current_mode": current_mode,
-            "current_target_c": _value_at(dhw_target_samples, period_end),
+            "current_enabled": current_enabled,
+            "current_target_c": reported_target_c if current_enabled is not False else None,
+            "configured_or_last_target_c": reported_target_c,
             "current_status": _value_at(dhw_status_samples or [], period_end),
             "current_worktime": _value_at(dhw_worktime_samples or [], period_end),
             "historical_mode_observed": bool(mode_samples),
             "historical_target_observed": bool(dhw_target_samples),
         },
         "episode_event_ids": [event.id for event in events if event.kind == "dhw_reheat_episode"],
+        "recirculation": {
+            "configured_present": recirculation_present,
+            "direct_pump_signal_available": False,
+            "inference_only": True,
+            "candidate_count": len(recirculation_events),
+            "candidate_event_ids": [event.id for event in recirculation_events],
+            "possible_unobserved_controls": ["self-adaptive recirculation control such as AUTOADAPT"],
+        },
     }
     return DhwAnalysis(metrics=metrics, events=sorted(events, key=lambda item: item.started_at), context=context)
 

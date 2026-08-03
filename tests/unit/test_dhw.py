@@ -75,8 +75,8 @@ def test_normal_reheat_uses_historical_target_mode_status_and_worktime() -> None
     assert _metrics(result)["dhw_mean_overshoot_c"] == 1
     assert _metrics(result)["dhw_confirmed_heating_pause_count"] == 1
     episode = next(event for event in result.events if event.kind == "dhw_reheat_episode")
-    assert episode.algorithm_version == "dhw-v1"
-    assert episode.id == f"event:day:1:dhw_episode:{int(_at(10).timestamp())}:dhw-v1"
+    assert episode.algorithm_version == "dhw-v2"
+    assert episode.id == f"event:day:1:dhw_episode:{int(_at(10).timestamp())}:dhw-v2"
     assert episode.details["facts"]["selected_system_mode_id"] == 1
     assert episode.details["facts"]["dhw_enabled_by_selected_mode"] is True
     assert episode.details["facts"]["dhw_status"] == 7
@@ -97,12 +97,76 @@ def test_selected_mode_can_disable_dhw_and_excludes_below_target_time() -> None:
         boiler_state_samples=[(_at(0), "[]"), (_at(5), "[]"), (_at(10), "[]")],
         dhw_mode_samples=[(_at(0), 2.0)],
         dhw_mode_catalog={2: {"id": 2, "name": "Эконом", "heating_enabled": False}},
+        recirculation_present=False,
     )
 
     assert result.context["dhw_circuit"]["current_mode_id"] == 2
     assert result.context["dhw_circuit"]["current_mode"]["heating_enabled"] is False
     assert "dhw_time_below_target_pct" not in _metrics(result)
+    assert result.context["dhw_circuit"]["current_enabled"] is False
+    assert result.context["dhw_circuit"]["current_target_c"] is None
+    assert result.context["dhw_circuit"]["configured_or_last_target_c"] == 55
     assert not result.events
+
+
+def test_activity_while_dhw_mode_is_off_is_not_an_ordinary_reheat() -> None:
+    result = _base_analysis(
+        boiler_state_samples=[(_at(0), "[]"), (_at(5), "['dhw', 'fl']"), (_at(10), "[]"), (_at(15), "[]")],
+        dhw_temperature_samples=[(_at(0), 45.0), (_at(5), 45.0), (_at(10), 48.0), (_at(15), 49.0)],
+        dhw_mode_samples=[(_at(0), 2.0)],
+        dhw_mode_catalog={2: {"id": 2, "name": "Эконом", "circuit_enabled": False}},
+        recirculation_present=False,
+    )
+
+    assert _metrics(result)["dhw_episode_count"] == 0
+    assert _metrics(result)["dhw_activity_while_disabled_count"] == 1
+    event = next(item for item in result.events if item.kind == "dhw_activity_while_disabled")
+    assert event.severity == "info"
+
+
+def test_off_to_sanitary_temperature_and_back_is_probable_antilegionella() -> None:
+    result = _base_analysis(
+        boiler_state_samples=[
+            (_at(0), "[]"),
+            (_at(5), "['dhw', 'fl']"),
+            (_at(10), "['dhw', 'fl']"),
+            (_at(15), "[]"),
+            (_at(20), "[]"),
+        ],
+        dhw_temperature_samples=[
+            (_at(0), 45.0),
+            (_at(5), 46.0),
+            (_at(10), 56.0),
+            (_at(15), 60.0),
+            (_at(20), 59.0),
+        ],
+        dhw_mode_samples=[(_at(0), 2.0)],
+        dhw_mode_catalog={2: {"id": 2, "name": "Эконом", "circuit_enabled": False}},
+        recirculation_present=False,
+    )
+
+    assert _metrics(result)["dhw_episode_count"] == 0
+    assert _metrics(result)["dhw_antilegionella_cycle_count"] == 1
+    event = next(item for item in result.events if item.kind == "dhw_antilegionella_cycle")
+    assert event.severity == "info"
+    assert event.details["inference"]["expected_service_cycle"] is True
+
+
+def test_recirculation_candidate_is_explicitly_inference_only() -> None:
+    arguments = {
+        "boiler_state_samples": [(_at(0), "[]"), (_at(5), "[]"), (_at(10), "[]")],
+        "dhw_temperature_samples": [(_at(0), 50.0), (_at(5), 49.2), (_at(10), 49.1)],
+        "recirculation_present": True,
+    }
+    result = _base_analysis(**arguments)
+    disabled = _base_analysis(**{**arguments, "recirculation_present": False})
+
+    event = next(item for item in result.events if item.kind == "dhw_possible_recirculation_activity")
+    assert event.details["facts"]["direct_pump_signal_available"] is False
+    assert event.details["inference"]["confidence"] == "low"
+    assert "AUTOADAPT" in event.details["hypothesis"]
+    assert result.context["recirculation"]["inference_only"] is True
+    assert not any(item.kind == "dhw_possible_recirculation_activity" for item in disabled.events)
 
 
 def test_ch_pause_has_fast_return_and_is_not_an_alert() -> None:
@@ -239,6 +303,6 @@ def test_metric_ids_are_stable_and_use_metric_dto() -> None:
     result = _base_analysis()
     metric = next(item for item in result.metrics if item.name == "dhw_episode_count")
 
-    assert metric.id == "metric:day:1:dhw_episode_count:dhw-v1"
-    assert metric.algorithm_version == "dhw-v1"
+    assert metric.id == "metric:day:1:dhw_episode_count:dhw-v2"
+    assert metric.algorithm_version == "dhw-v2"
     assert metric.value == pytest.approx(1)

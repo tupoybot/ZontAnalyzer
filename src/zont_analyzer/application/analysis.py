@@ -21,6 +21,7 @@ from zont_analyzer.analytics import (
     detect_control_context,
     detect_heating_availability,
     detect_temperature_events,
+    detect_unconfirmed_burner_pulses,
     temperature_metrics,
 )
 from zont_analyzer.config import AppConfig
@@ -168,21 +169,45 @@ class AnalysisService:
             (
                 item
                 for item in series
-                if item["role"] == "flow_temperature"
-                and (not dhw_device_id or str(item["device_id"]) == dhw_device_id)
+                if item["role"] == "flow_temperature" and (not dhw_device_id or str(item["device_id"]) == dhw_device_id)
             ),
             None,
         )
         temperature_samples = (
             self.db.fetch_samples(int(temperature_series["id"]), start, end) if temperature_series else []
         )
+        flow_temperature_samples = (
+            self.db.fetch_samples(int(flow_temperature_series["id"]), start, end) if flow_temperature_series else []
+        )
         burner_samples = self.db.fetch_samples(int(burner_series["id"]), start, end) if burner_series else []
         dhw_burner_samples: list[tuple[datetime, float]] = []
+        state_samples: list[tuple[datetime, str]] = []
+        flame_noise_windows: list[tuple[datetime, datetime]] = []
+        flame_noise_events: list[DetectedEvent] = []
+        flame_noise_metrics: list[MetricValue] = []
         burner_activity_scope = "generic_flame"
         if boiler_state_series:
             state_samples = self.db.fetch_text_samples(int(boiler_state_series["id"]), start, end)
-            space_heating_samples = self._purpose_flame_samples(state_samples, "ch")
-            dhw_burner_samples = self._purpose_flame_samples(state_samples, "dhw")
+            if flow_temperature_samples:
+                flame_noise = detect_unconfirmed_burner_pulses(
+                    period_id=period_id,
+                    boiler_state_samples=state_samples,
+                    flow_temperature_samples=flow_temperature_samples,
+                    maximum_pulse_minutes=2.0,
+                )
+                flame_noise_windows = flame_noise.ignored_windows
+                flame_noise_events = flame_noise.events
+                flame_noise_metrics = flame_noise.metrics
+            space_heating_samples = self._purpose_flame_samples(
+                state_samples,
+                "ch",
+                ignore_windows=flame_noise_windows,
+            )
+            dhw_burner_samples = self._purpose_flame_samples(
+                state_samples,
+                "dhw",
+                ignore_windows=flame_noise_windows,
+            )
             if space_heating_samples:
                 burner_samples = space_heating_samples
                 burner_activity_scope = "space_heating_only"
@@ -236,9 +261,7 @@ class AnalysisService:
         availability_modes = (
             self.db.fetch_samples(int(mode_series["id"]), context_start, end) if mode_series else mode_samples
         )
-        status_samples = (
-            self.db.fetch_samples(int(status_series["id"]), context_start, end) if status_series else []
-        )
+        status_samples = self.db.fetch_samples(int(status_series["id"]), context_start, end) if status_series else []
         availability_events, availability_context, inactive_windows = detect_heating_availability(
             start=start,
             end=end,
@@ -255,9 +278,7 @@ class AnalysisService:
         control_context["heating_circuit"] = availability_context
         control_context["burner_activity_scope"] = burner_activity_scope
         dhw_temperature_samples = (
-            self.db.fetch_samples(int(dhw_temperature_series["id"]), start, end)
-            if dhw_temperature_series
-            else []
+            self.db.fetch_samples(int(dhw_temperature_series["id"]), start, end) if dhw_temperature_series else []
         )
         dhw_target_samples = (
             self.db.fetch_samples(int(dhw_target_series["id"]), context_start, end) if dhw_target_series else []
@@ -278,11 +299,6 @@ class AnalysisService:
         )
         heating_target_context_samples = (
             self.db.fetch_samples(int(target_series["id"]), context_start, end) if target_series else []
-        )
-        flow_temperature_samples = (
-            self.db.fetch_samples(int(flow_temperature_series["id"]), start, end)
-            if flow_temperature_series
-            else []
         )
         interaction_state_samples: list[tuple[datetime, str | Collection[str]]] = list(
             self.db.fetch_text_samples(int(boiler_state_series["id"]), context_start, end)
@@ -306,6 +322,7 @@ class AnalysisService:
             target_samples=effective_target_samples,
             ignore_windows=inactive_windows,
         )
+        metrics.extend(flame_noise_metrics)
         if outdoor_series:
             outdoor_samples = self.db.fetch_samples(int(outdoor_series["id"]), start, end)
             outdoor_metrics = temperature_metrics(
@@ -326,8 +343,9 @@ class AnalysisService:
             target_samples=effective_target_samples,
             ignore_windows=[*transition_windows, *inactive_windows],
         )
+        events.extend(flame_noise_events)
         events.extend(control_events)
-        if burner_series:
+        if burner_samples:
             space_heating_metrics = burner_metrics(
                 burner_samples,
                 period_id=period_id,
@@ -382,6 +400,8 @@ class AnalysisService:
                 quality_score=dhw_quality.score,
                 minimum_quality_score=self.config.analysis.minimum_quality_score,
                 comfort_band_c=self.config.preferences.comfort_band_c,
+                recirculation_present=self.config.dhw.recirculation_present,
+                ignored_state_windows=flame_noise_windows,
             )
             metrics.extend(dhw_analysis.metrics)
             events.extend(dhw_analysis.events)
@@ -464,7 +484,10 @@ class AnalysisService:
 
     @staticmethod
     def _purpose_flame_samples(
-        samples: list[tuple[datetime, str]], purpose: str
+        samples: list[tuple[datetime, str]],
+        purpose: str,
+        *,
+        ignore_windows: list[tuple[datetime, datetime]] | None = None,
     ) -> list[tuple[datetime, float]]:
         result: list[tuple[datetime, float]] = []
         for timestamp, encoded in samples:
@@ -478,6 +501,8 @@ class AnalysisService:
                     selected = selected and "dhw" not in flags
                 elif purpose == "dhw":
                     selected = selected and "ch" not in flags
+                if any(start <= timestamp < end for start, end in ignore_windows or []):
+                    selected = False
                 result.append((timestamp, float(selected)))
         return result
 
@@ -525,8 +550,12 @@ class AnalysisService:
             return ""
         metric_values = {item.name: item.value for item in metrics}
         episodes = int(metric_values.get("dhw_episode_count", 0))
+        disabled_activity = int(metric_values.get("dhw_activity_while_disabled_count", 0))
+        antilegionella = int(metric_values.get("dhw_antilegionella_cycle_count", 0))
         quality = dhw_context.get("data_quality", {})
         quality_score = float(quality.get("score", 0)) if isinstance(quality, dict) else 0.0
+        circuit = dhw_context.get("dhw_circuit", {})
+        currently_disabled = isinstance(circuit, dict) and circuit.get("current_enabled") is False
         episode_word = (
             "эпизод"
             if episodes % 10 == 1 and episodes % 100 != 11
@@ -535,11 +564,20 @@ class AnalysisService:
             else "эпизодов"
         )
         if not dhw_context.get("quality_sufficient_for_alerts", False):
+            state = "ГВС отключено выбранным режимом. " if currently_disabled else ""
             return (
-                f"По ГВС найдено {episodes} {episode_word}, но отдельное качество данных ГВС "
+                f"{state}По ГВС найдено {episodes} {episode_word}, но отдельное качество данных ГВС "
                 f"({quality_score:.0%}) недостаточно для предупреждений."
             )
-        parts = [f"По ГВС найдено {episodes} {episode_word} догрева"]
+        parts = (
+            ["ГВС отключено выбранным режимом", f"обычных эпизодов догрева: {episodes}"]
+            if currently_disabled
+            else [f"По ГВС найдено {episodes} {episode_word} догрева"]
+        )
+        if disabled_activity:
+            parts.append(f"информационных сигналов активности при OFF: {disabled_activity}")
+        if antilegionella:
+            parts.append(f"вероятных штатных циклов антилегионеллы: {antilegionella}")
         if "dhw_mean_recovery_minutes" in metric_values:
             parts.append(f"среднее восстановление {metric_values['dhw_mean_recovery_minutes']:g} мин")
         long_returns = int(metric_values.get("dhw_long_heating_return_count", 0))

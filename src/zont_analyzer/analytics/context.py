@@ -82,6 +82,8 @@ def build_mode_catalog(
             "id": int(item["id"]),
             "name": name,
             "heating_enabled": heating_enabled,
+            "circuit_enabled": heating_enabled,
+            "temperature_setting_id": setting,
             "target_policy": "scheduled" if timetable else "fixed" if heating_enabled else "off",
             "intent": _mode_intent(name, heating_enabled=heating_enabled),
             "schedule": schedule,

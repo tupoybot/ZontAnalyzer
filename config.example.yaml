@@ -19,6 +19,11 @@ analysis:
   minimum_quality_score: 0.70
   short_cycle_minutes: 5
 
+# Whether the DHW tank has a recirculation loop. No pump sensor is assumed:
+# possible pump operation is inferred conservatively from temperature patterns.
+dhw:
+  recirculation_present: true
+
 openai:
   enabled: false
   daily_model: gpt-5.6-luna

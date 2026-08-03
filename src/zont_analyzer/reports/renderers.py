@@ -46,6 +46,10 @@ METRIC_LABELS = {
     "dhw_long_heating_return_count": "Долгие возвраты отопления при подтверждённом запросе",
     "dhw_residual_heat_return_count": "Возвраты отопительной активности без пламени",
     "dhw_long_hot_flow_tail_count": "Долгие горячие хвосты подачи после ГВС",
+    "dhw_activity_while_disabled_count": "Сигналы активности ГВС при OFF",
+    "dhw_antilegionella_cycle_count": "Вероятные циклы антилегионеллы",
+    "dhw_possible_recirculation_activity_count": "Кандидаты косвенной активности рециркуляции",
+    "unconfirmed_burner_pulse_count": "Отсечённые шумовые сигналы горелки",
 }
 
 SPACE_HEATING_METRIC_LABELS = {
@@ -69,6 +73,10 @@ EVENT_LABELS = {
     "dhw_reheat_episode": "Эпизод догрева ГВС",
     "dhw_concurrent_or_ambiguous": "Неоднозначные одновременные флаги ГВС и отопления",
     "dhw_long_heating_return": "Долгий возврат отопления после ГВС при подтверждённом запросе",
+    "dhw_activity_while_disabled": "Активность ГВС при отключённом режиме",
+    "dhw_antilegionella_cycle": "Вероятный штатный цикл антилегионеллы",
+    "dhw_possible_recirculation_activity": "Возможная активность рециркуляции ГВС",
+    "unconfirmed_burner_pulse": "Шумовой сигнал включения горелки",
 }
 
 
@@ -95,6 +103,12 @@ def _event_details(item: Any) -> str:
             ("recovery_minutes", "восстановление", "мин"),
             ("heating_return_delay_minutes", "возврат отопления", "мин"),
             ("hot_flow_tail_minutes", "горячий хвост подачи", "мин"),
+            ("temperature_drop_c", "снижение температуры", "°C"),
+            ("flow_temperature_rise_c", "рост температуры теплоносителя", "°C"),
+            ("dhw_temperature_peak_c", "пик ГВС", "°C"),
+            ("reported_duration_seconds", "длительность сигнала пламени", "с"),
+            ("flow_temperature_start_c", "теплоноситель в начале", "°C"),
+            ("flow_temperature_peak_c", "пик теплоносителя", "°C"),
         )
         for key, label, unit in mappings:
             if facts.get(key) is not None:
@@ -147,23 +161,45 @@ def render_text(report: Report) -> str:
             + (f", текущее летнее состояние: {'активно' if auto_active else 'неактивно'}" if auto_enabled else "")
         )
         active_time_pct = 100 - float(heating_circuit.get("inactive_time_pct", 0))
-        lines.append(
-            f"Контроль отопительной уставки был активен {active_time_pct:g}% периода."
-        )
+        lines.append(f"Контроль отопительной уставки был активен {active_time_pct:g}% периода.")
     dhw_interaction = report.context.get("dhw_interaction")
     if isinstance(dhw_interaction, dict):
         dhw_circuit = dhw_interaction.get("dhw_circuit", {})
         dhw_quality = dhw_interaction.get("data_quality", {})
         mode = dhw_circuit.get("current_mode") if isinstance(dhw_circuit, dict) else None
         mode_name = mode.get("name") if isinstance(mode, dict) else None
+        enabled = dhw_circuit.get("current_enabled") if isinstance(dhw_circuit, dict) else None
         target = dhw_circuit.get("current_target_c") if isinstance(dhw_circuit, dict) else None
+        saved_target = dhw_circuit.get("configured_or_last_target_c") if isinstance(dhw_circuit, dict) else None
         score = dhw_quality.get("score") if isinstance(dhw_quality, dict) else None
-        lines.append(
-            "ГВС: "
-            + (f"режим {mode_name}; " if mode_name else "режим неизвестен; ")
-            + (f"активная цель {target:g} °C; " if isinstance(target, (int, float)) else "активная цель неизвестна; ")
-            + (f"качество данных {float(score):.0%}." if isinstance(score, (int, float)) else "качество неизвестно.")
+        quality_text = (
+            f"качество данных {float(score):.0%}." if isinstance(score, (int, float)) else "качество неизвестно."
         )
+        if enabled is False:
+            saved_text = (
+                f" сохранённая неактивная уставка {saved_target:g} °C;"
+                if isinstance(saved_target, (int, float))
+                else ""
+            )
+            lines.append(f"ГВС: отключена выбранным режимом {mode_name or 'без названия'};{saved_text} {quality_text}")
+        else:
+            lines.append(
+                "ГВС: "
+                + (f"режим {mode_name}; " if mode_name else "режим неизвестен; ")
+                + (
+                    f"активная цель {target:g} °C; "
+                    if isinstance(target, (int, float))
+                    else "активная цель неизвестна; "
+                )
+                + quality_text
+            )
+        recirculation = dhw_interaction.get("recirculation")
+        if isinstance(recirculation, dict):
+            lines.append(
+                "Рециркуляция ГВС: "
+                + ("контур указан в конфигурации; " if recirculation.get("configured_present") else "не указана; ")
+                + "прямого датчика насоса нет, возможная работа определяется только косвенно."
+            )
         lines.append(
             "Доказательность эпизодов ГВС: отдельно показаны наблюдавшиеся факты, "
             "выводы из нескольких сигналов и недоказанные гидравлические гипотезы."
@@ -197,8 +233,7 @@ def render_text(report: Report) -> str:
                     f"  Гипотеза: {item.hypothesis}",
                     f"  Действие: {item.suggested_manual_action}",
                     f"  Ожидаемый эффект: {item.expected_effect}",
-                    "  Evidence: "
-                    + ", ".join((*item.evidence_metric_ids, *item.evidence_event_ids)),
+                    "  Evidence: " + ", ".join((*item.evidence_metric_ids, *item.evidence_event_ids)),
                 ]
             )
             if item.risks:
@@ -246,18 +281,32 @@ def render_html(report: Report) -> str:
         dhw_quality = dhw_interaction.get("data_quality", {})
         current_mode = dhw_circuit.get("current_mode") if isinstance(dhw_circuit, dict) else None
         current_mode_name = current_mode.get("name") if isinstance(current_mode, dict) else None
+        current_enabled = dhw_circuit.get("current_enabled") if isinstance(dhw_circuit, dict) else None
         current_target = dhw_circuit.get("current_target_c") if isinstance(dhw_circuit, dict) else None
+        saved_target = dhw_circuit.get("configured_or_last_target_c") if isinstance(dhw_circuit, dict) else None
         quality_score = dhw_quality.get("score") if isinstance(dhw_quality, dict) else None
-        target_text = f"{current_target:g} °C" if isinstance(current_target, (int, float)) else "неизвестна"
+        recirculation = dhw_interaction.get("recirculation", {})
+        if current_enabled is False:
+            target_text = "OFF"
+            if isinstance(saved_target, (int, float)):
+                target_text += f"; сохранённая неактивная уставка {saved_target:g} °C"
+        else:
+            target_text = f"{current_target:g} °C" if isinstance(current_target, (int, float)) else "неизвестна"
         quality_text = f"{float(quality_score):.0%}" if isinstance(quality_score, (int, float)) else "неизвестно"
         dhw_context = (
-            "<section class=\"dhw\"><h2>ГВС ↔ отопление</h2><p>"
+            '<section class="dhw"><h2>ГВС ↔ отопление</h2><p>'
             f"<strong>Режим ГВС:</strong> {html.escape(str(current_mode_name or 'неизвестен'))}; "
-            f"<strong>активная цель:</strong> "
+            f"<strong>{'состояние' if current_enabled is False else 'активная цель'}:</strong> "
             f"{html.escape(target_text)}; "
             f"<strong>качество данных ГВС:</strong> "
             f"{html.escape(quality_text)}.</p>"
-            "<p><small>Наблюдавшиеся факты отделены от выводов из нескольких сигналов и гипотез. "
+            + (
+                "<p><strong>Рециркуляция:</strong> контур указан в конфигурации; прямого датчика насоса нет, "
+                "работа оценивается только косвенно.</p>"
+                if isinstance(recirculation, dict) and recirculation.get("configured_present")
+                else ""
+            )
+            + "<p><small>Наблюдавшиеся факты отделены от выводов из нескольких сигналов и гипотез. "
             "Без прямых сигналов клапана, насоса и расхода гидравлическая причина не считается доказанной.</small></p>"
             "</section>"
         )
@@ -304,7 +353,7 @@ article{{border-left:4px solid #568;padding:0 1rem;margin:1rem 0}}
 </style></head><body><h1>{title}</h1>
 <p><strong>ID:</strong> <code>{html.escape(report.id)}</code></p>
 <p><strong>Период:</strong> {period}</p>
-<p><strong>AI-интерпретация:</strong> {'да' if report.ai_used else 'нет'}</p>
+<p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"}</p>
 {mode_context}
 {summer_context}
 {dhw_context}
@@ -312,5 +361,5 @@ article{{border-left:4px solid #568;padding:0 1rem;margin:1rem 0}}
 <p>{html.escape(report.summary)}</p><h2>Метрики</h2><table><tr><th>Метрика</th><th>Значение</th><th>Единица</th></tr>{metrics}</table>
 <h2>События</h2><p>Показано до 50 из {len(report.events)}.</p>
 <table><tr><th>Начало</th><th>Уровень</th><th>Тип</th><th>Детали</th></tr>{events}</table>
-<h2>Рекомендации</h2>{recommendations or '<p>Нет рекомендаций.</p>'}
+<h2>Рекомендации</h2>{recommendations or "<p>Нет рекомендаций.</p>"}
 <details><summary>Канонический JSON</summary><pre>{canonical}</pre></details></body></html>"""

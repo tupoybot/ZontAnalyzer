@@ -10,6 +10,9 @@ analysis:
   max_recommendations_per_report: 3
   minimum_quality_score: 0.70
 
+dhw:
+  recirculation_present: true
+
 storage:
   backend: sqlite
   path: zont-analyzer.sqlite3

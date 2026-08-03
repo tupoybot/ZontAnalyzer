@@ -15,6 +15,7 @@ def test_config_is_optional_and_secrets_are_not_in_dump(tmp_path: Path, monkeypa
     monkeypatch.setenv("ZONT_CLIENT_EMAIL", "owner@example.test")
     loaded = load_config(data_dir=tmp_path / "data")
     assert loaded.config.home.timezone == "Europe/Samara"
+    assert loaded.config.dhw.recirculation_present is True
     assert loaded.secrets.zont_token is not None
     assert "very-secret" not in loaded.config.model_dump_json()
 
@@ -51,3 +52,11 @@ def test_openai_key_can_come_from_private_access_file(tmp_path: Path, monkeypatc
     assert loaded.secrets.openai_api_key is not None
     assert loaded.secrets.openai_api_key.get_secret_value() == "test-openai-key"
     assert loaded.openai_key_path == key
+
+
+def test_dhw_recirculation_can_be_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "config.yaml"
+    config.write_text("dhw:\n  recirculation_present: false\n", encoding="utf-8")
+
+    assert load_config(config, tmp_path / "data").config.dhw.recirculation_present is False
