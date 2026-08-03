@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from openai import OpenAI
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.config import AppConfig
-from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
+from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue, Recommendation
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a read-only heating telemetry analyst.
 Facts are only the supplied metric and event objects. Never invent numbers.
@@ -59,6 +63,52 @@ class FakeAnalyst:
         return AnalysisResult(summary="AI-анализ отключён; показаны локально рассчитанные факты.")
 
 
+class _StructuredRecommendation(BaseModel):
+    """API response shape without application-only text safety validators."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    title: str = Field(min_length=1, max_length=160)
+    category: Literal[
+        "observe_only",
+        "safe_user_setting",
+        "needs_manual_context",
+        "service_required",
+        "safety_warning",
+    ]
+    priority: Literal["low", "medium", "high", "critical"]
+    confidence: float = Field(ge=0, le=1)
+    evidence_metric_ids: list[str] = Field(default_factory=list)
+    evidence_event_ids: list[str] = Field(default_factory=list)
+    hypothesis: str
+    suggested_manual_action: str
+    expected_effect: str
+    observation_period_days: int = Field(ge=1, le=60)
+    success_criteria: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    stop_conditions: list[str] = Field(default_factory=list)
+    alternatives: list[str] = Field(default_factory=list)
+    requires_specialist: bool = False
+
+
+class _StructuredAnalysisResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str
+    recommendations: list[_StructuredRecommendation] = Field(default_factory=list, max_length=3)
+
+
+def _validate_structured_result(result: _StructuredAnalysisResult) -> AnalysisResult:
+    recommendations: list[Recommendation] = []
+    for item in result.recommendations:
+        try:
+            recommendations.append(Recommendation.model_validate(item.model_dump()))
+        except ValidationError as exc:
+            logger.warning("Discarding invalid OpenAI recommendation: %s", exc.errors(include_url=False))
+    return AnalysisResult(summary=result.summary, recommendations=recommendations)
+
+
 class OpenAIAnalyst:
     def __init__(self, *, api_key: str, config: AppConfig, db: Database):
         self.client = OpenAI(api_key=api_key)
@@ -79,13 +129,14 @@ class OpenAIAnalyst:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": encoded},
             ],
-            text_format=AnalysisResult,
+            text_format=_StructuredAnalysisResult,
             store=False,
             max_output_tokens=2500,
         )
-        result = response.output_parsed
-        if result is None:
+        parsed = response.output_parsed
+        if parsed is None:
             raise RuntimeError("OpenAI response did not contain parsed output")
+        result = _validate_structured_result(parsed)
         valid_metric_ids = {str(metric["id"]) for metric in packet.get("metrics", [])}
         valid_event_ids = {str(item["id"]) for item in packet.get("events", [])}
         for recommendation in result.recommendations:
