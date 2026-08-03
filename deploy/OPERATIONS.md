@@ -2,9 +2,9 @@
 
 This deployment is intentionally isolated under the Compose project
 `zont-analyzer`. It publishes no ports and declares no external Docker network.
-The only shared host path is the exact `tupoybot.ru/za` directory in
-`compose.test.yaml`; the application itself contains no host-specific publishing
-policy.
+The only shared host path is the exact static `/za` directory selected through
+`ZONT_ANALYZER_PUBLISH_DIR` for `compose.test.yaml`; the application itself
+contains no host-specific publishing policy.
 
 ## One-time host preparation
 
