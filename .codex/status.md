@@ -17,19 +17,21 @@ P0 и вертикальный срез P1 реализованы. Инжене�
 
 ## P2 deployment checkpoint
 
-- Ручной test deployment запущен на `217.60.10.224` отдельным Compose project без публичных
-  портов; worker image — `zont-analyzer:p2-20260803-1`.
-- Persistent SQLite: `/opt/zont-analyzer/data/zont-analyzer.sqlite3`; первый catch-up создал
-  90 daily HTML и довёл БД до 96 отчётов. После явного restart inode SQLite сохранился.
-- Публичный test-канал: `https://tupoybot.ru/za/`, новый P1 daily — `latest.html`, ранее
-  созданный AI-отчёт — `ai-latest.html`. Все три URL возвращают HTTP 200.
-- Worker heartbeat `ok`, online backup создан в `/opt/zont-analyzer/data/backups`; root сайта и
-  Nightscout status также возвращают HTTP 200, существующие контейнеры остались healthy.
+- Ручной test deployment перенесён на HK `82.22.6.84` отдельным Compose project без публичных
+  портов; worker image — `zont-analyzer:p2-hk-20260803-1`.
+- Persistent SQLite перенесена через согласованный online backup в
+  `/opt/zont-analyzer/data/zont-analyzer.sqlite3`; integrity `ok`, revision `dd4272b6d030`,
+  469,820 samples и 96 отчётов. Миграционный backup сохранён в `data/backups`.
+- Публичный test-канал: `https://hk.tupoybot.ru/za/`; `latest.html` и `ai-latest.html`
+  возвращают HTTP 200 и содержат `AI-интерпретация: да`.
+- Worker heartbeat `ok`; nginx, Xray, Postfix, OpenDKIM и Docker на HK остались active.
 - После явного подтверждения владельца OpenAI включён только в test deployment; API-ключ
   смонтирован read-only из файла с mode `0600`, а обычные daily-отчёты могут запрашивать AI.
-- Контрольный вызов с `217.60.10.224` дошёл до Responses API, но получил HTTP 403: исходящий
-  адрес определяется как RU, то есть deployment сейчас упирается в региональную доступность
-  OpenAI. Локальный deterministic fallback сохранился, повторного вызова не было.
+- Единственный контрольный вызов с HK получил Responses API HTTP 200, прошёл strict Structured
+  Output и evidence validation; ledger вырос с 1,464 до 5,475 токенов. Автономный worker не
+  повторил вызов после старта и переиспользует сохранённую AI-интерпретацию.
+- Со старого `217.60.10.224` удалены только Compose project/network, два ZontAnalyzer image,
+  `/opt/zont-analyzer` и прежний каталог `/za`; Nightscout остался healthy и возвращает 200.
 
 ## Проверенный факт
 
@@ -39,9 +41,9 @@ P0 и вертикальный срез P1 реализованы. Инжене�
 - 90-дневный backfill на реальном ZONT завершался и корректно возобновлялся после rate limit.
 - Неполное окно не продвигает cursor; повторная запись идемпотентна.
 - Реальный daily-отчёт разделил нулевую работу отопления и один шестиминутный цикл ГВС.
-- Один ранее явно разрешённый OpenAI-вызов прошёл strict Structured Output и evidence
-  validation; в ledger записано 1,464 токена. Новый серверный test-вызов вернул 403 до
-  генерации, поэтому ledger и расход токенов не изменились.
+- Два явно разрешённых OpenAI-вызова прошли strict Structured Output и evidence validation;
+  в ledger записано 5,475 токенов. Один промежуточный вызов со старого RU deployment получил
+  403 до генерации и не увеличил ledger.
 - Последний полный локальный checkpoint: 57 тестов, Ruff, strict mypy, wheel и Compose config
   прошли; реальный `run --once` выполнил sync/catch-up/atomic publish, healthcheck вернул `ok`.
 
