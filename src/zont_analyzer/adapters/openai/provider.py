@@ -109,6 +109,31 @@ def _validate_structured_result(result: _StructuredAnalysisResult) -> AnalysisRe
     return AnalysisResult(summary=result.summary, recommendations=recommendations)
 
 
+def _filter_recommendations(
+    result: AnalysisResult,
+    *,
+    valid_metric_ids: set[str],
+    valid_event_ids: set[str],
+    forbidden_categories: set[str],
+) -> AnalysisResult:
+    accepted: list[Recommendation] = []
+    for recommendation in result.recommendations:
+        reason: str | None = None
+        if not recommendation.evidence_metric_ids and not recommendation.evidence_event_ids:
+            reason = "no supplied evidence"
+        elif not set(recommendation.evidence_metric_ids) <= valid_metric_ids:
+            reason = "unknown metric evidence"
+        elif not set(recommendation.evidence_event_ids) <= valid_event_ids:
+            reason = "unknown event evidence"
+        elif recommendation.category in forbidden_categories:
+            reason = "user-forbidden category"
+        if reason is not None:
+            logger.warning("Discarding invalid OpenAI recommendation: %s", reason)
+            continue
+        accepted.append(recommendation)
+    return result.model_copy(update={"recommendations": accepted})
+
+
 class OpenAIAnalyst:
     def __init__(self, *, api_key: str, config: AppConfig, db: Database):
         self.client = OpenAI(api_key=api_key)
@@ -139,15 +164,12 @@ class OpenAIAnalyst:
         result = _validate_structured_result(parsed)
         valid_metric_ids = {str(metric["id"]) for metric in packet.get("metrics", [])}
         valid_event_ids = {str(item["id"]) for item in packet.get("events", [])}
-        for recommendation in result.recommendations:
-            if not recommendation.evidence_metric_ids and not recommendation.evidence_event_ids:
-                raise ValueError("OpenAI recommendation must reference supplied evidence")
-            if not set(recommendation.evidence_metric_ids) <= valid_metric_ids:
-                raise ValueError("OpenAI recommendation references an unknown metric")
-            if not set(recommendation.evidence_event_ids) <= valid_event_ids:
-                raise ValueError("OpenAI recommendation references an unknown event")
-            if recommendation.category in self.config.safety.never_suggest_categories:
-                raise ValueError("OpenAI recommendation uses a user-forbidden category")
+        result = _filter_recommendations(
+            result,
+            valid_metric_ids=valid_metric_ids,
+            valid_event_ids=valid_event_ids,
+            forbidden_categories=set(self.config.safety.never_suggest_categories),
+        )
         usage = getattr(response, "usage", None)
         input_details = getattr(usage, "input_tokens_details", None)
         self.db.save_llm_call(
