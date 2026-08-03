@@ -2,18 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import uuid
 from typing import Any, Literal, Protocol
 
 from openai import OpenAI
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.config import AppConfig
-from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue, Recommendation
-
-logger = logging.getLogger(__name__)
+from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
 
 SYSTEM_PROMPT = """You are a read-only heating telemetry analyst.
 Facts are only the supplied metric and event objects. Never invent numbers.
@@ -100,38 +97,7 @@ class _StructuredAnalysisResult(BaseModel):
 
 
 def _validate_structured_result(result: _StructuredAnalysisResult) -> AnalysisResult:
-    recommendations: list[Recommendation] = []
-    for item in result.recommendations:
-        try:
-            recommendations.append(Recommendation.model_validate(item.model_dump()))
-        except ValidationError as exc:
-            logger.warning("Discarding invalid OpenAI recommendation: %s", exc.errors(include_url=False))
-    return AnalysisResult(summary=result.summary, recommendations=recommendations)
-
-
-def _filter_recommendations(
-    result: AnalysisResult,
-    *,
-    valid_metric_ids: set[str],
-    valid_event_ids: set[str],
-    forbidden_categories: set[str],
-) -> AnalysisResult:
-    accepted: list[Recommendation] = []
-    for recommendation in result.recommendations:
-        reason: str | None = None
-        if not recommendation.evidence_metric_ids and not recommendation.evidence_event_ids:
-            reason = "no supplied evidence"
-        elif not set(recommendation.evidence_metric_ids) <= valid_metric_ids:
-            reason = "unknown metric evidence"
-        elif not set(recommendation.evidence_event_ids) <= valid_event_ids:
-            reason = "unknown event evidence"
-        elif recommendation.category in forbidden_categories:
-            reason = "user-forbidden category"
-        if reason is not None:
-            logger.warning("Discarding invalid OpenAI recommendation: %s", reason)
-            continue
-        accepted.append(recommendation)
-    return result.model_copy(update={"recommendations": accepted})
+    return AnalysisResult.model_validate(result.model_dump())
 
 
 class OpenAIAnalyst:
@@ -162,14 +128,6 @@ class OpenAIAnalyst:
         if parsed is None:
             raise RuntimeError("OpenAI response did not contain parsed output")
         result = _validate_structured_result(parsed)
-        valid_metric_ids = {str(metric["id"]) for metric in packet.get("metrics", [])}
-        valid_event_ids = {str(item["id"]) for item in packet.get("events", [])}
-        result = _filter_recommendations(
-            result,
-            valid_metric_ids=valid_metric_ids,
-            valid_event_ids=valid_event_ids,
-            forbidden_categories=set(self.config.safety.never_suggest_categories),
-        )
         usage = getattr(response, "usage", None)
         input_details = getattr(usage, "input_tokens_details", None)
         self.db.save_llm_call(

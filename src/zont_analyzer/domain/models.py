@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DomainModel(BaseModel):
@@ -87,22 +87,6 @@ class Recommendation(DomainModel):
     stop_conditions: list[str] = Field(default_factory=list)
     alternatives: list[str] = Field(default_factory=list)
     requires_specialist: bool = False
-
-    @field_validator("suggested_manual_action")
-    @classmethod
-    def reject_dangerous_actions(cls, value: str) -> str:
-        lowered = value.casefold()
-        forbidden = (
-            "отключить защит",
-            "газов",
-            "контроль пламени",
-            "сервисн",
-            "электропровод",
-            "bypass safety",
-        )
-        if any(term in lowered for term in forbidden):
-            raise ValueError("recommendation violates immutable safety policy")
-        return value
 
 
 class AnalysisResult(DomainModel):

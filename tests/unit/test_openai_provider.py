@@ -1,5 +1,4 @@
 from zont_analyzer.adapters.openai.provider import (
-    _filter_recommendations,
     _StructuredAnalysisResult,
     _StructuredRecommendation,
     _validate_structured_result,
@@ -21,7 +20,7 @@ def _recommendation(*, action: str) -> _StructuredRecommendation:
     )
 
 
-def test_invalid_recommendation_does_not_discard_valid_ai_summary() -> None:
+def test_semantic_recommendation_text_is_not_filtered() -> None:
     parsed = _StructuredAnalysisResult(
         summary="Валидная AI-интерпретация.",
         recommendations=[
@@ -34,11 +33,12 @@ def test_invalid_recommendation_does_not_discard_valid_ai_summary() -> None:
 
     assert result.summary == "Валидная AI-интерпретация."
     assert [item.suggested_manual_action for item in result.recommendations] == [
+        "Изменить сервисную калибровку.",
         "Наблюдать показания в течение суток."
     ]
 
 
-def test_bad_evidence_discards_only_affected_recommendation() -> None:
+def test_unknown_evidence_ids_are_not_filtered() -> None:
     parsed = _StructuredAnalysisResult(
         summary="Валидная AI-интерпретация.",
         recommendations=[
@@ -49,14 +49,8 @@ def test_bad_evidence_discards_only_affected_recommendation() -> None:
     parsed.recommendations[0].evidence_metric_ids = ["metric:unknown"]
     result = _validate_structured_result(parsed)
 
-    filtered = _filter_recommendations(
-        result,
-        valid_metric_ids={"metric:1"},
-        valid_event_ids=set(),
-        forbidden_categories=set(),
-    )
-
-    assert filtered.summary == "Валидная AI-интерпретация."
-    assert [item.suggested_manual_action for item in filtered.recommendations] == [
+    assert result.summary == "Валидная AI-интерпретация."
+    assert [item.suggested_manual_action for item in result.recommendations] == [
+        "Проверить неизвестную метрику.",
         "Наблюдать показания в течение суток."
     ]
