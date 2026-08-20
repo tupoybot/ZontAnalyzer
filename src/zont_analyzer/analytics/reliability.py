@@ -13,6 +13,7 @@ MAIN_POWER_LOSS_TYPES = frozenset({"MainPowerLost"})
 MAIN_POWER_RESTORE_TYPES = frozenset({"MainPowerFound", "MainPowerRestored"})
 CONTROLLER_OFF_TYPES = frozenset({"PowerOff"})
 CONTROLLER_ON_TYPES = frozenset({"PowerOn"})
+DEFAULT_MAXIMUM_SAMPLE_AGE = timedelta(minutes=10)
 
 
 @dataclass(frozen=True)
@@ -169,6 +170,36 @@ def _last_gap_recovery(timestamps: list[datetime], as_of: datetime) -> datetime 
     return candidates[-1] if candidates else None
 
 
+def _telemetry_gap_intervals(
+    timestamps: list[datetime],
+    as_of: datetime,
+    maximum_sample_age: timedelta,
+) -> list[tuple[datetime, datetime]]:
+    ordered = sorted({item for item in timestamps if item < as_of})
+    if not ordered:
+        return []
+    result = [
+        (previous + maximum_sample_age, current)
+        for previous, current in zip(ordered, ordered[1:], strict=False)
+        if current - previous > maximum_sample_age
+    ]
+    if as_of - ordered[-1] > maximum_sample_age:
+        result.append((ordered[-1] + maximum_sample_age, as_of))
+    return result
+
+
+def _freshness(
+    timestamps: list[datetime],
+    as_of: datetime,
+    maximum_sample_age: timedelta,
+) -> tuple[datetime | None, bool, float | None]:
+    latest = max((item for item in timestamps if item < as_of), default=None)
+    if latest is None:
+        return None, False, None
+    age_seconds = max(0.0, (as_of - latest).total_seconds())
+    return latest, age_seconds <= maximum_sample_age.total_seconds(), age_seconds
+
+
 def _overlap_seconds(start: datetime, end: datetime, intervals: list[tuple[datetime, datetime]]) -> float:
     return sum(max(0.0, (min(end, right) - max(start, left)).total_seconds()) for left, right in intervals)
 
@@ -182,7 +213,10 @@ def analyze_reliability(
     boiler_metric_timestamps: list[datetime],
     zont_status_samples: list[tuple[datetime, float]],
     zont_metric_timestamps: list[datetime] | None = None,
+    maximum_sample_age: timedelta = DEFAULT_MAXIMUM_SAMPLE_AGE,
 ) -> ReliabilityAnalysis:
+    if maximum_sample_age <= timedelta(0):
+        raise ValueError("maximum_sample_age must be positive")
     ordered_events = _ordered_events(source_events, as_of)
     zont_timestamps = [
         timestamp
@@ -194,12 +228,28 @@ def analyze_reliability(
         if timestamp < as_of
     ]
     boiler_timestamps = [timestamp for timestamp in boiler_metric_timestamps if timestamp < as_of]
+    latest_zont_sample, zont_data_fresh, zont_sample_age_seconds = _freshness(
+        zont_timestamps,
+        as_of,
+        maximum_sample_age,
+    )
+    latest_boiler_sample, boiler_data_fresh, boiler_sample_age_seconds = _freshness(
+        boiler_timestamps,
+        as_of,
+        maximum_sample_age,
+    )
+    zont_gap_intervals = _telemetry_gap_intervals(zont_timestamps, as_of, maximum_sample_age)
     power_intervals = _main_power_intervals(ordered_events, zont_status_samples, as_of)
-    controller_intervals = _intervals_from_events(
-        ordered_events,
-        loss_types=CONTROLLER_OFF_TYPES,
-        restore_types=CONTROLLER_ON_TYPES,
-        as_of=as_of,
+    controller_intervals = _merge_intervals(
+        [
+            *_intervals_from_events(
+                ordered_events,
+                loss_types=CONTROLLER_OFF_TYPES,
+                restore_types=CONTROLLER_ON_TYPES,
+                as_of=as_of,
+            ),
+            *zont_gap_intervals,
+        ]
     )
     incidents, last_boiler_restore = _boiler_incidents(ordered_events)
     for incident in incidents:
@@ -238,17 +288,21 @@ def analyze_reliability(
             zont_anchor = _first_sustained_at(zont_timestamps)
             zont_basis = "first_sustained_metrics"
             zont_lower_bound = zont_anchor is not None
+    zont_online = zont_anchor is not None and zont_data_fresh
     if zont_anchor is not None:
         metrics.append(
             _metric(
                 period_id,
                 "zont_uptime_seconds",
-                (as_of - zont_anchor).total_seconds(),
+                (as_of - zont_anchor).total_seconds() if zont_online else 0.0,
                 "s",
-                online=True,
+                online=zont_online,
                 anchor_at=zont_anchor.isoformat(),
                 basis=zont_basis,
                 lower_bound=zont_lower_bound,
+                last_seen_at=latest_zont_sample.isoformat() if latest_zont_sample else None,
+                sample_age_seconds=zont_sample_age_seconds,
+                maximum_sample_age_seconds=maximum_sample_age.total_seconds(),
             )
         )
 
@@ -263,17 +317,27 @@ def analyze_reliability(
             boiler_anchor = _first_sustained_at(boiler_timestamps)
             boiler_basis = "first_sustained_boiler_metrics"
             boiler_lower_bound = boiler_anchor is not None
-    if boiler_anchor is not None and open_incident is None:
+    boiler_online = (
+        boiler_anchor is not None
+        and open_incident is None
+        and zont_data_fresh
+        and boiler_data_fresh
+    )
+    if boiler_anchor is not None:
         metrics.append(
             _metric(
                 period_id,
                 "boiler_uptime_seconds",
-                (as_of - boiler_anchor).total_seconds(),
+                (as_of - boiler_anchor).total_seconds() if boiler_online else 0.0,
                 "s",
-                online=True,
+                online=boiler_online,
                 anchor_at=boiler_anchor.isoformat(),
                 basis=boiler_basis,
                 lower_bound=boiler_lower_bound,
+                last_seen_at=latest_boiler_sample.isoformat() if latest_boiler_sample else None,
+                sample_age_seconds=boiler_sample_age_seconds,
+                maximum_sample_age_seconds=maximum_sample_age.total_seconds(),
+                zont_data_fresh=zont_data_fresh,
             )
         )
 
@@ -294,7 +358,7 @@ def analyze_reliability(
         seconds -= _overlap_seconds(item.previous_restore_at, item.lost_at, excluded_intervals)
         if seconds >= 0:
             operating_seconds.append(seconds)
-    if operating_seconds:
+    if operating_seconds and zont_data_fresh:
         metrics.append(
             _metric(
                 period_id,
@@ -305,7 +369,7 @@ def analyze_reliability(
                 excludes_power_outages=True,
             )
         )
-    if restore_seconds:
+    if restore_seconds and zont_data_fresh:
         metrics.append(
             _metric(
                 period_id,
@@ -353,9 +417,12 @@ def analyze_reliability(
 
     context: dict[str, object] = {
         "boiler": {
-            "online": open_incident is None and boiler_anchor is not None,
+            "online": boiler_online,
             "uptime_anchor": boiler_anchor.isoformat() if boiler_anchor else None,
             "uptime_basis": boiler_basis if boiler_anchor else "insufficient_data",
+            "last_seen_at": latest_boiler_sample.isoformat() if latest_boiler_sample else None,
+            "sample_age_seconds": boiler_sample_age_seconds,
+            "data_fresh": boiler_data_fresh,
             "completed_connection_incidents": sum(item.restored_at is not None for item in incidents),
             "intrinsic_failures": len(intrinsic_closed),
             "power_related_losses": sum(item.cause == "power_outage" for item in incidents),
@@ -363,10 +430,14 @@ def analyze_reliability(
             "open_loss_at": open_incident.lost_at.isoformat() if open_incident else None,
         },
         "zont": {
-            "online": zont_anchor is not None,
+            "online": zont_online,
             "uptime_anchor": zont_anchor.isoformat() if zont_anchor else None,
             "uptime_basis": zont_basis,
             "lower_bound": zont_lower_bound,
+            "last_seen_at": latest_zont_sample.isoformat() if latest_zont_sample else None,
+            "sample_age_seconds": zont_sample_age_seconds,
+            "data_fresh": zont_data_fresh,
+            "telemetry_gaps": len(zont_gap_intervals),
         },
         "main_power_outages": len(power_intervals),
         "policy": "main-power outages and ZONT restarts are excluded from boiler MTBF/MTBR",

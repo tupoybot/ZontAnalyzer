@@ -153,6 +153,50 @@ def test_reliability_events_persist_and_uptime_is_prominent(tmp_path: Path) -> N
     assert rendered_html.index("Аптайм ZONT") < rendered_html.index("Качество данных")
 
 
+def test_stale_reliability_data_is_rendered_as_offline(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    telemetry_start = datetime(2026, 7, 20, 20, tzinfo=UTC)
+    points: list[TelemetryPoint] = []
+    for offset in range(3):
+        timestamp = telemetry_start + timedelta(minutes=offset * 5)
+        points.extend(
+            [
+                TelemetryPoint(
+                    device_id="1",
+                    source_type="z3k_boiler_adapter",
+                    entity_id="boiler",
+                    metric_key="s",
+                    timestamp_utc=timestamp,
+                    value_text="[]",
+                ),
+                TelemetryPoint(
+                    device_id="1",
+                    source_type="ztc_state",
+                    entity_id="zont",
+                    metric_key="status_flags",
+                    timestamp_utc=timestamp,
+                    value_num=73,
+                ),
+            ]
+        )
+    db.upsert_samples(points)
+
+    report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
+    metrics = {item.name: item for item in report.metrics}
+    assert metrics["boiler_uptime_seconds"].value == 0
+    assert metrics["zont_uptime_seconds"].value == 0
+    assert "boiler_mtbf_hours" not in metrics
+    assert "boiler_mtbr_hours" not in metrics
+
+    rendered_text = render_text(report)
+    rendered_html = render_html(report)
+    assert "Аптайм котла (офлайн): 00:00:00 дд:чч:мм" in rendered_text
+    assert "Аптайм ZONT (офлайн): 00:00:00 дд:чч:мм" in rendered_text
+    assert "Аптайм котла (офлайн)" in rendered_html
+    assert "Аптайм ZONT (офлайн)" in rendered_html
+
+
 def test_uptime_renderer_does_not_wrap_days_after_99(tmp_path: Path) -> None:
     db = Database(tmp_path / "state.sqlite3")
     db.initialize()

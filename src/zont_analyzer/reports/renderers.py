@@ -87,9 +87,14 @@ EVENT_LABELS = {
 
 
 def _metric_label(name: str, context: dict[str, Any] | None = None) -> str:
+    offline = name in {"boiler_uptime_seconds", "zont_uptime_seconds"} and context is not None and (
+        context.get("online") is False
+    )
     if context and context.get("activity_scope") == "space_heating_only":
-        return SPACE_HEATING_METRIC_LABELS.get(name, METRIC_LABELS.get(name, name.replace("_", " ")))
-    return METRIC_LABELS.get(name, name.replace("_", " "))
+        label = SPACE_HEATING_METRIC_LABELS.get(name, METRIC_LABELS.get(name, name.replace("_", " ")))
+    else:
+        label = METRIC_LABELS.get(name, name.replace("_", " "))
+    return f"{label} (офлайн)" if offline else label
 
 
 def _event_label(kind: str) -> str:
