@@ -32,9 +32,18 @@ def assess_quality(
         )
     gaps = [(ordered[index + 1][0] - ordered[index][0]).total_seconds() for index in range(len(ordered) - 1)]
     positive_gaps = [gap for gap in gaps if gap > 0]
-    # A large outage must not become the inferred sampling cadence. With only a
-    # few points the regular minimum gap is a safer upper bound than the median.
-    expected = min(median(positive_gaps), min(positive_gaps) * 3) if positive_gaps else period_seconds
+    if len(positive_gaps) >= 10:
+        # With enough observations the median is robust to occasional short
+        # burst updates. Radio sensors normally report every several minutes,
+        # but may emit two close points when the value changes; treating that
+        # shortest interval as the cadence creates false coverage gaps.
+        expected = median(positive_gaps)
+    elif positive_gaps:
+        # With only a few points, prevent one large outage from becoming the
+        # inferred cadence and making sparse telemetry look complete.
+        expected = min(median(positive_gaps), min(positive_gaps) * 3)
+    else:
+        expected = period_seconds
     accepted_gap = max(expected * 2.5, 60)
     observed_seconds = sum(min(gap, accepted_gap) for gap in positive_gaps)
     coverage = min(100.0, observed_seconds / period_seconds * 100)

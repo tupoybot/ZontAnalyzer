@@ -43,6 +43,19 @@ def test_quality_flags_large_gaps() -> None:
     assert "large_gap" in quality.flags
 
 
+def test_quality_uses_regular_radio_cadence_despite_short_burst() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    samples = [(start + timedelta(minutes=5 + index * 10), 20 + index / 100) for index in range(144)]
+    samples.append((start + timedelta(hours=12, minutes=6), 21.0))
+
+    quality = assess_quality(samples, start, start + timedelta(days=1))
+
+    assert quality.sample_count == 145
+    assert quality.coverage_pct > 98
+    assert quality.score > 0.9
+    assert quality.flags == []
+
+
 def test_burner_metrics_count_cycles() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     values = [0, 1, 1, 0, 0, 1, 0]
