@@ -2,336 +2,273 @@
 
 Updated: 2026-08-24
 
-This is the near-term execution plan for the next ZontAnalyzer development cycle. It is intentionally more concrete than `architecture.md` and more detailed than `roadmap.md`.
+This is the near-term execution plan for the next ZontAnalyzer development cycle. Work from `fix/dhw-analysis-feedback`.
 
-Work from `fix/dhw-analysis-feedback`. Do not base the next implementation on the older `feature/sensor-aware-pza-analysis` branch.
+`feature/sensor-aware-pza-analysis` contains no unique work and must not be used as a base.
 
-## Starting point that must be preserved
+## Baseline that must be preserved
 
-The current branch is already materially ahead of `main` and these changes are part of the baseline, not work to redo:
+The current branch already contains working functionality that is part of the baseline, not work to redo:
 
-- DHW/heating interaction analysis from the P1 vertical slice remains authoritative: historical per-circuit mode/target, DHW episodes, heating pause/return, ambiguous concurrent OT flags, residual heat and quality guards.
-- Raw ZONT reliability events are now ingested read-only via `raw_events`, normalized as `SourceEvent`, persisted in SQLite and covered by migration/tests.
-- `analytics/reliability.py` distinguishes boiler/adapter communication loss from main-power loss and ZONT restart, derives ZONT/boiler uptime and MTBF/MTBR only from appropriate intervals, and handles stale telemetry explicitly.
-- Reliability context is already rendered and passed to OpenAI; power/restart incidents must not be reclassified as boiler failures by future AI logic.
-- The OpenAI adapter now uses a separate strict API response schema and then validates into application domain models. Keep that separation when the AI output contract grows.
-- Existing recommendation feedback (`applied` / `rejected` + owner note) remains part of the next AI packet and should become the basis for learning from manual experiments.
-- Read-only is immutable: ZontAnalyzer may read ZONT, but must never add equipment-control endpoints or tools.
+- DHW/heating interaction analysis: historical per-circuit mode/target, DHW episodes, heating pause/return, ambiguous concurrent OT flags, residual heat and quality guards.
+- Read-only `raw_events` ingestion, normalized `SourceEvent` persistence and reliability analysis.
+- Reliability classification that separates intrinsic boiler/adapter communication loss from main-power loss and ZONT restart; uptime/MTBF/MTBR and telemetry freshness are already available to reports and OpenAI.
+- Existing recommendation feedback: `applied` / `rejected` plus owner note.
+- OpenAI adapter pattern: strict API response schema is separate from application domain validation. Preserve this separation when the AI contract grows.
+- ZONT is permanently read-only. Never add control endpoints, tools or automatic equipment changes.
 
-Before each stage: run the existing test suite and keep the branch green. Do not mix unrelated refactoring into feature commits.
+## Architecture rule for this cycle: AI-first reasoning
+
+Before feature implementation, update `architecture.md` section 2.1 so it reflects the intended design:
+
+- deterministic code is the trustworthy data plane: discovery, normalization, provenance, quality checks, temporal alignment, exclusions and simple reproducible math;
+- OpenAI is the primary reasoning layer for multi-factor diagnosis, competing hypotheses, prediction/counterfactual analysis and choosing the next safe experiment;
+- do not build a large local expert system of heating/PZA/hydraulic thresholds;
+- do not send uncontrolled raw telemetry to OpenAI either: send bounded temporal evidence that preserves the shape of the relevant dynamics;
+- keep epistemic levels explicit: observed → derived → inferred → predicted;
+- every AI conclusion must cite supplied evidence; prediction must never be rendered as measured fact.
+
+This architecture update is documentation of an already agreed design, not a feature stage.
 
 ---
 
-## Stage 0 — Stabilize the current branch and capture the real installation contract
+## Preflight — confirm the real current ZONT contract
 
-### Goal
-
-Turn the current branch into a trustworthy baseline and capture the actual current ZONT configuration after installation of the radio module, wireless thermohygrometer and external return sensor.
+This is a short prerequisite, not a project phase and not a reason to redo the existing application.
 
 ### Work
 
-1. Run the current branch through the complete local checks:
-   - `pytest`
-   - `ruff check .`
-   - `mypy src/zont_analyzer`
-   - `python -m build`
-2. Run one real read-only `discover` / sync against the current installation.
-3. Capture a sanitized fixture containing only the parts needed to understand:
+1. Confirm the branch is green with the normal local checks.
+2. Run one real read-only `discover` and a small sync against the current installation.
+3. Capture only the sanitized fragments needed to establish:
    - heating circuit → control temperature sensor linkage;
-   - radio sensor structure and history data type;
-   - temperature and humidity metric keys;
+   - radio thermohygrometer history source and actual metric keys;
+   - humidity unit/shape;
    - external return sensor identity;
-   - any battery/RSSI/quality fields that are actually present.
-4. Verify that current reliability source-event ingestion still works after the latest hardware/config changes.
-5. Record the discovered contract in tests/fixtures or a small `.codex` note. Do not document secrets or full raw device payloads.
+   - battery/RSSI/quality fields only if they really exist.
+4. Turn those fragments into test fixtures.
 
 ### Acceptance criteria
 
-- All existing tests/lint/types/build pass before feature work starts.
-- One real `sync` completes without degrading existing DHW/reliability analysis.
-- We can name, from evidence rather than guesswork, the ZONT field that identifies the control-room sensor.
-- We know the actual history source/metric names for the new radio thermohygrometer.
-- We know which real series corresponds to the external return sensor.
-- Sanitized fixtures are sufficient to reproduce discovery/normalization in tests without live ZONT access.
+- Existing tests/lint/types/build remain green.
+- The real control-room sensor linkage is known from configuration, not guessed from names/order.
+- The real radio-sensor history shape is known.
+- The external return-temperature series is identified.
+- Sanitized fixtures reproduce discovery/normalization without live ZONT access.
+
+If these facts are already available in existing sanitized fixtures, skip the live discovery and proceed.
 
 ---
 
-## Stage 1 — Sensor semantics: control room, additional rooms, humidity and return temperature
+## Stage 1 — Sensor semantics and multi-sensor ingestion
 
 ### Goal
 
-Make the data model understand what each new sensor means before doing any smarter analysis.
+Make ZontAnalyzer understand the new sensors correctly before adding new intelligence.
 
 ### Work
 
-1. Replace the current ambiguous single `indoor_temperature` assumption with explicit semantic roles:
-   - `control_indoor_temperature` — the sensor actually linked to the heating circuit;
-   - `room_temperature` — additional habitable-room sensors;
-   - `technical_temperature` — boiler room and other non-living sensors where known;
-   - existing `outdoor_temperature`, `flow_temperature`, `return_temperature`, `dhw_temperature`.
-2. Reuse and harden `_linked_indoor_sensor_ids()` rather than replacing it with name heuristics. The heating-circuit linkage wins over display-name guessing.
-3. Add the actual radio-sensor history source discovered in Stage 0 to ingestion.
-4. Add semantic roles/units for the fields that really exist, at minimum:
-   - relative humidity (`%RH`);
-   - optionally battery and signal quality if exposed and useful.
-5. Ensure the external sensor named/linked as return is preferred as a separate measured source; do not silently conflate it with boiler `rwt` if both exist.
-6. Persist provenance/confidence so the report and AI packet can tell how a role was determined.
-7. Update text/HTML report with a compact sensor identity section, not a dump of all series.
+1. Replace the ambiguous single-room assumption with explicit semantic roles:
+   - `control_indoor_temperature` — sensor actually linked to the heating circuit;
+   - `room_temperature` — other habitable rooms;
+   - `technical_temperature` — boiler room / non-living sensors where known;
+   - existing outdoor/flow/return/DHW roles.
+2. Harden the existing heating-circuit sensor linkage logic; configuration linkage beats display-name heuristics.
+3. Add the actual radio-sensor history type discovered in Preflight.
+4. Add humidity and, only if useful and actually present, battery/signal quality.
+5. Keep external return temperature distinct from boiler-reported `rwt`; preserve source/provenance if both exist.
+6. Expose compact sensor identity/provenance in report context.
 
 ### Acceptance criteria
 
-- On the current installation the report explicitly says that the heating control sensor is the actual linked room sensor (currently expected to be `Гостиная`), not `Котельная` merely because it appeared first.
-- `Котельная` is not used for comfort/PZA conclusions unless it is explicitly linked as control sensor.
-- Wireless humidity appears with correct unit and sensor name.
+- The current installation identifies the linked living-room sensor as the control sensor; `Котельная` is not used for comfort/PZA analysis unless explicitly linked.
+- Wireless humidity is ingested with correct unit and sensor identity.
 - `Обратка` is classified as return temperature with provenance.
-- If role linkage cannot be proven, the result is low-confidence/unresolved rather than guessed.
-- Unit tests cover control-sensor selection independent of series order, radio sensor normalization, humidity, return sensor, and technical-vs-room separation.
-- Existing DHW and reliability tests remain green.
+- Unknown linkage stays unresolved/low-confidence rather than guessed.
+- Tests cover sensor-order independence, radio normalization, humidity, return sensor and technical-vs-room separation.
+- Existing DHW and reliability regression tests stay green.
 
 ---
 
-## Stage 2 — Build an AI-ready heating evidence layer, not a rule engine
+## Stage 2 — Heating evidence layer for OpenAI
 
 ### Goal
 
-Give OpenAI enough trustworthy temporal structure to reason about PZA, room dynamics and hydraulics without hard-coding a large expert-system tree in Python.
+Build a bounded, trustworthy temporal evidence packet rich enough for AI reasoning without turning Python into a heating expert system.
 
 ### Work
 
-1. Add a deterministic `heating_evidence` layer that aligns and summarizes:
-   - control-room temperature and historical target;
+1. Align and summarize these signals when available:
+   - control-room temperature + historical target;
+   - additional room temperatures;
    - outdoor temperature;
-   - calculated flow target (`cs`) where available;
+   - calculated flow target (`cs`);
    - actual flow temperature;
    - external return temperature and ΔT;
    - burner activity/modulation;
-   - heating availability/request/context;
+   - heating request/availability/context;
+   - DHW priority/interference windows;
+   - reliability and stale-telemetry intervals.
+2. Reuse existing exclusions:
+   - automatic summer/off;
+   - mode/target transitions;
    - DHW priority windows;
-   - reliability/telemetry gaps;
-   - additional room temperatures.
-2. Reuse existing exclusions/context instead of reinventing them:
-   - automatic summer/off windows;
-   - mode/target transition windows;
-   - DHW interaction windows;
-   - stale telemetry and boiler/ZONT reliability incidents.
-3. Create representative time windows/buckets for AI. Prefer a compact shape that preserves dynamics, for example hourly summaries plus selected heating episodes, rather than raw minute telemetry for 90 days.
-4. Give each summarized window a stable evidence ID and provenance so AI outputs can cite it.
-5. Deterministic code may calculate simple facts (means, ranges, ΔT, target error, lags, coverage, weather range). It must not decide by itself that a PZA slope is “too high”, a room is “hydraulically starved”, etc.
-6. Add domain-specific quality blocks: room/control quality, outdoor quality, flow/return quality and weather-range sufficiency. A good room series must not hide a bad return series.
+   - known telemetry/reliability gaps.
+3. Produce bounded temporal evidence: e.g. hourly buckets plus selected representative heating episodes. Preserve shape; do not collapse everything into a single correlation number.
+4. Give evidence windows stable IDs and provenance.
+5. Deterministically calculate only reproducible facts: means/ranges, target error, ΔT, lags, coverage, weather range and similar basics.
+6. Track quality independently for control room, weather, flow/return and additional rooms.
 
 ### Acceptance criteria
 
-- An analysis packet can show the shape of room error versus weather and heating behavior, not just one correlation coefficient.
-- Every AI-visible number is either an observed value or deterministic derived fact with evidence/provenance.
-- Periods contaminated by summer/off, DHW priority, control transitions, stale telemetry or known connection losses are identifiable in the packet.
-- The packet remains bounded in size for daily/weekly/monthly use and respects the configured token budget.
-- No new PZA/hydraulic recommendations are produced locally at this stage.
-- Tests cover temporal alignment, exclusions, ΔT, multiple quality domains and stable evidence-window IDs.
+- AI can see how room error changes with weather/heating behavior, not only aggregate coefficients.
+- Every AI-visible number has observed/derived provenance.
+- Contaminated windows are explicitly marked/excluded.
+- Packet size is bounded for daily/weekly/monthly analysis and respects token-budget constraints.
+- No local code declares PZA slope/offset/hydraulic imbalance at this stage.
+- Tests cover temporal alignment, exclusions, ΔT, quality domains and stable evidence IDs.
 
 ---
 
-## Stage 3 — Expand OpenAI from commentator to engineering reasoning layer
+## Stage 3 — AI reasoning contract: hypotheses, predictions and experiments
 
 ### Goal
 
-Make OpenAI the primary reasoning layer for multi-factor diagnosis, hypothesis ranking and prediction while keeping facts and safety deterministic.
+Promote OpenAI from a commentator of local metrics to the main reasoning layer.
 
 ### Work
 
-1. Expand the structured AI response beyond `summary + recommendations` with optional sections such as:
+1. Expand structured output beyond `summary + recommendations` with optional:
    - `observed_patterns`;
    - `hypotheses`;
    - `predictions`;
    - `unknowns`;
    - `recommended_experiment`.
-2. A hypothesis should contain at least:
-   - title/explanation;
-   - confidence;
-   - evidence for;
-   - evidence against;
-   - competing explanations.
-3. A prediction should contain:
-   - scenario/change being considered;
-   - expected direction/effect;
-   - confidence;
-   - assumptions;
-   - evidence;
-   - validation plan.
-4. Preserve the current strict-response-wrapper pattern: API schema stays isolated from application-only validators, then converts to domain models.
-5. Update `SYSTEM_PROMPT` so the model:
-   - reasons over the supplied temporal evidence, not fixed thresholds;
-   - separates observed / derived / inferred / predicted;
-   - explicitly compares competing explanations;
-   - uses DHW and reliability contexts already implemented on this branch;
-   - treats owner feedback as authoritative manual context;
-   - chooses one minimally invasive next experiment when evidence is ambiguous;
-   - never invents flowmeter positions, sensor locations or observed hydraulic flow.
-6. Keep all existing evidence-ID validation and extend it to evidence-window IDs.
-7. Keep `store=False`, token budget controls and no tools/write access.
+2. Hypotheses must support confidence, evidence for/against and competing explanations.
+3. Predictions must contain scenario, expected direction/effect, confidence, assumptions, evidence and validation plan.
+4. Keep the existing strict API-schema → domain-validation pattern.
+5. Update `SYSTEM_PROMPT` to:
+   - reason over temporal evidence instead of fixed thresholds;
+   - compare competing explanations;
+   - distinguish observed / derived / inferred / predicted;
+   - preserve DHW and reliability semantics already implemented;
+   - use owner feedback as authoritative manual context;
+   - prefer one minimally invasive next experiment when evidence is ambiguous;
+   - never invent flowmeter positions, room/loop mapping or measured hydraulic flow.
+6. Extend evidence-reference validation to temporal evidence IDs.
+7. Keep `store=False`, token budget and no tools/write access.
 
 ### Acceptance criteria
 
-- Structured output can represent at least two competing hypotheses without forcing a recommendation.
-- A prediction is clearly labeled as a forecast and cannot be rendered as an observed fact.
-- Unknown/insufficient-data is a valid successful AI result.
-- Reliability events classified as `power_outage` or `zont_restart` are not described as boiler failures.
-- DHW summer/off behavior remains correctly interpreted.
-- Invalid/unknown evidence references fail validation.
-- Mocked tests cover the expanded schema; one real API smoke test is sufficient for the stage (respect `AGENTS.md` API-call limits).
+- Structured output can represent multiple competing hypotheses without forcing a recommendation.
+- `unknown` / insufficient evidence is a successful result.
+- Predictions are unmistakably forecasts, never measured facts.
+- Power/restart reliability incidents cannot be described as intrinsic boiler failures.
+- Invalid evidence references fail validation.
+- Mocked tests cover schema/validation; at most one real OpenAI smoke request is needed for the stage.
 
 ---
 
-## Stage 4 — PZA diagnosis and counterfactual prediction
+## Stage 4 — PZA analysis and counterfactual prediction
 
 ### Goal
 
-Use the richer AI context to answer the useful engineering questions: whether the current PZA behavior fits the house, what alternative explanations exist, and what a small manual change is expected to do.
+Answer the useful questions about the current weather-compensation behavior without hard-coding a local PZA expert system.
 
 ### Work
 
-1. Discover current readable PZA parameters from ZONT config if they are actually available. Do not guess field names or infer settings from output temperature alone.
-2. Feed the model enough comparable heating windows over different outdoor conditions to distinguish, as hypotheses rather than hard-coded rules:
+1. Discover current readable PZA parameters from ZONT configuration if available; never guess field names.
+2. Supply comparable heating windows across weather conditions so AI can rank hypotheses such as:
    - overall curve/offset mismatch;
    - slope mismatch;
-   - PID/thermal-inertia effects;
+   - PID / floor-heating inertia;
    - solar/internal gains;
-   - insufficient weather range/data;
-   - local room imbalance rather than whole-house PZA error.
-3. Allow qualitative predictions by default. Numeric effect estimates are allowed only when evidence supports them and must remain explicitly estimated.
-4. `recommended_experiment` may propose one safe manual PZA change with:
-   - one variable only;
-   - small step;
-   - observation period;
-   - success criteria;
-   - rollback/stop conditions.
-5. Do not recommend a slope change when the available outdoor range or heating-active duration is too narrow to support it; the AI should say what additional data would discriminate hypotheses.
+   - local imbalance instead of whole-house PZA error;
+   - insufficient data/weather range.
+3. Support counterfactual questions such as “what is likely to happen after a small PZA change?”. Qualitative estimates are acceptable; numeric estimates must be explicitly predictions.
+4. `recommended_experiment` may suggest one safe manual PZA change only: one variable, small step, observation period, success criteria and rollback/stop conditions.
+5. If evidence/weather range is insufficient, ask for more observation instead of inventing precision.
 
 ### Acceptance criteria
 
-- Eval scenario: constant room error across weather does not automatically become a slope diagnosis.
-- Eval scenario: error that changes systematically with colder weather can rank slope mismatch above a constant offset, while still showing alternatives.
-- Eval scenario: daytime overheating with little/no heating activity can rank external/solar gains above PZA overheating.
-- Eval scenario: narrow outdoor range returns “insufficient evidence” rather than false precision.
-- The report can answer “what is likely to happen if I change the PZA setting slightly?” with assumptions and confidence.
-- No automatic ZONT change path exists; all actions are manual suggestions only.
+- Constant room error over weather does not automatically become a slope diagnosis.
+- Weather-dependent error can rank slope mismatch while preserving alternatives.
+- Daytime overheating without heating activity can rank external/solar gains above PZA overheating.
+- Narrow weather range returns insufficient evidence.
+- Report can answer a small-change counterfactual with assumptions/confidence.
+- There remains no automatic ZONT change path.
 
 ---
 
-## Stage 5 — Multi-room analysis and flowmeter/balancing recommendations
+## Stage 5 — Multi-room reasoning and hydraulic balancing
 
 ### Goal
 
-After the second-floor room sensor is connected and enough heating data exists, distinguish whole-house control problems from persistent local room/floor imbalance.
+After a second-floor living-room sensor exists and enough real heating data has accumulated, distinguish whole-house control errors from local room/floor imbalance.
 
 ### Work
 
-1. Treat the control room and additional living rooms as separate series with names/provenance.
-2. Build comparable heating windows for room-to-room response:
-   - target error;
-   - warm-up/decay response;
-   - outdoor temperature;
-   - supply/return/ΔT;
-   - heating activity;
-   - exclusions from Stages 2–4.
-3. Let AI compare competing explanations for a persistent room difference:
-   - hydraulic distribution;
-   - different heat loss;
-   - solar/internal gains;
-   - sensor placement/bias;
-   - insufficient data.
-4. Only suggest a flowmeter experiment when the relevant room/floor can be mapped to a known hydraulic branch/loop or the user supplies that mapping.
-5. If mapping is unknown, ask for manual context rather than inventing which flowmeter to turn.
-6. Never suggest changing PZA and hydraulic balancing in the same experiment.
+1. Compare control room and additional living rooms over comparable heating windows.
+2. Provide target error, warm-up/decay behavior, weather, flow/return/ΔT and heating activity to AI.
+3. Let AI rank competing explanations: hydraulic distribution, different heat loss, solar/internal gains, sensor bias/placement and insufficient data.
+4. Only suggest a flowmeter/balancing experiment if the room/floor can be mapped to a known hydraulic branch/loop or the owner supplies that mapping.
+5. Unknown mapping must produce `needs_manual_context`.
+6. Never change PZA and hydraulics in the same experiment.
 
 ### Acceptance criteria
 
-- Before a second living-room sensor exists, no flowmeter recommendation is generated.
-- A persistent difference confined to one room/floor can be distinguished from a similar error in all rooms.
-- The report can say “likely local imbalance” without pretending that actual water flow was measured.
-- Any suggested balancing experiment changes one known branch/group by a small manual step and waits at least one thermal-response period (normally 24–48 h for floor heating) before evaluation.
-- Unknown loop mapping yields `needs_manual_context`, not a guessed valve/flowmeter instruction.
+- No second living-room sensor → no flowmeter recommendation.
+- Local persistent imbalance can be distinguished from a whole-house deficit.
+- “Likely hydraulic imbalance” does not imply that actual flow was measured.
+- A balancing experiment changes one known branch/group by a small step and waits for floor-heating thermal response before evaluation.
+- Unknown loop mapping never becomes a guessed instruction.
 
 ---
 
-## Stage 6 — Learn from interventions and build a house-specific model
+## Stage 6 — Learn from interventions and release
 
 ### Goal
 
-Make ZontAnalyzer progressively more useful for this specific house instead of repeatedly applying generic heating advice.
+Use the existing feedback lifecycle to make future reasoning specific to this house, then release only after regression/eval proof.
 
 ### Work
 
-1. Extend the existing recommendation feedback lifecycle so an applied experiment can optionally store structured manual context:
-   - parameter/category changed;
-   - before/after value when known;
-   - timestamp;
-   - owner note.
-2. Build before/after evidence windows normalized as far as practical for weather, operating mode, DHW interference and data quality.
-3. Feed prior predictions and outcomes into subsequent AI analysis.
-4. Let AI assess whether the observed post-change behavior:
-   - supports the original hypothesis;
-   - contradicts it;
-   - is inconclusive because conditions changed.
-5. Add weekly/monthly summaries that preserve learned house behavior: thermal inertia, typical room response, weather-dependent errors, usual ΔT range, and room-to-room differences.
-6. Do not call this model training. It is structured history + retrieval/context for reasoning.
-
-### Acceptance criteria
-
-- An applied PZA experiment can be represented without free-text-only parsing.
-- Subsequent analysis compares pre/post periods and explicitly states confounders.
-- A rejected recommendation is not repeated without materially new contrary evidence.
-- A successful previous experiment influences the next prediction/recommendation.
-- Weekly/monthly reports can describe stable house-specific patterns rather than merely re-running daily metrics over a larger interval.
-
----
-
-## Stage 7 — Report UX, evals and release gate
-
-### Goal
-
-Make the new intelligence useful without turning the HTML report into a telemetry dashboard, then prove it does not regress the existing DHW/reliability work.
-
-### Work
-
-1. Keep the report compact and layered:
-   - current sensor/control context;
-   - indoor temperature + humidity;
-   - outdoor / flow / return / ΔT;
-   - DHW and reliability summary;
-   - important AI-observed patterns;
-   - ranked hypotheses;
-   - prediction if useful;
-   - one preferred next experiment or “do nothing”.
-2. Add a small AI eval suite covering at minimum:
+1. Extend applied feedback with optional structured experiment context: category/parameter, before/after value, timestamp and owner note.
+2. Build pre/post evidence windows normalized as far as practical for weather, mode, DHW interference and data quality.
+3. Feed prior prediction + observed outcome to later AI analysis.
+4. Let AI assess whether the result supports, contradicts or fails to distinguish the original hypothesis.
+5. Add weekly/monthly house-specific context: thermal inertia, typical weather response, usual ΔT and room-to-room behavior.
+6. Add AI eval scenarios for:
    - constant offset vs weather-dependent error;
    - one-floor imbalance vs whole-house deficit;
    - solar gain/no heating activity;
-   - insufficient data/weather range;
+   - insufficient data;
    - DHW interruption;
-   - boiler connection loss caused by power/restart vs intrinsic OT loss;
-   - an applied experiment that improved behavior;
-   - an applied experiment that made it worse.
-3. Eval assertions should focus on epistemic/safety behavior and ranking, not exact prose.
-4. Run full regression and one real `run --once` / report generation on the deployment before merge.
+   - intrinsic OT loss vs power/restart;
+   - successful and unsuccessful manual experiments.
+7. Keep report compact: current sensor context, DHW/reliability summary, important AI patterns, ranked hypotheses, useful prediction and one preferred next experiment or “do nothing”.
 
 ### Acceptance criteria
 
+- Applied experiments can be represented structurally, not only parsed from free text.
+- Subsequent AI explicitly compares before/after and names confounders.
+- Rejected recommendations are not repeated without materially new contrary evidence.
+- Weekly/monthly output captures stable behavior of this house rather than just stretching daily metrics over a larger period.
 - Existing DHW and reliability regression tests remain green.
-- No report section presents AI inference/prediction as measured fact.
-- No control/write endpoint or model tool exists.
-- `pytest`, `ruff check .`, `mypy src/zont_analyzer`, `python -m build` all pass.
-- CI is green.
-- Real `run --once` completes, latest HTML renders the new sensor context correctly, and no duplicate/unbounded AI calls occur.
-- At least one real report is manually reviewed and judged more useful than the current baseline before merging to `main`.
+- No AI inference/prediction is rendered as measured fact.
+- `pytest`, `ruff check .`, `mypy src/zont_analyzer`, `python -m build` pass and CI is green.
+- Real `run --once` succeeds and the new sensor context renders correctly.
+- At least one real report is manually judged more useful than the current baseline before merge to `main`.
 
 ---
 
 ## Execution rules
 
-- Complete stages in order. Do not start the next stage until the previous acceptance criteria are met or explicitly waived with a documented reason.
-- Prefer small commits that correspond to one stage/substage.
-- Use deterministic code for trustworthy data preparation and basic math; use OpenAI for multi-factor reasoning, hypothesis ranking and prediction.
-- Do not replace AI reasoning with a large collection of local “expert” thresholds.
-- Do not send raw long-term telemetry blindly to OpenAI; send compact temporal evidence that preserves the shape needed for reasoning.
-- Preserve DHW and reliability semantics already implemented on `fix/dhw-analysis-feedback`.
+- Preflight is only contract verification; do not treat it as reimplementation of P0.
+- Complete stages in order unless an acceptance criterion is explicitly waived with a documented reason.
+- Prefer small commits aligned to stages/substages; avoid unrelated refactoring.
+- Deterministic code prepares trustworthy evidence and basic math. OpenAI performs multi-factor reasoning, hypothesis ranking and prediction.
+- Do not replace AI reasoning with a large collection of local expert thresholds.
+- Do not blindly send long raw telemetry to OpenAI; preserve dynamics in bounded evidence windows.
+- Preserve all DHW and reliability semantics already implemented on `fix/dhw-analysis-feedback`.
 - One manual experiment changes one variable. ZontAnalyzer never performs the change itself.
