@@ -42,6 +42,14 @@ pilot:
   worker_status_file: worker-status.json
   max_catchup_days: 90
 
+feedback:
+  enabled: true
+  # Порт контейнера опубликован Compose только на loopback хоста; nginx проксирует /za/api.
+  listen_host: 0.0.0.0
+  listen_port: 8787
+  public_api_base_url: /za/api
+  token_file: /app/.access/feedback_token.txt
+
 notifications:
   log:
     enabled: true

@@ -25,3 +25,6 @@ jobs:
       - run: python -c "from zont_analyzer.cli import app; from zont_analyzer.reports import render_html"
       - run: zont-analyzer --data-dir "$(mktemp -d)" init
       - run: docker build -t zont-analyzer:test .
+      - run: docker build --target test -t zont-analyzer:feedback-e2e .
+      - run: docker run --rm zont-analyzer:feedback-e2e
+      - run: ZONT_ANALYZER_ENV_FILE="$GITHUB_WORKSPACE/deploy/env.example" docker compose -f deploy/compose.yaml -f deploy/compose.test.yaml config

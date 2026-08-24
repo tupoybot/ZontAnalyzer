@@ -25,11 +25,99 @@ from zont_analyzer.analytics import (
     detect_unconfirmed_burner_pulses,
     temperature_metrics,
 )
+from zont_analyzer.application.ingestion import _object_names, heating_circuit_sensor_links
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import DetectedEvent, MetricValue, QualityResult, Recommendation, Report
 from zont_analyzer.reports import render_text
 
 logger = logging.getLogger(__name__)
+
+
+def _select_control_temperature_series(
+    series: list[dict[str, Any]],
+    devices: list[dict[str, Any]],
+    target_series: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    candidates = [item for item in series if item["role"] == "control_indoor_temperature"]
+    configured = [item for item in candidates if item.get("provenance") == "config.entity_overrides"]
+    if len(configured) == 1:
+        return configured[0]
+    if len(configured) > 1:
+        return None
+
+    if target_series is not None:
+        circuit_id = str(target_series["entity_id"]).rsplit(":", 1)[-1]
+        device_id = str(target_series["device_id"])
+        links = heating_circuit_sensor_links(devices, _object_names(devices), series)
+        linked_sensor_ids = {
+            item.sensor_external_id
+            for item in links
+            if item.device_id == device_id and item.circuit_external_id == circuit_id
+        }
+        linked = [
+            item
+            for item in candidates
+            if str(item["device_id"]) == device_id
+            and str(item["entity_id"]).rsplit(":", 1)[-1] in linked_sensor_ids
+        ]
+        if len(linked) == 1:
+            return linked[0]
+        if len(linked) > 1:
+            return None
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        return None
+
+    # Compatibility for pre-migration databases and synthetic tests. Multiple
+    # legacy indoor rows remain deliberately unresolved instead of using order.
+    legacy = [item for item in series if item["role"] == "indoor_temperature"]
+    return legacy[0] if len(legacy) == 1 else None
+
+
+def _sensor_report_context(
+    series: list[dict[str, Any]], selected_control: dict[str, Any] | None
+) -> dict[str, Any]:
+    relevant_roles = {
+        "control_indoor_temperature",
+        "room_temperature",
+        "technical_temperature",
+        "humidity",
+        "outdoor_temperature",
+        "flow_temperature",
+        "return_temperature",
+        "dhw_temperature",
+    }
+
+    def compact(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "entity_id": str(item["entity_id"]),
+            "external_id": str(item["entity_id"]).rsplit(":", 1)[-1],
+            "display_name": str(item.get("display_name") or item["entity_id"]),
+            "role": str(item["role"]),
+            "source_type": str(item["source_type"]),
+            "metric_key": str(item["metric_key"]),
+            "unit": item.get("unit"),
+            "origin": str(item.get("origin") or item["source_type"]),
+            "confidence": float(item.get("confidence", 0.3)),
+            "provenance": str(item.get("provenance") or "unknown"),
+        }
+
+    records = [compact(item) for item in series if item["role"] in relevant_roles]
+    records.sort(key=lambda item: (item["role"], item["display_name"], item["entity_id"], item["metric_key"]))
+    return {
+        "control_resolution": "resolved" if selected_control is not None else "unresolved",
+        "control_temperature": compact(selected_control) if selected_control is not None else None,
+        "room_temperatures": [item for item in records if item["role"] == "room_temperature"],
+        "technical_temperatures": [item for item in records if item["role"] == "technical_temperature"],
+        "humidity": [item for item in records if item["role"] == "humidity"],
+        "return_temperatures": [item for item in records if item["role"] == "return_temperature"],
+        "other_temperature_sources": [
+            item
+            for item in records
+            if item["role"] in {"outdoor_temperature", "flow_temperature", "dhw_temperature"}
+        ],
+    }
 
 
 class AnalysisService:
@@ -93,14 +181,7 @@ class AnalysisService:
         period_id = f"{kind}:{int(start.timestamp())}"
         context_start = start - timedelta(days=7)
         series = self.db.list_series()
-        temperature_series = next(
-            (item for item in series if item["role"] == "indoor_temperature"),
-            None,
-        )
-        quality_series = temperature_series or next(
-            (item for item in series if item["role"] == "temperature"),
-            None,
-        )
+        devices = self.db.list_devices()
         burner_series = next(
             (item for item in series if item["role"] == "burner_activity" and item["metric_key"] == "flame"),
             next((item for item in series if item["role"] == "burner_activity"), None),
@@ -118,6 +199,8 @@ class AnalysisService:
             zont_status_series,
         )
         target_series = next((item for item in series if item["role"] == "target_temperature"), None)
+        temperature_series = _select_control_temperature_series(series, devices, target_series)
+        quality_series = temperature_series
         mode_series = next(
             (
                 item
@@ -228,7 +311,6 @@ class AnalysisService:
         mode_samples = self.db.fetch_samples(int(mode_series["id"]), start, end) if mode_series else []
         circuit_id = str(target_series["entity_id"]).rsplit(":", 1)[-1] if target_series else ""
         device_id = str(target_series["device_id"]) if target_series else ""
-        devices = self.db.list_devices()
         mode_catalog = build_mode_catalog(
             devices,
             device_id=device_id,
@@ -286,6 +368,7 @@ class AnalysisService:
         )
         control_context["heating_circuit"] = availability_context
         control_context["burner_activity_scope"] = burner_activity_scope
+        control_context["sensors"] = _sensor_report_context(series, temperature_series)
         dhw_temperature_samples = (
             self.db.fetch_samples(int(dhw_temperature_series["id"]), start, end) if dhw_temperature_series else []
         )

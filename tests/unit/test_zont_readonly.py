@@ -236,3 +236,22 @@ def test_anonymized_live_contract_normalizes_radio_sensor_metrics() -> None:
     assert all(isinstance(row[1], int) for row in humidity_rows)
     assert {point.metric_key for point in radio_points} == {"battery", "dbm", "flags", "humidity", "temperature"}
     assert [point.value_num for point in radio_points if point.metric_key == "humidity"] == [56.0, 55.0]
+    assert {point.unit for point in radio_points if point.metric_key == "humidity"} == {"%"}
+    assert {point.entity_id for point in radio_points} == {"zont:100001:z3k_radio_sensor:30001"}
+    assert {point.unit for point in radio_points if point.metric_key == "battery"} == {"V"}
+    assert {point.unit for point in radio_points if point.metric_key == "dbm"} == {"dBm"}
+
+
+def test_external_return_and_boiler_rwt_keep_distinct_identities() -> None:
+    response = {
+        "device_id": 7,
+        "z3k_temperature": {"30002": [[1_700_000_000, 31.0]]},
+        "z3k_boiler_adapter": {"900": {"rwt": [[1_700_000_000, 30.5]]}},
+    }
+
+    points, _entities = ZontReadOnlyClient.normalize_history(response)
+
+    assert {(point.source_type, point.entity_id, point.metric_key) for point in points} == {
+        ("z3k_temperature", "zont:7:z3k_temperature:30002", "z3k_temperature"),
+        ("z3k_boiler_adapter", "zont:7:z3k_boiler_adapter:900", "rwt"),
+    }

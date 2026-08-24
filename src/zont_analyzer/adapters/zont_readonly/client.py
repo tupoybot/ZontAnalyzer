@@ -124,9 +124,20 @@ def _walk_dta(value: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[st
 
 
 def infer_unit(source_type: str, path: Iterable[str]) -> str | None:
-    text = ".".join((source_type, *path)).casefold()
+    path_tuple = tuple(path)
+    text = ".".join((source_type, *path_tuple)).casefold()
+    metric = path_tuple[-1] if path_tuple else ""
+    if source_type == "z3k_radio_sensor":
+        radio_units = {
+            "temperature": "°C",
+            "humidity": "%",
+            "battery": "V",
+            "dbm": "dBm",
+            "flags": "state",
+        }
+        if metric in radio_units:
+            return radio_units[metric]
     if source_type == "z3k_boiler_adapter":
-        metric = tuple(path)[-1] if tuple(path) else ""
         if metric in {"cs", "cs2", "bt", "rwt", "dt", "ot", "rt", "rors", "ds"}:
             return "°C"
         if metric in {"rml", "mrml", "rp"}:
@@ -148,6 +159,15 @@ def infer_unit(source_type: str, path: Iterable[str]) -> str | None:
 
 def infer_role(source_type: str, entity_id: str, metric_key: str, display_name: str = "") -> tuple[str, float]:
     text = " ".join((source_type, entity_id, metric_key, display_name)).casefold()
+    if source_type == "z3k_radio_sensor":
+        radio_roles = {
+            "humidity": "humidity",
+            "battery": "sensor_battery_voltage",
+            "dbm": "sensor_signal_strength",
+            "flags": "sensor_status_flags",
+        }
+        if metric_key in radio_roles:
+            return radio_roles[metric_key], 0.95
     if source_type == "z3k_boiler_adapter":
         boiler_roles = {
             "ot": "outdoor_temperature",
@@ -177,16 +197,30 @@ def infer_role(source_type: str, entity_id: str, metric_key: str, display_name: 
             return "heating_activity", 0.8
     if any(term in text for term in ("улиц", "наруж", "outdoor", "outside")):
         return "outdoor_temperature", 0.9
-    if any(term in text for term in ("комнат", "room", "indoor", "воздух")) and "temp" in text:
-        return "indoor_temperature", 0.85
     if any(term in text for term in ("подач", "flow_temp", "supply_temp")):
         return "flow_temperature", 0.85
     if any(term in text for term in ("обрат", "return_temp")):
         return "return_temperature", 0.85
+    if any(term in text for term in ("котельн", "техническ", "бойлерн", "boiler room", "utility room")):
+        return "technical_temperature", 0.85
+    if any(
+        term in text
+        for term in (
+            "комнат",
+            "room",
+            "indoor",
+            "воздух",
+            "гостин",
+            "спальн",
+            "детск",
+            "кабинет",
+        )
+    ) and ("temp" in text or source_type in {"z3k_temperature", "z3k_radio_sensor"}):
+        return "room_temperature", 0.8
     if any(term in text for term in ("burner", "горел", "flame", "boiler_work_time")):
         return "burner_activity", 0.9
     if "temp" in text:
-        return "temperature", 0.55
+        return "temperature", 0.4
     if "mode" in text:
         return "operating_mode", 0.75
     return "unknown", 0.3

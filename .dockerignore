@@ -16,7 +16,6 @@ backups
 reports
 config.yaml
 zontaccesstoken.json
-tests
 dist
 build
 *.egg-info

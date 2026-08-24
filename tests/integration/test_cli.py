@@ -16,7 +16,7 @@ def test_cli_registers_all_commands_and_initializes(tmp_path: Path, monkeypatch)
     result = runner.invoke(app, ["--data-dir", str(tmp_path / "data"), "init"])
     assert result.exit_code == 0
     assert "initialized" in result.stdout
-    assert "5a9ce2bd8b34" in result.stdout
+    assert "7c8e9f1a2b3c" in result.stdout
 
     analyze = runner.invoke(app, ["--data-dir", str(tmp_path / "data"), "analyze", "initial", "--no-ai"])
     assert analyze.exit_code == 0

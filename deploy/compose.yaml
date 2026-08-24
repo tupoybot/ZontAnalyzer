@@ -14,6 +14,8 @@ services:
     environment:
       ZONT_ANALYZER_CONFIG: /config/config.yaml
       ZONT_ANALYZER_DATA_DIR: /data
+    ports:
+      - "127.0.0.1:${ZONT_ANALYZER_FEEDBACK_PORT:-8787}:8787"
     volumes:
       - type: bind
         source: /opt/zont-analyzer/data
@@ -35,6 +37,12 @@ services:
       - type: bind
         source: /opt/zont-analyzer/secrets/openai_access_token.txt
         target: /app/.access/.openai_access_token.txt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /opt/zont-analyzer/secrets/feedback_token.txt
+        target: /app/.access/feedback_token.txt
         read_only: true
         bind:
           create_host_path: false

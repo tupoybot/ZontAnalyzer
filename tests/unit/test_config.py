@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from zont_analyzer.config import load_config
+from zont_analyzer.config import AppConfig, load_config
+
+
+def test_default_history_types_include_confirmed_radio_sensor_source() -> None:
+    assert "z3k_radio_sensor" in AppConfig().zont.history_data_types
 
 
 def test_config_is_optional_and_secrets_are_not_in_dump(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

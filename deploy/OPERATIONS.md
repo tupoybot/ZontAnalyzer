@@ -1,10 +1,11 @@
 # Manual test deployment
 
 This deployment is intentionally isolated under the Compose project
-`zont-analyzer`. It publishes no ports and declares no external Docker network.
-The only shared host path is the exact static `/za` directory selected through
-`ZONT_ANALYZER_PUBLISH_DIR` for `compose.test.yaml`; the application itself
-contains no host-specific publishing policy.
+`zont-analyzer`. It publishes the narrow feedback API only on host loopback and
+declares no external Docker network. The only shared host path is the exact static
+`/za` directory selected through `ZONT_ANALYZER_PUBLISH_DIR` for
+`compose.test.yaml`; the application itself contains no host-specific publishing
+policy.
 
 ## One-time host preparation
 
@@ -33,10 +34,18 @@ test -e /var/www/html/za/index.html || \
     /var/www/html/za/index.html
 ```
 
-Edit `/opt/zont-analyzer/config.yaml` for the home. Put the ZONT JSON containing
+Edit `/opt/zont-analyzer/config.yaml` for the home. Generate an independent
+feedback bearer key, then put the ZONT JSON containing
 `token` and `email` in `/opt/zont-analyzer/secrets/zontaccesstoken.json`, and put
 only the OpenAI key in
-`/opt/zont-analyzer/secrets/openai_access_token.txt`. These files are mounted
+`/opt/zont-analyzer/secrets/openai_access_token.txt`:
+
+```sh
+umask 077
+openssl rand -hex 32 > /opt/zont-analyzer/secrets/feedback_token.txt
+```
+
+These files are mounted
 read-only and are not expanded into the Compose model or container environment.
 Because the container is UID 10001, make each credential file owned by that UID
 and private. Keep `.env` (release settings, not credentials) owned by root and mode
@@ -44,9 +53,11 @@ and private. Keep `.env` (release settings, not credentials) owned by root and m
 
 ```sh
 chown 10001:10001 /opt/zont-analyzer/secrets/zontaccesstoken.json \
-  /opt/zont-analyzer/secrets/openai_access_token.txt
+  /opt/zont-analyzer/secrets/openai_access_token.txt \
+  /opt/zont-analyzer/secrets/feedback_token.txt
 chmod 0600 /opt/zont-analyzer/secrets/zontaccesstoken.json \
-  /opt/zont-analyzer/secrets/openai_access_token.txt
+  /opt/zont-analyzer/secrets/openai_access_token.txt \
+  /opt/zont-analyzer/secrets/feedback_token.txt
 chown root:root /opt/zont-analyzer/.env
 chmod 0600 /opt/zont-analyzer/.env
 stat -c '%a %u:%g %n' /opt/zont-analyzer/.env /opt/zont-analyzer/secrets/*
@@ -55,6 +66,21 @@ stat -c '%a %u:%g %n' /opt/zont-analyzer/.env /opt/zont-analyzer/secrets/*
 Never put secrets in either Compose file or the release directory.
 The production `.env` must keep `ZONT_ANALYZER_PUBLISH_DIR=/var/www/html/za`;
 do not replace it with the example file during an upgrade.
+
+Add a same-origin nginx route beside the existing static `/za/` location. The
+container port remains unreachable from external interfaces; the application
+still validates the bearer key supplied by the HTML:
+
+```nginx
+location /za/api/ {
+    proxy_pass http://127.0.0.1:8787;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Validate nginx configuration before reloading it. Do not expose port 8787 on a
+public address and do not place the bearer key in nginx configuration or HTML.
 
 ## Release layout and preflight
 
@@ -148,6 +174,9 @@ test -s /var/www/html/za/index.html
 test -s /var/www/html/za/latest.html
 test -s /var/www/html/za/ai-latest.html
 curl -fsS https://hk.tupoybot.ru/za/ >/dev/null
+curl -fsS http://127.0.0.1:8787/api/health
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  -X PUT http://127.0.0.1:8787/api/recommendations/unknown/feedback)" = 401
 docker ps --format '{{.Names}} {{.Status}}'
 ```
 

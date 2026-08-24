@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -32,12 +33,58 @@ def _object_names(devices: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
     return names
 
 
-def _linked_indoor_sensor_ids(
+@dataclass(frozen=True)
+class SensorLink:
+    device_id: str
+    circuit_external_id: str
+    sensor_external_id: str
+    confidence: float
+    provenance: str
+
+
+def _is_dhw_name(name: str) -> bool:
+    normalized = name.casefold()
+    return any(term in normalized for term in ("гвс", "dhw", "hot water", "бойлер", "boiler tank"))
+
+
+def heating_circuit_sensor_links(
     devices: list[dict[str, Any]],
     config_names: dict[tuple[str, str], str],
     series_rows: list[dict[str, Any]],
-) -> set[tuple[str, str]]:
+) -> list[SensorLink]:
+    """Resolve space-heating circuit -> indoor sensor links, strongest source first."""
+
+    links: dict[tuple[str, str], SensorLink] = {}
     heating_circuit_ids: set[tuple[str, str]] = set()
+    raw_by_device: dict[str, dict[str, Any]] = {}
+    for device in devices:
+        device_id = str(device["id"])
+        raw = device["raw"]
+        raw_by_device[device_id] = raw
+        z3k_config = raw.get("z3k_config")
+        circuits = z3k_config.get("heating_circuits", []) if isinstance(z3k_config, dict) else []
+        if not isinstance(circuits, list):
+            continue
+        for circuit in circuits:
+            if not isinstance(circuit, dict) or circuit.get("id") is None:
+                continue
+            circuit_id = str(circuit["id"])
+            name = str(circuit.get("name") or config_names.get((device_id, circuit_id), ""))
+            if _is_dhw_name(name):
+                continue
+            heating_circuit_ids.add((device_id, circuit_id))
+            sensor_id = circuit.get("air_temp_sensor")
+            if sensor_id is not None:
+                links[(device_id, circuit_id)] = SensorLink(
+                    device_id=device_id,
+                    circuit_external_id=circuit_id,
+                    sensor_external_id=str(sensor_id),
+                    confidence=1.0,
+                    provenance="zont_config.heating_circuits[].air_temp_sensor",
+                )
+
+    # History metadata identifies a circuit only as a fallback. It is never used
+    # to override an explicit circuit configuration link.
     for series in series_rows:
         if series["source_type"] != "z3k_heating_circuit" or series["metric_key"] != "target_temp":
             continue
@@ -48,23 +95,56 @@ def _linked_indoor_sensor_ids(
         if role == "target_temperature":
             heating_circuit_ids.add((device_id, external_id))
 
-    linked: set[tuple[str, str]] = set()
+    for device_id, circuit_id in heating_circuit_ids:
+        if (device_id, circuit_id) in links:
+            continue
+        raw = raw_by_device.get(device_id, {})
+        io = raw.get("io")
+        z3k_state = io.get("z3k-state") if isinstance(io, dict) else None
+        state = z3k_state.get(circuit_id) if isinstance(z3k_state, dict) else None
+        sensor_id = state.get("target_sensor_id") if isinstance(state, dict) else None
+        if sensor_id is not None:
+            links[(device_id, circuit_id)] = SensorLink(
+                device_id=device_id,
+                circuit_external_id=circuit_id,
+                sensor_external_id=str(sensor_id),
+                confidence=0.9,
+                provenance="zont_io.z3k-state.target_sensor_id",
+            )
+    return sorted(links.values(), key=lambda item: (item.device_id, item.circuit_external_id))
 
-    def walk(device_id: str, value: Any, parent_key: str | None = None) -> None:
-        if isinstance(value, dict):
-            if parent_key is not None and (device_id, parent_key) in heating_circuit_ids:
-                target_sensor_id = value.get("target_sensor_id")
-                if target_sensor_id is not None:
-                    linked.add((device_id, str(target_sensor_id)))
-            for key, child in value.items():
-                walk(device_id, child, str(key))
-        elif isinstance(value, list):
-            for child in value:
-                walk(device_id, child)
 
-    for device in devices:
-        walk(str(device["id"]), device["raw"])
-    return linked
+def _linked_indoor_sensor_ids(
+    devices: list[dict[str, Any]],
+    config_names: dict[tuple[str, str], str],
+    series_rows: list[dict[str, Any]],
+) -> set[tuple[str, str]]:
+    return {
+        (link.device_id, link.sensor_external_id)
+        for link in heating_circuit_sensor_links(devices, config_names, series_rows)
+    }
+
+
+def _is_sensor_temperature_series(series: dict[str, Any]) -> bool:
+    source_type = str(series["source_type"])
+    metric_key = str(series["metric_key"])
+    return (
+        source_type == "z3k_radio_sensor" and metric_key == "temperature"
+    ) or source_type == "z3k_temperature" or (
+        source_type == "temperature" and metric_key in {"temperature", source_type}
+    )
+
+
+def _series_origin(source_type: str, metric_key: str, role: str) -> str:
+    if source_type == "z3k_boiler_adapter" and metric_key == "rwt":
+        return "boiler_reported_rwt"
+    if role == "return_temperature":
+        return "external_sensor"
+    if source_type == "z3k_radio_sensor":
+        return "radio_sensor"
+    if source_type == "z3k_temperature":
+        return "wired_temperature_sensor"
+    return source_type
 
 
 class IngestionService:
@@ -97,26 +177,51 @@ class IngestionService:
         config_names: dict[tuple[str, str], str],
     ) -> None:
         series_rows = self.db.list_series()
-        linked_indoor_sensor_ids = _linked_indoor_sensor_ids(devices, config_names, series_rows)
+        links = heating_circuit_sensor_links(devices, config_names, series_rows)
+        links_by_sensor = {(item.device_id, item.sensor_external_id): item for item in links}
         for series in series_rows:
             entity_id = str(series["entity_id"])
             entity = inferred_entities.get(entity_id, {})
             external_id = str(entity.get("external_id", entity_id.rsplit(":", 1)[-1]))
             device_id = str(series["device_id"])
             name = config_names.get((device_id, external_id), str(entity.get("display_name", entity_id)))
-            role, _confidence = infer_role(
+            role, confidence = infer_role(
                 str(series["source_type"]),
                 external_id,
                 str(series["metric_key"]),
                 name,
             )
-            if series["source_type"] == "z3k_temperature" and (device_id, external_id) in linked_indoor_sensor_ids:
-                role = "indoor_temperature"
+            provenance = "display_name heuristic" if confidence < 0.95 else "history source semantics"
+            link = links_by_sensor.get((device_id, external_id))
+            if link is not None and _is_sensor_temperature_series(series):
+                role = "control_indoor_temperature"
+                confidence = link.confidence
+                provenance = link.provenance
             override = self.config.entity_overrides.get(entity_id, {})
+            override_role = override.get("role")
+            if override_role is not None:
+                configured_role = str(override_role)
+                temperature_roles = {
+                    "control_indoor_temperature",
+                    "room_temperature",
+                    "technical_temperature",
+                    "outdoor_temperature",
+                    "flow_temperature",
+                    "return_temperature",
+                    "dhw_temperature",
+                }
+                is_temperature_measurement = _is_sensor_temperature_series(series) or series.get("unit") == "°C"
+                if configured_role not in temperature_roles or is_temperature_measurement:
+                    role = configured_role
+                    confidence = 1.0
+                    provenance = "config.entity_overrides"
             self.db.update_series_role(
                 int(series["id"]),
-                str(override.get("role", role)),
+                role,
                 str(override.get("display_name", name)),
+                confidence=confidence,
+                provenance=provenance,
+                origin=_series_origin(str(series["source_type"]), str(series["metric_key"]), role),
             )
 
     def sync(self, *, backfill: timedelta | None = None, now: datetime | None = None) -> dict[str, Any]:

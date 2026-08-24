@@ -11,6 +11,7 @@ from typing import Annotated, Any
 
 import typer
 
+from zont_analyzer.application.feedback import start_feedback_server
 from zont_analyzer.application.pilot import PilotService, worker_health, worker_status_path
 from zont_analyzer.config import explain_config
 from zont_analyzer.doctor import run_doctor
@@ -232,7 +233,11 @@ def report_export(
     if report is None:
         raise typer.BadParameter(f"Unknown report: {report_id}" if report_id else "No reports exist")
     if format_ == "html":
-        content = render_html(report)
+        content = render_html(
+            report,
+            db.recommendation_views_for_report(report.id),
+            feedback_api_base_url=_runtime(ctx).config.feedback.public_api_base_url,
+        )
     elif format_ in {"text", "md"}:
         content = render_text(report)
     elif format_ == "json":
@@ -320,20 +325,36 @@ def run(ctx: typer.Context, once: Annotated[bool, typer.Option("--once")] = Fals
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    while not stopping.is_set():
-        try:
-            result = worker.run_cycle()
-            logging.getLogger("zont_analyzer.worker").info("worker cycle complete: %s", result)
+    feedback_server = None
+    feedback_thread = None
+    if not once and runtime.config.feedback.enabled:
+        feedback_server, feedback_thread = start_feedback_server(runtime)
+        logging.getLogger("zont_analyzer.feedback").info(
+            "feedback API listening on %s:%d",
+            runtime.config.feedback.listen_host,
+            runtime.config.feedback.listen_port,
+        )
+    try:
+        while not stopping.is_set():
+            try:
+                result = worker.run_cycle()
+                logging.getLogger("zont_analyzer.worker").info("worker cycle complete: %s", result)
+                if once:
+                    _json(result)
+            except Exception as exc:
+                logging.getLogger("zont_analyzer.worker").exception("worker iteration failed")
+                if once:
+                    typer.echo(f"Worker cycle failed: {type(exc).__name__}: {exc}", err=True)
+                    raise typer.Exit(1) from exc
             if once:
-                _json(result)
-        except Exception as exc:
-            logging.getLogger("zont_analyzer.worker").exception("worker iteration failed")
-            if once:
-                typer.echo(f"Worker cycle failed: {type(exc).__name__}: {exc}", err=True)
-                raise typer.Exit(1) from exc
-        if once:
-            break
-        stopping.wait(runtime.config.scheduler.sync_every_minutes * 60)
+                break
+            stopping.wait(runtime.config.scheduler.sync_every_minutes * 60)
+    finally:
+        if feedback_server is not None:
+            feedback_server.shutdown()
+            feedback_server.server_close()
+        if feedback_thread is not None:
+            feedback_thread.join(timeout=5)
 
 
 def main() -> None:

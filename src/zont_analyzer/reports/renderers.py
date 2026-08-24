@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -85,6 +86,21 @@ EVENT_LABELS = {
     "main_power_outage": "Пропадание основного питания",
 }
 
+SENSOR_GROUP_LABELS = {
+    "control_temperature": "Контрольная температура контура",
+    "room_temperatures": "Другие жилые комнаты",
+    "technical_temperatures": "Технические помещения",
+    "humidity": "Влажность",
+    "return_temperatures": "Обратка",
+}
+
+SENSOR_ORIGIN_LABELS = {
+    "radio_sensor": "радиодатчик",
+    "wired_temperature_sensor": "проводной датчик",
+    "external_sensor": "внешний датчик",
+    "boiler_reported_rwt": "значение rwt котла",
+}
+
 
 def _metric_label(name: str, context: dict[str, Any] | None = None) -> str:
     offline = name in {"boiler_uptime_seconds", "zont_uptime_seconds"} and context is not None and (
@@ -156,6 +172,33 @@ def _metric_display(metric: Any) -> tuple[str, str]:
     return f"{metric.value:g}", str(metric.unit)
 
 
+def _sensor_identity(item: dict[str, Any]) -> str:
+    name = str(item.get("display_name") or item.get("entity_id") or "неизвестный датчик")
+    external_id = str(item.get("external_id") or "?")
+    origin = SENSOR_ORIGIN_LABELS.get(str(item.get("origin")), str(item.get("origin") or "источник неизвестен"))
+    source_type = str(item.get("source_type") or "unknown")
+    confidence = float(item.get("confidence", 0.0))
+    return f"{name} (ID {external_id}; {origin}; {source_type}; уверенность {confidence:.0%})"
+
+
+def _sensor_context_lines(context: Any) -> list[str]:
+    if not isinstance(context, dict):
+        return []
+    lines: list[str] = []
+    control = context.get("control_temperature")
+    if isinstance(control, dict):
+        lines.append(f"{SENSOR_GROUP_LABELS['control_temperature']}: {_sensor_identity(control)}")
+    elif context.get("control_resolution") == "unresolved":
+        lines.append(f"{SENSOR_GROUP_LABELS['control_temperature']}: связь не разрешена")
+    for key in ("room_temperatures", "technical_temperatures", "humidity", "return_temperatures"):
+        values = context.get(key)
+        if isinstance(values, list) and values:
+            identities = "; ".join(_sensor_identity(item) for item in values if isinstance(item, dict))
+            if identities:
+                lines.append(f"{SENSOR_GROUP_LABELS[key]}: {identities}")
+    return lines
+
+
 def render_text(report: Report) -> str:
     lines = [
         f"ZontAnalyzer — {report.kind}",
@@ -181,6 +224,10 @@ def render_text(report: Report) -> str:
         )
     if report.context.get("current_target_c") is not None:
         lines.append(f"Текущая целевая температура: {report.context['current_target_c']:g} °C")
+    sensor_lines = _sensor_context_lines(report.context.get("sensors"))
+    if sensor_lines:
+        lines.append("Датчики:")
+        lines.extend(f"- {line}" for line in sensor_lines)
     heating_circuit = report.context.get("heating_circuit")
     if isinstance(heating_circuit, dict):
         auto_enabled = heating_circuit.get("automatic_summer_mode_enabled")
@@ -276,7 +323,12 @@ def render_text(report: Report) -> str:
     return "\n".join(lines)
 
 
-def render_html(report: Report) -> str:
+def render_html(
+    report: Report,
+    recommendation_feedback: Mapping[str, Mapping[str, Any]] | None = None,
+    *,
+    feedback_api_base_url: str = "/api",
+) -> str:
     title = html.escape(f"ZontAnalyzer — {report.kind}")
     period = html.escape(
         f"{_local(report.period_start, report.timezone)} — {_local(report.period_end, report.timezone)}"
@@ -292,6 +344,14 @@ def render_html(report: Report) -> str:
         else ""
     )
     heating_circuit = report.context.get("heating_circuit")
+    sensor_lines = _sensor_context_lines(report.context.get("sensors"))
+    sensor_context = (
+        '<section class="sensors"><h2>Датчики</h2><ul>'
+        + "".join(f"<li>{html.escape(line)}</li>" for line in sensor_lines)
+        + "</ul></section>"
+        if sensor_lines
+        else ""
+    )
     summer_context = ""
     if isinstance(heating_circuit, dict):
         auto_enabled = heating_circuit.get("automatic_summer_mode_enabled")
@@ -366,9 +426,23 @@ def render_html(report: Report) -> str:
     def html_list(values: list[str], empty: str) -> str:
         return "<ul>" + "".join(f"<li>{html.escape(value)}</li>" for value in values) + "</ul>" if values else empty
 
-    recommendations = "".join(
-        (
-            f"<article><h3>{html.escape(item.title)}</h3>"
+    feedback_by_id = recommendation_feedback or {}
+    status_labels = {"new": "Новая", "applied": "Выполнено", "rejected": "Отклонено"}
+    recommendation_cards: list[str] = []
+    for item in report.recommendations:
+        recommendation_id = item.id or ""
+        state = feedback_by_id.get(recommendation_id, {})
+        status = str(state.get("status", "new"))
+        if status not in status_labels:
+            status = "new"
+        owner_note = str(state.get("owner_note") or "")
+        disabled = " disabled" if not recommendation_id else ""
+        recommendation_cards.append(
+            f'<article class="recommendation" data-recommendation-id="{html.escape(recommendation_id, quote=True)}">'
+            f"<h3>{html.escape(item.title)}</h3>"
+            f'<p><strong>ID рекомендации:</strong> <code>{html.escape(recommendation_id or "не сохранена")}</code></p>'
+            f'<p><strong>Статус:</strong> <span class="feedback-status status-{html.escape(status)}" '
+            f'data-status="{html.escape(status)}">{status_labels[status]}</span></p>'
             f"<p><strong>Гипотеза:</strong> {html.escape(item.hypothesis)}</p>"
             f"<p><strong>Действие:</strong> {html.escape(item.suggested_manual_action)}</p>"
             f"<p><strong>Ожидаемый эффект:</strong> {html.escape(item.expected_effect)}</p>"
@@ -377,11 +451,23 @@ def render_html(report: Report) -> str:
             f"<p><small>Приоритет: {html.escape(item.priority)}; уверенность: {item.confidence:.0%}</small></p>"
             f"<p><strong>Риски:</strong></p>{html_list(item.risks, '<p>Не указаны.</p>')}"
             f"<p><strong>Когда остановиться:</strong></p>"
-            f"{html_list(item.stop_conditions, '<p>Не указано.</p>')}</article>"
+            f"{html_list(item.stop_conditions, '<p>Не указано.</p>')}"
+            '<div class="feedback-controls">'
+            '<label>Комментарий владельца'
+            f'<textarea class="feedback-note" rows="3" maxlength="2000"{disabled}>'
+            f"{html.escape(owner_note)}</textarea></label>"
+            '<div class="feedback-actions">'
+            f'<button type="button" data-feedback-status="applied"{disabled}>Выполнено</button>'
+            f'<button type="button" class="reject" data-feedback-status="rejected"{disabled}>Отклонить</button>'
+            "</div>"
+            f'<p class="saved-note"><strong>Сохранённый комментарий:</strong> '
+            f'<span>{html.escape(owner_note) if owner_note else "нет"}</span></p>'
+            '<p class="feedback-message" role="status" aria-live="polite"></p>'
+            "</div></article>"
         )
-        for item in report.recommendations
-    )
+    recommendations = "".join(recommendation_cards)
     canonical = html.escape(json.dumps(report.model_dump(mode="json"), ensure_ascii=False))
+    api_base = html.escape(feedback_api_base_url.rstrip("/"), quote=True)
     return f"""<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>{title}</title><style>
@@ -391,16 +477,29 @@ td,th{{padding:.55rem;border-bottom:1px solid #ddd;text-align:left}}
 .quality{{padding:.8rem;background:#eef6ff;border-radius:.5rem}}
 article{{border-left:4px solid #568;padding:0 1rem;margin:1rem 0}}
 .dhw{{padding:.8rem 1rem;background:#fff8e8;border-radius:.5rem}}
+.sensors{{padding:.8rem 1rem;background:#f4f4fb;border-radius:.5rem}}
 .uptime-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.8rem;margin:1rem 0}}
 .uptime-card{{display:grid;gap:.25rem;border:0;background:#edf8f1;border-radius:.7rem;padding:1rem;margin:0}}
 .uptime-card strong{{font-size:1.8rem;font-variant-numeric:tabular-nums}}
 .uptime-card small{{color:#53635a}}
-</style></head><body><h1>{title}</h1>
+.feedback-controls{{display:grid;gap:.65rem;padding:.8rem;background:#f6f8fa;border-radius:.5rem;margin:1rem 0}}
+.feedback-controls label{{display:grid;gap:.35rem;font-weight:600}}
+.feedback-note{{box-sizing:border-box;width:100%;font:inherit;padding:.55rem}}
+.feedback-actions{{display:flex;gap:.6rem;flex-wrap:wrap}}
+.feedback-actions button{{font:inherit;padding:.5rem .9rem;border:0;border-radius:.4rem;background:#287943;color:white;
+cursor:pointer}}
+.feedback-actions button.reject{{background:#a33b32}}
+.feedback-actions button:disabled{{opacity:.55;cursor:wait}}
+.feedback-status{{display:inline-block;padding:.15rem .45rem;border-radius:1rem;background:#e9edf2}}
+.status-applied{{background:#dcefe2;color:#185c2d}}.status-rejected{{background:#f7dfdc;color:#812820}}
+.saved-note,.feedback-message{{margin:.1rem 0}}.feedback-message.error{{color:#9b251d}}
+</style></head><body data-feedback-api-base="{api_base}"><h1>{title}</h1>
 <p><strong>ID:</strong> <code>{html.escape(report.id)}</code></p>
 <p><strong>Период:</strong> {period}</p>
 <p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"}</p>
 {uptime}
 {mode_context}
+{sensor_context}
 {summer_context}
 {dhw_context}
 <p class="quality">Качество данных: {report.quality.score:.0%}; покрытие {report.quality.coverage_pct:.1f}%</p>
@@ -408,4 +507,83 @@ article{{border-left:4px solid #568;padding:0 1rem;margin:1rem 0}}
 <h2>События</h2><p>Показано до 50 из {len(report.events)}.</p>
 <table><tr><th>Начало</th><th>Уровень</th><th>Тип</th><th>Детали</th></tr>{events}</table>
 <h2>Рекомендации</h2>{recommendations or "<p>Нет рекомендаций.</p>"}
-<details><summary>Канонический JSON</summary><pre>{canonical}</pre></details></body></html>"""
+<details><summary>Канонический JSON</summary><pre>{canonical}</pre></details>
+<script>
+(() => {{
+  const apiBase = document.body.dataset.feedbackApiBase || "/api";
+  const labels = {{applied: "Выполнено", rejected: "Отклонено", new: "Новая"}};
+  const tokenKey = "zont-analyzer-feedback-token";
+
+  function token(interactive) {{
+    let value = sessionStorage.getItem(tokenKey) || "";
+    if (!value && interactive) {{
+      value = window.prompt("Введите ключ обратной связи ZontAnalyzer") || "";
+      if (value) sessionStorage.setItem(tokenKey, value);
+    }}
+    return value;
+  }}
+
+  function applyState(card, payload) {{
+    const status = payload.status || "new";
+    const note = payload.owner_note || "";
+    const statusNode = card.querySelector(".feedback-status");
+    statusNode.textContent = labels[status] || status;
+    statusNode.dataset.status = status;
+    statusNode.className = `feedback-status status-${{status}}`;
+    card.querySelector(".feedback-note").value = note;
+    card.querySelector(".saved-note span").textContent = note || "нет";
+  }}
+
+  async function request(card, options, interactive) {{
+    const secret = token(interactive);
+    if (!secret) throw new Error("Нужен ключ обратной связи.");
+    const id = card.dataset.recommendationId;
+    const response = await fetch(`${{apiBase}}/recommendations/${{encodeURIComponent(id)}}/feedback`, {{
+      ...options,
+      headers: {{"Authorization": `Bearer ${{secret}}`, ...(options.headers || {{}})}},
+      credentials: "same-origin",
+    }});
+    if (response.status === 401) sessionStorage.removeItem(tokenKey);
+    const payload = await response.json().catch(() => ({{}}));
+    if (!response.ok) throw new Error(payload.error || `Ошибка HTTP ${{response.status}}`);
+    applyState(card, payload);
+    return payload;
+  }}
+
+  document.querySelectorAll(".recommendation[data-recommendation-id]").forEach((card) => {{
+    const id = card.dataset.recommendationId;
+    if (!id) return;
+    const message = card.querySelector(".feedback-message");
+    card.querySelectorAll("button[data-feedback-status]").forEach((button) => {{
+      button.addEventListener("click", async () => {{
+        const buttons = card.querySelectorAll("button[data-feedback-status]");
+        buttons.forEach((item) => item.disabled = true);
+        message.className = "feedback-message";
+        message.textContent = "Сохраняю…";
+        try {{
+          await request(card, {{
+            method: "PUT",
+            headers: {{"Content-Type": "application/json"}},
+            body: JSON.stringify({{
+              status: button.dataset.feedbackStatus,
+              owner_note: card.querySelector(".feedback-note").value,
+            }}),
+          }}, true);
+          message.textContent = "Обратная связь сохранена.";
+        }} catch (error) {{
+          message.className = "feedback-message error";
+          message.textContent = error instanceof Error ? error.message : "Не удалось сохранить обратную связь.";
+        }} finally {{
+          buttons.forEach((item) => item.disabled = false);
+        }}
+      }});
+    }});
+    if (token(false)) {{
+      request(card, {{method: "GET"}}, false).catch((error) => {{
+        message.className = "feedback-message error";
+        message.textContent = error instanceof Error ? error.message : "Не удалось обновить статус.";
+      }});
+    }}
+  }});
+}})();
+</script></body></html>"""
