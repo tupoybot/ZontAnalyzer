@@ -1,0 +1,54 @@
+{
+  "ok": true,
+  "devices": [
+    {
+      "device_id": 100001,
+      "name": "Обезличенный контроллер",
+      "z3k_config": {
+        "heating_circuits": [
+          {
+            "id": 20001,
+            "name": "Контур отопления",
+            "air_temp_sensor": 30001
+          }
+        ],
+        "radiosensors": [
+          {
+            "id": 30001,
+            "name": "Комнатный радиотермогигрометр",
+            "type": 18,
+            "upper_humidity_threshold": 80,
+            "lower_humidity_threshold": 30,
+            "humidity_hysteresis": 5
+          }
+        ],
+        "wired_temperature_sensors": [
+          {
+            "id": 30002,
+            "name": "Внешний датчик обратки",
+            "io_extension_id": 50001
+          }
+        ]
+      },
+      "io": {
+        "z3k-state": {
+          "20001": {
+            "target_sensor_id": 30001,
+            "target_temp": 22.0
+          },
+          "30001": {
+            "temperature": 22.4,
+            "humidity": 56,
+            "battery": 3.1,
+            "rssi": -62.0,
+            "sensor_ok": true
+          },
+          "30002": {
+            "curr_temp": 31.0,
+            "sensor_ok": true
+          }
+        }
+      }
+    }
+  ]
+}

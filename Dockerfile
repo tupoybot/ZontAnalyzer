@@ -15,3 +15,13 @@ USER zont
 VOLUME ["/data"]
 ENTRYPOINT ["zont-analyzer", "--data-dir", "/data"]
 CMD ["run"]
+
+FROM runtime AS test
+USER root
+RUN pip install --no-cache-dir '.[dev]'
+COPY tests ./tests
+USER zont
+ENTRYPOINT ["pytest"]
+CMD ["-q", "-p", "no:cacheprovider", "tests/integration/test_feedback_http.py"]
+
+FROM runtime AS production

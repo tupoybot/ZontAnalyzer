@@ -17,10 +17,12 @@ from .events import detect_burner_events, detect_temperature_events
 from .flame import detect_unconfirmed_burner_pulses
 from .metrics import burner_metrics, temperature_metrics
 from .quality import assess_quality
+from .reliability import ReliabilityAnalysis, analyze_reliability
 
 __all__ = [
     "assess_quality",
     "analyze_dhw_interactions",
+    "analyze_reliability",
     "BoilerPurpose",
     "build_heating_circuit_config",
     "build_mode_catalog",
@@ -35,5 +37,6 @@ __all__ = [
     "detect_unconfirmed_burner_pulses",
     "DhwAnalysis",
     "HeatingDemand",
+    "ReliabilityAnalysis",
     "temperature_metrics",
 ]

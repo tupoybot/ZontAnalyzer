@@ -166,7 +166,15 @@ class PilotService:
 
     def _publish_archive(self, report_date: date, report: Report) -> tuple[Path, Path]:
         html_path, json_path = self._archive_paths(report_date)
-        atomic_write_text(html_path, render_html(report), mode=0o644)
+        atomic_write_text(
+            html_path,
+            render_html(
+                report,
+                self.runtime.db.recommendation_views_for_report(report.id),
+                feedback_api_base_url=self.runtime.config.feedback.public_api_base_url,
+            ),
+            mode=0o644,
+        )
         atomic_write_text(json_path, report.model_dump_json(indent=2) + "\n", mode=0o644)
         return html_path, json_path
 
@@ -242,7 +250,15 @@ class PilotService:
                 latest_report_id=latest_report.id,
                 sync=sync_result,
             )
-            atomic_write_text(latest_path, render_html(latest_report), mode=0o644)
+            atomic_write_text(
+                latest_path,
+                render_html(
+                    latest_report,
+                    self.runtime.db.recommendation_views_for_report(latest_report.id),
+                    feedback_api_base_url=self.runtime.config.feedback.public_api_base_url,
+                ),
+                mode=0o644,
+            )
             delivered = self.runtime.db.flush_log_outbox()
             for message in delivered:
                 logger.info(message)

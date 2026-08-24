@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import time
 from collections.abc import Iterable, Iterator, Sequence
@@ -8,9 +10,22 @@ from typing import Any, Literal
 
 import httpx
 
-from zont_analyzer.domain import TelemetryPoint
+from zont_analyzer.domain import SourceEvent, TelemetryPoint
 
-ALLOWED_METHODS = frozenset({"devices", "load_data"})
+ALLOWED_METHODS = frozenset({"devices", "load_data", "raw_events"})
+RELIABILITY_EVENT_TYPES = frozenset(
+    {
+        "LossConnectionBoiler",
+        "ReconnectingBoiler",
+        "OTLost",
+        "OTFound",
+        "MainPowerLost",
+        "MainPowerFound",
+        "MainPowerRestored",
+        "PowerOff",
+        "PowerOn",
+    }
+)
 _SENSITIVE_KEY_PARTS = frozenset(
     {
         "token",
@@ -109,9 +124,20 @@ def _walk_dta(value: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[st
 
 
 def infer_unit(source_type: str, path: Iterable[str]) -> str | None:
-    text = ".".join((source_type, *path)).casefold()
+    path_tuple = tuple(path)
+    text = ".".join((source_type, *path_tuple)).casefold()
+    metric = path_tuple[-1] if path_tuple else ""
+    if source_type == "z3k_radio_sensor":
+        radio_units = {
+            "temperature": "°C",
+            "humidity": "%",
+            "battery": "V",
+            "dbm": "dBm",
+            "flags": "state",
+        }
+        if metric in radio_units:
+            return radio_units[metric]
     if source_type == "z3k_boiler_adapter":
-        metric = tuple(path)[-1] if tuple(path) else ""
         if metric in {"cs", "cs2", "bt", "rwt", "dt", "ot", "rt", "rors", "ds"}:
             return "°C"
         if metric in {"rml", "mrml", "rp"}:
@@ -133,6 +159,15 @@ def infer_unit(source_type: str, path: Iterable[str]) -> str | None:
 
 def infer_role(source_type: str, entity_id: str, metric_key: str, display_name: str = "") -> tuple[str, float]:
     text = " ".join((source_type, entity_id, metric_key, display_name)).casefold()
+    if source_type == "z3k_radio_sensor":
+        radio_roles = {
+            "humidity": "humidity",
+            "battery": "sensor_battery_voltage",
+            "dbm": "sensor_signal_strength",
+            "flags": "sensor_status_flags",
+        }
+        if metric_key in radio_roles:
+            return radio_roles[metric_key], 0.95
     if source_type == "z3k_boiler_adapter":
         boiler_roles = {
             "ot": "outdoor_temperature",
@@ -162,16 +197,30 @@ def infer_role(source_type: str, entity_id: str, metric_key: str, display_name: 
             return "heating_activity", 0.8
     if any(term in text for term in ("улиц", "наруж", "outdoor", "outside")):
         return "outdoor_temperature", 0.9
-    if any(term in text for term in ("комнат", "room", "indoor", "воздух")) and "temp" in text:
-        return "indoor_temperature", 0.85
     if any(term in text for term in ("подач", "flow_temp", "supply_temp")):
         return "flow_temperature", 0.85
     if any(term in text for term in ("обрат", "return_temp")):
         return "return_temperature", 0.85
+    if any(term in text for term in ("котельн", "техническ", "бойлерн", "boiler room", "utility room")):
+        return "technical_temperature", 0.85
+    if any(
+        term in text
+        for term in (
+            "комнат",
+            "room",
+            "indoor",
+            "воздух",
+            "гостин",
+            "спальн",
+            "детск",
+            "кабинет",
+        )
+    ) and ("temp" in text or source_type in {"z3k_temperature", "z3k_radio_sensor"}):
+        return "room_temperature", 0.8
     if any(term in text for term in ("burner", "горел", "flame", "boiler_work_time")):
         return "burner_activity", 0.9
     if "temp" in text:
-        return "temperature", 0.55
+        return "temperature", 0.4
     if "mode" in text:
         return "operating_mode", 0.75
     return "unknown", 0.3
@@ -293,6 +342,72 @@ class ZontReadOnlyClient:
         if not isinstance(responses, list):
             raise ZontApiError("ZONT load_data response does not contain responses")
         return [item for item in responses if isinstance(item, dict)]
+
+    def load_events(
+        self,
+        *,
+        device_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[list[Any]]:
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("Event boundaries must be timezone-aware")
+        payload = self._post_allowed(
+            "raw_events",
+            {
+                "device_id": int(device_id) if device_id.isdigit() else device_id,
+                "mintime": int(start.timestamp()),
+                "maxtime": int(end.timestamp()),
+                "only": sorted(RELIABILITY_EVENT_TYPES),
+            },
+        )
+        events = payload.get("events", [])
+        if not isinstance(events, list):
+            raise ZontApiError("ZONT raw_events response does not contain a list")
+        return [item for item in events if isinstance(item, list)]
+
+    @staticmethod
+    def normalize_events(device_id: str, rows: Sequence[Sequence[Any]]) -> list[SourceEvent]:
+        result: list[SourceEvent] = []
+        safe_detail_keys = {"object_id", "object_name", "reason"}
+        for row in rows:
+            if len(row) < 3 or str(row[2]) not in RELIABILITY_EVENT_TYPES:
+                continue
+            try:
+                timestamp = datetime.fromtimestamp(int(row[1]), UTC)
+            except (TypeError, ValueError, OverflowError, OSError):
+                continue
+            event_type = str(row[2])
+            duration = row[5] if len(row) > 5 else None
+            duration_seconds = (
+                int(duration) if isinstance(duration, (int, float)) and not isinstance(duration, bool) else None
+            )
+            raw_details = row[6] if len(row) > 6 else None
+            details = (
+                {str(key): value for key, value in raw_details.items() if str(key) in safe_detail_keys}
+                if isinstance(raw_details, dict)
+                else {}
+            )
+            important = bool(row[7]) if len(row) > 7 else False
+            canonical = json.dumps(
+                [device_id, int(timestamp.timestamp()), event_type, duration_seconds, details, important],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            digest = hashlib.sha256(canonical.encode()).hexdigest()[:24]
+            result.append(
+                SourceEvent(
+                    id=f"zont-event:{digest}",
+                    device_id=device_id,
+                    event_type=event_type,
+                    timestamp_utc=timestamp,
+                    duration_seconds=duration_seconds,
+                    details=details,
+                    important=important,
+                )
+            )
+        return result
 
     @staticmethod
     def normalize_history(response: dict[str, Any]) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:

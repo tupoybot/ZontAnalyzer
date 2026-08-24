@@ -53,6 +53,9 @@ class FakeDatabase:
     def save_report(self, report: Report, _rendered_text: str) -> None:
         self.reports[report.id] = report
 
+    def recommendation_views_for_report(self, _report_id: str) -> dict[str, dict[str, Any]]:
+        return {}
+
     def flush_log_outbox(self) -> list[str]:
         return ["report notification"]
 

@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from openai import OpenAI
+from pydantic import BaseModel, ConfigDict, Field
 
 from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.config import AppConfig
@@ -38,6 +39,10 @@ is a possible cause of irregular autonomous recirculation timing, not proof of a
 installed at this home. Treat dhw_antilegionella_cycle as an expected autonomous boiler
 service cycle, not a fault. Treat unconfirmed_burner_pulse as telemetry noise already
 excluded from burner/DHW cycle statistics, not as a start, short cycle, or failure.
+Use the reliability context when interpreting boiler connection losses. A loss classified
+as power_outage or zont_restart is not a boiler failure and is already excluded from the
+boiler MTBF/MTBR statistics. Main-power loss alone does not reset ZONT uptime while stable
+controller telemetry continues on the built-in battery.
 recommendation_feedback contains owner-confirmed outcomes from earlier recommendations.
 Treat owner_note as authoritative manual context. Do not repeat a rejected recommendation
 unless the current packet contains materially new contradictory evidence; if revisiting it,
@@ -53,6 +58,46 @@ class Analyst(Protocol):
 class FakeAnalyst:
     def analyze(self, packet: dict[str, Any]) -> AnalysisResult:
         return AnalysisResult(summary="AI-анализ отключён; показаны локально рассчитанные факты.")
+
+
+class _StructuredRecommendation(BaseModel):
+    """API response shape without application-only text safety validators."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    title: str = Field(min_length=1, max_length=160)
+    category: Literal[
+        "observe_only",
+        "safe_user_setting",
+        "needs_manual_context",
+        "service_required",
+        "safety_warning",
+    ]
+    priority: Literal["low", "medium", "high", "critical"]
+    confidence: float = Field(ge=0, le=1)
+    evidence_metric_ids: list[str] = Field(default_factory=list)
+    evidence_event_ids: list[str] = Field(default_factory=list)
+    hypothesis: str
+    suggested_manual_action: str
+    expected_effect: str
+    observation_period_days: int = Field(ge=1, le=60)
+    success_criteria: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    stop_conditions: list[str] = Field(default_factory=list)
+    alternatives: list[str] = Field(default_factory=list)
+    requires_specialist: bool = False
+
+
+class _StructuredAnalysisResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str
+    recommendations: list[_StructuredRecommendation] = Field(default_factory=list, max_length=3)
+
+
+def _validate_structured_result(result: _StructuredAnalysisResult) -> AnalysisResult:
+    return AnalysisResult.model_validate(result.model_dump())
 
 
 class OpenAIAnalyst:
@@ -75,24 +120,14 @@ class OpenAIAnalyst:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": encoded},
             ],
-            text_format=AnalysisResult,
+            text_format=_StructuredAnalysisResult,
             store=False,
             max_output_tokens=2500,
         )
-        result = response.output_parsed
-        if result is None:
+        parsed = response.output_parsed
+        if parsed is None:
             raise RuntimeError("OpenAI response did not contain parsed output")
-        valid_metric_ids = {str(metric["id"]) for metric in packet.get("metrics", [])}
-        valid_event_ids = {str(item["id"]) for item in packet.get("events", [])}
-        for recommendation in result.recommendations:
-            if not recommendation.evidence_metric_ids and not recommendation.evidence_event_ids:
-                raise ValueError("OpenAI recommendation must reference supplied evidence")
-            if not set(recommendation.evidence_metric_ids) <= valid_metric_ids:
-                raise ValueError("OpenAI recommendation references an unknown metric")
-            if not set(recommendation.evidence_event_ids) <= valid_event_ids:
-                raise ValueError("OpenAI recommendation references an unknown event")
-            if recommendation.category in self.config.safety.never_suggest_categories:
-                raise ValueError("OpenAI recommendation uses a user-forbidden category")
+        result = _validate_structured_result(parsed)
         usage = getattr(response, "usage", None)
         input_details = getattr(usage, "input_tokens_details", None)
         self.db.save_llm_call(

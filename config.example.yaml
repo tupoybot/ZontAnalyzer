@@ -1,5 +1,6 @@
-# Every value is optional. Secrets must be provided through environment variables
-# or private token files (mode 0600), never in this file. Local OpenAI fallback:
+# Все значения необязательны. Секреты следует передавать через переменные окружения
+# или закрытые файлы токенов (с правами 0600), но никогда не хранить в этом файле.
+# Локальный резервный путь для ключа OpenAI:
 # .access/.openai_access_token.txt
 home:
   timezone: Europe/Samara
@@ -19,8 +20,8 @@ analysis:
   minimum_quality_score: 0.70
   short_cycle_minutes: 5
 
-# Whether the DHW tank has a recirculation loop. No pump sensor is assumed:
-# possible pump operation is inferred conservatively from temperature patterns.
+# Есть ли у бойлера косвенного нагрева контур рециркуляции ГВС. Наличие датчика насоса
+# не предполагается: возможная работа насоса осторожно определяется по изменению температуры.
 dhw:
   recirculation_present: true
 
@@ -28,7 +29,7 @@ openai:
   enabled: false
   daily_model: gpt-5.6-luna
   review_model: gpt-5.6-terra
-  reasoning_effort: low
+  reasoning_effort: medium
   prompt_version: analyst-v2
   monthly_token_budget: 100000
 
@@ -43,11 +44,31 @@ storage:
   path: zont-analyzer.sqlite3
   backup_dir: backups
 
-# Relative paths stay inside ZONT_ANALYZER_DATA_DIR. Absolute paths are supported
-# for a bind-mounted publish directory; deployment-specific web paths do not belong here.
+# Относительные пути разрешаются внутри ZONT_ANALYZER_DATA_DIR. Абсолютные пути поддерживаются
+# для подключённого каталога публикации; зависящие от окружения веб-пути здесь не задаются.
 pilot:
   reports_dir: reports
   worker_status_file: worker-status.json
   max_catchup_days: 90
 
+# Worker принимает только feedback к существующим рекомендациям. Для локального запуска
+# endpoint слушает loopback; ключ берётся из ZONT_FEEDBACK_TOKEN или закрытого файла 0600.
+feedback:
+  enabled: true
+  listen_host: 127.0.0.1
+  listen_port: 8787
+  public_api_base_url: /api
+  token_file: .access/feedback_token.txt
+
+# Обычно контрольный датчик определяется из связи контура в ZONT. Если пользователь
+# вручную сменил смысл датчика или хочет временно назначить резервный, можно явно
+# переопределить роль температурного ряда по стабильному entity ID. Для составного
+# радиодатчика эта температурная роль не применяется к humidity/battery/dbm/flags.
 entity_overrides: {}
+# entity_overrides:
+#   "zont:100001:z3k_radio_sensor:30001":
+#     role: control_indoor_temperature
+#     display_name: Гостиная
+#   "zont:100001:z3k_temperature:30003":
+#     role: technical_temperature
+#     display_name: Котельная

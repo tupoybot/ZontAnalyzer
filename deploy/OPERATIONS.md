@@ -1,17 +1,18 @@
 # Manual test deployment
 
 This deployment is intentionally isolated under the Compose project
-`zont-analyzer`. It publishes no ports and declares no external Docker network.
-The only shared host path is the exact static `/za` directory selected through
-`ZONT_ANALYZER_PUBLISH_DIR` for `compose.test.yaml`; the application itself
-contains no host-specific publishing policy.
+`zont-analyzer`. It publishes the narrow feedback API only on host loopback and
+declares no external Docker network. The only shared host path is the exact static
+`/za` directory selected through `ZONT_ANALYZER_PUBLISH_DIR` for
+`compose.test.yaml`; the application itself contains no host-specific publishing
+policy.
 
 ## One-time host preparation
 
 First audit, without changing anything:
 
 ```sh
-ssh 217.60.10.224 'hostname; date -Is; docker version 2>/dev/null || true; docker compose version 2>/dev/null || true; systemctl is-active nginx 2>/dev/null || true; ss -ltnp; df -h /opt; test -d /opt/nightscout-compose/certbot/www/tupoybot.ru/html && echo webroot-ok'
+ssh hk.tupoybot.ru 'hostname; date -Is; docker version 2>/dev/null || true; docker compose version 2>/dev/null || true; systemctl is-active nginx 2>/dev/null || true; ss -ltnp; df -h /opt; test -d /var/www/html && echo webroot-ok'
 ```
 
 If Docker is absent, install the distribution's Docker Engine and Compose plugin.
@@ -25,18 +26,26 @@ runs as UID/GID 10001; nginx only needs read access to the published file.
 ```sh
 install -d -m 0750 -o 10001 -g 10001 /opt/zont-analyzer/data
 install -d -m 0700 -o 10001 -g 10001 /opt/zont-analyzer/secrets
-install -d -m 0755 -o 10001 -g 10001 /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za
+install -d -m 0755 -o 10001 -g 10001 /var/www/html/za
 install -m 0644 RELEASE/deploy/config.production.example.yaml /opt/zont-analyzer/config.yaml
 install -m 0600 RELEASE/deploy/env.example /opt/zont-analyzer/.env
-test -e /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za/index.html || \
+test -e /var/www/html/za/index.html || \
   install -m 0644 RELEASE/deploy/site-index.html \
-    /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za/index.html
+    /var/www/html/za/index.html
 ```
 
-Edit `/opt/zont-analyzer/config.yaml` for the home. Put the ZONT JSON containing
+Edit `/opt/zont-analyzer/config.yaml` for the home. Generate an independent
+feedback bearer key, then put the ZONT JSON containing
 `token` and `email` in `/opt/zont-analyzer/secrets/zontaccesstoken.json`, and put
 only the OpenAI key in
-`/opt/zont-analyzer/secrets/openai_access_token.txt`. These files are mounted
+`/opt/zont-analyzer/secrets/openai_access_token.txt`:
+
+```sh
+umask 077
+openssl rand -hex 32 > /opt/zont-analyzer/secrets/feedback_token.txt
+```
+
+These files are mounted
 read-only and are not expanded into the Compose model or container environment.
 Because the container is UID 10001, make each credential file owned by that UID
 and private. Keep `.env` (release settings, not credentials) owned by root and mode
@@ -44,15 +53,34 @@ and private. Keep `.env` (release settings, not credentials) owned by root and m
 
 ```sh
 chown 10001:10001 /opt/zont-analyzer/secrets/zontaccesstoken.json \
-  /opt/zont-analyzer/secrets/openai_access_token.txt
+  /opt/zont-analyzer/secrets/openai_access_token.txt \
+  /opt/zont-analyzer/secrets/feedback_token.txt
 chmod 0600 /opt/zont-analyzer/secrets/zontaccesstoken.json \
-  /opt/zont-analyzer/secrets/openai_access_token.txt
+  /opt/zont-analyzer/secrets/openai_access_token.txt \
+  /opt/zont-analyzer/secrets/feedback_token.txt
 chown root:root /opt/zont-analyzer/.env
 chmod 0600 /opt/zont-analyzer/.env
 stat -c '%a %u:%g %n' /opt/zont-analyzer/.env /opt/zont-analyzer/secrets/*
 ```
 
 Never put secrets in either Compose file or the release directory.
+The production `.env` must keep `ZONT_ANALYZER_PUBLISH_DIR=/var/www/html/za`;
+do not replace it with the example file during an upgrade.
+
+Add a same-origin nginx route beside the existing static `/za/` location. The
+container port remains unreachable from external interfaces; the application
+still validates the bearer key supplied by the HTML:
+
+```nginx
+location /za/api/ {
+    proxy_pass http://127.0.0.1:8787;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Validate nginx configuration before reloading it. Do not expose port 8787 on a
+public address and do not place the bearer key in nginx configuration or HTML.
 
 ## Release layout and preflight
 
@@ -89,6 +117,14 @@ docker compose --project-name zont-analyzer \
 ```
 
 ## Backup and deploy
+
+Before replacing the running release, complete the isolated production-host
+acceptance described in [`docs/implementation_plan.md`](../docs/implementation_plan.md):
+use a verified online backup as a writable temporary database, a separate
+container/Compose project, and a temporary publication directory. Never point a
+candidate at `/opt/zont-analyzer/data` or `/var/www/html/za`. Synthetic tests run
+locally/in Docker; the production host validates the candidate against an isolated
+copy of real data. Only the accepted image proceeds to the live deployment below.
 
 Before replacing a running release, make an online verified SQLite backup with the
 old release. Do not `cp` the live `.sqlite3`, `-wal`, and `-shm` files separately.
@@ -134,10 +170,13 @@ Verify `worker` is healthy, the stable report files are non-empty, the site
 returns the landing page, and unrelated workloads remain unchanged:
 
 ```sh
-test -s /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za/index.html
-test -s /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za/latest.html
-test -s /opt/nightscout-compose/certbot/www/tupoybot.ru/html/za/ai-latest.html
-curl -fsS https://tupoybot.ru/za/ >/dev/null
+test -s /var/www/html/za/index.html
+test -s /var/www/html/za/latest.html
+test -s /var/www/html/za/ai-latest.html
+curl -fsS https://hk.tupoybot.ru/za/ >/dev/null
+curl -fsS http://127.0.0.1:8787/api/health
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  -X PUT http://127.0.0.1:8787/api/recommendations/unknown/feedback)" = 401
 docker ps --format '{{.Names}} {{.Status}}'
 ```
 

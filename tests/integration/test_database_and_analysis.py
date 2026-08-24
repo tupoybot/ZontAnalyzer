@@ -11,7 +11,7 @@ from zont_analyzer.adapters.sqlite.database import Base
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.ingestion import IngestionService
 from zont_analyzer.config import AppConfig
-from zont_analyzer.domain import TelemetryPoint
+from zont_analyzer.domain import MetricValue, SourceEvent, TelemetryPoint
 from zont_analyzer.reports import render_html, render_text
 
 
@@ -51,6 +51,103 @@ def test_upsert_is_idempotent_and_analysis_persists_report(tmp_path: Path) -> No
     # Re-running uses stable IDs and does not duplicate the report.
     AnalysisService(db, config).analyze_daily(date(2026, 8, 1), use_ai=False)
     assert db.status()["reports"] == 1
+
+
+def test_upsert_fills_unit_for_series_discovered_before_unit_was_known(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    timestamp = datetime(2026, 8, 1, tzinfo=UTC)
+    point = TelemetryPoint(
+        device_id="1",
+        source_type="z3k_radio_sensor",
+        entity_id="radio",
+        metric_key="humidity",
+        timestamp_utc=timestamp,
+        value_num=55,
+    )
+    db.upsert_samples([point], {"radio": "humidity"})
+    point.unit = "%"
+    db.upsert_samples([point], {"radio": "humidity"})
+
+    assert db.list_series()[0]["unit"] == "%"
+
+
+@pytest.mark.parametrize("control_first", [True, False])
+def test_comfort_analysis_uses_only_control_sensor_regardless_of_series_order(
+    tmp_path: Path, control_first: bool
+) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    start = datetime(2026, 7, 31, 20, tzinfo=UTC)
+    control = (list(_points(start, [22.0] * 288, entity="control")), "control_indoor_temperature")
+    technical = (list(_points(start, [35.0] * 288, entity="boiler-room")), "technical_temperature")
+    room = (list(_points(start, [19.0] * 288, entity="bedroom")), "room_temperature")
+    groups = [control, technical, room] if control_first else [room, technical, control]
+    for points, role in groups:
+        db.upsert_samples(points, {points[0].entity_id: role})
+
+    report = AnalysisService(
+        db,
+        AppConfig.model_validate({"preferences": {"target_temperature_c": 22}}),
+    ).analyze_daily(date(2026, 8, 1), use_ai=False)
+
+    mean_temperature = next(item for item in report.metrics if item.name == "mean_temperature_c")
+    assert mean_temperature.value == 22.0
+    sensors = report.context["sensors"]
+    assert sensors["control_resolution"] == "resolved"
+    assert sensors["control_temperature"]["entity_id"] == "control"
+    assert [item["entity_id"] for item in sensors["technical_temperatures"]] == ["boiler-room"]
+    assert [item["entity_id"] for item in sensors["room_temperatures"]] == ["bedroom"]
+
+
+def test_report_renders_compact_sensor_identity_and_return_origins(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    start = datetime(2026, 7, 31, 20, tzinfo=UTC)
+    points = list(_points(start, [22.0] * 288, entity="living-room"))
+    db.upsert_samples(points, {"living-room": "control_indoor_temperature"})
+    control_series = next(item for item in db.list_series() if item["entity_id"] == "living-room")
+    db.update_series_role(
+        int(control_series["id"]),
+        "control_indoor_temperature",
+        "Гостиная",
+        confidence=1.0,
+        provenance="zont_config.heating_circuits[].air_temp_sensor",
+        origin="radio_sensor",
+    )
+    for entity, source_type, metric, origin in (
+        ("external-return", "z3k_temperature", "z3k_temperature", "external_sensor"),
+        ("boiler-return", "z3k_boiler_adapter", "rwt", "boiler_reported_rwt"),
+    ):
+        point = TelemetryPoint(
+            device_id="1",
+            source_type=source_type,
+            entity_id=entity,
+            metric_key=metric,
+            timestamp_utc=start,
+            value_num=31,
+            unit="°C",
+        )
+        db.upsert_samples([point], {entity: "return_temperature"})
+        row = next(item for item in db.list_series() if item["entity_id"] == entity)
+        db.update_series_role(
+            int(row["id"]),
+            "return_temperature",
+            "Обратка",
+            confidence=0.95,
+            provenance="history source semantics",
+            origin=origin,
+        )
+
+    report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
+    text = render_text(report)
+    html = render_html(report)
+
+    assert "Контрольная температура контура: Гостиная" in text
+    assert "внешний датчик" in text
+    assert "значение rwt котла" in text
+    assert "Контрольная температура контура: Гостиная" in html
+    assert len(report.context["sensors"]["return_temperatures"]) == 2
 
 
 def test_temperature_above_setpoint_is_not_attributed_to_inactive_heating(tmp_path: Path) -> None:
@@ -98,9 +195,128 @@ def test_html_escapes_report_content(tmp_path: Path) -> None:
     db.initialize()
     report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
     report.summary = '<script>alert("x")</script>'
-    rendered = render_html(report)
-    assert "<script>" not in rendered
+    recommendation_id = report.recommendations[0].id
+    assert recommendation_id is not None
+    owner_note = '</textarea><script>alert("owner")</script>'
+    rendered = render_html(
+        report,
+        {recommendation_id: {"status": "rejected", "owner_note": owner_note}},
+    )
+    assert '<script>alert("x")</script>' not in rendered
     assert "&lt;script&gt;" in rendered
+    assert owner_note not in rendered
+    assert "&lt;/textarea&gt;&lt;script&gt;alert(&quot;owner&quot;)&lt;/script&gt;" in rendered
+
+
+def test_reliability_events_persist_and_uptime_is_prominent(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    start = datetime(2026, 7, 30, 20, tzinfo=UTC)
+    points: list[TelemetryPoint] = []
+    for index in range(3 * 24 * 12):
+        timestamp = start + timedelta(minutes=index * 5)
+        points.extend(
+            [
+                TelemetryPoint(
+                    device_id="1",
+                    source_type="z3k_boiler_adapter",
+                    entity_id="boiler",
+                    metric_key="s",
+                    timestamp_utc=timestamp,
+                    value_text="[]",
+                ),
+                TelemetryPoint(
+                    device_id="1",
+                    source_type="ztc_state",
+                    entity_id="zont",
+                    metric_key="status_flags",
+                    timestamp_utc=timestamp,
+                    value_num=73,
+                ),
+            ]
+        )
+    db.upsert_samples(points)
+    restored = start + timedelta(hours=2)
+    source = SourceEvent(
+        id="restore",
+        device_id="1",
+        event_type="ReconnectingBoiler",
+        timestamp_utc=restored,
+    )
+    assert db.upsert_source_events([source, source]) == 2
+    assert len(db.list_source_events(start, start + timedelta(days=3))) == 1
+
+    report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
+    metrics = {item.name: item for item in report.metrics}
+    assert metrics["boiler_uptime_seconds"].value == pytest.approx(46 * 3600)
+    assert metrics["zont_uptime_seconds"].value == pytest.approx(48 * 3600)
+    rendered_text = render_text(report)
+    rendered_html = render_html(report)
+    assert "Аптайм котла: 01:22:00 дд:чч:мм" in rendered_text
+    assert "Аптайм ZONT: 02:00:00 дд:чч:мм" in rendered_text
+    assert rendered_html.index("Аптайм котла") < rendered_html.index("Качество данных")
+    assert rendered_html.index("Аптайм ZONT") < rendered_html.index("Качество данных")
+
+
+def test_stale_reliability_data_is_rendered_as_offline(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    telemetry_start = datetime(2026, 7, 20, 20, tzinfo=UTC)
+    points: list[TelemetryPoint] = []
+    for offset in range(3):
+        timestamp = telemetry_start + timedelta(minutes=offset * 5)
+        points.extend(
+            [
+                TelemetryPoint(
+                    device_id="1",
+                    source_type="z3k_boiler_adapter",
+                    entity_id="boiler",
+                    metric_key="s",
+                    timestamp_utc=timestamp,
+                    value_text="[]",
+                ),
+                TelemetryPoint(
+                    device_id="1",
+                    source_type="ztc_state",
+                    entity_id="zont",
+                    metric_key="status_flags",
+                    timestamp_utc=timestamp,
+                    value_num=73,
+                ),
+            ]
+        )
+    db.upsert_samples(points)
+
+    report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
+    metrics = {item.name: item for item in report.metrics}
+    assert metrics["boiler_uptime_seconds"].value == 0
+    assert metrics["zont_uptime_seconds"].value == 0
+    assert "boiler_mtbf_hours" not in metrics
+    assert "boiler_mtbr_hours" not in metrics
+
+    rendered_text = render_text(report)
+    rendered_html = render_html(report)
+    assert "Аптайм котла (офлайн): 00:00:00 дд:чч:мм" in rendered_text
+    assert "Аптайм ZONT (офлайн): 00:00:00 дд:чч:мм" in rendered_text
+    assert "Аптайм котла (офлайн)" in rendered_html
+    assert "Аптайм ZONT (офлайн)" in rendered_html
+
+
+def test_uptime_renderer_does_not_wrap_days_after_99(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
+    report.metrics.append(
+        MetricValue(
+            id="uptime",
+            name="zont_uptime_seconds",
+            value=(123 * 24 + 4) * 3600 + 5 * 60 + 59,
+            unit="s",
+        )
+    )
+
+    assert "Аптайм ZONT: 123:04:05 дд:чч:мм" in render_text(report)
+    assert "123:04:05" in render_html(report)
 
 
 def test_renderers_show_disabled_dhw_target_as_inactive(tmp_path: Path) -> None:
@@ -165,6 +381,39 @@ def test_openai_failure_keeps_deterministic_report(tmp_path: Path) -> None:
     assert report.ai_used is False
     assert "AI-интерпретация недоступна" in report.summary
     assert db.latest_report() is not None
+
+
+def test_openai_refresh_failure_reuses_last_valid_interpretation(tmp_path: Path) -> None:
+    class SuccessfulAnalyst:
+        def analyze(self, _packet):
+            from zont_analyzer.domain import AnalysisResult
+
+            return AnalysisResult(summary="Последняя валидная AI-интерпретация")
+
+    class FailingAnalyst:
+        def analyze(self, _packet):
+            raise RuntimeError("invalid structured output")
+
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    start = datetime(2026, 7, 31, 20, tzinfo=UTC)
+    db.upsert_samples(
+        list(_points(start, [22.0] * 288, entity="room")),
+        {"room": "indoor_temperature"},
+    )
+    config = AppConfig.model_validate(
+        {
+            "preferences": {"target_temperature_c": 22},
+            "analysis": {"daily_ai_when_normal": True},
+        }
+    )
+    first = AnalysisService(db, config, SuccessfulAnalyst()).analyze_daily(date(2026, 8, 1))
+    refreshed = AnalysisService(db, config, FailingAnalyst()).analyze_daily(date(2026, 8, 1))
+
+    assert first.ai_used is True
+    assert refreshed.ai_used is True
+    assert refreshed.summary == "Последняя валидная AI-интерпретация"
+    assert refreshed.context["ai_interpretation_reuse"]["source_generated_at"] == first.generated_at.isoformat()
 
 
 def test_online_backup_passes_integrity_check(tmp_path: Path) -> None:
@@ -345,7 +594,7 @@ def test_fresh_database_is_created_at_alembic_head(tmp_path: Path) -> None:
     result = db.initialize()
 
     assert result.previous_revision is None
-    assert result.revision == "dd4272b6d030"
+    assert result.revision == "7c8e9f1a2b3c"
     assert result.backup_path is None
     assert db.current_revision() == result.revision
     assert db.status()["schema_revision"] == result.revision
@@ -370,6 +619,32 @@ def test_legacy_create_all_database_is_backed_up_and_adopted(tmp_path: Path) -> 
     assert repeated.previous_revision == result.revision
     assert repeated.backup_path is None
     assert repeated.adopted_legacy_schema is False
+
+
+def test_previous_version_is_backed_up_and_migrated_with_series_semantics(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    previous = Database(db_path)
+    previous._run_alembic(previous._migration_config(), "upgrade", "5a9ce2bd8b34")
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO telemetry_series
+                (device_id, source_type, entity_id, metric_key, unit, display_name, role)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("1", "z3k_temperature", "return", "z3k_temperature", "°C", "Обратка", "return_temperature"),
+        )
+
+    upgraded = Database(db_path)
+    result = upgraded.initialize(tmp_path / "migration-backups")
+
+    assert result.previous_revision == "5a9ce2bd8b34"
+    assert result.revision == "7c8e9f1a2b3c"
+    assert result.backup_path is not None and result.backup_path.exists()
+    series = upgraded.list_series()[0]
+    assert series["confidence"] == 0.3
+    assert series["provenance"] == "unknown"
+    assert series["origin"] == "unknown"
 
 
 def test_unversioned_partial_schema_is_rejected(tmp_path: Path) -> None:

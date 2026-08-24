@@ -17,6 +17,7 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -35,7 +36,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-from zont_analyzer.domain import Report, TelemetryPoint
+from zont_analyzer.domain import Report, SourceEvent, TelemetryPoint
 
 
 def utcnow() -> datetime:
@@ -96,6 +97,9 @@ class TelemetrySeriesRow(Base):
     unit: Mapped[str | None] = mapped_column(String, nullable=True)
     display_name: Mapped[str] = mapped_column(String, default="")
     role: Mapped[str] = mapped_column(String, default="unknown")
+    confidence: Mapped[float] = mapped_column(Float, default=0.3)
+    provenance: Mapped[str] = mapped_column(String, default="unknown")
+    origin: Mapped[str] = mapped_column(String, default="unknown")
     __table_args__ = (UniqueConstraint("device_id", "source_type", "entity_id", "metric_key"),)
 
 
@@ -125,6 +129,18 @@ class DataGapRow(Base):
     started_at: Mapped[int] = mapped_column(Integer)
     ended_at: Mapped[int] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(String)
+
+
+class SourceEventRow(Base):
+    __tablename__ = "source_events"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    device_id: Mapped[str] = mapped_column(String, index=True)
+    event_type: Mapped[str] = mapped_column(String, index=True)
+    timestamp_utc: Mapped[int] = mapped_column(Integer, index=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    details_json: Mapped[str] = mapped_column(Text, default="{}")
+    important: Mapped[bool] = mapped_column(Boolean, default=False)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class AnalysisPeriodRow(Base):
@@ -433,7 +449,7 @@ class Database:
             )
 
     def _series_id(self, session: Session, point: TelemetryPoint, role: str = "unknown") -> int:
-        query = select(TelemetrySeriesRow.id).where(
+        query = select(TelemetrySeriesRow).where(
             TelemetrySeriesRow.device_id == point.device_id,
             TelemetrySeriesRow.source_type == point.source_type,
             TelemetrySeriesRow.entity_id == point.entity_id,
@@ -441,7 +457,9 @@ class Database:
         )
         found = session.scalar(query)
         if found is not None:
-            return found
+            if found.unit is None and point.unit is not None:
+                found.unit = point.unit
+            return found.id
         row = TelemetrySeriesRow(
             device_id=point.device_id,
             source_type=point.source_type,
@@ -450,6 +468,9 @@ class Database:
             unit=point.unit,
             display_name=point.entity_id,
             role=role,
+            confidence=0.3,
+            provenance="history source only",
+            origin=point.source_type,
         )
         session.add(row)
         session.flush()
@@ -511,17 +532,35 @@ class Database:
                     "metric_key": r.metric_key,
                     "unit": r.unit,
                     "role": r.role,
+                    "confidence": r.confidence,
+                    "provenance": r.provenance,
+                    "origin": r.origin,
                 }
                 for r in rows
             ]
 
-    def update_series_role(self, series_id: int, role: str, display_name: str | None = None) -> None:
+    def update_series_role(
+        self,
+        series_id: int,
+        role: str,
+        display_name: str | None = None,
+        *,
+        confidence: float | None = None,
+        provenance: str | None = None,
+        origin: str | None = None,
+    ) -> None:
         with self.session() as session:
             row = session.get(TelemetrySeriesRow, series_id)
             if row:
                 row.role = role
                 if display_name:
                     row.display_name = display_name
+                if confidence is not None:
+                    row.confidence = confidence
+                if provenance is not None:
+                    row.provenance = provenance
+                if origin is not None:
+                    row.origin = origin
 
     def fetch_samples(self, series_id: int, start: datetime, end: datetime) -> list[tuple[datetime, float]]:
         with self.session() as session:
@@ -552,6 +591,74 @@ class Database:
                 .order_by(TelemetrySampleRow.timestamp_utc)
             )
             return [(datetime.fromtimestamp(ts, UTC), str(value)) for ts, value in session.execute(query).all()]
+
+    def fetch_sample_timestamps(self, series_id: int, start: datetime, end: datetime) -> list[datetime]:
+        with self.session() as session:
+            query = (
+                select(TelemetrySampleRow.timestamp_utc)
+                .where(
+                    TelemetrySampleRow.series_id == series_id,
+                    TelemetrySampleRow.timestamp_utc >= int(start.timestamp()),
+                    TelemetrySampleRow.timestamp_utc < int(end.timestamp()),
+                    TelemetrySampleRow.quality == "valid",
+                )
+                .order_by(TelemetrySampleRow.timestamp_utc)
+            )
+            return [datetime.fromtimestamp(ts, UTC) for (ts,) in session.execute(query).all()]
+
+    def upsert_source_events(self, events: Iterable[SourceEvent]) -> int:
+        rows = [
+            {
+                "id": item.id,
+                "device_id": item.device_id,
+                "event_type": item.event_type,
+                "timestamp_utc": int(item.timestamp_utc.timestamp()),
+                "duration_seconds": item.duration_seconds,
+                "details_json": json.dumps(item.details, ensure_ascii=False, sort_keys=True),
+                "important": item.important,
+                "ingested_at": utcnow(),
+            }
+            for item in events
+        ]
+        if not rows:
+            return 0
+        with self.session() as session:
+            statement = sqlite_insert(SourceEventRow).values(rows)
+            session.execute(
+                statement.on_conflict_do_update(
+                    index_elements=["id"],
+                    set_={
+                        "duration_seconds": statement.excluded.duration_seconds,
+                        "details_json": statement.excluded.details_json,
+                        "important": statement.excluded.important,
+                        "ingested_at": statement.excluded.ingested_at,
+                    },
+                )
+            )
+        return len(rows)
+
+    def list_source_events(self, start: datetime, end: datetime) -> list[SourceEvent]:
+        with self.session() as session:
+            rows = session.scalars(
+                select(SourceEventRow)
+                .where(
+                    SourceEventRow.timestamp_utc >= int(start.timestamp()),
+                    SourceEventRow.timestamp_utc < int(end.timestamp()),
+                )
+                .order_by(SourceEventRow.timestamp_utc, SourceEventRow.id)
+            ).all()
+            return [
+                SourceEvent(
+                    id=row.id,
+                    device_id=row.device_id,
+                    event_type=row.event_type,
+                    timestamp_utc=datetime.fromtimestamp(row.timestamp_utc, UTC),
+                    duration_seconds=row.duration_seconds,
+                    details=json.loads(row.details_json),
+                    important=row.important,
+                )
+                for row in rows
+            ]
 
     def latest_sample_time(self) -> datetime | None:
         with self.session() as session:
@@ -686,16 +793,51 @@ class Database:
     def recommendations(self) -> list[dict[str, Any]]:
         with self.session() as session:
             rows = session.scalars(select(RecommendationRow).order_by(RecommendationRow.created_at.desc())).all()
-            return [
-                {"id": r.id, "status": r.status, "report_id": r.report_id, **json.loads(r.payload_json)} for r in rows
-            ]
+            return [self._recommendation_view(session, row) for row in rows]
 
     def recommendation(self, recommendation_id: str) -> dict[str, Any] | None:
         with self.session() as session:
             row = session.get(RecommendationRow, recommendation_id)
             if not row:
                 return None
-            return {"status": row.status, "report_id": row.report_id, **json.loads(row.payload_json)}
+            return self._recommendation_view(session, row)
+
+    def recommendation_views_for_report(self, report_id: str) -> dict[str, dict[str, Any]]:
+        """Return mutable lifecycle state keyed by recommendation ID for rendering."""
+        with self.session() as session:
+            rows = session.scalars(
+                select(RecommendationRow)
+                .where(RecommendationRow.report_id == report_id)
+                .order_by(RecommendationRow.created_at)
+            ).all()
+            return {row.id: self._recommendation_view(session, row) for row in rows}
+
+    @staticmethod
+    def _latest_intervention(session: Session, recommendation_id: str) -> InterventionRow | None:
+        return session.scalar(
+            select(InterventionRow)
+            .where(InterventionRow.recommendation_id == recommendation_id)
+            .order_by(InterventionRow.applied_at.desc(), InterventionRow.id.desc())
+            .limit(1)
+        )
+
+    @classmethod
+    def _recommendation_view(cls, session: Session, row: RecommendationRow) -> dict[str, Any]:
+        owner_note = row.rejection_reason
+        intervention: InterventionRow | None = None
+        if row.status == "applied":
+            intervention = cls._latest_intervention(session, row.id)
+            owner_note = intervention.note if intervention else None
+        updated_at = row.updated_at if row.updated_at.tzinfo is not None else row.updated_at.replace(tzinfo=UTC)
+        return {
+            **json.loads(row.payload_json),
+            "id": row.id,
+            "status": row.status,
+            "report_id": row.report_id,
+            "owner_note": owner_note,
+            "updated_at": updated_at.isoformat(),
+            "intervention_id": intervention.id if intervention else None,
+        }
 
     def recommendation_feedback(self, limit: int = 10) -> list[dict[str, Any]]:
         """Return compact owner-confirmed outcomes for future analysis packets."""
@@ -713,12 +855,7 @@ class Database:
                 payload = json.loads(row.payload_json)
                 owner_note = row.rejection_reason
                 if row.status == "applied":
-                    intervention = session.scalar(
-                        select(InterventionRow)
-                        .where(InterventionRow.recommendation_id == row.id)
-                        .order_by(InterventionRow.applied_at.desc())
-                        .limit(1)
-                    )
+                    intervention = self._latest_intervention(session, row.id)
                     owner_note = intervention.note if intervention else None
                 feedback.append(
                     {
@@ -734,31 +871,54 @@ class Database:
                 )
             return feedback
 
-    def mark_applied(self, recommendation_id: str, note: str) -> str:
+    def set_recommendation_feedback(
+        self,
+        recommendation_id: str,
+        status: str,
+        owner_note: str | None = None,
+    ) -> dict[str, Any]:
+        """Idempotently store owner feedback using the existing lifecycle tables."""
+        if status not in {"applied", "rejected"}:
+            raise ValueError("status must be applied or rejected")
+        note = (owner_note or "").strip()
         with self.session() as session:
             row = session.get(RecommendationRow, recommendation_id)
             if not row:
                 raise KeyError(recommendation_id)
-            row.status = "applied"
+
+            current_note = row.rejection_reason or ""
+            latest_intervention: InterventionRow | None = None
+            if row.status == "applied":
+                latest_intervention = self._latest_intervention(session, recommendation_id)
+                current_note = latest_intervention.note if latest_intervention else ""
+            if row.status == status and current_note == note:
+                return self._recommendation_view(session, row)
+
+            row.status = status
             row.updated_at = utcnow()
-            intervention_id = f"intervention:{uuid.uuid4()}"
-            session.add(
-                InterventionRow(
-                    id=intervention_id,
+            if status == "applied":
+                row.rejection_reason = None
+                intervention = InterventionRow(
+                    id=f"intervention:{uuid.uuid4()}",
                     recommendation_id=recommendation_id,
                     note=note,
                 )
-            )
-            return intervention_id
+                session.add(intervention)
+                session.flush()
+            else:
+                row.rejection_reason = note
+            session.flush()
+            return self._recommendation_view(session, row)
+
+    def mark_applied(self, recommendation_id: str, note: str) -> str:
+        feedback = self.set_recommendation_feedback(recommendation_id, "applied", note)
+        intervention_id = feedback.get("intervention_id")
+        if not isinstance(intervention_id, str):
+            raise RuntimeError(f"Applied recommendation {recommendation_id} has no intervention")
+        return intervention_id
 
     def reject(self, recommendation_id: str, reason: str) -> None:
-        with self.session() as session:
-            row = session.get(RecommendationRow, recommendation_id)
-            if not row:
-                raise KeyError(recommendation_id)
-            row.status = "rejected"
-            row.rejection_reason = reason
-            row.updated_at = utcnow()
+        self.set_recommendation_feedback(recommendation_id, "rejected", reason)
 
     def flush_log_outbox(self) -> list[str]:
         delivered: list[str] = []
@@ -802,6 +962,7 @@ class Database:
                 "devices": int(session.scalar(select(func.count()).select_from(DeviceRow)) or 0),
                 "series": int(session.scalar(select(func.count()).select_from(TelemetrySeriesRow)) or 0),
                 "samples": int(session.scalar(select(func.count()).select_from(TelemetrySampleRow)) or 0),
+                "source_events": int(session.scalar(select(func.count()).select_from(SourceEventRow)) or 0),
                 "reports": int(session.scalar(select(func.count()).select_from(ReportRow)) or 0),
                 "pending_notifications": int(
                     session.scalar(

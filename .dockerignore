@@ -1,7 +1,7 @@
 .git
 .github
 .access
-.codex
+docs
 .venv
 __pycache__
 *.py[cod]
@@ -16,7 +16,6 @@ backups
 reports
 config.yaml
 zontaccesstoken.json
-tests
 dist
 build
 *.egg-info

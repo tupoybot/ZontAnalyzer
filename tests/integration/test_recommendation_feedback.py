@@ -53,6 +53,25 @@ def test_recommendation_feedback_contains_rejection_and_latest_applied_note(tmp_
     assert feedback[rejected.id]["hypothesis"] == rejected.hypothesis
 
 
+def test_identical_applied_feedback_is_idempotent(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
+    recommendation_id = report.recommendations[0].id
+    assert recommendation_id is not None
+
+    first = db.mark_applied(recommendation_id, "Проверено владельцем")
+    second = db.mark_applied(recommendation_id, "Проверено владельцем")
+
+    assert second == first
+    with db.engine.connect() as connection:
+        count = connection.exec_driver_sql(
+            "SELECT count(*) FROM interventions WHERE recommendation_id = ?",
+            (recommendation_id,),
+        ).scalar_one()
+    assert count == 1
+
+
 def test_next_openai_packet_includes_owner_recommendation_feedback(tmp_path: Path) -> None:
     class CapturingAnalyst:
         def __init__(self) -> None:
@@ -92,4 +111,3 @@ def test_next_openai_packet_includes_owner_recommendation_feedback(tmp_path: Pat
             "updated_at": feedback[0]["updated_at"],
         }
     ]
-
