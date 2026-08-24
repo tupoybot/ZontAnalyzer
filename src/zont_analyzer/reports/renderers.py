@@ -53,8 +53,10 @@ METRIC_LABELS = {
     "unconfirmed_burner_pulse_count": "Отсечённые шумовые сигналы горелки",
     "boiler_uptime_seconds": "Аптайм котла",
     "zont_uptime_seconds": "Аптайм ZONT",
-    "boiler_mtbf_hours": "MTBF котла без отключений питания",
-    "boiler_mtbr_hours": "Среднее восстановление связи котла (MTTR/MTBR)",
+    "boiler_mtbf_hours": "MTBF котельного сервиса",
+    "boiler_mttr_hours": "MTTR котельного сервиса",
+    # Compatibility for reports persisted before the canonical MTTR rename.
+    "boiler_mtbr_hours": "MTTR котельного сервиса",
 }
 
 SPACE_HEATING_METRIC_LABELS = {
@@ -169,6 +171,11 @@ def _duration_dd_hh_mm(seconds: float) -> str:
 def _metric_display(metric: Any) -> tuple[str, str]:
     if metric.name in {"boiler_uptime_seconds", "zont_uptime_seconds"}:
         return _duration_dd_hh_mm(float(metric.value)), "дд:чч:мм"
+    if metric.name in {"boiler_mtbf_hours", "boiler_mttr_hours", "boiler_mtbr_hours"}:
+        value = _duration_dd_hh_mm(float(metric.value) * 3600)
+        if metric.name == "boiler_mtbf_hours" and metric.context.get("lower_bound") is True:
+            value = f"> {value}"
+        return value, "дд:чч:мм"
     return f"{metric.value:g}", str(metric.unit)
 
 
