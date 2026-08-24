@@ -92,6 +92,14 @@ docker compose --project-name zont-analyzer \
 
 ## Backup and deploy
 
+Before replacing the running release, complete the isolated production-host
+acceptance described in [`docs/implementation_plan.md`](../docs/implementation_plan.md):
+use a verified online backup as a writable temporary database, a separate
+container/Compose project, and a temporary publication directory. Never point a
+candidate at `/opt/zont-analyzer/data` or `/var/www/html/za`. Synthetic tests run
+locally/in Docker; the production host validates the candidate against an isolated
+copy of real data. Only the accepted image proceeds to the live deployment below.
+
 Before replacing a running release, make an online verified SQLite backup with the
 old release. Do not `cp` the live `.sqlite3`, `-wal`, and `-shm` files separately.
 

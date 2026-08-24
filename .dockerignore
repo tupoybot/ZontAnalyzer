@@ -1,7 +1,7 @@
 .git
 .github
 .access
-.codex
+docs
 .venv
 __pycache__
 *.py[cod]
