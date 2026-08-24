@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx
 import pytest
@@ -11,6 +13,8 @@ from zont_analyzer.adapters.zont_readonly.client import (
     decode_delta_time_array,
     redact,
 )
+
+CONTRACT_FIXTURES = Path(__file__).parents[1] / "fixtures" / "zont_contract"
 
 
 def test_decode_delta_time_array_supports_delta_and_absolute_reset() -> None:
@@ -190,3 +194,45 @@ def test_history_retries_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     assert calls == 2
+
+
+def test_anonymized_live_contract_normalizes_radio_sensor_metrics() -> None:
+    devices_payload = json.loads((CONTRACT_FIXTURES / "devices.json").read_text(encoding="utf-8"))
+    history_payload = json.loads((CONTRACT_FIXTURES / "load_data.json").read_text(encoding="utf-8"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/devices"):
+            return httpx.Response(200, json=devices_payload)
+        if request.url.path.endswith("/load_data"):
+            return httpx.Response(200, json=history_payload)
+        raise AssertionError(f"Unexpected path: {request.url.path}")
+
+    with ZontReadOnlyClient(
+        token="fixture-secret",
+        client_email="fixture@example.test",
+        transport=httpx.MockTransport(handler),
+        history_request_interval_seconds=0,
+    ) as client:
+        devices = client.discover_devices()
+        responses = client.load_history(
+            device_ids=["100001"],
+            start=datetime.fromtimestamp(1_700_000_000, UTC),
+            end=datetime.fromtimestamp(1_700_001_200, UTC),
+            data_types=["z3k_radio_sensor", "z3k_temperature", "z3k_heating_circuit"],
+        )
+        points, _entities = client.normalize_history(responses[0])
+
+    radio_points = [point for point in points if point.source_type == "z3k_radio_sensor"]
+    circuit = devices[0]["z3k_config"]["heating_circuits"][0]
+    radio_sensor = devices[0]["z3k_config"]["radiosensors"][0]
+    radio_state = devices[0]["io"]["z3k-state"]["30001"]
+    humidity_rows = history_payload["responses"][0]["z3k_radio_sensor"]["30001"]["humidity"]
+    assert circuit["air_temp_sensor"] == 30001
+    assert devices[0]["io"]["z3k-state"]["20001"]["target_sensor_id"] == 30001
+    assert radio_sensor["lower_humidity_threshold"] == 30
+    assert radio_sensor["upper_humidity_threshold"] == 80
+    assert {"battery", "rssi", "sensor_ok"} <= radio_state.keys()
+    assert "quality" not in radio_state
+    assert all(isinstance(row[1], int) for row in humidity_rows)
+    assert {point.metric_key for point in radio_points} == {"battery", "dbm", "flags", "humidity", "temperature"}
+    assert [point.value_num for point in radio_points if point.metric_key == "humidity"] == [56.0, 55.0]
