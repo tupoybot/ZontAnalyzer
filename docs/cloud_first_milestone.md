@@ -78,7 +78,7 @@
 - Отделить rendering отчёта от публикации в локальный path, чтобы позднее Object Storage стал отдельным publisher target.
 - Добавить в логи invocation/job correlation IDs.
 - Проверить timeout/retry behavior и безопасность повторных/параллельных invocation на границах приложения.
-- Выполнить из реального Serverless Container отдельный smoke test исходящего HTTPS-доступа к `api.openai.com`: сначала без API key, где HTTP `401` считается успешным доказательством DNS/TLS/egress-доступности, затем при подключённом через штатный secret path ключе — authenticated запрос к metadata endpoint модели с ожидаемым `200`. Этот тест не должен выполнять generation и расходовать токены на анализ.
+- Выполнить из реального Serverless Container smoke test исходящего HTTPS-доступа к `api.openai.com` **без API key**, чтобы отдельно доказать DNS/TLS/egress-доступность. До authenticated-вызова проверить, что фактический регион выполнения входит в официальный список регионов, где OpenAI API поддерживается. Если регион не поддерживается, не передавать туда рабочий API key и зафиксировать это как deployment blocker, а не обходить ограничение. Если регион поддерживается, выполнить один authenticated запрос к metadata endpoint модели с ожидаемым `200`; generation для smoke test не нужен.
 
 На этом этапе допустим временный/dev backend состояния; нельзя выдавать ephemeral local SQLite за production-safe решение.
 
@@ -88,7 +88,7 @@
 - Корректность долговечного состояния не зависит от сохранения локальной filesystem контейнера между invocation.
 - Два перекрывающихся invocation не приводят к неконтролируемым дублирующим side effects.
 - Failure виден в logs/metrics, а следующий invocation может безопасно повторить работу.
-- Из Serverless Container подтверждён исходящий доступ к OpenAI API; сетевой smoke test не требует смены AI provider или архитектуры AI-слоя.
+- Для OpenAI отдельно зафиксированы сетевой результат и региональная совместимость; API key не используется из неподдерживаемого OpenAI региона.
 
 ---
 
