@@ -78,6 +78,7 @@
 - Отделить rendering отчёта от публикации в локальный path, чтобы позднее Object Storage стал отдельным publisher target.
 - Добавить в логи invocation/job correlation IDs.
 - Проверить timeout/retry behavior и безопасность повторных/параллельных invocation на границах приложения.
+- Выполнить из реального Serverless Container отдельный smoke test исходящего HTTPS-доступа к `api.openai.com`: сначала без API key, где HTTP `401` считается успешным доказательством DNS/TLS/egress-доступности, затем при подключённом через штатный secret path ключе — authenticated запрос к metadata endpoint модели с ожидаемым `200`. Этот тест не должен выполнять generation и расходовать токены на анализ.
 
 На этом этапе допустим временный/dev backend состояния; нельзя выдавать ephemeral local SQLite за production-safe решение.
 
@@ -87,6 +88,7 @@
 - Корректность долговечного состояния не зависит от сохранения локальной filesystem контейнера между invocation.
 - Два перекрывающихся invocation не приводят к неконтролируемым дублирующим side effects.
 - Failure виден в logs/metrics, а следующий invocation может безопасно повторить работу.
+- Из Serverless Container подтверждён исходящий доступ к OpenAI API; сетевой smoke test не требует смены AI provider или архитектуры AI-слоя.
 
 ---
 
@@ -200,14 +202,15 @@
 
 ---
 
-## M7 — Опциональные cloud UX services
+## M7 — Опциональные cloud UX services и визуализация
 
 ### Цель
 
-Добавлять managed services только там, где они упрощают реальный use case.
+Добавлять managed services только там, где они упрощают реальный use case, и при желании дать проекту удобный инженерный UI для исследования телеметрии.
 
 Возможные дополнения:
 
+- **Grafana Cloud Free** как опциональный visualization layer для красивых инженерных графиков из канонической telemetry: комнаты/уставки, улица, подача/обратка/ΔT, ГВС, горелка, reliability events и interventions. Это не source of truth и не обязательная часть ZontAnalyzer: штатные графики ZONT и standalone HTML остаются достаточными для обычного использования. Если Grafana подключается напрямую к YDB, использовать отдельные строго read-only credentials/service identity;
 - API Gateway для feedback/status endpoints;
 - Postbox для weekly/важных email-сводок;
 - Workflows/EventRouter, если orchestration станет понятнее, чем единый `run --once`;
@@ -220,6 +223,7 @@ Cloud Functions разрешены для изолированных мален�
 
 - У каждого добавленного сервиса есть конкретная продуктовая или эксплуатационная причина.
 - Ни один сервис не добавляется только ради более «cloud-native» вида архитектуры.
+- Если Grafana включена, она читает только канонические данные через read-only доступ и не становится обязательной зависимостью ingestion/analysis/report pipeline.
 - Feedback endpoints могут менять только состояние, принадлежащее ZontAnalyzer, но не ZONT/boiler controls.
 
 ---
