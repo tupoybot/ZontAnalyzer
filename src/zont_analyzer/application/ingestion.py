@@ -252,21 +252,13 @@ class IngestionService:
         chunk = timedelta(hours=self.config.zont.sync_chunk_hours)
         start: datetime
         if backfill is not None:
-            requested_start = now - backfill
-            earliest_sample = self.db.earliest_sample_time()
-            can_resume_backfill = (
-                earliest_cursor is not None
-                and earliest_sample is not None
-                and earliest_sample <= requested_start + chunk
-            )
-            if can_resume_backfill:
-                assert earliest_cursor is not None
-                start = max(
-                    requested_start,
-                    earliest_cursor - timedelta(minutes=self.config.scheduler.overlap_minutes),
-                )
-            else:
-                start = requested_start
+            # An explicit backfill is a request to replay the whole selected
+            # interval.  The regular cursor may already point at the present
+            # even when a newly enabled history type has no older samples.
+            # Reusing that cursor here would silently reduce a historical
+            # backfill to the normal overlap window.  Sample upserts are
+            # idempotent, so replaying completed windows is safe on retry.
+            start = now - backfill
         elif earliest_cursor is not None:
             start = earliest_cursor - timedelta(minutes=self.config.scheduler.overlap_minutes)
         else:

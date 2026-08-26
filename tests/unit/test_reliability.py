@@ -27,7 +27,7 @@ def _status(start_minute: int, end_minute: int, value: int = 73) -> list[tuple[d
     return [(item, float(value)) for item in _timestamps(start_minute, end_minute)]
 
 
-def test_uptime_mtbf_and_mtbr_use_completed_boiler_event_pairs() -> None:
+def test_mtbf_includes_completed_intervals_and_current_uptime() -> None:
     result = analyze_reliability(
         period_id="day",
         period_start=START,
@@ -46,33 +46,130 @@ def test_uptime_mtbf_and_mtbr_use_completed_boiler_event_pairs() -> None:
 
     assert metrics["boiler_uptime_seconds"].value == 100 * 60
     assert metrics["zont_uptime_seconds"].value == 300 * 60
-    assert metrics["boiler_mtbf_hours"].value == pytest.approx((60 + 110) / 2 / 60, abs=0.001)
-    assert metrics["boiler_mtbr_hours"].value == pytest.approx(15 / 60)
+    assert metrics["boiler_mtbf_hours"].value == pytest.approx(135 / 60, abs=0.001)
+    assert metrics["boiler_mtbf_hours"].context == {
+        "formula": "observed_operating_seconds / confirmed_service_failures",
+        "observed_operating_seconds": 270 * 60,
+        "observation_start": START.isoformat(),
+        "confirmed_failures": 2,
+        "completed_failures": 2,
+        "lower_bound": False,
+        "includes_current_uptime": True,
+    }
+    assert metrics["boiler_mttr_hours"].value == pytest.approx(15 / 60)
 
 
-def test_power_related_boiler_loss_is_excluded_and_does_not_reset_zont_uptime() -> None:
-    status = [*_status(0, 29, 73), *_status(30, 89, 72), *_status(90, 180, 73)]
+def test_mtbf_grows_while_current_uptime_continues() -> None:
+    source_events = [
+        _event(0, "ReconnectingBoiler"),
+        _event(60, "LossConnectionBoiler"),
+        _event(70, "ReconnectingBoiler"),
+        _event(180, "LossConnectionBoiler"),
+        _event(200, "ReconnectingBoiler"),
+    ]
+    earlier = analyze_reliability(
+        period_id="earlier",
+        period_start=START,
+        as_of=START + timedelta(minutes=240),
+        source_events=source_events,
+        boiler_metric_timestamps=_timestamps(0, 240),
+        zont_status_samples=_status(0, 240),
+    )
+    later = analyze_reliability(
+        period_id="later",
+        period_start=START,
+        as_of=START + timedelta(minutes=300),
+        source_events=source_events,
+        boiler_metric_timestamps=_timestamps(0, 300),
+        zont_status_samples=_status(0, 300),
+    )
+
+    earlier_mtbf = next(item.value for item in earlier.metrics if item.name == "boiler_mtbf_hours")
+    later_mtbf = next(item.value for item in later.metrics if item.name == "boiler_mtbf_hours")
+    assert earlier_mtbf == pytest.approx(105 / 60, abs=0.001)
+    assert later_mtbf == pytest.approx(135 / 60, abs=0.001)
+
+
+def test_mtbf_without_failures_is_a_lower_bound_instead_of_infinity() -> None:
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(hours=5),
+        source_events=[],
+        boiler_metric_timestamps=_timestamps(0, 300),
+        zont_status_samples=_status(0, 300),
+    )
+
+    metric = next(item for item in result.metrics if item.name == "boiler_mtbf_hours")
+    assert metric.value == 5
+    assert metric.context["lower_bound"] is True
+    assert metric.context["confirmed_failures"] == 0
+    assert metric.context["completed_failures"] == 0
+
+
+def test_power_related_boiler_loss_is_a_service_failure() -> None:
     result = analyze_reliability(
         period_id="day",
         period_start=START,
         as_of=START + timedelta(minutes=180),
         source_events=[
             _event(0, "ReconnectingBoiler"),
+            _event(30, "MainPowerLost"),
             _event(31, "LossConnectionBoiler"),
+            _event(90, "MainPowerFound"),
             _event(91, "ReconnectingBoiler"),
         ],
         boiler_metric_timestamps=_timestamps(0, 180),
-        zont_status_samples=status,
+        zont_status_samples=_status(0, 180),
     )
     metrics = {item.name: item for item in result.metrics}
 
     assert metrics["zont_uptime_seconds"].value == 180 * 60
-    assert "boiler_mtbf_hours" not in metrics
-    assert "boiler_mtbr_hours" not in metrics
+    assert metrics["boiler_mtbf_hours"].value == pytest.approx(119 / 60, abs=0.001)
+    assert metrics["boiler_mtbf_hours"].context["confirmed_failures"] == 1
+    assert metrics["boiler_mttr_hours"].value == 1
     loss = next(item for item in result.events if item.kind == "boiler_connection_loss")
-    assert loss.severity == "info"
+    assert loss.severity == "warning"
     assert loss.details["cause"] == "power_outage"
+    assert loss.details["excluded_from_boiler_reliability"] is False
     assert result.context["boiler"]["power_related_losses"] == 1  # type: ignore[index]
+
+
+@pytest.mark.parametrize(("loss_minute", "expected_cause"), [(32, "power_outage"), (33, "boiler_or_adapter")])
+def test_power_cause_uses_named_timestamp_tolerance(loss_minute: int, expected_cause: str) -> None:
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(minutes=120),
+        source_events=[
+            _event(30, "MainPowerLost"),
+            _event(loss_minute, "LossConnectionBoiler"),
+            _event(90, "MainPowerFound"),
+            _event(91, "ReconnectingBoiler"),
+        ],
+        boiler_metric_timestamps=_timestamps(0, 120),
+        zont_status_samples=_status(0, 120),
+    )
+
+    loss = next(item for item in result.events if item.kind == "boiler_connection_loss")
+    assert loss.details["cause"] == expected_cause
+
+
+def test_main_power_loss_without_boiler_loss_does_not_create_failure() -> None:
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(minutes=120),
+        source_events=[_event(30, "MainPowerLost"), _event(90, "MainPowerFound")],
+        boiler_metric_timestamps=_timestamps(0, 120),
+        zont_status_samples=_status(0, 120),
+    )
+
+    metric = next(item for item in result.metrics if item.name == "boiler_mtbf_hours")
+    assert metric.value == 2
+    assert metric.context["lower_bound"] is True
+    assert result.context["boiler"]["confirmed_service_failures"] == 0  # type: ignore[index]
+    assert not any(item.kind == "boiler_connection_loss" for item in result.events)
 
 
 def test_power_on_and_missing_restore_event_use_first_sustained_metrics() -> None:
@@ -113,6 +210,10 @@ def test_open_boiler_loss_without_stable_metrics_reports_zero_uptime() -> None:
     assert metric.value == 0
     assert metric.context["online"] is False
     assert result.context["boiler"]["online"] is False  # type: ignore[index]
+    metrics = {item.name: item for item in result.metrics}
+    assert metrics["boiler_mtbf_hours"].value == pytest.approx(40 / 60, abs=0.001)
+    assert metrics["boiler_mtbf_hours"].context["confirmed_failures"] == 1
+    assert "boiler_mttr_hours" not in metrics
 
 
 def test_stale_telemetry_reports_zero_uptime_and_suppresses_reliability_means() -> None:
@@ -135,7 +236,7 @@ def test_stale_telemetry_reports_zero_uptime_and_suppresses_reliability_means() 
     assert metrics["boiler_uptime_seconds"].value == 0
     assert metrics["boiler_uptime_seconds"].context["online"] is False
     assert "boiler_mtbf_hours" not in metrics
-    assert "boiler_mtbr_hours" not in metrics
+    assert "boiler_mttr_hours" not in metrics
     assert result.context["zont"]["data_fresh"] is False  # type: ignore[index]
     assert result.context["boiler"]["data_fresh"] is False  # type: ignore[index]
 
@@ -158,6 +259,32 @@ def test_zont_gap_resets_uptime_and_is_excluded_from_boiler_mtbf() -> None:
 
     assert metrics["zont_uptime_seconds"].value == 30 * 60
     assert metrics["boiler_uptime_seconds"].value == 10 * 60
-    assert metrics["boiler_mtbf_hours"].value == pytest.approx(0.5)
-    assert metrics["boiler_mtbr_hours"].value == pytest.approx(10 / 60, abs=0.001)
+    assert metrics["boiler_mtbf_hours"].value == pytest.approx(40 / 60, abs=0.001)
+    assert metrics["boiler_mttr_hours"].value == pytest.approx(10 / 60, abs=0.001)
     assert result.context["zont"]["telemetry_gaps"] == 1  # type: ignore[index]
+
+
+def test_zont_restart_is_observability_only() -> None:
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(minutes=60),
+        source_events=[
+            _event(0, "ReconnectingBoiler"),
+            _event(30, "PowerOff"),
+            _event(31, "LossConnectionBoiler"),
+            _event(40, "PowerOn"),
+            _event(41, "ReconnectingBoiler"),
+        ],
+        boiler_metric_timestamps=_timestamps(0, 60),
+        zont_status_samples=_status(0, 60),
+    )
+    metrics = {item.name: item for item in result.metrics}
+
+    assert metrics["boiler_mtbf_hours"].value == pytest.approx(49 / 60, abs=0.001)
+    assert metrics["boiler_mtbf_hours"].context["lower_bound"] is True
+    assert "boiler_mttr_hours" not in metrics
+    loss = next(item for item in result.events if item.kind == "boiler_connection_loss")
+    assert loss.details["cause"] == "zont_restart"
+    assert loss.details["excluded_from_boiler_reliability"] is True
+    assert result.context["boiler"]["confirmed_service_failures"] == 0  # type: ignore[index]

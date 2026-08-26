@@ -14,6 +14,9 @@ MAIN_POWER_RESTORE_TYPES = frozenset({"MainPowerFound", "MainPowerRestored"})
 CONTROLLER_OFF_TYPES = frozenset({"PowerOff"})
 CONTROLLER_ON_TYPES = frozenset({"PowerOn"})
 DEFAULT_MAXIMUM_SAMPLE_AGE = timedelta(minutes=10)
+INCIDENT_CAUSE_TOLERANCE = timedelta(minutes=2)
+EVENT_INTERVAL_MERGE_TOLERANCE = timedelta(minutes=2)
+SERVICE_FAILURE_CAUSES = frozenset({"power_outage", "boiler_or_adapter"})
 
 
 @dataclass(frozen=True)
@@ -107,7 +110,19 @@ def _merge_intervals(intervals: list[tuple[datetime, datetime]]) -> list[tuple[d
     for start, end in sorted(intervals):
         if end < start:
             continue
-        if merged and start <= merged[-1][1] + timedelta(seconds=120):
+        if merged and start <= merged[-1][1] + EVENT_INTERVAL_MERGE_TOLERANCE:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _union_intervals(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+    merged: list[tuple[datetime, datetime]] = []
+    for start, end in sorted(intervals):
+        if end < start:
+            continue
+        if merged and start <= merged[-1][1]:
             merged[-1] = (merged[-1][0], max(merged[-1][1], end))
         else:
             merged.append((start, end))
@@ -137,10 +152,12 @@ def _classify_incident(
     power_intervals: list[tuple[datetime, datetime]],
     controller_intervals: list[tuple[datetime, datetime]],
 ) -> None:
-    skew = timedelta(minutes=2)
-    if any(start - skew <= incident.lost_at <= end + skew for start, end in controller_intervals):
+    if any(
+        start - INCIDENT_CAUSE_TOLERANCE <= incident.lost_at <= end + INCIDENT_CAUSE_TOLERANCE
+        for start, end in controller_intervals
+    ):
         incident.cause = "zont_restart"
-    elif any(start - skew <= incident.lost_at <= end + skew for start, end in power_intervals):
+    elif any(abs(incident.lost_at - start) <= INCIDENT_CAUSE_TOLERANCE for start, _ in power_intervals):
         incident.cause = "power_outage"
 
 
@@ -341,43 +358,78 @@ def analyze_reliability(
             )
         )
 
-    intrinsic_closed = [
-        item for item in incidents if item.cause == "boiler_or_adapter" and item.restored_at is not None
-    ]
+    service_failures = [item for item in incidents if item.cause in SERVICE_FAILURE_CAUSES]
+    completed_service_failures = [item for item in service_failures if item.restored_at is not None]
     restore_seconds = [
         (item.restored_at - item.lost_at).total_seconds()
-        for item in intrinsic_closed
+        for item in completed_service_failures
         if item.restored_at and not item.restore_inferred_from_metrics
     ]
-    operating_seconds: list[float] = []
-    excluded_intervals = _merge_intervals([*power_intervals, *controller_intervals])
-    for item in intrinsic_closed:
-        if item.previous_restore_at is None:
-            continue
-        seconds = (item.lost_at - item.previous_restore_at).total_seconds()
-        seconds -= _overlap_seconds(item.previous_restore_at, item.lost_at, excluded_intervals)
-        if seconds >= 0:
-            operating_seconds.append(seconds)
-    if operating_seconds and zont_data_fresh:
+    confirmed_power_intervals = [
+        (start, end)
+        for start, end in power_intervals
+        if any(
+            item.cause == "power_outage" and abs(item.lost_at - start) <= INCIDENT_CAUSE_TOLERANCE
+            for item in service_failures
+        )
+    ]
+    service_downtime_intervals = [(item.lost_at, item.restored_at or as_of) for item in service_failures]
+    observability_incident_intervals = [
+        (item.lost_at, item.restored_at or as_of) for item in incidents if item.cause == "zont_restart"
+    ]
+    first_sustained_boiler = _first_sustained_at(boiler_timestamps)
+    first_boiler_restore = min(
+        (item.timestamp_utc for item in ordered_events if item.event_type in BOILER_RESTORE_TYPES),
+        default=None,
+    )
+    observation_start = (
+        max(first_sustained_boiler, first_boiler_restore)
+        if first_sustained_boiler is not None and first_boiler_restore is not None
+        else first_sustained_boiler
+    )
+    operating_seconds: float | None = None
+    if observation_start is not None:
+        excluded_intervals = _union_intervals(
+            [
+                *controller_intervals,
+                *confirmed_power_intervals,
+                *service_downtime_intervals,
+                *observability_incident_intervals,
+            ]
+        )
+        observed_seconds = max(0.0, (as_of - observation_start).total_seconds())
+        operating_seconds = max(
+            0.0,
+            observed_seconds - _overlap_seconds(observation_start, as_of, excluded_intervals),
+        )
+    if operating_seconds is not None and zont_data_fresh and (service_failures or boiler_online):
+        assert observation_start is not None
+        failure_count = len(service_failures)
         metrics.append(
             _metric(
                 period_id,
                 "boiler_mtbf_hours",
-                mean(operating_seconds) / 3600,
+                (operating_seconds / failure_count if failure_count else operating_seconds) / 3600,
                 "h",
-                completed_intervals=len(operating_seconds),
-                excludes_power_outages=True,
+                formula="observed_operating_seconds / confirmed_service_failures",
+                observed_operating_seconds=operating_seconds,
+                observation_start=observation_start.isoformat(),
+                confirmed_failures=failure_count,
+                completed_failures=len(completed_service_failures),
+                lower_bound=failure_count == 0,
+                includes_current_uptime=boiler_online,
             )
         )
     if restore_seconds and zont_data_fresh:
         metrics.append(
             _metric(
                 period_id,
-                "boiler_mtbr_hours",
+                "boiler_mttr_hours",
                 mean(restore_seconds) / 3600,
                 "h",
-                completed_intervals=len(restore_seconds),
-                excludes_power_outages=True,
+                completed_failures=len(restore_seconds),
+                includes_power_outages=True,
+                excludes_inferred_recoveries=True,
             )
         )
 
@@ -391,11 +443,11 @@ def analyze_reliability(
                 kind="boiler_connection_loss",
                 started_at=item.lost_at,
                 ended_at=item.restored_at,
-                severity="warning" if item.cause == "boiler_or_adapter" else "info",
+                severity="info" if item.cause == "zont_restart" else "warning",
                 details={
                     "cause": item.cause,
                     "duration_seconds": duration,
-                    "excluded_from_boiler_reliability": item.cause != "boiler_or_adapter",
+                    "excluded_from_boiler_reliability": item.cause == "zont_restart",
                     "restore_inferred_from_stable_metrics": item.restore_inferred_from_metrics,
                 },
                 algorithm_version="reliability-v1",
@@ -424,7 +476,9 @@ def analyze_reliability(
             "sample_age_seconds": boiler_sample_age_seconds,
             "data_fresh": boiler_data_fresh,
             "completed_connection_incidents": sum(item.restored_at is not None for item in incidents),
-            "intrinsic_failures": len(intrinsic_closed),
+            "intrinsic_failures": sum(item.cause == "boiler_or_adapter" for item in service_failures),
+            "confirmed_service_failures": len(service_failures),
+            "completed_service_failures": len(completed_service_failures),
             "power_related_losses": sum(item.cause == "power_outage" for item in incidents),
             "zont_restart_related_losses": sum(item.cause == "zont_restart" for item in incidents),
             "open_loss_at": open_incident.lost_at.isoformat() if open_incident else None,
@@ -440,7 +494,10 @@ def analyze_reliability(
             "telemetry_gaps": len(zont_gap_intervals),
         },
         "main_power_outages": len(power_intervals),
-        "policy": "main-power outages and ZONT restarts are excluded from boiler MTBF/MTBR",
+        "policy": (
+            "power_outage and boiler_or_adapter incidents are service failures included in boiler MTBF/MTTR; "
+            "zont_restart incidents are observability losses excluded from both metrics"
+        ),
     }
     return ReliabilityAnalysis(
         metrics=metrics,

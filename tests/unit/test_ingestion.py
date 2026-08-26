@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -16,6 +16,60 @@ from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import TelemetryPoint
 
 CONTRACT_FIXTURES = Path(__file__).parents[1] / "fixtures" / "zont_contract"
+
+
+def test_explicit_backfill_replays_requested_interval_despite_current_cursor(tmp_path: Path) -> None:
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.history_calls: list[dict[str, object]] = []
+
+        def discover_devices(self) -> list[dict[str, object]]:
+            return [{"device_id": 1, "name": "test"}]
+
+        def load_history(self, **kwargs: object) -> list[dict[str, object]]:
+            self.history_calls.append(kwargs)
+            return [{"device_id": 1, "ok": True, "dta": {}}]
+
+        def normalize_history(
+            self, _response: dict[str, object]
+        ) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
+            return [], {}
+
+        def load_events(self, **_kwargs: object) -> list[list[Any]]:
+            return []
+
+        def normalize_events(self, _device_id: str, _events: list[list[Any]]) -> list[Any]:
+            return []
+
+    now = datetime(2026, 8, 25, 12, tzinfo=UTC)
+    requested_start = now - timedelta(days=1)
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    db.upsert_samples(
+        [
+            TelemetryPoint(
+                device_id="1",
+                source_type="z3k_temperature",
+                entity_id="zont:1:z3k_temperature:1",
+                metric_key="z3k_temperature",
+                timestamp_utc=now - timedelta(days=30),
+                value_num=20.0,
+                unit="°C",
+            )
+        ]
+    )
+    db.set_cursor("1", "temperature", now)
+    client = RecordingClient()
+
+    result = IngestionService(db, cast(ZontReadOnlyClient, client), AppConfig()).sync(
+        backfill=timedelta(days=1),
+        now=now,
+    )
+
+    assert result["complete"] is True
+    assert result["windows"] == 1
+    assert client.history_calls[0]["start"] == requested_start
+    assert client.history_calls[0]["end"] == now
 
 
 def test_heating_circuit_target_sensor_is_indoor_regardless_of_room_name() -> None:

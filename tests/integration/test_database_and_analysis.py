@@ -292,7 +292,7 @@ def test_stale_reliability_data_is_rendered_as_offline(tmp_path: Path) -> None:
     assert metrics["boiler_uptime_seconds"].value == 0
     assert metrics["zont_uptime_seconds"].value == 0
     assert "boiler_mtbf_hours" not in metrics
-    assert "boiler_mtbr_hours" not in metrics
+    assert "boiler_mttr_hours" not in metrics
 
     rendered_text = render_text(report)
     rendered_html = render_html(report)
@@ -314,9 +314,32 @@ def test_uptime_renderer_does_not_wrap_days_after_99(tmp_path: Path) -> None:
             unit="s",
         )
     )
+    report.metrics.extend(
+        [
+            MetricValue(
+                id="mtbf",
+                name="boiler_mtbf_hours",
+                value=158 + 22 / 60,
+                unit="h",
+                context={"lower_bound": True, "completed_failures": 0},
+            ),
+            MetricValue(
+                id="mttr",
+                name="boiler_mttr_hours",
+                value=17 / 60,
+                unit="h",
+            ),
+        ]
+    )
 
-    assert "Аптайм ZONT: 123:04:05 дд:чч:мм" in render_text(report)
-    assert "123:04:05" in render_html(report)
+    text = render_text(report)
+    html = render_html(report)
+    assert "Аптайм ZONT: 123:04:05 дд:чч:мм" in text
+    assert "MTBF котельного сервиса: > 06:14:22 дд:чч:мм" in text
+    assert "MTTR котельного сервиса: 00:00:17 дд:чч:мм" in text
+    assert "123:04:05" in html
+    assert "&gt; 06:14:22" in html
+    assert "00:00:17" in html
 
 
 def test_renderers_show_disabled_dhw_target_as_inactive(tmp_path: Path) -> None:
