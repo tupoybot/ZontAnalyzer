@@ -67,11 +67,19 @@ Never put secrets in either Compose file or the release directory.
 The production `.env` must keep `ZONT_ANALYZER_PUBLISH_DIR=/var/www/html/za`;
 do not replace it with the example file during an upgrade.
 
-Add a same-origin nginx route beside the existing static `/za/` location. The
-container port remains unreachable from external interfaces; the application
-still validates the bearer key supplied by the HTML:
+Enable the daily archive index and add a same-origin nginx route beside the
+existing static `/za/` location. Keep the archive rule as an exact match so
+autoindex is not enabled for the rest of `/za/`. The container port remains
+unreachable from external interfaces; the application still validates the
+bearer key supplied by the HTML:
 
 ```nginx
+location = /za/daily/ {
+    autoindex on;
+    autoindex_exact_size off;
+    autoindex_localtime on;
+}
+
 location /za/api/ {
     proxy_pass http://127.0.0.1:8787;
     proxy_set_header Host $host;
@@ -174,6 +182,8 @@ test -s /var/www/html/za/index.html
 test -s /var/www/html/za/latest.html
 test -s /var/www/html/za/ai-latest.html
 curl -fsS https://hk.tupoybot.ru/za/ >/dev/null
+curl -fsS https://hk.tupoybot.ru/za/daily/ >/dev/null
+curl -fsS https://hk.tupoybot.ru/za/latest.html >/dev/null
 curl -fsS http://127.0.0.1:8787/api/health
 test "$(curl -sS -o /dev/null -w '%{http_code}' \
   -X PUT http://127.0.0.1:8787/api/recommendations/unknown/feedback)" = 401
