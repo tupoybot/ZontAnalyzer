@@ -327,7 +327,15 @@ def analyze_reliability(
     boiler_basis = "boiler_connection_restored"
     boiler_lower_bound = False
     if open_incident is None:
-        if zont_anchor is not None and (boiler_anchor is None or zont_anchor > boiler_anchor):
+        # A controller reboot (including a firmware update) does not establish a
+        # boiler connection loss.  Keep the boiler's own restoration anchor in
+        # that case; only an observed telemetry gap can require a fresh boiler
+        # metric anchor when there is no later boiler restore event.
+        if (
+            zont_basis == "stable_metrics_after_gap"
+            and zont_anchor is not None
+            and (boiler_anchor is None or zont_anchor > boiler_anchor)
+        ):
             boiler_anchor = _first_sustained_at(boiler_timestamps, after=zont_anchor)
             boiler_basis = "stable_boiler_metrics_after_zont_recovery"
         if boiler_anchor is None:

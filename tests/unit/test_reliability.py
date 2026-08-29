@@ -288,3 +288,23 @@ def test_zont_restart_is_observability_only() -> None:
     assert loss.details["cause"] == "zont_restart"
     assert loss.details["excluded_from_boiler_reliability"] is True
     assert result.context["boiler"]["confirmed_service_failures"] == 0  # type: ignore[index]
+
+
+def test_zont_firmware_restart_without_boiler_loss_keeps_boiler_uptime() -> None:
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(minutes=60),
+        source_events=[
+            _event(0, "ReconnectingBoiler"),
+            _event(30, "PowerOff"),
+            _event(31, "PowerOn"),
+        ],
+        boiler_metric_timestamps=_timestamps(0, 60),
+        zont_status_samples=_status(0, 60),
+    )
+    metrics = {item.name: item for item in result.metrics}
+
+    assert metrics["zont_uptime_seconds"].value == 29 * 60
+    assert metrics["boiler_uptime_seconds"].value == 60 * 60
+    assert metrics["boiler_uptime_seconds"].context["basis"] == "boiler_connection_restored"

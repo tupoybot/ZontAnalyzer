@@ -31,7 +31,7 @@ openai:
   review_model: gpt-5.6-terra
   reasoning_effort: medium
   prompt_version: analyst-v2
-  monthly_token_budget: 100000
+  monthly_token_budget: 1000000
 
 scheduler:
   sync_every_minutes: 5
