@@ -126,9 +126,8 @@ class FeedbackConfig(StrictModel):
     listen_host: str = Field(default="127.0.0.1", min_length=1)
     listen_port: int = Field(default=8787, ge=1, le=65535)
     public_api_base_url: str = Field(default="/api", min_length=1)
-    token_file: str = Field(default=".access/feedback_token.txt", min_length=1)
 
-    @field_validator("listen_host", "public_api_base_url", "token_file")
+    @field_validator("listen_host", "public_api_base_url")
     @classmethod
     def valid_feedback_text(cls, value: str) -> str:
         value = value.strip()
@@ -157,7 +156,6 @@ class Secrets(StrictModel):
     zont_token: SecretStr | None = None
     openai_api_key: SecretStr | None = None
     telegram_bot_token: SecretStr | None = None
-    feedback_token: SecretStr | None = None
 
 
 class LoadedConfig(StrictModel):
@@ -226,17 +224,10 @@ def load_config(config_path: Path | None = None, data_dir: Path | None = None) -
     openai_key_path = openai_key_candidate if openai_key_candidate.exists() else None
     if openai_key is None and openai_key_path is not None:
         openai_key = _read_private_text_secret(openai_key_path)
-    feedback_token = os.getenv("ZONT_FEEDBACK_TOKEN")
-    feedback_token_path = Path(config.feedback.token_file)
-    if not feedback_token_path.is_absolute():
-        feedback_token_path = Path.cwd() / feedback_token_path
-    if feedback_token is None:
-        feedback_token = _read_private_text_secret(feedback_token_path)
     secrets = Secrets(
         zont_token=SecretStr(token) if token else None,
         openai_api_key=SecretStr(openai_key) if openai_key else None,
         telegram_bot_token=SecretStr(value) if (value := os.getenv("TELEGRAM_BOT_TOKEN")) else None,
-        feedback_token=SecretStr(feedback_token) if feedback_token else None,
     )
     return LoadedConfig(
         config=config,
@@ -258,6 +249,5 @@ def explain_config(loaded: LoadedConfig) -> dict[str, Any]:
             "zont_token": "present" if loaded.secrets.zont_token else "missing",
             "openai_api_key": "present" if loaded.secrets.openai_api_key else "missing",
             "telegram_bot_token": "present" if loaded.secrets.telegram_bot_token else "missing",
-            "feedback_token": "present" if loaded.secrets.feedback_token else "missing",
         },
     }

@@ -15,8 +15,6 @@ from zont_analyzer.domain import AnalysisResult, TelemetryPoint
 from zont_analyzer.reports import render_html
 from zont_analyzer.runtime import build_runtime
 
-TOKEN = "test-feedback-token-123456"
-
 
 def _room_points(start: datetime) -> list[TelemetryPoint]:
     return [
@@ -34,7 +32,6 @@ def _room_points(start: datetime) -> list[TelemetryPoint]:
 
 
 def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("ZONT_FEEDBACK_TOKEN", TOKEN)
     runtime = build_runtime(None, tmp_path / "data")
     runtime.loaded.config.feedback.listen_port = 0
     runtime.loaded.config.feedback.public_api_base_url = "/api"
@@ -62,6 +59,9 @@ def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch
     assert "Отклонить" in initial_html
     assert "Без реакции" in initial_html
     assert "Комментарий владельца" in initial_html
+    assert "sessionStorage" not in initial_html
+    assert "Authorization" not in initial_html
+    assert "Bearer" not in initial_html
 
     server = build_feedback_server(runtime)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -70,21 +70,16 @@ def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch
     feedback_url = f"{base_url}/{recommendation.id}/feedback"
     try:
         with httpx.Client(timeout=5) as client:
-            unauthorized = client.put(feedback_url, json={"status": "applied", "owner_note": "готово"})
-            assert unauthorized.status_code == 401
-
-            headers = {"Authorization": f"Bearer {TOKEN}"}
             unknown = client.put(
                 f"{base_url}/unknown/feedback",
-                headers=headers,
                 json={"status": "applied", "owner_note": "готово"},
             )
             assert unknown.status_code == 404
 
             payload = {"status": "rejected", "owner_note": "Датчик исправен; наблюдаем дальше"}
-            saved = client.put(feedback_url, headers=headers, json=payload)
-            repeated = client.put(feedback_url, headers=headers, json=payload)
-            reopened = client.get(feedback_url, headers=headers)
+            saved = client.put(feedback_url, json=payload)
+            repeated = client.put(feedback_url, json=payload)
+            reopened = client.get(feedback_url)
     finally:
         server.shutdown()
         server.server_close()

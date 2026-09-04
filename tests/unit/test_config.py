@@ -59,6 +59,25 @@ def test_openai_key_can_come_from_private_access_file(tmp_path: Path, monkeypatc
     assert loaded.openai_key_path == key
 
 
+def test_feedback_has_no_application_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ZONT_FEEDBACK_TOKEN", "must-not-be-used")
+
+    loaded = load_config(data_dir=tmp_path / "data")
+
+    assert not hasattr(loaded.secrets, "feedback_token")
+    assert "feedback_token" not in loaded.secrets.model_dump()
+
+
+def test_legacy_feedback_token_file_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "config.yaml"
+    config.write_text("feedback:\n  token_file: .access/feedback_token.txt\n", encoding="utf-8")
+
+    with pytest.raises(ValidationError):
+        load_config(config, tmp_path / "data")
+
+
 def test_dhw_recirculation_can_be_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     config = tmp_path / "config.yaml"

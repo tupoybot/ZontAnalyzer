@@ -6,12 +6,14 @@ import logging
 from collections.abc import Collection
 from datetime import UTC, date, datetime, time, timedelta
 from statistics import median
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.adapters.openai.provider import Analyst, analysis_packet
 from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.analytics import (
+    ReliabilityEvidencePoint,
+    ReliabilityEvidenceSeries,
     analyze_dhw_interactions,
     analyze_reliability,
     assess_quality,
@@ -456,6 +458,30 @@ class AnalysisService:
             if boiler_reliability_series
             else []
         )
+        reliability_evidence: list[ReliabilityEvidenceSeries] = []
+        if boiler_reliability_series:
+            metric_key = str(boiler_reliability_series["metric_key"])
+            role = str(boiler_reliability_series["role"])
+            if boiler_reliability_series["source_type"] == "z3k_boiler_adapter" and metric_key == "s":
+                role = "boiler_adapter_state"
+            evidence_kind: Literal["activity", "thermal", "context"] = (
+                "activity"
+                if metric_key in {"s", "flame", "rml", "worktime"} or role == "burner_activity"
+                else "thermal"
+            )
+            reliability_evidence.append(
+                ReliabilityEvidenceSeries(
+                    series_id=int(boiler_reliability_series["id"]),
+                    role=role,
+                    provenance=str(boiler_reliability_series["provenance"]),
+                    origin=str(boiler_reliability_series["origin"]),
+                    evidence_kind=evidence_kind,
+                    points=tuple(
+                        ReliabilityEvidencePoint(timestamp_utc=timestamp)
+                        for timestamp in boiler_metric_timestamps
+                    ),
+                )
+            )
         zont_status_samples = (
             self.db.fetch_samples(int(zont_status_series["id"]), history_start, end) if zont_status_series else []
         )
@@ -472,6 +498,7 @@ class AnalysisService:
             boiler_metric_timestamps=boiler_metric_timestamps,
             zont_status_samples=zont_status_samples,
             zont_metric_timestamps=zont_metric_timestamps,
+            evidence_series=reliability_evidence,
         )
         metrics.extend(reliability.metrics)
         events.extend(reliability.events)

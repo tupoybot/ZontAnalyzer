@@ -37,12 +37,6 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      - type: bind
-        source: /opt/zont-analyzer/secrets/feedback_token.txt
-        target: /app/.access/feedback_token.txt
-        read_only: true
-        bind:
-          create_host_path: false
     read_only: true
     tmpfs:
       - /tmp:size=32m,mode=1777

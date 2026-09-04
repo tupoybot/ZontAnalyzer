@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from statistics import mean
@@ -16,7 +17,6 @@ CONTROLLER_ON_TYPES = frozenset({"PowerOn"})
 DEFAULT_MAXIMUM_SAMPLE_AGE = timedelta(minutes=10)
 INCIDENT_CAUSE_TOLERANCE = timedelta(minutes=2)
 EVENT_INTERVAL_MERGE_TOLERANCE = timedelta(minutes=2)
-SERVICE_FAILURE_CAUSES = frozenset({"power_outage", "boiler_or_adapter"})
 
 
 @dataclass(frozen=True)
@@ -26,13 +26,37 @@ class ReliabilityAnalysis:
     context: dict[str, object]
 
 
+@dataclass(frozen=True)
+class ReliabilityEvidencePoint:
+    timestamp_utc: datetime
+    value_num: float | None = None
+    value_text: str | None = None
+    quality: Literal["valid", "invalid"] = "valid"
+
+
+@dataclass(frozen=True)
+class ReliabilityEvidenceSeries:
+    series_id: int
+    role: str
+    provenance: str
+    origin: str
+    evidence_kind: Literal["activity", "thermal", "context"]
+    points: tuple[ReliabilityEvidencePoint, ...] = ()
+
+
 @dataclass
 class _BoilerIncident:
     lost_at: datetime
     restored_at: datetime | None
     previous_restore_at: datetime | None
+    loss_event_id: str
+    restore_event_id: str | None = None
     cause: Literal["power_outage", "zont_restart", "boiler_or_adapter"] = "boiler_or_adapter"
     restore_inferred_from_metrics: bool = False
+    service_impact: Literal[
+        "confirmed_service_running", "confirmed_service_failure", "unknown_service_impact"
+    ] = "unknown_service_impact"
+    evidence: tuple[ReliabilityEvidenceSeries, ...] = ()
 
 
 def _metric(period_id: str, name: str, value: float, unit: str, **context: object) -> MetricValue:
@@ -129,16 +153,41 @@ def _union_intervals(intervals: list[tuple[datetime, datetime]]) -> list[tuple[d
     return merged
 
 
+def _subtract_intervals(
+    intervals: list[tuple[datetime, datetime]],
+    included: list[tuple[datetime, datetime]],
+) -> list[tuple[datetime, datetime]]:
+    """Remove intervals proven observable from conservative gap exclusions."""
+    remaining: list[tuple[datetime, datetime]] = []
+    inclusions = _union_intervals(included)
+    for start, end in _union_intervals(intervals):
+        fragments = [(start, end)]
+        for include_start, include_end in inclusions:
+            next_fragments: list[tuple[datetime, datetime]] = []
+            for left, right in fragments:
+                if include_end <= left or include_start >= right:
+                    next_fragments.append((left, right))
+                    continue
+                if left < include_start:
+                    next_fragments.append((left, include_start))
+                if include_end < right:
+                    next_fragments.append((include_end, right))
+            fragments = next_fragments
+        remaining.extend(fragments)
+    return remaining
+
+
 def _boiler_incidents(events: list[SourceEvent]) -> tuple[list[_BoilerIncident], datetime | None]:
     incidents: list[_BoilerIncident] = []
     active: _BoilerIncident | None = None
     last_restore: datetime | None = None
     for item in events:
         if item.event_type in BOILER_LOSS_TYPES and active is None:
-            active = _BoilerIncident(item.timestamp_utc, None, last_restore)
+            active = _BoilerIncident(item.timestamp_utc, None, last_restore, item.id)
         elif item.event_type in BOILER_RESTORE_TYPES:
             if active is not None and item.timestamp_utc >= active.lost_at:
                 active.restored_at = item.timestamp_utc
+                active.restore_event_id = item.id
                 incidents.append(active)
                 active = None
             last_restore = item.timestamp_utc
@@ -152,13 +201,118 @@ def _classify_incident(
     power_intervals: list[tuple[datetime, datetime]],
     controller_intervals: list[tuple[datetime, datetime]],
 ) -> None:
-    if any(
+    if any(abs(incident.lost_at - start) <= INCIDENT_CAUSE_TOLERANCE for start, _ in power_intervals):
+        incident.cause = "power_outage"
+    elif any(
         start - INCIDENT_CAUSE_TOLERANCE <= incident.lost_at <= end + INCIDENT_CAUSE_TOLERANCE
         for start, end in controller_intervals
     ):
         incident.cause = "zont_restart"
-    elif any(abs(incident.lost_at - start) <= INCIDENT_CAUSE_TOLERANCE for start, _ in power_intervals):
-        incident.cause = "power_outage"
+
+
+def _reconcile_incident(
+    incident: _BoilerIncident,
+    evidence_series: tuple[ReliabilityEvidenceSeries, ...],
+    power_intervals: list[tuple[datetime, datetime]],
+) -> None:
+    """Classify a connection loss using only timestamped, typed evidence.
+
+    A source connection-loss event is deliberately not treated as proof of a
+    boiler failure.  Power loss is the one explicit exception; activity
+    reported by the boiler adapter during a completed interval proves that the
+    service continued.  Everything else remains unknown.
+    """
+    if any(abs(incident.lost_at - start) <= INCIDENT_CAUSE_TOLERANCE for start, _ in power_intervals):
+        incident.service_impact = "confirmed_service_failure"
+        return
+    if incident.restored_at is None:
+        incident.service_impact = "unknown_service_impact"
+        return
+    activity: list[ReliabilityEvidenceSeries] = []
+    for series in evidence_series:
+        if series.evidence_kind != "activity":
+            continue
+        index = bisect_right(series.points, incident.lost_at, key=lambda point: point.timestamp_utc)
+        if index >= len(series.points) or series.points[index].timestamp_utc >= incident.restored_at:
+            continue
+        activity.append(
+            ReliabilityEvidenceSeries(
+                series_id=series.series_id,
+                role=series.role,
+                provenance=series.provenance,
+                origin=series.origin,
+                evidence_kind=series.evidence_kind,
+                points=(series.points[index],),
+            )
+        )
+    if activity:
+        incident.service_impact = "confirmed_service_running"
+        incident.evidence = tuple(activity)
+    else:
+        incident.service_impact = "unknown_service_impact"
+
+
+def _evidence_details(
+    incident: _BoilerIncident,
+    power_intervals: list[tuple[datetime, datetime]],
+    *,
+    limit: int = 8,
+) -> list[dict[str, object]]:
+    details: list[dict[str, object]] = [
+        {
+            "evidence_id": incident.loss_event_id,
+            "role": "boiler_connection_loss",
+            "provenance": "zont.source_event",
+            "origin": "source_events",
+            "timestamp": incident.lost_at.isoformat(),
+        }
+    ]
+    if incident.restore_event_id and incident.restored_at:
+        details.append(
+            {
+                "evidence_id": incident.restore_event_id,
+                "role": "boiler_connection_restore",
+                "provenance": "zont.source_event",
+                "origin": "source_events",
+                "timestamp": incident.restored_at.isoformat(),
+            }
+        )
+    if incident.service_impact == "confirmed_service_failure":
+        power_start = next(
+            (
+                start
+                for start, _end in power_intervals
+                if abs(incident.lost_at - start) <= INCIDENT_CAUSE_TOLERANCE
+            ),
+            None,
+        )
+        if power_start is not None:
+            details.append(
+                {
+                    "evidence_id": f"main-power-interval:{int(power_start.timestamp())}",
+                    "role": "main_power_availability",
+                    "provenance": "source_events+ztc_state.status_flags",
+                    "origin": "reliability.power_intervals",
+                    "timestamp": power_start.isoformat(),
+                }
+            )
+    for item in incident.evidence:
+        if len(details) >= limit:
+            break
+        point = next((point for point in item.points if point.quality == "valid"), None)
+        if point is None:
+            continue
+        details.append(
+            {
+                "evidence_id": f"telemetry:{item.series_id}:{int(point.timestamp_utc.timestamp())}",
+                "series_id": item.series_id,
+                "role": item.role,
+                "provenance": item.provenance,
+                "origin": item.origin,
+                "timestamp": point.timestamp_utc.isoformat(),
+            }
+        )
+    return details
 
 
 def _first_sustained_at(
@@ -230,6 +384,7 @@ def analyze_reliability(
     boiler_metric_timestamps: list[datetime],
     zont_status_samples: list[tuple[datetime, float]],
     zont_metric_timestamps: list[datetime] | None = None,
+    evidence_series: list[ReliabilityEvidenceSeries] | None = None,
     maximum_sample_age: timedelta = DEFAULT_MAXIMUM_SAMPLE_AGE,
 ) -> ReliabilityAnalysis:
     if maximum_sample_age <= timedelta(0):
@@ -268,16 +423,35 @@ def analyze_reliability(
             *zont_gap_intervals,
         ]
     )
-    incidents, last_boiler_restore = _boiler_incidents(ordered_events)
+    incidents, _ = _boiler_incidents(ordered_events)
+    typed_evidence = tuple(
+        ReliabilityEvidenceSeries(
+            series_id=series.series_id,
+            role=series.role,
+            provenance=series.provenance,
+            origin=series.origin,
+            evidence_kind=series.evidence_kind,
+            points=tuple(
+                sorted(
+                    (point for point in series.points if point.quality == "valid"),
+                    key=lambda point: point.timestamp_utc,
+                )
+            ),
+        )
+        for series in (evidence_series or ())
+    )
     for incident in incidents:
         _classify_incident(incident, power_intervals, controller_intervals)
+        _reconcile_incident(incident, typed_evidence, power_intervals)
     open_incident = incidents[-1] if incidents and incidents[-1].restored_at is None else None
+    inferred_boiler_restore: datetime | None = None
     if open_incident is not None:
         inferred_restore = _first_sustained_at(boiler_timestamps, after=open_incident.lost_at)
         if inferred_restore is not None:
             open_incident.restored_at = inferred_restore
             open_incident.restore_inferred_from_metrics = True
-            last_boiler_restore = inferred_restore
+            _reconcile_incident(open_incident, typed_evidence, power_intervals)
+            inferred_boiler_restore = inferred_restore
             open_incident = None
 
     metrics: list[MetricValue] = []
@@ -323,7 +497,24 @@ def analyze_reliability(
             )
         )
 
-    boiler_anchor = last_boiler_restore
+    running_restore_times = {
+        item.restored_at
+        for item in incidents
+        if item.service_impact == "confirmed_service_running" and item.restored_at is not None
+    }
+    restore_times = [
+        item.timestamp_utc
+        for item in ordered_events
+        if item.event_type in BOILER_RESTORE_TYPES and item.timestamp_utc not in running_restore_times
+    ]
+    relevant_boiler_restore = max(restore_times, default=None)
+    if inferred_boiler_restore is not None:
+        relevant_boiler_restore = (
+            max(relevant_boiler_restore, inferred_boiler_restore)
+            if relevant_boiler_restore
+            else inferred_boiler_restore
+        )
+    boiler_anchor = relevant_boiler_restore
     boiler_basis = "boiler_connection_restored"
     boiler_lower_bound = False
     if open_incident is None:
@@ -366,12 +557,26 @@ def analyze_reliability(
             )
         )
 
-    service_failures = [item for item in incidents if item.cause in SERVICE_FAILURE_CAUSES]
+    service_failures = [item for item in incidents if item.service_impact == "confirmed_service_failure"]
+    unknown_impacts = [item for item in incidents if item.service_impact == "unknown_service_impact"]
+    running_impacts = [item for item in incidents if item.service_impact == "confirmed_service_running"]
     completed_service_failures = [item for item in service_failures if item.restored_at is not None]
+    failures_with_unknown_restore = [
+        item
+        for item in completed_service_failures
+        if item.restored_at is not None
+        and (
+            item.restore_inferred_from_metrics
+            or any(
+                gap_start < item.restored_at and gap_end > item.lost_at
+                for gap_start, gap_end in zont_gap_intervals
+            )
+        )
+    ]
     restore_seconds = [
         (item.restored_at - item.lost_at).total_seconds()
         for item in completed_service_failures
-        if item.restored_at and not item.restore_inferred_from_metrics
+        if item.restored_at and item not in failures_with_unknown_restore
     ]
     confirmed_power_intervals = [
         (start, end)
@@ -381,10 +586,15 @@ def analyze_reliability(
             for item in service_failures
         )
     ]
-    service_downtime_intervals = [(item.lost_at, item.restored_at or as_of) for item in service_failures]
-    observability_incident_intervals = [
-        (item.lost_at, item.restored_at or as_of) for item in incidents if item.cause == "zont_restart"
+    service_downtime_intervals = [
+        (item.lost_at, item.restored_at or as_of) for item in [*service_failures, *unknown_impacts]
     ]
+    running_intervals = [
+        (item.lost_at, item.restored_at)
+        for item in running_impacts
+        if item.restored_at is not None
+    ]
+    unconfirmed_controller_intervals = _subtract_intervals(controller_intervals, running_intervals)
     first_sustained_boiler = _first_sustained_at(boiler_timestamps)
     first_boiler_restore = min(
         (item.timestamp_utc for item in ordered_events if item.event_type in BOILER_RESTORE_TYPES),
@@ -399,10 +609,9 @@ def analyze_reliability(
     if observation_start is not None:
         excluded_intervals = _union_intervals(
             [
-                *controller_intervals,
+                *unconfirmed_controller_intervals,
                 *confirmed_power_intervals,
                 *service_downtime_intervals,
-                *observability_incident_intervals,
             ]
         )
         observed_seconds = max(0.0, (as_of - observation_start).total_seconds())
@@ -451,12 +660,15 @@ def analyze_reliability(
                 kind="boiler_connection_loss",
                 started_at=item.lost_at,
                 ended_at=item.restored_at,
-                severity="info" if item.cause == "zont_restart" else "warning",
+                severity="warning" if item.service_impact == "confirmed_service_failure" else "info",
                 details={
                     "cause": item.cause,
+                    "service_impact": item.service_impact,
                     "duration_seconds": duration,
-                    "excluded_from_boiler_reliability": item.cause == "zont_restart",
+                    "excluded_from_boiler_reliability": item.service_impact != "confirmed_service_failure",
                     "restore_inferred_from_stable_metrics": item.restore_inferred_from_metrics,
+                    "evidence": _evidence_details(item, power_intervals),
+                    "reconciliation_version": "reliability-reconciliation-v1",
                 },
                 algorithm_version="reliability-v1",
             )
@@ -487,6 +699,9 @@ def analyze_reliability(
             "intrinsic_failures": sum(item.cause == "boiler_or_adapter" for item in service_failures),
             "confirmed_service_failures": len(service_failures),
             "completed_service_failures": len(completed_service_failures),
+            "service_failures_with_unknown_restore": len(failures_with_unknown_restore),
+            "confirmed_service_running": len(running_impacts),
+            "unknown_service_impact": len(unknown_impacts),
             "power_related_losses": sum(item.cause == "power_outage" for item in incidents),
             "zont_restart_related_losses": sum(item.cause == "zont_restart" for item in incidents),
             "open_loss_at": open_incident.lost_at.isoformat() if open_incident else None,
@@ -503,8 +718,9 @@ def analyze_reliability(
         },
         "main_power_outages": len(power_intervals),
         "policy": (
-            "power_outage and boiler_or_adapter incidents are service failures included in boiler MTBF/MTTR; "
-            "zont_restart incidents are observability losses excluded from both metrics"
+            "power_outage is always a confirmed service failure; activity evidence inside a completed loss "
+            "interval confirms service running; all other connection losses are unknown and excluded from "
+            "boiler MTBF/MTTR"
         ),
     }
     return ReliabilityAnalysis(

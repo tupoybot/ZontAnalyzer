@@ -17,7 +17,12 @@ from .events import detect_burner_events, detect_temperature_events
 from .flame import detect_unconfirmed_burner_pulses
 from .metrics import burner_metrics, temperature_metrics
 from .quality import assess_quality
-from .reliability import ReliabilityAnalysis, analyze_reliability
+from .reliability import (
+    ReliabilityAnalysis,
+    ReliabilityEvidencePoint,
+    ReliabilityEvidenceSeries,
+    analyze_reliability,
+)
 
 __all__ = [
     "assess_quality",
@@ -38,5 +43,7 @@ __all__ = [
     "DhwAnalysis",
     "HeatingDemand",
     "ReliabilityAnalysis",
+    "ReliabilityEvidencePoint",
+    "ReliabilityEvidenceSeries",
     "temperature_metrics",
 ]

@@ -2,10 +2,11 @@
 
 This deployment is intentionally isolated under the Compose project
 `zont-analyzer`. It publishes the narrow feedback API only on host loopback and
-declares no external Docker network. The only shared host path is the exact static
-`/za` directory selected through `ZONT_ANALYZER_PUBLISH_DIR` for
-`compose.test.yaml`; the application itself contains no host-specific publishing
-policy.
+declares no external Docker network. nginx protects the complete `/za/` perimeter
+with one Basic Auth policy; the application does not carry a second bearer secret.
+The only shared host path is the exact static `/za` directory selected through
+`ZONT_ANALYZER_PUBLISH_DIR` for `compose.test.yaml`; the application itself
+contains no host-specific publishing policy.
 
 ## One-time host preparation
 
@@ -34,30 +35,20 @@ test -e /var/www/html/za/index.html || \
     /var/www/html/za/index.html
 ```
 
-Edit `/opt/zont-analyzer/config.yaml` for the home. Generate an independent
-feedback bearer key, then put the ZONT JSON containing
+Edit `/opt/zont-analyzer/config.yaml` for the home. Put the ZONT JSON containing
 `token` and `email` in `/opt/zont-analyzer/secrets/zontaccesstoken.json`, and put
-only the OpenAI key in
-`/opt/zont-analyzer/secrets/openai_access_token.txt`:
-
-```sh
-umask 077
-openssl rand -hex 32 > /opt/zont-analyzer/secrets/feedback_token.txt
-```
-
-These files are mounted
-read-only and are not expanded into the Compose model or container environment.
+only the OpenAI key in `/opt/zont-analyzer/secrets/openai_access_token.txt`.
+These files are mounted read-only and are not expanded into the Compose model or
+container environment.
 Because the container is UID 10001, make each credential file owned by that UID
 and private. Keep `.env` (release settings, not credentials) owned by root and mode
 `0600`:
 
 ```sh
 chown 10001:10001 /opt/zont-analyzer/secrets/zontaccesstoken.json \
-  /opt/zont-analyzer/secrets/openai_access_token.txt \
-  /opt/zont-analyzer/secrets/feedback_token.txt
+  /opt/zont-analyzer/secrets/openai_access_token.txt
 chmod 0600 /opt/zont-analyzer/secrets/zontaccesstoken.json \
-  /opt/zont-analyzer/secrets/openai_access_token.txt \
-  /opt/zont-analyzer/secrets/feedback_token.txt
+  /opt/zont-analyzer/secrets/openai_access_token.txt
 chown root:root /opt/zont-analyzer/.env
 chmod 0600 /opt/zont-analyzer/.env
 stat -c '%a %u:%g %n' /opt/zont-analyzer/.env /opt/zont-analyzer/secrets/*
@@ -67,28 +58,33 @@ Never put secrets in either Compose file or the release directory.
 The production `.env` must keep `ZONT_ANALYZER_PUBLISH_DIR=/var/www/html/za`;
 do not replace it with the example file during an upgrade.
 
-Enable the daily archive index and add a same-origin nginx route beside the
-existing static `/za/` location. Keep the archive rule as an exact match so
-autoindex is not enabled for the rest of `/za/`. The container port remains
-unreachable from external interfaces; the application still validates the
-bearer key supplied by the HTML:
+Create a private htpasswd file outside the release and application directories.
+Use an interactive password prompt so the password does not enter Git, shell
+history, HTML, logs, or application configuration:
 
-```nginx
-location = /za/daily/ {
-    autoindex on;
-    autoindex_exact_size off;
-    autoindex_localtime on;
-}
-
-location /za/api/ {
-    proxy_pass http://127.0.0.1:8787;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
+```sh
+test -e /etc/nginx/zont-analyzer.htpasswd || \
+  install -m 0640 -o root -g www-data /dev/null /etc/nginx/zont-analyzer.htpasswd
+htpasswd /etc/nginx/zont-analyzer.htpasswd zont
 ```
 
-Validate nginx configuration before reloading it. Do not expose port 8787 on a
-public address and do not place the bearer key in nginx configuration or HTML.
+Install `deploy/nginx-zont-analyzer.conf` as an nginx snippet and include it once
+inside the TLS `server` block for `hk.tupoybot.ru`. Remove older `/za/daily/` and
+`/za/api/` locations from that block; the snippet owns all `/za/` routes:
+
+```sh
+install -m 0644 RELEASE/deploy/nginx-zont-analyzer.conf \
+  /etc/nginx/snippets/zont-analyzer.conf
+```
+
+```nginx
+include /etc/nginx/snippets/zont-analyzer.conf;
+```
+
+Validate the complete nginx configuration before reloading it. Without Basic
+Auth, `/za/`, `latest.html`, `/za/daily/`, and `/za/api/` must all return 401;
+with the same credentials, reports and feedback must work. Keep port 8787 on host
+loopback and do not put the Basic Auth password in application files.
 
 ## Local development and CI
 
@@ -111,8 +107,8 @@ HTTP E2E. To publish a reviewed commit, push an explicit `release-*` tag, or run
 manually with `publish=true`. The release still has to pass the test job:
 
 ```sh
-git tag release-1.7 YOUR_REVIEWED_COMMIT
-git push origin release-1.7
+git tag release-1.6-YYYYMMDD YOUR_REVIEWED_COMMIT
+git push origin release-1.6-YYYYMMDD
 ```
 
 CI publishes `ghcr.io/tupoybot/zontanalyzer:sha-COMMIT` with `GITHUB_TOKEN` and emits
@@ -138,6 +134,12 @@ writable online backup and a temporary non-public output directory. Inspect `ini
 and `daily` HTML/JSON. This can happen locally or in a separate container on the
 production host; never mount live data/publication into the candidate. A clean-DB
 bootstrap check uses another empty directory and read-only ZONT credentials.
+
+When migrating an existing bearer deployment, enable and verify nginx Basic Auth
+before starting the bearer-free application image. This makes feedback briefly
+unavailable instead of briefly writable without authentication. The old
+`feedback_token.txt` may be removed only after the new image and the external
+Basic Auth feedback path have both been verified.
 
 The explicit deployment command pulls the digest, creates and verifies an online
 backup using the running worker, preserves `.env.previous`, updates only the image
@@ -197,14 +199,18 @@ returns the landing page, and unrelated workloads remain unchanged:
 test -s /var/www/html/za/index.html
 test -s /var/www/html/za/latest.html
 test -s /var/www/html/za/ai-latest.html
-curl -fsS https://hk.tupoybot.ru/za/ >/dev/null
-curl -fsS https://hk.tupoybot.ru/za/daily/ >/dev/null
-curl -fsS https://hk.tupoybot.ru/za/latest.html >/dev/null
 curl -fsS http://127.0.0.1:8787/api/health
-test "$(curl -sS -o /dev/null -w '%{http_code}' \
-  -X PUT http://127.0.0.1:8787/api/recommendations/unknown/feedback)" = 401
+for path in /za/ /za/daily/ /za/latest.html /za/api/health; do
+  test "$(curl -sS -o /dev/null -w '%{http_code}' \
+    "https://hk.tupoybot.ru$path")" = 401
+  curl -fsS -u zont "https://hk.tupoybot.ru$path" >/dev/null
+done
 docker ps --format '{{.Names}} {{.Status}}'
 ```
+
+The authenticated public `curl` commands prompt for the Basic Auth password via
+`curl -u zont`. The loopback health endpoint intentionally has no
+application-level authentication; its host binding is the security boundary.
 
 ## Rollback
 

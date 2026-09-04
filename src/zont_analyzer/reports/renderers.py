@@ -525,16 +525,6 @@ cursor:pointer}}
 (() => {{
   const apiBase = document.body.dataset.feedbackApiBase || "/api";
   const labels = {{applied: "Выполнено", rejected: "Отклонено", ignored: "Без реакции", new: "Новая"}};
-  const tokenKey = "zont-analyzer-feedback-token";
-
-  function token(interactive) {{
-    let value = sessionStorage.getItem(tokenKey) || "";
-    if (!value && interactive) {{
-      value = window.prompt("Введите ключ обратной связи ZontAnalyzer") || "";
-      if (value) sessionStorage.setItem(tokenKey, value);
-    }}
-    return value;
-  }}
 
   function applyState(card, payload) {{
     const status = payload.status || "new";
@@ -547,16 +537,13 @@ cursor:pointer}}
     card.querySelector(".saved-note span").textContent = note || "нет";
   }}
 
-  async function request(card, options, interactive) {{
-    const secret = token(interactive);
-    if (!secret) throw new Error("Нужен ключ обратной связи.");
+  async function request(card, options) {{
     const id = card.dataset.recommendationId;
     const response = await fetch(`${{apiBase}}/recommendations/${{encodeURIComponent(id)}}/feedback`, {{
       ...options,
-      headers: {{"Authorization": `Bearer ${{secret}}`, ...(options.headers || {{}})}},
+      headers: {{...(options.headers || {{}})}},
       credentials: "same-origin",
     }});
-    if (response.status === 401) sessionStorage.removeItem(tokenKey);
     const payload = await response.json().catch(() => ({{}}));
     if (!response.ok) throw new Error(payload.error || `Ошибка HTTP ${{response.status}}`);
     applyState(card, payload);
@@ -581,7 +568,7 @@ cursor:pointer}}
               status: button.dataset.feedbackStatus,
               owner_note: card.querySelector(".feedback-note").value,
             }}),
-          }}, true);
+          }});
           message.textContent = "Обратная связь сохранена.";
         }} catch (error) {{
           message.className = "feedback-message error";
@@ -591,12 +578,10 @@ cursor:pointer}}
         }}
       }});
     }});
-    if (token(false)) {{
-      request(card, {{method: "GET"}}, false).catch((error) => {{
-        message.className = "feedback-message error";
-        message.textContent = error instanceof Error ? error.message : "Не удалось обновить статус.";
-      }});
-    }}
+    request(card, {{method: "GET"}}).catch((error) => {{
+      message.className = "feedback-message error";
+      message.textContent = error instanceof Error ? error.message : "Не удалось обновить статус.";
+    }});
   }});
 }})();
 </script></body></html>"""

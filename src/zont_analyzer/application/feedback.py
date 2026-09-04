@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hmac
 import json
 import logging
 import threading
@@ -65,14 +64,6 @@ class FeedbackHttpServer(ThreadingHTTPServer):
 
 
 def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
-    configured_token = runtime.loaded.secrets.feedback_token
-    if configured_token is None:
-        raise RuntimeError(
-            "Feedback API is enabled but ZONT_FEEDBACK_TOKEN or feedback.token_file is missing"
-        )
-    expected_token = configured_token.get_secret_value()
-    if len(expected_token) < 16:
-        raise RuntimeError("Feedback token must contain at least 16 characters")
     api_path = _api_path(runtime)
     route_prefix = f"{api_path}/recommendations/"
 
@@ -89,12 +80,6 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
             self.end_headers()
             self.wfile.write(encoded)
 
-        def _authorized(self) -> bool:
-            authorization = self.headers.get("Authorization", "")
-            prefix = "Bearer "
-            supplied = authorization[len(prefix) :] if authorization.startswith(prefix) else ""
-            return bool(supplied) and hmac.compare_digest(supplied, expected_token)
-
         def _recommendation_id(self) -> str | None:
             path = urlsplit(self.path).path
             suffix = "/feedback"
@@ -105,12 +90,6 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                 return None
             return unquote(encoded_id)
 
-        def _require_authorization(self) -> bool:
-            if self._authorized():
-                return True
-            self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "Необходим корректный ключ обратной связи."})
-            return False
-
         def do_GET(self) -> None:  # noqa: N802
             if urlsplit(self.path).path == f"{api_path}/health":
                 self._send_json(HTTPStatus.OK, {"ok": True})
@@ -118,8 +97,6 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
             recommendation_id = self._recommendation_id()
             if recommendation_id is None:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "Маршрут не найден."})
-                return
-            if not self._require_authorization():
                 return
             value = runtime.db.recommendation(recommendation_id)
             if value is None:
@@ -131,8 +108,6 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
             recommendation_id = self._recommendation_id()
             if recommendation_id is None:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "Маршрут не найден."})
-                return
-            if not self._require_authorization():
                 return
             try:
                 content_length = int(self.headers.get("Content-Length", "0"))
