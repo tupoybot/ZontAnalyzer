@@ -90,62 +90,77 @@ location /za/api/ {
 Validate nginx configuration before reloading it. Do not expose port 8787 on a
 public address and do not place the bearer key in nginx configuration or HTML.
 
-## Release layout and preflight
+## Local development and CI
 
-Upload each source snapshot to an immutable directory such as
-`/opt/zont-analyzer/releases/20260803-021500`, then atomically point
-`/opt/zont-analyzer/current` to it. Preserve previous releases for rollback.
-Do not upload `.access`, `.git`, local SQLite files, `.env`, caches, or reports.
-
-Set a unique `ZONT_ANALYZER_IMAGE_TAG` in `/opt/zont-analyzer/.env` for the release.
-From the release directory, validate interpolation before building (the rendered
-output contains variable names but must not be copied into logs if future Compose
-changes inline a secret):
+Develop and debug locally with the normal `.venv` commands from README. The local
+Compose file uses its own named volume and has no host production mounts:
 
 ```sh
-cd /opt/zont-analyzer/current
-docker compose --project-name zont-analyzer \
-  --env-file /opt/zont-analyzer/.env \
-  -f deploy/compose.yaml -f deploy/compose.test.yaml config --quiet
-docker compose --project-name zont-analyzer \
-  --env-file /opt/zont-analyzer/.env \
-  -f deploy/compose.yaml -f deploy/compose.test.yaml build --pull
+docker compose -f deploy/compose.local.yaml build
+docker compose -f deploy/compose.local.yaml run --rm worker init
+docker compose -f deploy/compose.local.yaml run --rm worker analyze daily --no-ai
+docker compose -f deploy/compose.local.yaml run --rm --entrypoint sh worker
 ```
 
-Run one-off preflight commands with the built image. `doctor --live` performs one
-read-only ZONT request; omit `--live` if the API must not be contacted yet.
+For a real-data check, mount a verified online SQLite **copy** to an isolated
+container. Do not attach the candidate to live data. Local credentials can be
+mounted read-only explicitly when needed; they never go into the image or CI.
+
+Every branch/PR runs tests, Ruff, mypy, wheel installation, Docker build and feedback
+HTTP E2E. To publish a reviewed commit, push an explicit `release-*` tag, or run CI
+manually with `publish=true`. The release still has to pass the test job:
 
 ```sh
-docker compose --project-name zont-analyzer \
-  --env-file /opt/zont-analyzer/.env \
-  -f deploy/compose.yaml -f deploy/compose.test.yaml run --rm --no-deps worker init
-docker compose --project-name zont-analyzer \
-  --env-file /opt/zont-analyzer/.env \
-  -f deploy/compose.yaml -f deploy/compose.test.yaml run --rm --no-deps worker doctor --live
+git tag release-1.7 YOUR_REVIEWED_COMMIT
+git push origin release-1.7
 ```
 
-## Backup and deploy
+CI publishes `ghcr.io/tupoybot/zontanalyzer:sha-COMMIT` with `GITHUB_TOKEN` and emits
+`image.env` plus the exact `ghcr.io/...@sha256:...` reference in its summary. An existing
+commit tag is reused. Deploy by digest, never by a moving tag. Publishing does not
+connect to or deploy on the server. For private GHCR packages, authenticate Docker
+on the server with an account allowed to read the package (`read:packages`);
+use `docker login ghcr.io --password-stdin`, never a token in a command argument.
+The package can remain private; no new application secrets are needed.
 
-Before replacing the running release, complete the isolated production-host
-acceptance described in [`docs/implementation_plan.md`](../docs/implementation_plan.md):
-use a verified online backup as a writable temporary database, a separate
-container/Compose project, and a temporary publication directory. Never point a
-candidate at `/opt/zont-analyzer/data` or `/var/www/html/za`. Synthetic tests run
-locally/in Docker; the production host validates the candidate against an isolated
-copy of real data. Only the accepted image proceeds to the live deployment below.
+## Release preflight and deployment
 
-Before replacing a running release, make an online verified SQLite backup with the
-old release. Do not `cp` the live `.sqlite3`, `-wal`, and `-shm` files separately.
+Keep a Git checkout on the server for the small Compose files and deployment script;
+check out the same reviewed commit as the image. Application source is not built
+on the server. Existing `/opt/zont-analyzer/config.yaml`, `.env`, data, secrets and
+`/var/www/html/za` stay in place. Preserve the previous checkout/reference for rollback.
+Set `ZONT_ANALYZER_IMAGE` in `.env` to the digest emitted by CI. The old
+`ZONT_ANALYZER_IMAGE_TAG` setting is no longer used.
+
+Before replacing the running release, run the pulled candidate against a separately
+writable online backup and a temporary non-public output directory. Inspect `initial`
+and `daily` HTML/JSON. This can happen locally or in a separate container on the
+production host; never mount live data/publication into the candidate. A clean-DB
+bootstrap check uses another empty directory and read-only ZONT credentials.
+
+The explicit deployment command pulls the digest, creates and verifies an online
+backup using the running worker, preserves `.env.previous`, updates only the image
+reference, starts Compose without a build, and checks health/status and lifecycle counts:
 
 ```sh
-/opt/zont-analyzer/current/deploy/backup-sqlite.sh /opt/zont-analyzer/current
+./deploy/release.sh ghcr.io/tupoybot/zontanalyzer@sha256:YOUR_VERIFIED_DIGEST
 ```
+
+It does not deploy on every push. If a check fails, inspect the command output and
+worker logs before retrying. Do not automatically restore SQLite. The first updated
+startup also creates a verified pre-migration backup and logs the number of old `new`
+recommendations before marking them `ignored`; later maintenance is idempotent.
+
+For first installation only, after host preparation and selecting the digest:
 
 Start only this Compose project; never use `docker compose down -v` or global
 Docker prune commands on this shared server.
 
 ```sh
 cd /opt/zont-analyzer/current
+docker compose --project-name zont-analyzer \
+  --env-file /opt/zont-analyzer/.env \
+  -f deploy/compose.yaml -f deploy/compose.test.yaml pull worker
 docker compose --project-name zont-analyzer \
   --env-file /opt/zont-analyzer/.env \
   -f deploy/compose.yaml -f deploy/compose.test.yaml up -d --no-build
@@ -193,7 +208,7 @@ docker ps --format '{{.Names}} {{.Status}}'
 ## Rollback
 
 An application rollback is non-destructive: retain `/opt/zont-analyzer/data`, point
-`current` back to the previous immutable release, select its original image tag in
+`current` back to the previous immutable release, select its original `ZONT_ANALYZER_IMAGE` digest in
 the root-only `.env`, validate Compose, and run `up -d --no-build` again. This
 replaces only containers in project `zont-analyzer` and leaves SQLite and the
 published last-known-good page intact.
@@ -207,3 +222,6 @@ copy with SQLite integrity checks before any explicit cutover.
 To disable only test publication while preserving data, set
 `pilot.reports_dir: reports` in the config and redeploy the worker with
 `deploy/compose.yaml` alone. Do not delete the `/za` directory as part of rollback.
+
+Registry workflow references: [GitHub Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry),
+[Compose pull](https://docs.docker.com/reference/cli/docker/compose/pull/).

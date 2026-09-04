@@ -1,0 +1,13 @@
+# Local development only. No production paths or credentials are mounted.
+name: zont-analyzer-local
+services:
+  worker:
+    image: zont-analyzer:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    volumes:
+      - local-data:/data
+    command: ['analyze', 'daily', '--no-ai']
+volumes:
+  local-data:

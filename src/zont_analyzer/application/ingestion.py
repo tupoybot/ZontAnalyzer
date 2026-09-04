@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import math
 from dataclasses import dataclass
@@ -12,6 +13,22 @@ from zont_analyzer.adapters.zont_readonly.client import infer_role
 from zont_analyzer.config import AppConfig
 
 logger = logging.getLogger(__name__)
+
+
+# These cursors record all-time, read-only requests per ZONT data type.  They
+# keep a large boiler history response from being combined with every other
+# source in memory, and ensure an interrupted type is retried on the next run.
+_BOOTSTRAP_COMPLETE_CURSOR = "history_bootstrap_complete"
+_BOOTSTRAP_FIRST_OBSERVED_CURSOR = "history_bootstrap_first_observed"
+_BOOTSTRAP_LAST_OBSERVED_CURSOR = "history_bootstrap_last_observed"
+_BOOTSTRAP_OBSERVATION_META = "history_bootstrap_observation"
+# This is a protocol boundary rather than an assumed archive-retention date.
+# mintime=0 requests all available ZONT history without a home-specific cutoff.
+_UNIVERSAL_HISTORY_START = datetime.fromtimestamp(0, UTC)
+
+
+def _bootstrap_cursor(kind: str, data_type: str) -> str:
+    return f"{kind}:{data_type}"
 
 
 def _object_names(devices: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
@@ -240,6 +257,97 @@ class IngestionService:
         data_types = self.config.zont.history_data_types
         config_names = _object_names(devices)
         inferred_entities: dict[str, dict[str, Any]] = {}
+        samples = 0
+
+        def ingest_window(
+            *, requested_device_ids: list[str], start: datetime, end: datetime, requested_data_types: list[str]
+        ) -> tuple[set[str], dict[str, tuple[datetime | None, datetime | None]], dict[str, bool | None]]:
+            """Load one read-only history request and return successful devices and points."""
+
+            nonlocal samples
+            try:
+                responses = self.client.load_history(
+                    device_ids=requested_device_ids,
+                    start=start,
+                    end=end,
+                    data_types=requested_data_types,
+                )
+            except Exception as exc:
+                errors.append(f"{start.isoformat()} history request: {type(exc).__name__}: {exc}")
+                logger.warning("ZONT history request failed at %s: %s", start, type(exc).__name__)
+                return set(), {}, {}
+            successful_device_ids: set[str] = set()
+            bounds_by_device: dict[str, tuple[datetime | None, datetime | None]] = {}
+            truncation_by_device: dict[str, bool | None] = {}
+            for response in responses:
+                response_device_id = str(response.get("device_id", ""))
+                if response.get("ok") is False:
+                    reason = str(response.get("error_ui") or response.get("error") or "unknown error")
+                    errors.append(f"{start.isoformat()} device {response_device_id}: {reason}")
+                    logger.warning(
+                        "ZONT history failed for device %s at %s: %s",
+                        response_device_id,
+                        start,
+                        reason,
+                    )
+                    continue
+                if response_device_id not in requested_device_ids:
+                    continue
+                successful_device_ids.add(response_device_id)
+                value = response.get("time_truncated")
+                truncation_by_device[response_device_id] = value if isinstance(value, bool) else None
+                iterator = getattr(self.client, "iter_normalized_history", None)
+                if iterator is None:
+                    points, entities = self.client.normalize_history(response)
+                else:
+                    points, entities = iterator(response)
+                first_observed: datetime | None = None
+                last_observed: datetime | None = None
+                batch: list[Any] = []
+                roles: dict[str, str] = {}
+                for point in points:
+                    if not start <= point.timestamp_utc <= end:
+                        continue
+                    first_observed = (
+                        point.timestamp_utc
+                        if first_observed is None or point.timestamp_utc < first_observed
+                        else first_observed
+                    )
+                    last_observed = (
+                        point.timestamp_utc
+                        if last_observed is None or point.timestamp_utc > last_observed
+                        else last_observed
+                    )
+                    batch.append(point)
+                    entity = entities.get(point.entity_id, {})
+                    override = self.config.entity_overrides.get(point.entity_id, {})
+                    roles[point.entity_id] = str(override.get("role", entity.get("role", "unknown")))
+                    if len(batch) == 2000:
+                        samples += self.db.upsert_samples(batch, roles)
+                        batch.clear()
+                        roles.clear()
+                if batch:
+                    samples += self.db.upsert_samples(batch, roles)
+                bounds_by_device[response_device_id] = (first_observed, last_observed)
+                inferred_entities.update(entities)
+                for entity_id, entity in entities.items():
+                    override = self.config.entity_overrides.get(entity_id, {})
+                    role = str(override.get("role", entity["role"]))
+                    name = str(override.get("display_name", entity["display_name"]))
+                    self.db.upsert_entity(
+                        entity_id=entity_id,
+                        device_id=entity["device_id"],
+                        source_type=entity["source_type"],
+                        external_id=entity["external_id"],
+                        display_name=name,
+                        role=role,
+                        unit=entity["unit"],
+                        confidence=float(entity["confidence"]),
+                        provenance="config override" if override else "ZONT history metadata",
+                    )
+            self._refresh_series_roles(devices, inferred_entities, config_names)
+            return successful_device_ids, bounds_by_device, truncation_by_device
+
         earliest_cursor = min(
             (
                 cursor
@@ -250,6 +358,13 @@ class IngestionService:
             default=None,
         )
         chunk = timedelta(hours=self.config.zont.sync_chunk_hours)
+        bootstrap_requests = [
+            (device_id, data_type)
+            for device_id in device_ids
+            for data_type in data_types
+            if self.db.get_cursor(device_id, _bootstrap_cursor(_BOOTSTRAP_COMPLETE_CURSOR, data_type)) is None
+        ]
+        bootstrap = backfill is None and bool(bootstrap_requests)
         start: datetime
         if backfill is not None:
             # An explicit backfill is a request to replay the whole selected
@@ -259,81 +374,88 @@ class IngestionService:
             # backfill to the normal overlap window.  Sample upserts are
             # idempotent, so replaying completed windows is safe on retry.
             start = now - backfill
+        elif bootstrap:
+            # A blank local store has no trustworthy date from which to infer
+            # archive retention.  Ask for the whole possible interval.  ZONT
+            # may return ``time_truncated`` when the account's archive starts
+            # later.  That is an observed archive boundary, not a reason to
+            # invent an earlier retention date or to page into a gap.
+            start = _UNIVERSAL_HISTORY_START
         elif earliest_cursor is not None:
             start = earliest_cursor - timedelta(minutes=self.config.scheduler.overlap_minutes)
         else:
             start = now - timedelta(days=1)
-        samples = 0
         windows = 0
         failed_windows = 0
         errors: list[str] = []
         cursor = start
-        total_windows = max(1, math.ceil((now - start) / chunk))
+        total_windows = len(bootstrap_requests) if bootstrap else max(1, math.ceil((now - start) / chunk))
         try:
-            while cursor < now:
-                window_end = min(cursor + chunk, now)
-                responses = self.client.load_history(
-                    device_ids=device_ids,
-                    start=cursor,
-                    end=window_end,
-                    data_types=data_types,
-                )
-                window_points = []
-                successful_device_ids: set[str] = set()
-                for response in responses:
-                    response_device_id = str(response.get("device_id", ""))
-                    if response.get("ok") is False:
-                        reason = str(response.get("error_ui") or response.get("error") or "unknown error")
-                        errors.append(f"{cursor.isoformat()} device {response_device_id}: {reason}")
-                        logger.warning(
-                            "ZONT history failed for device %s at %s: %s",
-                            response_device_id,
-                            cursor,
-                            reason,
-                        )
-                        continue
-                    if response_device_id in device_ids:
-                        successful_device_ids.add(response_device_id)
-                    points, entities = self.client.normalize_history(response)
-                    inferred_entities.update(entities)
-                    for entity_id, entity in entities.items():
-                        override = self.config.entity_overrides.get(entity_id, {})
-                        role = str(override.get("role", entity["role"]))
-                        name = str(override.get("display_name", entity["display_name"]))
-                        self.db.upsert_entity(
-                            entity_id=entity_id,
-                            device_id=entity["device_id"],
-                            source_type=entity["source_type"],
-                            external_id=entity["external_id"],
-                            display_name=name,
-                            role=role,
-                            unit=entity["unit"],
-                            confidence=float(entity["confidence"]),
-                            provenance="config override" if override else "ZONT history metadata",
-                        )
-                    window_points.extend(points)
-                role_map = {entity_id: str(entity["role"]) for entity_id, entity in inferred_entities.items()}
-                for point in window_points:
-                    if point.entity_id in self.config.entity_overrides:
-                        role_map[point.entity_id] = str(
-                            self.config.entity_overrides[point.entity_id].get("role", "unknown")
-                        )
-                samples += self.db.upsert_samples(window_points, role_map)
-                self._refresh_series_roles(devices, inferred_entities, config_names)
-                missing_device_ids = set(device_ids) - successful_device_ids
-                if missing_device_ids:
-                    failed_windows += 1
-                    errors.append(
-                        f"{cursor.isoformat()}: no successful response for devices {sorted(missing_device_ids)}"
+            if bootstrap:
+                while bootstrap_requests:
+                    device_id, data_type = bootstrap_requests[0]
+                    successful_device_ids, bounds_by_device, truncation_by_device = ingest_window(
+                        requested_device_ids=[device_id],
+                        start=_UNIVERSAL_HISTORY_START,
+                        end=now,
+                        requested_data_types=[data_type],
                     )
-                    break
-                for device_id in successful_device_ids:
-                    for data_type in data_types:
-                        self.db.set_cursor(device_id, data_type, window_end)
-                cursor = window_end
-                windows += 1
-                if windows % 10 == 0 or cursor >= now:
-                    logger.info("ZONT sync progress: %d/%d windows", windows, total_windows)
+                    windows += 1
+                    if device_id not in successful_device_ids:
+                        failed_windows += 1
+                        errors.append(f"bootstrap device {device_id} data type {data_type}: no successful response")
+                        break
+                    first_observed, last_observed = bounds_by_device[device_id]
+                    if first_observed is not None and last_observed is not None:
+                        self.db.set_cursor(
+                            device_id,
+                            _bootstrap_cursor(_BOOTSTRAP_FIRST_OBSERVED_CURSOR, data_type),
+                            first_observed,
+                        )
+                        self.db.set_cursor(
+                            device_id,
+                            _bootstrap_cursor(_BOOTSTRAP_LAST_OBSERVED_CURSOR, data_type),
+                            last_observed,
+                        )
+                    self.db.set_cursor(device_id, _bootstrap_cursor(_BOOTSTRAP_COMPLETE_CURSOR, data_type), now)
+                    self.db.set_cursor(device_id, data_type, now)
+                    self.db.set_app_meta(
+                        _bootstrap_cursor(_BOOTSTRAP_OBSERVATION_META, f"{device_id}:{data_type}"),
+                        json.dumps(
+                            {
+                                "requested_start": _UNIVERSAL_HISTORY_START.isoformat(),
+                                "requested_end": now.isoformat(),
+                                "time_truncated": truncation_by_device[device_id],
+                            },
+                            sort_keys=True,
+                        ),
+                    )
+                    bootstrap_requests.pop(0)
+                    logger.info("ZONT bootstrap completed for device %s data type %s", device_id, data_type)
+                cursor = now if not bootstrap_requests and failed_windows == 0 else cursor
+            else:
+                while cursor < now:
+                    window_end = min(cursor + chunk, now)
+                    successful_device_ids, _bounds_by_device, _truncation_by_device = ingest_window(
+                        requested_device_ids=device_ids,
+                        start=cursor,
+                        end=window_end,
+                        requested_data_types=data_types,
+                    )
+                    missing_device_ids = set(device_ids) - successful_device_ids
+                    if missing_device_ids:
+                        failed_windows += 1
+                        errors.append(
+                            f"{cursor.isoformat()}: no successful response for devices {sorted(missing_device_ids)}"
+                        )
+                        break
+                    for device_id in successful_device_ids:
+                        for data_type in data_types:
+                            self.db.set_cursor(device_id, data_type, window_end)
+                    cursor = window_end
+                    windows += 1
+                    if windows % 10 == 0 or cursor >= now:
+                        logger.info("ZONT sync progress: %d/%d windows", windows, total_windows)
         finally:
             self._refresh_series_roles(devices, inferred_entities, config_names)
         source_events = 0
@@ -359,6 +481,31 @@ class IngestionService:
                     failed_windows += 1
                     errors.append(f"raw events device {device_id}: {type(exc).__name__}: {exc}")
                     logger.warning("ZONT raw event sync failed for device %s: %s", device_id, type(exc).__name__)
+        earliest_observed = self.db.earliest_sample_time()
+        latest_observed = self.db.latest_sample_time()
+        bootstrap_ranges: dict[str, dict[str, Any]] = {}
+        for device_id in device_ids:
+            for data_type in data_types:
+                first = self.db.get_cursor(
+                    device_id, _bootstrap_cursor(_BOOTSTRAP_FIRST_OBSERVED_CURSOR, data_type)
+                )
+                last = self.db.get_cursor(device_id, _bootstrap_cursor(_BOOTSTRAP_LAST_OBSERVED_CURSOR, data_type))
+                complete = self.db.get_cursor(device_id, _bootstrap_cursor(_BOOTSTRAP_COMPLETE_CURSOR, data_type))
+                observation_json = self.db.get_app_meta(
+                    _bootstrap_cursor(_BOOTSTRAP_OBSERVATION_META, f"{device_id}:{data_type}")
+                )
+                try:
+                    observation = json.loads(observation_json) if observation_json else {}
+                except json.JSONDecodeError:
+                    observation = {}
+                if complete or first or last or observation:
+                    bootstrap_ranges[f"{device_id}:{data_type}"] = {
+                        "requested_start": observation.get("requested_start"),
+                        "requested_end": observation.get("requested_end"),
+                        "time_truncated": observation.get("time_truncated"),
+                        "first_observed": first.isoformat() if first else None,
+                        "last_observed": last.isoformat() if last else None,
+                    }
         return {
             "samples": samples,
             "source_events": source_events,
@@ -368,4 +515,9 @@ class IngestionService:
             "failed_windows": failed_windows,
             "complete": failed_windows == 0 and cursor >= now,
             "errors": errors[:10],
+            "history_range": {
+                "first_observed": earliest_observed.isoformat() if earliest_observed else None,
+                "last_observed": latest_observed.isoformat() if latest_observed else None,
+            },
+            "bootstrap_ranges": bootstrap_ranges,
         }

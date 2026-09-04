@@ -140,12 +140,15 @@ class AnalysisService:
         start, end = self.local_day_window(selected)
         return self._analyze(start, end, kind=kind, use_ai=use_ai)
 
-    def analyze_initial(self, *, use_ai: bool = True, days: int = 30) -> Report:
-        if not 1 <= days <= 365:
+    def analyze_initial(self, *, use_ai: bool = True, days: int | None = None) -> Report:
+        if days is not None and not 1 <= days <= 365:
             raise ValueError("Initial analysis period must be between 1 and 365 days")
         latest = self.db.latest_sample_time()
         end = (latest + timedelta(seconds=1)) if latest else datetime.now(UTC).replace(microsecond=0)
-        start = end - timedelta(days=days)
+        start = (
+            end - timedelta(days=days) if days is not None
+            else self.db.earliest_sample_time() or end - timedelta(days=1)
+        )
         return self._analyze(start, end, kind="initial", use_ai=use_ai)
 
     def local_today(self) -> date:
@@ -369,6 +372,7 @@ class AnalysisService:
         control_context["heating_circuit"] = availability_context
         control_context["burner_activity_scope"] = burner_activity_scope
         control_context["sensors"] = _sensor_report_context(series, temperature_series)
+        control_context["recommendation_policy"] = "p2-1.7"
         dhw_temperature_samples = (
             self.db.fetch_samples(int(dhw_temperature_series["id"]), start, end) if dhw_temperature_series else []
         )
@@ -591,7 +595,11 @@ class AnalysisService:
                 ai_used = True
             except Exception as exc:
                 logger.warning("OpenAI analysis failed; keeping deterministic report: %s", type(exc).__name__)
-                if previous_report is not None and previous_report.ai_used:
+                if (
+                    previous_report is not None
+                    and previous_report.ai_used
+                    and previous_report.context.get("recommendation_policy") == "p2-1.7"
+                ):
                     summary = previous_report.summary
                     recommendations = previous_report.recommendations
                     ai_used = True
@@ -744,10 +752,15 @@ class AnalysisService:
                     ),
                     expected_effect="Появится достаточный период данных для безопасного анализа.",
                     observation_period_days=1,
-                    success_criteria=["Покрытие данных не ниже 70%", "Нет длительных пробелов"],
+                    success_criteria=[
+                        "Покрытие и интервалы данных достаточны для сопоставления", "Длительные пробелы устранены"
+                    ],
                     risks=["Изменение настроек сейчас может замаскировать причину"],
-                    stop_conditions=["Показания физически неправдоподобны — обратиться к специалисту"],
-                    alternatives=["Продолжить локальный сбор без рекомендаций"],
+                    stop_conditions=[
+                        "Если показания остаются физически неправдоподобными, "
+                        "не менять настройки до восстановления данных"
+                    ],
+                    alternatives=["Продолжить локальный сбор без изменения настроек"],
                     requires_specialist=False,
                 )
             ]
@@ -763,17 +776,20 @@ class AnalysisService:
                     confidence=0.75,
                     evidence_metric_ids=[short_metric.id],
                     evidence_event_ids=evidence_events,
-                    hypothesis="Доля коротких включений выше консервативного сигнального порога.",
+                    hypothesis=(
+                        f"В выбранном периоде зафиксирована доля коротких включений {short_metric.value:g}% "
+                        "; нужно проверить, сохраняется ли этот паттерн в сопоставимых периодах."
+                    ),
                     suggested_manual_action=(
                         "Не менять параметры котла; сравнить ещё несколько сопоставимых суток "
                         "и проверить руководство оборудования."
                     ),
-                    expected_effect="Станет понятно, устойчив ли сигнал и нужен ли сервисный осмотр.",
+                    expected_effect="Станет понятно, устойчив ли наблюдаемый паттерн и требуется ли отдельный разбор.",
                     observation_period_days=self.config.analysis.default_experiment_days,
                     success_criteria=["Доля коротких циклов снижается либо подтверждается как устойчивая"],
                     risks=["Один день может быть несопоставим по погоде или режиму"],
                     stop_conditions=["Появилась ошибка котла или предупреждение безопасности"],
-                    alternatives=["Передать evidence специалисту"],
+                    alternatives=["Продолжить наблюдение без изменения настроек"],
                     requires_specialist=False,
                 )
             ]

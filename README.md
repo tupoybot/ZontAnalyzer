@@ -79,25 +79,39 @@ zont-analyzer discover
 
 ### 4. Загрузить данные и открыть HTML
 
-Для первой проверки достаточно семи дней:
+Первый `sync` получает всю историю, которую ZONT реально предоставляет аккаунту и устройствам:
 
 ```bash
-zont-analyzer sync --backfill 7d
-zont-analyzer analyze initial --no-ai --days 7
+zont-analyzer sync
+zont-analyzer analyze initial --no-ai
 zont-analyzer report export --format html -o reports/latest.html
 ```
 
-Откройте `reports/latest.html` обычным браузером. Флаг `--no-ai` гарантирует, что анализ
-полностью локальный. Когда этот путь проверен, можно расширить историю:
+Откройте `reports/latest.html` браузером. `--no-ai` оставляет анализ полностью локальным.
+В результате синхронизации отображается фактически сохранённый диапазон. Ограничение архива
+со стороны ZONT не означает, что до первой полученной точки оборудование не работало.
+При временном ограничении API повторите `sync`: завершённые части не загружаются заново,
+незавершённые повторяются идемпотентно. Для явного повторного чтения диапазона есть
+`sync --backfill 90d`; `analyze initial --days 30` ограничивает только анализ, не хранение.
 
-```bash
-zont-analyzer sync --backfill 90d
-zont-analyzer analyze initial --no-ai --days 30
-zont-analyzer report export --format html -o reports/latest.html
-```
+### Жизненный цикл рекомендаций
 
-Backfill возобновляемый: если ZONT временно вернул `429` или оборвал соединение, повторите ту
-же команду. Уже сохранённые точки не дублируются.
+Рекомендации без ответа через 48 часов переходят из `new` в нейтральное `ignored`
+(«Без реакции»). Это не отклонение и не обучающий сигнал; позднее доступны «Выполнено» и
+«Отклонить». Обслуживание выполняется при запуске и в каждом цикле worker; ручная проверка:
+`recommendations maintain`. Первый запуск обновлённой версии сохраняет проверенную online
+копию старой SQLite до миграции и пишет число затрагиваемых рекомендаций до их изменения.
+
+
+### Сборка и выпуск образа
+
+Для локальной отладки: `docker compose -f deploy/compose.local.yaml build`, затем
+`docker compose -f deploy/compose.local.yaml run --rm worker analyze daily --no-ai`.
+Данные этого Compose изолированы от сервера. CI проверяет каждый push/PR; релизный тег
+`release-*` или ручной запуск с `publish=true` публикует образ в GHCR. Сервер получает
+готовый digest через `deploy/release.sh`, без сборки и передачи tar-файла образа.
+Порядок приёмки, backup и rollback — в [deploy/OPERATIONS.md](deploy/OPERATIONS.md).
+
 
 ## Что смотреть в отчёте
 
@@ -332,7 +346,7 @@ test override, а nginx проксирует same-origin путь к API по и
 | `sync [--backfill 90d]` | Догрузить историю с overlap и durable cursor. |
 | `analyze initial\|daily\|weekly\|monthly\|seasonal` | Рассчитать и сохранить отчёт. Долгие периоды пока экспериментальны. |
 | `report latest\|show\|export` | Посмотреть или экспортировать сохранённый отчёт. |
-| `recommendations list\|show\|mark-applied\|reject` | Вести локальный lifecycle рекомендаций. |
+| `recommendations list\|show\|mark-applied\|reject\|maintain` | Вести локальный lifecycle рекомендаций. |
 | `config explain\|export-inferred` | Проверить effective config или inferred profile. |
 | `notifications test` | Доставить pending-отчёты в текущий log-канал. |
 | `db backup` | Создать и проверить online backup SQLite. |

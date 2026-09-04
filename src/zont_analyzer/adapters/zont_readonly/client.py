@@ -72,7 +72,7 @@ def redact(value: Any) -> Any:
     return value
 
 
-def decode_delta_time_array(rows: Sequence[Sequence[Any]]) -> list[tuple[datetime, Any]]:
+def iter_delta_time_array(rows: Sequence[Sequence[Any]]) -> Iterator[tuple[datetime, Any]]:
     """Decode ZONT Delta-time Array.
 
     The first positive value is an absolute Unix timestamp. Negative values mean
@@ -80,7 +80,6 @@ def decode_delta_time_array(rows: Sequence[Sequence[Any]]) -> list[tuple[datetim
     A later positive value resets the absolute timestamp.
     """
 
-    decoded: list[tuple[datetime, Any]] = []
     timestamp: int | None = None
     for index, row in enumerate(rows):
         if not isinstance(row, Sequence) or isinstance(row, (str, bytes)) or len(row) < 2:
@@ -95,8 +94,13 @@ def decode_delta_time_array(rows: Sequence[Sequence[Any]]) -> list[tuple[datetim
             raise ValueError("Delta-time Array starts with a relative timestamp")
         else:
             timestamp -= marker_int
-        decoded.append((datetime.fromtimestamp(timestamp, UTC), row[1]))
-    return decoded
+        yield datetime.fromtimestamp(timestamp, UTC), row[1]
+
+
+def decode_delta_time_array(rows: Sequence[Sequence[Any]]) -> list[tuple[datetime, Any]]:
+    """Return decoded delta-time rows for callers that need a materialized list."""
+
+    return list(iter_delta_time_array(rows))
 
 
 def _looks_like_dta(value: Any) -> bool:
@@ -410,83 +414,91 @@ class ZontReadOnlyClient:
         return result
 
     @staticmethod
-    def normalize_history(response: dict[str, Any]) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
+    def iter_normalized_history(
+        response: dict[str, Any],
+    ) -> tuple[Iterator[TelemetryPoint], dict[str, dict[str, Any]]]:
+        """Normalize history without retaining every decoded point in memory."""
+
         device_id = str(response.get("device_id", "unknown"))
-        points: list[TelemetryPoint] = []
         entities: dict[str, dict[str, Any]] = {}
         ignored = {"ok", "device_id", "error", "error_ui"}
-        for source_type, payload in response.items():
-            if source_type in ignored:
-                continue
-            for path, encoded in _walk_dta(payload):
-                if not path:
-                    entity_external = source_type
-                    metric_key = source_type
-                elif len(path) == 1:
-                    entity_external = path[0]
-                    metric_key = source_type if path[0].isdigit() else path[0]
-                else:
-                    entity_external = ".".join(path[:-1])
-                    metric_key = path[-1]
-                display_name = entity_external
-                if isinstance(payload, dict):
-                    candidate = payload.get(path[0]) if path else None
-                    if isinstance(candidate, dict) and candidate.get("name"):
-                        display_name = str(candidate["name"])
-                stable_entity_id = f"zont:{device_id}:{source_type}:{entity_external}"
-                unit = infer_unit(source_type, path)
-                role, confidence = infer_role(source_type, entity_external, metric_key, display_name)
-                entities[stable_entity_id] = {
-                    "device_id": device_id,
-                    "source_type": source_type,
-                    "external_id": entity_external,
-                    "display_name": display_name,
-                    "role": role,
-                    "confidence": confidence,
-                    "unit": unit,
-                }
-                try:
-                    decoded = decode_delta_time_array(encoded)
-                except (ValueError, OverflowError, OSError):
+
+        def points() -> Iterator[TelemetryPoint]:
+            for source_type, payload in response.items():
+                if source_type in ignored:
                     continue
-                for timestamp, value in decoded:
-                    numeric: float | None = None
-                    text: str | None = None
-                    quality: Literal["valid", "invalid"] = "valid"
-                    if isinstance(value, bool):
-                        numeric = float(value)
-                    elif isinstance(value, (int, float)):
-                        numeric = float(value)
-                        if not math.isfinite(numeric):
-                            quality = "invalid"
-                    elif value is not None:
-                        text = str(value)
+                for path, encoded in _walk_dta(payload):
+                    if not path:
+                        entity_external = source_type
+                        metric_key = source_type
+                    elif len(path) == 1:
+                        entity_external = path[0]
+                        metric_key = source_type if path[0].isdigit() else path[0]
                     else:
-                        quality = "invalid"
-                    points.append(
-                        TelemetryPoint(
-                            device_id=device_id,
-                            source_type=source_type,
-                            entity_id=stable_entity_id,
-                            metric_key=metric_key,
-                            timestamp_utc=timestamp,
-                            value_num=numeric,
-                            value_text=text,
-                            unit=unit,
-                            quality=quality,
-                        )
-                    )
-                    if source_type == "z3k_boiler_adapter" and metric_key == "s" and isinstance(value, list):
-                        points.append(
-                            TelemetryPoint(
+                        entity_external = ".".join(path[:-1])
+                        metric_key = path[-1]
+                    display_name = entity_external
+                    if isinstance(payload, dict):
+                        candidate = payload.get(path[0]) if path else None
+                        if isinstance(candidate, dict) and candidate.get("name"):
+                            display_name = str(candidate["name"])
+                    stable_entity_id = f"zont:{device_id}:{source_type}:{entity_external}"
+                    unit = infer_unit(source_type, path)
+                    role, confidence = infer_role(source_type, entity_external, metric_key, display_name)
+                    entities[stable_entity_id] = {
+                        "device_id": device_id,
+                        "source_type": source_type,
+                        "external_id": entity_external,
+                        "display_name": display_name,
+                        "role": role,
+                        "confidence": confidence,
+                        "unit": unit,
+                    }
+                    try:
+                        for timestamp, value in iter_delta_time_array(encoded):
+                            numeric: float | None = None
+                            text: str | None = None
+                            quality: Literal["valid", "invalid"] = "valid"
+                            if isinstance(value, bool):
+                                numeric = float(value)
+                            elif isinstance(value, (int, float)):
+                                numeric = float(value)
+                                if not math.isfinite(numeric):
+                                    quality = "invalid"
+                            elif value is not None:
+                                text = str(value)
+                            else:
+                                quality = "invalid"
+                            yield TelemetryPoint(
                                 device_id=device_id,
                                 source_type=source_type,
                                 entity_id=stable_entity_id,
-                                metric_key="flame",
+                                metric_key=metric_key,
                                 timestamp_utc=timestamp,
-                                value_num=float("fl" in value),
-                                unit="state",
-                                quality="valid",
+                                value_num=numeric,
+                                value_text=text,
+                                unit=unit,
+                                quality=quality,
                             )
-                        )
-        return points, entities
+                            if source_type == "z3k_boiler_adapter" and metric_key == "s" and isinstance(value, list):
+                                yield TelemetryPoint(
+                                    device_id=device_id,
+                                    source_type=source_type,
+                                    entity_id=stable_entity_id,
+                                    metric_key="flame",
+                                    timestamp_utc=timestamp,
+                                    value_num=float("fl" in value),
+                                    unit="state",
+                                    quality="valid",
+                                )
+                    except (ValueError, OverflowError, OSError):
+                        continue
+
+        return points(), entities
+
+    @staticmethod
+    def normalize_history(response: dict[str, Any]) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
+        """Compatibility wrapper for callers that require a materialized list."""
+
+        points, entities = ZontReadOnlyClient.iter_normalized_history(response)
+        return list(points), entities

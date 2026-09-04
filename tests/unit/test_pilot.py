@@ -37,6 +37,7 @@ def _report(selected: date) -> Report:
             sample_count=1,
         ),
         summary=f"Report for {selected.isoformat()}",
+        context={"recommendation_policy": "p2-1.7"},
     )
 
 
@@ -114,6 +115,15 @@ class FakeRuntime:
     def analysis(self) -> FakeAnalysis:
         return self.analysis_service
 
+    @staticmethod
+    def maintain_recommendation_lifecycle(*, now: datetime | None = None) -> dict[str, Any]:
+        return {
+            "cutoff": (now or datetime.now(UTC)).isoformat(),
+            "eligible": 0,
+            "ignored": 0,
+            "status_counts": {"new": 0, "applied": 0, "rejected": 0, "ignored": 0},
+        }
+
 
 def test_pilot_catches_up_recomputes_yesterday_and_publishes_atomically(tmp_path: Path) -> None:
     runtime = FakeRuntime(tmp_path, {"complete": True, "samples": 4, "errors": []})
@@ -142,7 +152,10 @@ def test_pilot_catches_up_recomputes_yesterday_and_publishes_atomically(tmp_path
     assert status["latest_report_id"] == existing_yesterday.id
 
 
-def test_ai_is_called_only_for_first_yesterday_report_and_reused_afterward(tmp_path: Path) -> None:
+@pytest.mark.parametrize("legacy_policy", [False, True])
+def test_ai_is_called_only_for_first_yesterday_report_and_reused_afterward(
+    tmp_path: Path, legacy_policy: bool
+) -> None:
     runtime = FakeRuntime(tmp_path, {"complete": True, "samples": 4, "errors": []})
     runtime.db.reports[_report(date(2026, 8, 1)).id] = _report(date(2026, 8, 1))
     runtime.db.reports[_report(date(2026, 8, 2)).id] = _report(date(2026, 8, 2))
@@ -154,6 +167,8 @@ def test_ai_is_called_only_for_first_yesterday_report_and_reused_afterward(tmp_p
     ai_report = runtime.db.reports[yesterday_id].model_copy(
         update={"ai_used": True, "summary": "AI summary"}
     )
+    if legacy_policy:
+        ai_report.context.pop("recommendation_policy")
     runtime.db.reports[yesterday_id] = ai_report
     runtime.analysis_service.calls.clear()
 
@@ -161,6 +176,10 @@ def test_ai_is_called_only_for_first_yesterday_report_and_reused_afterward(tmp_p
 
     assert runtime.analysis_service.calls == [(date(2026, 8, 3), False)]
     retained = runtime.db.reports[yesterday_id]
+    if legacy_policy:
+        assert retained.ai_used is False
+        assert retained.summary != "AI summary"
+        return
     assert retained.ai_used is True
     assert retained.summary == "AI summary"
     assert retained.context["pilot_ai_reuse"]["reason"].startswith("daily facts recomputed")

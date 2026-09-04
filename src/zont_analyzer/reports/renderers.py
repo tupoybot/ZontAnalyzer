@@ -434,7 +434,12 @@ def render_html(
         return "<ul>" + "".join(f"<li>{html.escape(value)}</li>" for value in values) + "</ul>" if values else empty
 
     feedback_by_id = recommendation_feedback or {}
-    status_labels = {"new": "Новая", "applied": "Выполнено", "rejected": "Отклонено"}
+    status_labels = {
+        "new": "Новая",
+        "applied": "Выполнено",
+        "rejected": "Отклонено",
+        "ignored": "Без реакции",
+    }
     recommendation_cards: list[str] = []
     for item in report.recommendations:
         recommendation_id = item.id or ""
@@ -499,6 +504,7 @@ cursor:pointer}}
 .feedback-actions button:disabled{{opacity:.55;cursor:wait}}
 .feedback-status{{display:inline-block;padding:.15rem .45rem;border-radius:1rem;background:#e9edf2}}
 .status-applied{{background:#dcefe2;color:#185c2d}}.status-rejected{{background:#f7dfdc;color:#812820}}
+.status-ignored{{background:#e9edf2;color:#51606f}}
 .saved-note,.feedback-message{{margin:.1rem 0}}.feedback-message.error{{color:#9b251d}}
 </style></head><body data-feedback-api-base="{api_base}"><h1>{title}</h1>
 <p><strong>ID:</strong> <code>{html.escape(report.id)}</code></p>
@@ -518,7 +524,7 @@ cursor:pointer}}
 <script>
 (() => {{
   const apiBase = document.body.dataset.feedbackApiBase || "/api";
-  const labels = {{applied: "Выполнено", rejected: "Отклонено", new: "Новая"}};
+  const labels = {{applied: "Выполнено", rejected: "Отклонено", ignored: "Без реакции", new: "Новая"}};
   const tokenKey = "zont-analyzer-feedback-token";
 
   function token(interactive) {{

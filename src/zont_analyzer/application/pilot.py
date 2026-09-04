@@ -182,6 +182,9 @@ class PilotService:
         self._cycle_started_at = datetime.now(UTC).replace(microsecond=0)
         self._write_status("starting")
         try:
+            recommendation_maintenance = self.runtime.maintain_recommendation_lifecycle(
+                now=self._cycle_started_at
+            )
             self._write_status("syncing")
             with self.runtime.zont_client() as client:
                 sync_result = self.runtime.ingestion(client).sync()
@@ -216,7 +219,12 @@ class PilotService:
                     # evaluated only on the first report for yesterday, never on every poll.
                     first_completed_day_report = selected == yesterday and previous_report is None
                     report = analysis.analyze_daily(selected, use_ai=first_completed_day_report)
-                    if previous_report is not None and previous_report.ai_used:
+                    if (
+                        previous_report is not None
+                        and previous_report.ai_used
+                        and previous_report.context.get("recommendation_policy")
+                        == report.context.get("recommendation_policy")
+                    ):
                         context = dict(report.context)
                         context["pilot_ai_reuse"] = {
                             "source_generated_at": previous_report.generated_at.isoformat(),
@@ -273,6 +281,7 @@ class PilotService:
                 "reports_dir": str(self.output_dir),
                 "status_file": str(self.status_file),
                 "delivered_log_notifications": len(delivered),
+                "recommendation_maintenance": recommendation_maintenance,
             }
             self._write_status("ok", **result)
             return result

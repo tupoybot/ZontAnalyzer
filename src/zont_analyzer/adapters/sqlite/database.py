@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -693,6 +693,15 @@ class Database:
             row = session.get(IngestionCursorRow, (device_id, data_type))
             return datetime.fromtimestamp(row.timestamp_utc, UTC) if row else None
 
+    def set_app_meta(self, key: str, value: str) -> None:
+        with self.session() as session:
+            session.merge(AppMetaRow(key=key, value=value))
+
+    def get_app_meta(self, key: str) -> str | None:
+        with self.session() as session:
+            row = session.get(AppMetaRow, key)
+            return row.value if row else None
+
     def save_report(self, report: Report, rendered_text: str) -> None:
         period_id = f"{report.kind}:{int(report.period_start.timestamp())}:{report.algorithm_version}"
         for index, recommendation in enumerate(report.recommendations):
@@ -870,6 +879,67 @@ class Database:
                     }
                 )
             return feedback
+
+    def recommendation_status_counts(self) -> dict[str, int]:
+        """Return lifecycle totals, including empty states, for maintenance reporting."""
+        counts = {status: 0 for status in ("new", "applied", "rejected", "ignored")}
+        with self.session() as session:
+            rows = session.execute(
+                select(RecommendationRow.status, func.count())
+                .group_by(RecommendationRow.status)
+                .order_by(RecommendationRow.status)
+            ).all()
+        counts.update({str(status): int(count) for status, count in rows})
+        return counts
+
+    def stale_recommendation_count(self, *, now: datetime | None = None) -> int:
+        """Count unanswered recommendations whose 48-hour owner-response window elapsed."""
+        reference = now or utcnow()
+        cutoff = reference - timedelta(hours=48)
+        with self.session() as session:
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(RecommendationRow)
+                    .where(
+                        RecommendationRow.status == "new",
+                        RecommendationRow.created_at <= cutoff,
+                    )
+                )
+                or 0
+            )
+
+    def expire_stale_recommendations(self, *, now: datetime | None = None) -> dict[str, Any]:
+        """Idempotently mark unanswered recommendations older than 48 hours as ignored."""
+        reference = now or utcnow()
+        cutoff = reference - timedelta(hours=48)
+        with self.session() as session:
+            eligible = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(RecommendationRow)
+                    .where(
+                        RecommendationRow.status == "new",
+                        RecommendationRow.created_at <= cutoff,
+                    )
+                )
+                or 0
+            )
+            if eligible:
+                session.query(RecommendationRow).filter(
+                    RecommendationRow.status == "new",
+                    RecommendationRow.created_at <= cutoff,
+                ).update(
+                    {RecommendationRow.status: "ignored", RecommendationRow.updated_at: reference},
+                    synchronize_session=False,
+                )
+
+        return {
+            "cutoff": cutoff.isoformat(),
+            "eligible": eligible,
+            "ignored": eligible,
+            "status_counts": self.recommendation_status_counts(),
+        }
 
     def set_recommendation_feedback(
         self,

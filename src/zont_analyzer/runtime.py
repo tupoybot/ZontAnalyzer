@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from zont_analyzer.adapters.openai import OpenAIAnalyst
 from zont_analyzer.adapters.sqlite import Database
@@ -10,6 +13,8 @@ from zont_analyzer.adapters.zont_readonly import ZontReadOnlyClient
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.ingestion import IngestionService
 from zont_analyzer.config import AppConfig, LoadedConfig, load_config
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,6 +49,26 @@ class Runtime:
             analyst = OpenAIAnalyst(api_key=api_key.get_secret_value(), config=self.config, db=self.db)
         return AnalysisService(self.db, self.config, analyst)
 
+    def maintain_recommendation_lifecycle(self, *, now: datetime | None = None) -> dict[str, Any]:
+        """Expire unanswered recommendations and retain an auditable pre-change count."""
+        reference = now or datetime.now(UTC)
+        eligible = self.db.stale_recommendation_count(now=reference)
+        if eligible:
+            logger.info(
+                "recommendation maintenance: %d new recommendation(s) older than 48 hours will be ignored; "
+                "pre-migration backup=%s",
+                eligible,
+                self.migration.backup_path or "not required",
+            )
+        result = self.db.expire_stale_recommendations(now=reference)
+        if eligible:
+            logger.info(
+                "recommendation maintenance complete: ignored=%d statuses=%s",
+                result["ignored"],
+                result["status_counts"],
+            )
+        return result
+
 
 def build_runtime(config_path: Path | None, data_dir: Path | None) -> Runtime:
     loaded = load_config(config_path, data_dir)
@@ -55,4 +80,6 @@ def build_runtime(config_path: Path | None, data_dir: Path | None) -> Runtime:
     if not backup_dir.is_absolute():
         backup_dir = loaded.data_dir / backup_dir
     migration = db.initialize(backup_dir)
-    return Runtime(loaded=loaded, db=db, migration=migration)
+    runtime = Runtime(loaded=loaded, db=db, migration=migration)
+    runtime.maintain_recommendation_lifecycle()
+    return runtime

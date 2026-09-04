@@ -2,10 +2,7 @@ name: zont-analyzer
 
 services:
   worker:
-    image: zont-analyzer:${ZONT_ANALYZER_IMAGE_TAG:-manual}
-    build:
-      context: ..
-      dockerfile: Dockerfile
+    image: ${ZONT_ANALYZER_IMAGE:-zont-analyzer:manual}
     restart: unless-stopped
     init: true
     user: "10001:10001"

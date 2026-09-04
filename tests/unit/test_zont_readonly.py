@@ -90,6 +90,7 @@ def test_public_api_contains_no_mutating_or_generic_request_method() -> None:
         "load_events",
         "load_config_snapshot",
         "load_history",
+        "iter_normalized_history",
         "normalize_events",
         "normalize_history",
     }
@@ -240,6 +241,30 @@ def test_anonymized_live_contract_normalizes_radio_sensor_metrics() -> None:
     assert {point.entity_id for point in radio_points} == {"zont:100001:z3k_radio_sensor:30001"}
     assert {point.unit for point in radio_points if point.metric_key == "battery"} == {"V"}
     assert {point.unit for point in radio_points if point.metric_key == "dbm"} == {"dBm"}
+
+
+def test_iter_normalized_history_yields_points_without_the_list_wrapper() -> None:
+    response = {
+        "device_id": 7,
+        "z3k_temperature": {"4104": [[1_700_000_000, 21], [-60, 22]]},
+    }
+
+    points, entities = ZontReadOnlyClient.iter_normalized_history(response)
+
+    first = next(points)
+    assert first.value_num == 21.0
+    assert entities == {
+        "zont:7:z3k_temperature:4104": {
+            "device_id": "7",
+            "source_type": "z3k_temperature",
+            "external_id": "4104",
+            "display_name": "4104",
+            "role": "temperature",
+            "confidence": 0.4,
+            "unit": "°C",
+        }
+    }
+    assert [point.value_num for point in points] == [22.0]
 
 
 def test_external_return_and_boiler_rwt_keep_distinct_identities() -> None:

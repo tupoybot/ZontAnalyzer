@@ -376,7 +376,7 @@ def test_initial_report_uses_latest_sample_and_stable_id(tmp_path: Path) -> None
     second = AnalysisService(db, AppConfig()).analyze_initial(use_ai=False)
 
     assert first.period_end == latest + timedelta(seconds=1)
-    assert first.period_end - first.period_start == timedelta(days=30)
+    assert first.period_start == latest
     assert second.id == first.id
     assert db.status()["reports"] == 1
     assert first.id in render_text(first)
@@ -406,7 +406,8 @@ def test_openai_failure_keeps_deterministic_report(tmp_path: Path) -> None:
     assert db.latest_report() is not None
 
 
-def test_openai_refresh_failure_reuses_last_valid_interpretation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("legacy_policy", [False, True])
+def test_openai_refresh_failure_reuses_last_valid_interpretation(tmp_path: Path, legacy_policy: bool) -> None:
     class SuccessfulAnalyst:
         def analyze(self, _packet):
             from zont_analyzer.domain import AnalysisResult
@@ -431,9 +432,17 @@ def test_openai_refresh_failure_reuses_last_valid_interpretation(tmp_path: Path)
         }
     )
     first = AnalysisService(db, config, SuccessfulAnalyst()).analyze_daily(date(2026, 8, 1))
+    if legacy_policy:
+        first.context.pop("recommendation_policy")
+        db.save_report(first, render_text(first))
     refreshed = AnalysisService(db, config, FailingAnalyst()).analyze_daily(date(2026, 8, 1))
 
     assert first.ai_used is True
+    if legacy_policy:
+        assert refreshed.ai_used is False
+        assert "ai_interpretation_reuse" not in refreshed.context
+        assert refreshed.summary != first.summary
+        return
     assert refreshed.ai_used is True
     assert refreshed.summary == "Последняя валидная AI-интерпретация"
     assert refreshed.context["ai_interpretation_reuse"]["source_generated_at"] == first.generated_at.isoformat()
@@ -617,7 +626,7 @@ def test_fresh_database_is_created_at_alembic_head(tmp_path: Path) -> None:
     result = db.initialize()
 
     assert result.previous_revision is None
-    assert result.revision == "7c8e9f1a2b3c"
+    assert result.revision == "9f4a2c8d1e70"
     assert result.backup_path is None
     assert db.current_revision() == result.revision
     assert db.status()["schema_revision"] == result.revision
@@ -662,7 +671,7 @@ def test_previous_version_is_backed_up_and_migrated_with_series_semantics(tmp_pa
     result = upgraded.initialize(tmp_path / "migration-backups")
 
     assert result.previous_revision == "5a9ce2bd8b34"
-    assert result.revision == "7c8e9f1a2b3c"
+    assert result.revision == "9f4a2c8d1e70"
     assert result.backup_path is not None and result.backup_path.exists()
     series = upgraded.list_series()[0]
     assert series["confidence"] == 0.3

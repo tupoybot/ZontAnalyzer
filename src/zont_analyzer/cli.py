@@ -141,10 +141,17 @@ def sync(
 def analyze_initial(
     ctx: typer.Context,
     no_ai: Annotated[bool, typer.Option("--no-ai")] = False,
-    days: Annotated[int, typer.Option("--days", min=1, max=365, help="Days ending at the latest sample")] = 30,
+    days: Annotated[
+        int | None, typer.Option("--days", min=1, max=365, help="Optional window; default all history")
+    ] = None,
 ) -> None:
     report = _runtime(ctx).analysis(no_ai=no_ai).analyze_initial(use_ai=not no_ai, days=days)
     typer.echo(render_text(report))
+
+
+@recommendations_app.command("maintain")
+def recommendations_maintain(ctx: typer.Context) -> None:
+    _json(_runtime(ctx).db.expire_stale_recommendations())
 
 
 @analyze_app.command("daily")

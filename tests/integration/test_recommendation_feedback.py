@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from zont_analyzer.adapters.sqlite import Database
+from zont_analyzer.adapters.sqlite.database import RecommendationRow
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, TelemetryPoint
+from zont_analyzer.reports import render_html
 
 
 def _room_points(start: datetime) -> list[TelemetryPoint]:
@@ -46,9 +48,7 @@ def test_recommendation_feedback_contains_rejection_and_latest_applied_note(tmp_
     assert feedback[applied.id]["status"] == "applied"
     assert feedback[applied.id]["owner_note"] == "Датчик проверен: показания верные"
     assert feedback[rejected.id]["status"] == "rejected"
-    assert feedback[rejected.id]["owner_note"] == (
-        "Датчик исправен; гипотезу закрыть на период наблюдения"
-    )
+    assert feedback[rejected.id]["owner_note"] == ("Датчик исправен; гипотезу закрыть на период наблюдения")
     assert feedback[rejected.id]["title"] == rejected.title
     assert feedback[rejected.id]["hypothesis"] == rejected.hypothesis
 
@@ -70,6 +70,53 @@ def test_identical_applied_feedback_is_idempotent(tmp_path: Path) -> None:
             (recommendation_id,),
         ).scalar_one()
     assert count == 1
+
+
+def test_stale_new_recommendation_becomes_ignored_idempotently_and_can_receive_late_feedback(
+    tmp_path: Path,
+) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    service = AnalysisService(db, AppConfig())
+    old_report = service.analyze_daily(date(2026, 8, 1), use_ai=False)
+    fresh_report = service.analyze_daily(date(2026, 8, 2), use_ai=False)
+    old_id = old_report.recommendations[0].id
+    fresh_id = fresh_report.recommendations[0].id
+    assert old_id is not None and fresh_id is not None
+
+    reference = datetime(2026, 8, 5, tzinfo=UTC)
+    with db.session() as session:
+        old_row = session.get(RecommendationRow, old_id)
+        fresh_row = session.get(RecommendationRow, fresh_id)
+        assert old_row is not None and fresh_row is not None
+        old_row.created_at = reference - timedelta(hours=48, seconds=1)
+        fresh_row.created_at = reference - timedelta(hours=47)
+
+    first = db.expire_stale_recommendations(now=reference)
+    old_view = db.recommendation(old_id)
+    fresh_view = db.recommendation(fresh_id)
+    assert first["eligible"] == 1
+    assert first["ignored"] == 1
+    assert first["status_counts"] == {"new": 1, "applied": 0, "rejected": 0, "ignored": 1}
+    assert old_view is not None and old_view["status"] == "ignored"
+    assert fresh_view is not None and fresh_view["status"] == "new"
+    assert db.recommendation_feedback() == []
+    ignored_updated_at = old_view["updated_at"]
+
+    repeated = db.expire_stale_recommendations(now=reference)
+    assert repeated["ignored"] == 0
+    repeated_old_view = db.recommendation(old_id)
+    assert repeated_old_view is not None
+    assert repeated_old_view["updated_at"] == ignored_updated_at
+
+    rendered = render_html(old_report, db.recommendation_views_for_report(old_report.id))
+    assert "Без реакции" in rendered
+    assert "status-ignored" in rendered
+
+    late = db.set_recommendation_feedback(old_id, "applied", "Проверено после наблюдения")
+    assert late["status"] == "applied"
+    assert late["owner_note"] == "Проверено после наблюдения"
+    assert db.recommendation_feedback()[0]["recommendation_id"] == old_id
 
 
 def test_next_openai_packet_includes_owner_recommendation_feedback(tmp_path: Path) -> None:

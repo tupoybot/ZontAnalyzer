@@ -41,6 +41,8 @@ def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch
     report = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
     recommendation = report.recommendations[0]
     assert recommendation.id is not None
+    maintenance = runtime.db.expire_stale_recommendations(now=datetime.now(UTC) + timedelta(days=3))
+    assert maintenance["ignored"] == 1
 
     pilot = PilotService(runtime)
     archive_path, _json_path = pilot._publish_archive(date(2026, 8, 1), report)
@@ -58,6 +60,7 @@ def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch
     assert recommendation.id in initial_html
     assert "Выполнено" in initial_html
     assert "Отклонить" in initial_html
+    assert "Без реакции" in initial_html
     assert "Комментарий владельца" in initial_html
 
     server = build_feedback_server(runtime)
