@@ -199,7 +199,7 @@ returns the landing page, and unrelated workloads remain unchanged:
 test -s /var/www/html/za/index.html
 test -s /var/www/html/za/latest.html
 test -s /var/www/html/za/ai-latest.html
-curl -fsS http://127.0.0.1:8787/api/health
+curl -fsS http://127.0.0.1:8787/za/api/health
 for path in /za/ /za/daily/ /za/latest.html /za/api/health; do
   test "$(curl -sS -o /dev/null -w '%{http_code}' \
     "https://hk.tupoybot.ru$path")" = 401
