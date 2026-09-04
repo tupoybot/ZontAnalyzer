@@ -129,8 +129,9 @@ Keep a Git checkout on the server for the small Compose files and deployment scr
 check out the same reviewed commit as the image. Application source is not built
 on the server. Existing `/opt/zont-analyzer/config.yaml`, `.env`, data, secrets and
 `/var/www/html/za` stay in place. Preserve the previous checkout/reference for rollback.
-Set `ZONT_ANALYZER_IMAGE` in `.env` to the digest emitted by CI. The old
-`ZONT_ANALYZER_IMAGE_TAG` setting is no longer used.
+Pass the digest emitted by CI to `release.sh`; it saves the previous `.env` before
+updating `ZONT_ANALYZER_IMAGE`. For first installation, set that variable manually.
+The old `ZONT_ANALYZER_IMAGE_TAG` setting is no longer used by the new Compose file.
 
 Before replacing the running release, run the pulled candidate against a separately
 writable online backup and a temporary non-public output directory. Inspect `initial`
