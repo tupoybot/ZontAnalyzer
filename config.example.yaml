@@ -68,7 +68,7 @@ entity_overrides: {}
 # entity_overrides:
 #   "zont:100001:z3k_radio_sensor:30001":
 #     role: control_indoor_temperature
-#     display_name: Гостиная
+#     display_name: Жилая комната
 #   "zont:100001:z3k_temperature:30003":
 #     role: technical_temperature
-#     display_name: Котельная
+#     display_name: Техническое помещение
