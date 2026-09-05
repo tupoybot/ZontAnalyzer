@@ -96,3 +96,22 @@ Postfix, OpenDKIM и Docker active; API опубликован только на
 отчёт и usage-запись для импорта; полная БД на production не заменяется. Импорт готовых
 данных проверен на отдельной локальной копии, включая повторный запуск без дубля LLM-учёта.
 147 Python-тестов, Ruff, mypy и Docker browser E2E прошли локально.
+
+Уточнение развёрнуто коммитом `40819bf`, тег `release-1.8.1-20260905`.
+[Release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/33950895345) и
+[branch CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/33950895287) прошли.
+Рабочий digest:
+`ghcr.io/tupoybot/zontanalyzer@sha256:10eda20c2113327dfbd57b618d2967366e5e513e19bdb6ac2ef5fcf31b5413c5`.
+`current` переключён на `/opt/zont-analyzer/releases/20260905-compact-40819bf`.
+
+Готовый AI-отчёт, две рекомендации и одна usage-запись импортированы через методы приложения
+в одной SQL-транзакции, с проверкой сохранности прежнего owner feedback и блокировкой
+публикации. На HK не выполнялись сборки, тестовые расчёты или AI-запросы. После обновления
+первый обычный worker cycle завершился `2026-09-05T06:59:53Z`: `ok`, container healthy.
+В canonical report подтверждены `ai_used=true`, исходная AI-summary и `pilot_ai_reuse`:
+штатный пересчёт фактов не потерял AI-интерпретацию. Usage учтён ровно один раз и связан
+с ID отчёта; прежние решения и interventions владельца сохранены.
+
+Короткий authenticated smoke подтвердил компактный календарь, «AI-интерпретация: да»
+и объяснение MTTR на root, `daily/2026-09-04.html` и legacy `/za/latest.html`.
+Временный пользователь smoke удалён, исходный htpasswd восстановлен.
