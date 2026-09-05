@@ -24,6 +24,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: pip install -e '.[dev]'
       - run: ruff check .
       - run: mypy src/zont_analyzer
@@ -36,6 +39,10 @@ jobs:
       - run: docker build --target test -t zont-analyzer:feedback-e2e .
       - run: docker run --rm zont-analyzer:feedback-e2e
       - run: sh tests/integration/test_nginx_basic_auth.sh
+      - run: docker tag zont-analyzer:test zont-analyzer:stage18-candidate
+      - run: npm ci --prefix tests/integration/browser
+      - run: npx --prefix tests/integration/browser playwright install --with-deps chromium
+      - run: sh tests/integration/test_archive_browser.sh
       - run: ZONT_ANALYZER_ENV_FILE="$GITHUB_WORKSPACE/deploy/env.example" docker compose -f deploy/compose.yaml -f deploy/compose.test.yaml config --quiet
       - run: docker compose -f deploy/compose.local.yaml config --quiet
 

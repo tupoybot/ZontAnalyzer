@@ -12,6 +12,20 @@ For substantial implementation tasks:
 
 # General approach
 
+## HK production host: keep load minimal
+
+- Never build images, packages, or application artifacts on `hk.tupoybot.ru`.
+- Run builds, full tests, integration tests, and production-data acceptance locally.
+- When real data is needed, create a SQLite online backup on HK, download it, and
+  test against a separately writable local copy with an isolated publication directory.
+- Deploy only the already built and tested immutable image to HK, then run a short,
+  bounded smoke check. Do not repeat full analysis, backfills, benchmarks, or heavy
+  database checks on the server as part of acceptance.
+- HK has other workloads and its hosting provider has complained about sustained
+  load. Keep deployment and diagnostics brief; never use the server as a build/test runner.
+
+## Delegation
+
 Use subagents only when they provide a clear benefit.
 
 Do not delegate work by default. For small, local, or straightforward tasks, handle the work directly in the main agent.

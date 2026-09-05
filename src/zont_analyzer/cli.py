@@ -220,6 +220,14 @@ def report_latest(ctx: typer.Context) -> None:
     typer.echo(render_text(report))
 
 
+@report_app.command("publish")
+def report_publish(ctx: typer.Context) -> None:
+    """Publish existing completed daily/weekly/monthly reports without analysis or AI."""
+    from zont_analyzer.application.publication import publish_reports
+
+    _json(publish_reports(_runtime(ctx)))
+
+
 @report_app.command("show")
 def report_show(ctx: typer.Context, report_id: str) -> None:
     report = _runtime(ctx).db.report(report_id)

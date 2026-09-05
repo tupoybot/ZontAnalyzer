@@ -26,7 +26,6 @@ compose pull worker
 # A running worker owns the live database. Use its SQLite online backup API.
 # First installation is handled by OPERATIONS.md after directory preparation.
 compose exec -T worker zont-analyzer --config /config/config.yaml --data-dir /data db backup
-compose exec -T worker zont-analyzer --config /config/config.yaml --data-dir /data doctor
 
 # Save the previous reference next to .env; never overwrite credentials or other settings.
 python3 - "$env_file" "$image" <<'PY'
@@ -60,6 +59,6 @@ finally:
         os.unlink(temp)
 PY
 compose up -d --no-build --wait --wait-timeout 300 worker
-compose exec -T worker zont-analyzer --config /config/config.yaml --data-dir /data doctor
-compose exec -T worker zont-analyzer --config /config/config.yaml --data-dir /data recommendations maintain
-compose exec -T worker zont-analyzer --config /config/config.yaml --data-dir /data healthcheck
+# Heavy doctor/integrity/analysis acceptance runs locally on an online backup copy.
+# --wait already checks container health. Report it without starting another app process.
+compose ps worker

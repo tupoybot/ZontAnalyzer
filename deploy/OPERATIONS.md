@@ -119,6 +119,50 @@ on the server with an account allowed to read the package (`read:packages`);
 use `docker login ghcr.io --password-stdin`, never a token in a command argument.
 The package can remain private; no new application secrets are needed.
 
+## HK load policy
+
+Never build or run full tests on HK: it shares capacity with other workloads and
+the hosting provider has complained about sustained load. Build and test locally
+or in CI, including analysis and full SQLite integrity checks on a downloaded
+online backup copy. HK receives only the tested registry digest. After deployment,
+limit verification to container health/worker status, a few HTTP requests and
+small read-only metadata queries. Do not run full initial analysis, bootstrap,
+backfill, benchmarks or repeated `doctor` checks on HK for acceptance.
+
+## Stage 1.8 dedicated report domain
+
+`https://za.tupoybot.ru/` is the main entry point and serves `latest.html` directly.
+The archive manifest `reports.json` lists only existing completed daily/weekly/monthly
+reports; `start`/`end` are local dates, with the end boundary excluded. All public
+artifacts are replaced atomically, archives before the manifest and latest last;
+a failed write cannot expose partial JSON/HTML. Writers, including feedback, share
+a filesystem lock. This is ordered per-file publication, not a multi-file transaction.
+
+To refresh existing reports with no analysis or external calls:
+
+```sh
+zont-analyzer --config CONFIG --data-dir DATA report publish
+```
+
+Validate `deploy/nginx-zont-analyzer-root.conf` locally with the Docker browser E2E.
+It owns the dedicated root, uses the existing Basic Auth file, and proxies `/api/`
+to the loopback application's existing `/za/api/` prefix. The separate
+`deploy/nginx-za-vhost.conf` listens on HK's existing `127.0.0.1:4443` TLS fallback;
+Xray retains port 443. Never copy this root snippet into the shared HK vhost.
+
+Before cutover, verify DNS, issue the dedicated certificate with Certbot webroot
+(`/var/www/certbot`), validate the candidate TLS configuration locally, and record
+hashes of existing HK nginx/Xray configs and responses of existing external endpoints.
+Install only the two new files, run `nginx -t`, reload once, and check Basic Auth,
+the root, manifest, direct archive and API URLs. Certbot renewal uses the separate
+HTTP ACME location in the new vhost. Retain the existing renewal/reload hook.
+The owner's Basic Auth credential is unchanged. A temporary random acceptance
+user may be added for the bounded authenticated smoke and must be removed immediately.
+
+Legacy `https://hk.tupoybot.ru/za/` and its include remain active. Rollback of the
+domain removes only `/etc/nginx/conf.d/30-zont-analyzer.conf`, then runs `nginx -t`
+and reloads. Do not edit shared HK or Xray configuration during cutover or rollback.
+
 ## Release preflight and deployment
 
 Keep a Git checkout on the server for the small Compose files and deployment script;
@@ -131,8 +175,8 @@ The old `ZONT_ANALYZER_IMAGE_TAG` setting is no longer used by the new Compose f
 
 Before replacing the running release, run the pulled candidate against a separately
 writable online backup and a temporary non-public output directory. Inspect `initial`
-and `daily` HTML/JSON. This can happen locally or in a separate container on the
-production host; never mount live data/publication into the candidate. A clean-DB
+and `daily` HTML/JSON locally; never run candidate acceptance on HK or mount live
+data/publication into the candidate. A clean-DB
 bootstrap check uses another empty directory and read-only ZONT credentials.
 
 When migrating an existing bearer deployment, enable and verify nginx Basic Auth
@@ -143,7 +187,7 @@ Basic Auth feedback path have both been verified.
 
 The explicit deployment command pulls the digest, creates and verifies an online
 backup using the running worker, preserves `.env.previous`, updates only the image
-reference, starts Compose without a build, and checks health/status and lifecycle counts:
+reference, starts Compose without a build, and waits for container health:
 
 ```sh
 ./deploy/release.sh ghcr.io/tupoybot/zontanalyzer@sha256:YOUR_VERIFIED_DIGEST

@@ -97,7 +97,7 @@ def test_release_backup_failure_leaves_env_untouched_without_up(tmp_path: Path) 
     assert not any(" up -d " in command for command in commands)
 
 
-def test_release_pulls_backs_up_checks_then_updates_only_image_and_healthchecks(tmp_path: Path) -> None:
+def test_release_pulls_backs_up_then_deploys_with_only_bounded_health_checks(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     original = "ZONT_CLIENT_TOKEN=secret\nZONT_ANALYZER_IMAGE=old\nUNRELATED_SETTING=preserved\n"
     env_file.write_text(original, encoding="utf-8")
@@ -115,16 +115,16 @@ def test_release_pulls_backs_up_checks_then_updates_only_image_and_healthchecks(
     stages = [
         next(index for index, command in enumerate(commands) if command.endswith(" pull worker")),
         next(index for index, command in enumerate(commands) if " db backup" in command),
-        next(index for index, command in enumerate(commands) if " doctor" in command),
         next(
             index
             for index, command in enumerate(commands)
             if " up -d --no-build --wait --wait-timeout 300 worker" in command
         ),
-        next(index for index, command in enumerate(commands) if " healthcheck" in command),
+        next(index for index, command in enumerate(commands) if command.endswith(" ps worker")),
     ]
     assert stages == sorted(stages)
-    assert sum(" doctor" in command for command in commands) == 2
+    assert not any(" doctor" in command or "recommendations maintain" in command for command in commands)
+    assert not any(" build " in command or " analyze " in command for command in commands)
 
 
 def test_retry_keeps_the_previous_release_reference(tmp_path: Path) -> None:

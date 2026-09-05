@@ -51,6 +51,9 @@ class FakeDatabase:
     def report(self, report_id: str) -> Report | None:
         return self.reports.get(report_id)
 
+    def completed_reports(self, now: datetime) -> list[Report]:
+        return [report for report in self.reports.values() if report.period_end <= now]
+
     def save_report(self, report: Report, _rendered_text: str) -> None:
         self.reports[report.id] = report
 

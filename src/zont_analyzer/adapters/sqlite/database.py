@@ -799,6 +799,20 @@ class Database:
             row = session.scalar(select(ReportRow).order_by(ReportRow.generated_at.desc()).limit(1))
             return Report.model_validate_json(row.canonical_json) if row else None
 
+    def completed_reports(self, now: datetime) -> list[Report]:
+        """Existing calendar reports calculated after their entire period ended."""
+        with self.session() as session:
+            rows = session.scalars(
+                select(ReportRow)
+                .where(
+                    ReportRow.kind.in_(("daily", "weekly", "monthly")),
+                    ReportRow.period_end <= int(now.timestamp()),
+                )
+                .order_by(ReportRow.generated_at, ReportRow.id)
+            )
+            reports = [Report.model_validate_json(row.canonical_json) for row in rows]
+            return [report for report in reports if report.generated_at >= report.period_end]
+
     def recommendations(self) -> list[dict[str, Any]]:
         with self.session() as session:
             rows = session.scalars(select(RecommendationRow).order_by(RecommendationRow.created_at.desc())).all()

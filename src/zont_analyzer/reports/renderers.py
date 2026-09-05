@@ -104,6 +104,222 @@ SENSOR_ORIGIN_LABELS = {
 }
 
 
+_ARCHIVE_KINDS = frozenset({"daily", "weekly", "monthly"})
+
+# This deliberately stays in the generated document instead of a separately
+# published bundle.  Archives are standalone exports and must not depend on a
+# CDN or on a second publication operation for a static asset.
+_ARCHIVE_NAVIGATION_SCRIPT = r"""
+(() => {
+  const navigation = document.querySelector("[data-archive-navigation]");
+  if (!navigation) return;
+
+  const supportedKinds = new Set(["daily", "weekly", "monthly"]);
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+  const reportKind = supportedKinds.has(navigation.dataset.reportKind) ? navigation.dataset.reportKind : "daily";
+  const reportStart = navigation.dataset.reportStart || "";
+  let activeKind = reportKind;
+  let displayedMonth = reportStart || "";
+  let reports = [];
+
+  function archiveRoot(pathname) {
+    const archived = pathname.match(/^(.*\/)(?:daily|weekly|monthly)\/[^/]+$/);
+    if (archived) return archived[1] || "/";
+    if (pathname.endsWith("/latest.html")) return pathname.slice(0, -"latest.html".length) || "/";
+    if (pathname.endsWith("/")) return pathname;
+    const slash = pathname.lastIndexOf("/");
+    return slash >= 0 ? pathname.slice(0, slash + 1) : "/";
+  }
+
+  const root = archiveRoot(window.location.pathname);
+  window.ZontArchive = {root};
+  const controls = navigation.querySelector(".archive-controls");
+  const status = navigation.querySelector(".archive-status");
+  const panel = navigation.querySelector(".archive-panel");
+  const previous = navigation.querySelector('[data-archive-action="previous"]');
+  const latest = navigation.querySelector('[data-archive-action="latest"]');
+  const next = navigation.querySelector('[data-archive-action="next"]');
+  const monthLabel = navigation.querySelector(".archive-month-label");
+
+  function validReport(value) {
+    if (!value || typeof value !== "object" || !supportedKinds.has(value.kind)) return false;
+    if (!datePattern.test(value.start) || !datePattern.test(value.end) || typeof value.href !== "string") return false;
+    const start = localDate(value.start);
+    const end = localDate(value.end);
+    const datesAreReal = !Number.isNaN(start.valueOf()) && !Number.isNaN(end.valueOf())
+      && start.toISOString().slice(0, 10) === value.start && end.toISOString().slice(0, 10) === value.end;
+    return datesAreReal && value.start < value.end && value.href === `${value.kind}/${value.start}.html`;
+  }
+
+  function byStart(a, b) {
+    return a.start.localeCompare(b.start);
+  }
+
+  function directUrl(report) {
+    return new URL(report.href, window.location.origin + root).pathname;
+  }
+
+  function localDate(value) {
+    return new Date(`${value}T00:00:00Z`);
+  }
+
+  function formatBoundary(value) {
+    const format = new Intl.DateTimeFormat(
+      "ru-RU", {year: "numeric", month: "long", day: "numeric", timeZone: "UTC"},
+    );
+    return format.format(localDate(value));
+  }
+
+  function formatMonth(value) {
+    const format = new Intl.DateTimeFormat(
+      "ru-RU", {year: "numeric", month: "long", timeZone: "UTC"},
+    );
+    return format.format(localDate(value));
+  }
+
+  function dateForMonth(value) {
+    const latestDaily = reports.filter((item) => item.kind === "daily").at(-1);
+    const base = datePattern.test(value) ? localDate(value) : localDate(latestDaily?.start || "1970-01-01");
+    return {year: base.getUTCFullYear(), month: base.getUTCMonth()};
+  }
+
+  function dateString(year, month, day) {
+    return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+
+  function currentDailyIndex(days) {
+    const selected = reportKind === "daily" ? reportStart : "";
+    return days.findIndex((item) => item.start === selected);
+  }
+
+  function setNavigation(days) {
+    const selected = currentDailyIndex(days);
+    const previousReport = selected > 0 ? days[selected - 1] : null;
+    const nextReport = selected >= 0 && selected < days.length - 1 ? days[selected + 1] : null;
+    const latestReport = days.at(-1) || null;
+    for (const [button, item] of [[previous, previousReport], [latest, latestReport], [next, nextReport]]) {
+      if (!button) continue;
+      button.disabled = !item;
+      button.dataset.href = item ? item.href : "";
+    }
+  }
+
+  function renderDaily() {
+    const days = reports.filter((item) => item.kind === "daily").sort(byStart);
+    setNavigation(days);
+    const {year, month} = dateForMonth(displayedMonth);
+    displayedMonth = dateString(year, month, 1);
+    monthLabel.textContent = formatMonth(displayedMonth);
+    const firstWeekday = (new Date(Date.UTC(year, month, 1)).getUTCDay() + 6) % 7;
+    const count = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    const available = new Map(days.map((item) => [item.start, item]));
+    const labels = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+    const cells = labels.map((label) => `<span class="archive-weekday">${label}</span>`);
+    for (let index = 0; index < firstWeekday; index += 1) {
+      cells.push('<span class="archive-day archive-empty" aria-hidden="true"></span>');
+    }
+    for (let day = 1; day <= count; day += 1) {
+      const date = dateString(year, month, day);
+      const item = available.get(date);
+      const selected = date === reportStart && reportKind === "daily";
+      if (item) {
+        const className = `archive-day available${selected ? " selected" : ""}`;
+        cells.push(
+          `<a class="${className}" href="${directUrl(item)}" aria-label="Отчёт за ${date}">${day}</a>`,
+        );
+      } else {
+        cells.push(
+          `<span class="archive-day unavailable" aria-label="Нет опубликованного отчёта за ${date}">${day}</span>`,
+        );
+      }
+    }
+    panel.innerHTML = [
+      '<div class="archive-calendar" role="grid" aria-label="Календарь опубликованных дневных отчётов">',
+      cells.join(""),
+      "</div>",
+    ].join("");
+  }
+
+  function renderPeriods() {
+    previous.disabled = true;
+    latest.disabled = true;
+    next.disabled = true;
+    monthLabel.textContent = activeKind === "weekly" ? "Опубликованные недели" : "Опубликованные месяцы";
+    const periods = reports.filter((item) => item.kind === activeKind).sort(byStart).reverse();
+    if (!periods.length) {
+      panel.innerHTML = '<p class="archive-empty-message">Нет опубликованных отчётов для этого периода.</p>';
+      return;
+    }
+    panel.innerHTML = `<ul class="archive-periods">${periods.map((item) => {
+      const selected = item.start === reportStart && reportKind === activeKind ? " aria-current=\"page\"" : "";
+      const boundaries = `${formatBoundary(item.start)} — ${formatBoundary(item.end)} (конец не включён)`;
+      return `<li><a href="${directUrl(item)}"${selected}>${boundaries}</a></li>`;
+    }).join("")}</ul>`;
+  }
+
+  function render() {
+    navigation.querySelectorAll("[data-archive-kind]").forEach((button) => {
+      const selected = button.dataset.archiveKind === activeKind;
+      button.setAttribute("aria-selected", String(selected));
+      button.tabIndex = selected ? 0 : -1;
+    });
+    navigation.querySelectorAll("[data-archive-month]").forEach((button) => {
+      button.disabled = activeKind !== "daily";
+    });
+    if (activeKind === "daily") renderDaily(); else renderPeriods();
+  }
+
+  navigation.querySelectorAll("[data-archive-kind]").forEach((button) => {
+    button.addEventListener("click", () => {
+      activeKind = button.dataset.archiveKind || "daily";
+      render();
+    });
+  });
+  navigation.querySelector(".archive-period-tabs")?.addEventListener("keydown", (event) => {
+    const tabs = Array.from(navigation.querySelectorAll("[data-archive-kind]"));
+    const current = tabs.indexOf(document.activeElement);
+    if (current < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const target = event.key === "Home" ? tabs[0] : event.key === "End" ? tabs.at(-1)
+      : tabs[(current + (event.key === "ArrowLeft" ? -1 : 1) + tabs.length) % tabs.length];
+    target?.focus();
+    target?.click();
+  });
+  navigation.querySelectorAll("[data-archive-month]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (activeKind !== "daily") return;
+      const {year, month} = dateForMonth(displayedMonth);
+      const shifted = new Date(Date.UTC(year, month + (button.dataset.archiveMonth === "previous" ? -1 : 1), 1));
+      displayedMonth = dateString(shifted.getUTCFullYear(), shifted.getUTCMonth(), 1);
+      render();
+    });
+  });
+  [previous, latest, next].forEach((button) => button?.addEventListener("click", () => {
+    if (button.dataset.href) window.location.assign(directUrl({href: button.dataset.href}));
+  }));
+
+  fetch(new URL("reports.json", window.location.origin + root), {credentials: "same-origin"})
+    .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+    .then((manifest) => {
+      if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.reports)) {
+        throw new Error("Неверный формат manifest");
+      }
+      reports = manifest.reports.filter(validReport);
+      controls.hidden = false;
+      navigation.querySelector(".archive-nojs")?.setAttribute("hidden", "");
+      status.textContent = reports.length ? "" : "В архиве пока нет опубликованных отчётов.";
+      if (!datePattern.test(displayedMonth)) {
+        displayedMonth = reports.filter((item) => item.kind === "daily").at(-1)?.start || "1970-01-01";
+      }
+      render();
+    })
+    .catch(() => {
+      status.textContent = "Архив сейчас недоступен. Откройте последний сформированный отчёт по ссылке выше.";
+    });
+})();
+"""
+
+
 def _metric_label(name: str, context: dict[str, Any] | None = None) -> str:
     offline = name in {"boiler_uptime_seconds", "zont_uptime_seconds"} and context is not None and (
         context.get("online") is False
@@ -335,11 +551,15 @@ def render_html(
     recommendation_feedback: Mapping[str, Mapping[str, Any]] | None = None,
     *,
     feedback_api_base_url: str = "/api",
+    latest_report_href: str = "latest.html",
 ) -> str:
     title = html.escape(f"ZontAnalyzer — {report.kind}")
     period = html.escape(
         f"{_local(report.period_start, report.timezone)} — {_local(report.period_end, report.timezone)}"
     )
+    archive_kind = report.kind if report.kind in _ARCHIVE_KINDS else "daily"
+    archive_start = report.period_start.astimezone(ZoneInfo(report.timezone)).date().isoformat()
+    archive_end = report.period_end.astimezone(ZoneInfo(report.timezone)).date().isoformat()
     current_mode = report.context.get("current_mode")
     mode_name = current_mode.get("name") if isinstance(current_mode, dict) else None
     mode_intent = current_mode.get("intent") if isinstance(current_mode, dict) else None
@@ -480,12 +700,33 @@ def render_html(
     recommendations = "".join(recommendation_cards)
     canonical = html.escape(json.dumps(report.model_dump(mode="json"), ensure_ascii=False))
     api_base = html.escape(feedback_api_base_url.rstrip("/"), quote=True)
+    latest_href = html.escape(latest_report_href, quote=True)
     return f"""<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>{title}</title><style>
 body{{font:16px system-ui;max-width:960px;margin:2rem auto;padding:0 1rem;color:#20242a}}
 h1{{font-size:1.6rem}}table{{border-collapse:collapse;width:100%}}
 td,th{{padding:.55rem;border-bottom:1px solid #ddd;text-align:left}}
+.archive-navigation{{padding:1rem;background:#f4f7fb;border:1px solid #d8e0ea;border-radius:.7rem;
+margin:0 0 1.25rem}}
+.archive-navigation p{{margin:.1rem 0}}.archive-controls{{display:grid;gap:.8rem}}
+.archive-controls[hidden]{{display:none}}
+.archive-period-tabs,.archive-day-actions,.archive-month-controls{{display:flex;gap:.45rem;align-items:center;
+flex-wrap:wrap}}
+.archive-period-tabs button,.archive-day-actions button,
+.archive-month-controls button{{font:inherit;padding:.4rem .7rem;
+border:1px solid #aebdce;border-radius:.4rem;background:white;color:#1d344b;cursor:pointer}}
+.archive-period-tabs button[aria-selected="true"]{{background:#235d92;border-color:#235d92;color:white}}
+.archive-day-actions button:disabled{{opacity:.5;cursor:default}}
+.archive-month-label{{font-weight:600;min-width:11rem;text-align:center}}
+.archive-calendar{{display:grid;grid-template-columns:repeat(7,minmax(2rem,1fr));gap:.25rem;max-width:32rem}}
+.archive-weekday,.archive-day{{min-height:2.15rem;display:grid;place-items:center;border-radius:.35rem;font-variant-numeric:tabular-nums}}
+.archive-weekday{{font-size:.8rem;color:#536579}}
+.archive-day.available{{background:#dceefc;color:#123d63;font-weight:600;text-decoration:none}}
+.archive-day.available:hover,.archive-day.available:focus{{outline:2px solid #235d92;outline-offset:1px}}
+.archive-day.selected{{background:#235d92;color:white}}.archive-day.unavailable{{color:#9aa5b1}}
+.archive-periods{{margin:.2rem 0;padding-left:1.25rem}}.archive-periods li{{margin:.45rem 0}}
+.archive-empty-message,.archive-status{{color:#536579}}
 .quality{{padding:.8rem;background:#eef6ff;border-radius:.5rem}}
 article{{border-left:4px solid #568;padding:0 1rem;margin:1rem 0}}
 .dhw{{padding:.8rem 1rem;background:#fff8e8;border-radius:.5rem}}
@@ -506,7 +747,28 @@ cursor:pointer}}
 .status-applied{{background:#dcefe2;color:#185c2d}}.status-rejected{{background:#f7dfdc;color:#812820}}
 .status-ignored{{background:#e9edf2;color:#51606f}}
 .saved-note,.feedback-message{{margin:.1rem 0}}.feedback-message.error{{color:#9b251d}}
+@media(max-width:560px){{body{{margin:1rem auto}}.archive-navigation{{padding:.75rem}}
+.archive-day-actions button{{flex:1 1 8rem}}.archive-calendar{{max-width:none}}
+td,th{{padding:.4rem;font-size:.9rem;vertical-align:top}}table{{display:block;overflow-x:auto}}}}
 </style></head><body data-feedback-api-base="{api_base}"><h1>{title}</h1>
+<nav class="archive-navigation" data-archive-navigation data-report-kind="{archive_kind}"
+data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="Архив отчётов">
+<p class="archive-nojs">Для просмотра другого периода откройте
+<a href="{latest_href}">последний сформированный дневной отчёт</a>.</p>
+<div class="archive-controls" hidden>
+<div class="archive-period-tabs" role="tablist" aria-label="Период отчёта">
+<button type="button" role="tab" data-archive-kind="daily">День</button>
+<button type="button" role="tab" data-archive-kind="weekly">Неделя</button>
+<button type="button" role="tab" data-archive-kind="monthly">Месяц</button></div>
+<div class="archive-day-actions"><button type="button" data-archive-action="previous">← Предыдущий</button>
+<button type="button" data-archive-action="latest" title="Последний доступный дневной отчёт">Сегодня</button>
+<button type="button" data-archive-action="next">Следующий →</button></div>
+<div class="archive-month-controls">
+<button type="button" data-archive-month="previous" aria-label="Предыдущий месяц">←</button>
+<span class="archive-month-label" aria-live="polite"></span>
+<button type="button" data-archive-month="next" aria-label="Следующий месяц">→</button></div>
+<p class="archive-status" role="status" aria-live="polite"></p><div class="archive-panel"></div>
+</div></nav>
 <p><strong>ID:</strong> <code>{html.escape(report.id)}</code></p>
 <p><strong>Период:</strong> {period}</p>
 <p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"}</p>
@@ -521,9 +783,14 @@ cursor:pointer}}
 <table><tr><th>Начало</th><th>Уровень</th><th>Тип</th><th>Детали</th></tr>{events}</table>
 <h2>Рекомендации</h2>{recommendations or "<p>Нет рекомендаций.</p>"}
 <details><summary>Канонический JSON</summary><pre>{canonical}</pre></details>
+<script>{_ARCHIVE_NAVIGATION_SCRIPT}</script>
 <script>
 (() => {{
-  const apiBase = document.body.dataset.feedbackApiBase || "/api";
+  const configuredApiBase = document.body.dataset.feedbackApiBase || "/api";
+  const archiveRoot = window.ZontArchive?.root || "/";
+  const apiBase = configuredApiBase === "/api" || configuredApiBase === "/za/api"
+    ? `${{archiveRoot}}api`.replace(/\\/{{2,}}/g, "/")
+    : configuredApiBase;
   const labels = {{applied: "Выполнено", rejected: "Отклонено", ignored: "Без реакции", new: "Новая"}};
 
   function applyState(card, payload) {{

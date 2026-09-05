@@ -7,10 +7,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import unquote, urlsplit
-from zoneinfo import ZoneInfo
 
-from zont_analyzer.application.pilot import atomic_write_text, reports_directory
-from zont_analyzer.reports import render_html
+from zont_analyzer.application.publication import publish_reports
 from zont_analyzer.runtime import Runtime
 
 logger = logging.getLogger(__name__)
@@ -41,21 +39,7 @@ def publish_feedback_report(runtime: Runtime, report_id: str) -> None:
     report = runtime.db.report(report_id)
     if report is None:
         return
-    output_dir = reports_directory(runtime)
-    rendered = render_html(
-        report,
-        runtime.db.recommendation_views_for_report(report.id),
-        feedback_api_base_url=runtime.config.feedback.public_api_base_url,
-    )
-    if report.kind == "daily":
-        local_date = report.period_start.astimezone(ZoneInfo(report.timezone)).date()
-        archive = output_dir / "daily" / f"{local_date.isoformat()}.html"
-        if archive.exists():
-            atomic_write_text(archive, rendered, mode=0o644)
-    latest = runtime.db.latest_report()
-    latest_path = output_dir / "latest.html"
-    if latest is not None and latest.id == report.id and latest_path.exists():
-        atomic_write_text(latest_path, rendered, mode=0o644)
+    publish_reports(runtime)
 
 
 class FeedbackHttpServer(ThreadingHTTPServer):

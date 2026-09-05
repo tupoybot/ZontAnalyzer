@@ -172,6 +172,7 @@ class PilotService:
                 report,
                 self.runtime.db.recommendation_views_for_report(report.id),
                 feedback_api_base_url=self.runtime.config.feedback.public_api_base_url,
+                latest_report_href="../latest.html",
             ),
             mode=0o644,
         )
@@ -243,7 +244,6 @@ class PilotService:
                 if report is None:
                     raise WorkerCycleError(f"daily report was not created for {selected.isoformat()}")
                 if must_analyze or not html_path.exists() or not json_path.exists():
-                    self._publish_archive(selected, report)
                     published_dates.append(selected.isoformat())
                 if selected == yesterday:
                     latest_report = report
@@ -258,15 +258,9 @@ class PilotService:
                 latest_report_id=latest_report.id,
                 sync=sync_result,
             )
-            atomic_write_text(
-                latest_path,
-                render_html(
-                    latest_report,
-                    self.runtime.db.recommendation_views_for_report(latest_report.id),
-                    feedback_api_base_url=self.runtime.config.feedback.public_api_base_url,
-                ),
-                mode=0o644,
-            )
+            from zont_analyzer.application.publication import publish_reports
+
+            publication = publish_reports(self.runtime)
             delivered = self.runtime.db.flush_log_outbox()
             for message in delivered:
                 logger.info(message)
@@ -282,6 +276,7 @@ class PilotService:
                 "status_file": str(self.status_file),
                 "delivered_log_notifications": len(delivered),
                 "recommendation_maintenance": recommendation_maintenance,
+                "publication": publication,
             }
             self._write_status("ok", **result)
             return result
