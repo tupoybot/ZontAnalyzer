@@ -34,5 +34,46 @@ DNS имени указывает на HK `82.22.6.84`. Фактический n
 
 ## CI и production
 
-Публикация immutable образа через CI и короткая production-проверка выполняются после
-локальной приёмки. До подтверждения этих шагов этап не считается закрытым.
+Коммит приложения: `24b1ba9e937357853e2ec1ace2bc35091375c594`.
+Тег: `release-1.8-20260905`.
+[Release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/33949660599) и
+[branch CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/33949660392) завершились успешно.
+Пакет собран в sdist/wheel; полный новый nginx vhost проверен локально через `nginx -t`
+и TLS Host/SNI на отдельном listener с тестовым сертификатом.
+
+Образ:
+`ghcr.io/tupoybot/zontanalyzer@sha256:858ae2d335c37a91c5544b61b8ddfd2432dc474611920618f06e2cfa3ed25af9`.
+Локально скачан этот digest, SHA-256 всех 31 Python-файла совпали с коммитом; повторная
+публикация на изолированной копии прошла. Финальный `integrity_check=ok`, foreign-key
+нарушений нет; явные feedback, interventions и количество LLM-вызовов не изменились.
+
+HK получил готовый образ без сборки и полных тестов. Release создал предрелизный online backup
+`/opt/zont-analyzer/data/backups/zont-analyzer-20260905T062819219746Z.sqlite3`, обновил
+только Compose worker и сохранил `.env.previous`. `current` указывает на
+`/opt/zont-analyzer/releases/20260905-stage18-24b1ba9`.
+Контейнер healthy, `OOMKilled=false`, OCI revision совпадает с коммитом. Первый рабочий цикл
+завершён `2026-09-05T06:31:03Z`, state `ok`, manifest содержит 123 отчёта.
+
+Установлены только новые `/etc/nginx/conf.d/30-zont-analyzer.conf` и
+`/etc/nginx/snippets/zont-analyzer-root.conf`. После успешного `nginx -t` выполнен reload.
+Для `za.tupoybot.ru` и legacy `hk.tupoybot.ru/za` проверены root, `latest.html`,
+`reports.json`, `daily/`, `daily/2026-08-01.html`, `api/health`: без credentials 401,
+с Basic Auth 200. GET feedback на обоих адресах вернул сохранённый `ignored`.
+Сохранение feedback через PUT и обновление страницы проверены локальным Docker E2E;
+на production для smoke данные владельца не переписывались.
+
+Временный случайный пользователь smoke удалён сразу после проверки, исходный htpasswd
+восстановлен побайтно; пароль владельца не читался и не менялся. Старый landing обновлён
+ссылкой на основной домен. Legacy `/za/` и все его маршруты сохранены.
+
+Хеши shared HK HTTP/TLS конфигов и всех Xray JSON совпали до/после cutover; 9 явных решений
+владельца и 9 interventions сохранились побайтно на уровне выбранных SQL-строк.
+`https://hk.tupoybot.ru/` и `https://kharichev.pro/` сохранили HTTP 200. nginx, Xray,
+Postfix, OpenDKIM и Docker active; API опубликован только на `127.0.0.1:8787`.
+Существующий Certbot deploy-hook обновления nginx сохранён; новый vhost содержит ACME webroot.
+
+Откат домена: удалить только новый vhost, выполнить `nginx -t` и reload. Старый HK server
+и Xray не менять. Откат приложения использует прежний digest из `.env.previous`.
+
+**Этап 1.8 закрыт 2026-09-05 (Europe/Samara).** Продуктовая оценка полезности P2 владельцем
+остаётся отдельным условием закрытия P2.
