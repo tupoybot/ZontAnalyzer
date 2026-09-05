@@ -422,6 +422,20 @@ def _sensor_context_lines(context: Any) -> list[str]:
     return lines
 
 
+def _missing_mttr_reason(report: Report) -> str | None:
+    if any(metric.name in {"boiler_mttr_hours", "boiler_mtbr_hours"} for metric in report.metrics):
+        return None
+    reliability = report.context.get("reliability")
+    boiler = reliability.get("boiler") if isinstance(reliability, dict) else None
+    if not isinstance(boiler, dict):
+        return None
+    if boiler.get("service_failures_with_unknown_restore", 0):
+        return "Момент восстановления после подтверждённых отказов попал в разрывы наблюдаемости."
+    if boiler.get("confirmed_service_failures") == 0:
+        return "В доступной истории нет подтверждённых отказов котельного сервиса."
+    return "Недостаточно наблюдений восстановления после подтверждённых отказов."
+
+
 def render_text(report: Report) -> str:
     lines = [
         f"ZontAnalyzer — {report.kind}",
@@ -525,6 +539,9 @@ def render_text(report: Report) -> str:
             f"{_event_details(event.details)}"
             for event in report.events[:20]
         )
+    mttr_reason = _missing_mttr_reason(report)
+    if mttr_reason:
+        lines.append(f"MTTR котельного сервиса: нет достоверных данных. {mttr_reason}")
     if report.recommendations:
         lines.append("Рекомендации:")
         for item in report.recommendations:
@@ -641,6 +658,12 @@ def render_html(
                 f'<article class="uptime-card"><span>{html.escape(label)}</span>'
                 f"<strong>{html.escape(value)}</strong><small>{html.escape(unit)}</small></article>"
             )
+    mttr_reason = _missing_mttr_reason(report)
+    if mttr_reason:
+        metric_rows.append(
+            "<tr><td>MTTR котельного сервиса</td><td>Нет достоверных данных</td>"
+            f"<td><small>{html.escape(mttr_reason)}</small></td></tr>"
+        )
     metrics = "".join(metric_rows)
     uptime = f'<section class="uptime-grid">{"".join(uptime_cards)}</section>' if uptime_cards else ""
     events = "".join(
@@ -707,28 +730,31 @@ def render_html(
 body{{font:16px system-ui;max-width:960px;margin:2rem auto;padding:0 1rem;color:#20242a}}
 h1{{font-size:1.6rem}}table{{border-collapse:collapse;width:100%}}
 td,th{{padding:.55rem;border-bottom:1px solid #ddd;text-align:left}}
-.archive-navigation{{padding:1rem;background:#f4f7fb;border:1px solid #d8e0ea;border-radius:.7rem;
-margin:0 0 1.25rem}}
-.archive-navigation p{{margin:.1rem 0}}.archive-controls{{display:grid;gap:.8rem}}
+.archive-navigation{{padding:.65rem;background:#f4f7fb;border:1px solid #d8e0ea;border-radius:.7rem;
+margin:0 0 1rem}}
+.archive-navigation p{{margin:0}}
+.archive-controls{{display:grid;grid-template-columns:max-content max-content;gap:.45rem .65rem}}
 .archive-controls[hidden]{{display:none}}
-.archive-period-tabs,.archive-day-actions,.archive-month-controls{{display:flex;gap:.45rem;align-items:center;
+.archive-period-tabs,.archive-day-actions,.archive-month-controls{{display:flex;gap:.3rem;align-items:center;
 flex-wrap:wrap}}
+.archive-month-controls,.archive-panel,.archive-status{{grid-column:1/-1}}
+.archive-status:empty{{display:none}}
 .archive-period-tabs button,.archive-day-actions button,
-.archive-month-controls button{{font:inherit;padding:.4rem .7rem;
+.archive-month-controls button{{font:inherit;font-size:.82rem;padding:.25rem .45rem;
 border:1px solid #aebdce;border-radius:.4rem;background:white;color:#1d344b;cursor:pointer}}
 .archive-period-tabs button[aria-selected="true"]{{background:#235d92;border-color:#235d92;color:white}}
 .archive-day-actions button:disabled{{opacity:.5;cursor:default}}
-.archive-month-label{{font-weight:600;min-width:11rem;text-align:center}}
-.archive-calendar{{display:grid;grid-template-columns:repeat(7,minmax(2rem,1fr));gap:.25rem;max-width:32rem}}
-.archive-weekday,.archive-day{{min-height:2.15rem;display:grid;place-items:center;border-radius:.35rem;font-variant-numeric:tabular-nums}}
-.archive-weekday{{font-size:.8rem;color:#536579}}
+.archive-month-label{{font-size:.85rem;font-weight:600;min-width:9rem;text-align:center}}
+.archive-calendar{{display:grid;grid-template-columns:repeat(7,minmax(1.5rem,1fr));gap:.15rem;max-width:18rem}}
+.archive-weekday,.archive-day{{min-height:1.4rem;font-size:.82rem;display:grid;place-items:center;border-radius:.35rem;font-variant-numeric:tabular-nums}}
+.archive-weekday{{font-size:.7rem;color:#536579}}
 .archive-day.available{{background:#dceefc;color:#123d63;font-weight:600;text-decoration:none}}
 .archive-day.available:hover,.archive-day.available:focus{{outline:2px solid #235d92;outline-offset:1px}}
 .archive-day.selected{{background:#235d92;color:white}}.archive-day.unavailable{{color:#9aa5b1}}
 .archive-periods{{margin:.2rem 0;padding-left:1.25rem}}.archive-periods li{{margin:.45rem 0}}
 .archive-empty-message,.archive-status{{color:#536579}}
 .quality{{padding:.8rem;background:#eef6ff;border-radius:.5rem}}
-article{{border-left:4px solid #568;padding:0 1rem;margin:1rem 0}}
+article{{border-left:4px solid #568;padding:0 1rem;margin:1rem 0;overflow-wrap:anywhere}}
 .dhw{{padding:.8rem 1rem;background:#fff8e8;border-radius:.5rem}}
 .sensors{{padding:.8rem 1rem;background:#f4f4fb;border-radius:.5rem}}
 .uptime-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.8rem;margin:1rem 0}}
@@ -747,8 +773,8 @@ cursor:pointer}}
 .status-applied{{background:#dcefe2;color:#185c2d}}.status-rejected{{background:#f7dfdc;color:#812820}}
 .status-ignored{{background:#e9edf2;color:#51606f}}
 .saved-note,.feedback-message{{margin:.1rem 0}}.feedback-message.error{{color:#9b251d}}
-@media(max-width:560px){{body{{margin:1rem auto}}.archive-navigation{{padding:.75rem}}
-.archive-day-actions button{{flex:1 1 8rem}}.archive-calendar{{max-width:none}}
+@media(max-width:560px){{body{{margin:1rem auto}}.archive-navigation{{padding:.6rem}}
+.archive-controls{{grid-template-columns:minmax(0,1fr)}}
 td,th{{padding:.4rem;font-size:.9rem;vertical-align:top}}table{{display:block;overflow-x:auto}}}}
 </style></head><body data-feedback-api-base="{api_base}"><h1>{title}</h1>
 <nav class="archive-navigation" data-archive-navigation data-report-kind="{archive_kind}"

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from zont_analyzer.domain import QualityResult, Report
-from zont_analyzer.reports import render_html
+from zont_analyzer.domain import MetricValue, QualityResult, Report
+from zont_analyzer.reports import render_html, render_text
 from zont_analyzer.reports.renderers import _ARCHIVE_NAVIGATION_SCRIPT
 
 
@@ -32,6 +32,32 @@ def _report(*, kind: str = "daily") -> Report:
         ),
         summary="Архивный отчёт",
     )
+
+
+@pytest.mark.parametrize("unknown_restore", [0, 2])
+def test_missing_mttr_is_explained_without_inventing_a_value(unknown_restore: int) -> None:
+    report = _report().model_copy(update={"context": {"reliability": {"boiler": {
+        "confirmed_service_failures": unknown_restore,
+        "service_failures_with_unknown_restore": unknown_restore,
+    }}}})
+    reason = "разрывы наблюдаемости" if unknown_restore else "нет подтверждённых отказов"
+    for content in (render_html(report), render_text(report)):
+        assert "MTTR котельного сервиса" in content
+        assert "достоверных данных" in content
+        assert reason in content
+    assert report.metrics == []
+
+
+def test_observed_mttr_keeps_its_numeric_value() -> None:
+    report = _report().model_copy(update={
+        "context": {"reliability": {"boiler": {"service_failures_with_unknown_restore": 2}}},
+        "metrics": [MetricValue(id="mttr", name="boiler_mttr_hours", value=1.5, unit="h")],
+    })
+    for content in (render_html(report), render_text(report)):
+        assert "MTTR котельного сервиса" in content
+        assert "00:01:30" in content
+        assert "Нет достоверных данных" not in content
+        assert "Момент восстановления" not in content
 
 
 def test_archive_ui_uses_local_report_boundaries_and_standalone_navigation() -> None:
