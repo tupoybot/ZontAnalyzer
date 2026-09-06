@@ -80,12 +80,18 @@ try {
   await autoAdapt.locator(".owner-unknown").selectOption("yes");
   await ownerForm.locator("[data-profile-save]").click();
   await ownerForm.locator("[data-profile-message]").filter({ hasText: "сохранён" }).waitFor();
-  assert.deepEqual(Object.keys(profileRequests.at(-1).fields), ["auto_adapt"], "profile sends changed fields only");
+  assert.deepEqual(Object.keys(profileRequests.at(-1).fields), ["auto_adapt", "auto_adapt_node"], "first save includes the default node");
+  assert.equal(profileRequests.at(-1).fields.auto_adapt_node.value, "Рециркуляция ГВС");
+  assert.equal(await ownerForm.locator("[data-field=auto_adapt_node] select").inputValue(), "Рециркуляция ГВС");
+  for (const removed of ["gas_unit", "gas_source", "gas_applicability"]) {
+    assert.equal(await ownerForm.locator(`[data-field=${removed}]`).count(), 0);
+  }
   assert.equal(profileRequests.at(-1).fields.auto_adapt.value, true);
   await autoAdapt.locator(".owner-unknown").selectOption("no");
   await ownerForm.locator("[data-profile-save]").click();
   await ownerForm.locator("[data-profile-message]").filter({ hasText: "сохранён" }).waitFor();
   assert.equal(profileRequests.at(-1).fields.auto_adapt.value, false);
+  assert.deepEqual(Object.keys(profileRequests.at(-1).fields), ["auto_adapt"], "saved node is not overwritten on unrelated changes");
   await autoAdapt.locator(".owner-reset").click();
   await ownerForm.locator("[data-profile-message]").filter({ hasText: "сброшено" }).waitFor();
   assert.equal((await context.request.get(`${baseURL}/api/equipment`)).status(), 200);

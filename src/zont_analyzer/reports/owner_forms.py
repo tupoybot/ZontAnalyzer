@@ -21,9 +21,6 @@ _FIELDS: tuple[tuple[str, str, str], ...] = (
     ("nominal_power_kw", "Номинальная мощность котла, кВт", "number"),
     ("gas_min_m3h", "Минимальный расход газа, м³/ч", "number"),
     ("gas_max_m3h", "Максимальный расход газа, м³/ч", "number"),
-    ("gas_unit", "Единица расхода газа", "text"),
-    ("gas_source", "Источник паспортных данных", "text"),
-    ("gas_applicability", "Применимость (модель/режим)", "text"),
     ("gas_type", "Вид газа", "text"),
     ("coordinates", "Координаты (переопределение)", "coordinates"),
 )
@@ -92,6 +89,21 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
                 f'<label>Широта<input type="number" class="owner-coordinate" data-coordinate="latitude" step="any" value="{latitude}"></label>'
                 f'<label>Долгота<input type="number" class="owner-coordinate" data-coordinate="longitude" step="any" value="{longitude}"></label></details>'
                 f'<small class="owner-source">Источник: {source_text or "нет"}</small>'
+                '<button type="button" class="owner-reset">Сбросить к авто</button></div>'
+            )
+        elif name == "auto_adapt_node":
+            node_options = ["Рециркуляция ГВС", "Радиаторное отопление", "Тёплый пол", "Котловой контур", "Другой узел"]
+            selected = str(value or node_options[0])
+            if selected not in node_options:
+                node_options.append(selected)
+            options_html = "".join(
+                f'<option value="{html.escape(item, quote=True)}"{" selected" if item == selected else ""}>{html.escape(item)}</option>'
+                for item in node_options
+            )
+            fields.append(
+                f'<div class="owner-field" data-field="{name}"><label>{label}'
+                f'<select class="owner-value" data-default="Рециркуляция ГВС">{options_html}</select></label>'
+                f'<small class="owner-source">Источник: {source_text or "не сохранено"}</small>'
                 '<button type="button" class="owner-reset">Сбросить к авто</button></div>'
             )
         elif name == "dhw_type":

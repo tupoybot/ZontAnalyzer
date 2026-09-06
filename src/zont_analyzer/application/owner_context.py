@@ -502,24 +502,12 @@ class OwnerContextStore:
         profile = self._profile_state(self._ordered_profile_rows(session, devices[0].id, as_of))
         values = {
             key: profile.get(key, {}).get("value")
-            for key in (
-                "gas_max_m3h",
-                "gas_unit",
-                "gas_source",
-                "gas_applicability",
-                "has_gas_stove",
-            )
+            for key in ("gas_max_m3h", "has_gas_stove")
         }
-        if any(values[key] is None for key in ("gas_max_m3h", "gas_unit", "gas_source", "gas_applicability")):
+        if values["gas_max_m3h"] is None:
             return {
                 "status": "unknown",
-                "reason": "Паспортные max, единица, источник или применимость ещё не указаны.",
-                "warnings": [],
-            }
-        if values["gas_unit"] != "м³/ч":
-            return {
-                "status": "unknown",
-                "reason": "Паспортная единица не позволяет сопоставить расход с м³/ч.",
+                "reason": "Максимальный паспортный расход котла, м³/ч, ещё не указан.",
                 "warnings": [],
             }
         if values["has_gas_stove"] is not False:

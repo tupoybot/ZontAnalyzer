@@ -39,7 +39,17 @@ OWNER_SCRIPT = r"""
         input.value = value?.[input.dataset.coordinate] ?? '';
       });
       const input = node.querySelector('.owner-value');
-      if (input) input.value = value ?? '';
+      if (input) {
+        const selected = value ?? input.dataset.default ?? '';
+        if (input.tagName === 'SELECT' && input.dataset.default) {
+          input.querySelectorAll('[data-legacy]').forEach(option => option.remove());
+          if (![...input.options].some(option => option.value === selected)) {
+            const option = new Option(selected, selected);
+            option.dataset.legacy = 'true'; input.append(option);
+          }
+        }
+        input.value = selected;
+      }
       const check = node.querySelector('.owner-tristate');
       const state = node.querySelector('.owner-unknown');
       if (check) { check.checked = value === true; check.indeterminate = value == null; }
@@ -116,7 +126,9 @@ OWNER_SCRIPT = r"""
       const fields = {};
       for (const node of fieldNodes) {
         const name = node.dataset.field;
-        if (!changed.has(name)) continue;
+        const defaultInput = node.querySelector('[data-default]');
+        const current = profiles.find(p => p.device_id === deviceId)?.fields?.[name]?.value;
+        if (!changed.has(name) && !(defaultInput && current == null)) continue;
         const coordinates = [...node.querySelectorAll('[data-coordinate]')];
         const state = node.querySelector('.owner-unknown');
         const input = node.querySelector('.owner-value');
