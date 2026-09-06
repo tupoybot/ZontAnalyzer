@@ -66,5 +66,25 @@ Online backup создан штатной командой работающег�
   Взвешенные квантили не переоценивают короткие участки с частыми отсчётами.
 - Штатная схема Responses Structured Outputs сохранена по
   [официальному контракту](https://developers.openai.com/api/docs/guides/structured-outputs).
-  Реальный запрос пока не выполнялся: автоматическая проверка потребовала отдельное
-  согласие на конкретный пакет production-телеметрии; работа с mock пройдена.
+  После отдельного явного согласия владельца выполнен один реальный запрос,
+  `max_retries=0`: 20604 input / 624 output tokens, `gpt-5.6-luna`, medium.
+  Response успешно разобран прежней схемой; пустой список рекомендаций уместен,
+  летний режим и прежние решения владельца учтены. Артефакты: `/tmp/zont-stage2/ai-result.json`
+  и `/tmp/zont-stage2/publish/2026-09-05-ai.{html,txt}`. Usage вырос ровно на одну запись;
+  повторных запросов нет. Первоначальная автоматическая блокировка разрешена явным согласием.
+
+## Публикация и приёмка immutable образа
+
+- Коммит приложения: `4ba9cd3282875fbc8178d352a6f15b1ee82d8cc7`.
+- Тег: `release-2-20260906`.
+- [Release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34035224385)
+  и [branch CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34035222672) — success.
+- Принятый образ:
+  `ghcr.io/tupoybot/zontanalyzer@sha256:7c4596fd9669c9570d4fed3fec81feec4994252bef3ba455ecec3de499b18d40`.
+- OCI revision label в опубликованном образе отсутствует; вместо него локально сверены
+  SHA-256 всех 32 Python-файлов установленного приложения — совпали с коммитом.
+- Этот digest отдельно запущен локально с `--network none`, read-only root filesystem,
+  штатным UID и только writable mounts копии БД/одноразовой публикации. Оба реальных
+  дневных отчёта рассчитаны, артефакт `/tmp/zont-stage2/registry-acceptance.log`.
+- 14 явных решений `applied/rejected` и 14 interventions на локальной копии совпали
+  с исходным backup побайтно на уровне SQL-строк; `integrity_check=ok`, FK-нарушений нет.

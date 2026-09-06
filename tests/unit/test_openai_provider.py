@@ -200,3 +200,19 @@ def test_analysis_packet_preserves_complete_evidence_dto_when_it_fits() -> None:
 
     assert packet["control_context"]["temporal_evidence"] == evidence
     assert packet["provenance"]["truncation"]["omitted"] == {}
+
+
+def test_packet_shares_budget_between_dhw_dynamics_and_aggregate_metrics() -> None:
+    events = [_event(index) for index in range(12)]
+    for event in events:
+        event.kind = "dhw_reheat_episode"
+        event.details = {"facts": {"temperature_samples_description": "x" * 2_000}}
+    metrics = [MetricValue(id=f"metric:{index:03}", name="temperature", value=index, unit="°C") for index in range(44)]
+    packet = analysis_packet(
+        quality={"score": 1.0}, metrics=metrics, events=events, period={"kind": "daily"},
+        context={"temporal_evidence": {"windows": [_window(1)], "provenance_note": "x" * 42_000}},
+    )
+    assert any(event["kind"] == "dhw_reheat_episode" for event in packet["events"])
+    assert len(packet["metrics"]) == len(metrics)
+    assert packet["provenance"]["truncation"]["omitted"]["events"]["items"] > 0
+    assert packet["provenance"]["truncation"]["serialized_bytes"] <= ANALYSIS_PACKET_MAX_BYTES

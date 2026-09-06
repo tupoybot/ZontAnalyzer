@@ -286,18 +286,25 @@ def analysis_packet(
     if isinstance(canonical_context, dict):
         for key in sorted(important_context & canonical_context.keys()):
             _add_mapping_item(packet, context_target, key, canonical_context[key], "control_context", record_omitted)
+    representatives: list[Any] = []
+    remaining_events: list[Any] = []
+    seen_families: set[str] = set()
+    for event in sorted(canonical_events, key=_event_sort_key):
+        kind = str(event.get("kind", ""))
+        family = kind if any(name in kind for name in ("dhw", "summer", "burner_pulse", "reliability")) else ""
+        if event.get("severity") == "critical" or (family and family not in seen_families):
+            representatives.append(event)
+            seen_families.add(family)
+        else:
+            remaining_events.append(event)
+    # Keep a complete representative episode before aggregates, then share the
+    # remaining budget between metrics and additional episodes. Repeated DHW
+    # episodes must not crowd all comfort/reliability metrics out of the packet.
+    _add_sorted_list(packet, packet, "events", representatives, "events", record_omitted, _event_sort_key)
     _add_sorted_list(
         packet, packet, "metrics", canonical_metrics, "metrics", record_omitted, lambda item: str(item.get("id", ""))
     )
-    _add_sorted_list(
-        packet,
-        packet,
-        "events",
-        canonical_events,
-        "events",
-        record_omitted,
-        _event_sort_key,
-    )
+    _add_sorted_list(packet, packet, "events", remaining_events, "events", record_omitted, _event_sort_key)
     context_target = packet["control_context"]
     if isinstance(canonical_context, dict):
         for key in sorted(canonical_context.keys() - important_context):
