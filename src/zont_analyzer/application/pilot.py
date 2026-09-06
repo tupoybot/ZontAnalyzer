@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from zont_analyzer.application.reasoning_context import reasoning_payload
 from zont_analyzer.domain import Report
 from zont_analyzer.reports import render_html, render_text
+from zont_analyzer.reports.chart_data import cached_chart_data
 
 if TYPE_CHECKING:
     from zont_analyzer.runtime import Runtime
@@ -172,6 +173,7 @@ class PilotService:
             render_html(
                 report,
                 self.runtime.db.recommendation_views_for_report(report.id),
+                chart_data=cached_chart_data(self.runtime.db, report),
                 feedback_api_base_url=self.runtime.config.feedback.public_api_base_url,
                 latest_report_href="../latest.html",
             ),

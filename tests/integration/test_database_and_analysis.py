@@ -254,8 +254,11 @@ def test_reliability_events_persist_and_uptime_is_prominent(tmp_path: Path) -> N
     rendered_html = render_html(report)
     assert "Аптайм котла: 01:22:00 дд:чч:мм" in rendered_text
     assert "Аптайм ZONT: 02:00:00 дд:чч:мм" in rendered_text
-    assert rendered_html.index("Аптайм котла") < rendered_html.index("Качество данных")
-    assert rendered_html.index("Аптайм ZONT") < rendered_html.index("Качество данных")
+    assert 'class="reliability"' in rendered_html
+    assert "1 дн." in rendered_html
+    assert "2 дн." in rendered_html
+    assert "Аптайм котла" in rendered_html  # Exact values remain in metric details.
+    assert "01:22:00" in rendered_html
 
 
 def test_stale_reliability_data_is_rendered_as_offline(tmp_path: Path) -> None:

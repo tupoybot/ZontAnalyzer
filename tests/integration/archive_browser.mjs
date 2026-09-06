@@ -30,6 +30,15 @@ try {
   await page.locator("[data-archive-navigation]").waitFor();
   assert.equal(await page.locator('[data-archive-action="latest"][href]').count(), 0);
 
+  assert.equal(await page.locator(".archive-picker").getAttribute("open"), null);
+  assert.equal(await page.locator("#system-profile").getAttribute("open"), null);
+  assert.equal(await page.locator(".feedback-note").first().isVisible(), false);
+  assert.equal(await page.locator("#debug-toggle").isChecked(), false);
+  await page.locator("#debug-toggle").check();
+  assert.equal(await page.locator("body").evaluate(e => e.classList.contains("debug-mode")), true);
+  await page.reload({waitUntil: "networkidle"});
+  assert.equal(await page.locator("#debug-toggle").isChecked(), true);
+  await page.locator("#debug-toggle").uncheck();
   const controls = page.locator(".archive-controls");
   await assert.equal(await controls.isVisible(), true, "controls appear after the manifest loads");
   assert.equal(await page.locator(".archive-day.available").count(), 3, "only completed sparse daily reports are selectable");
@@ -44,6 +53,7 @@ try {
   await page.locator('[data-archive-action="latest"]').click();
   await page.waitForURL("**/daily/2026-08-05.html");
 
+  await page.locator(".archive-picker > summary").click();
   const beforeMonthArrow = page.url();
   await page.locator('[data-archive-month="previous"]').click();
   assert.equal(page.url(), beforeMonthArrow, "month arrows change the calendar only");
@@ -115,6 +125,7 @@ try {
   assert.equal(await gasType.locator("custom").count(), 0);
 
   const gas = ownerForm.locator("[data-owner-gas]");
+  await gas.locator("[data-gas-edit]").click();
   await gas.locator("[name=gas-value]").fill("10");
   await gas.locator("[data-gas-save]").click();
   await gas.locator("[data-gas-message]").filter({ hasText: "сохранено" }).waitFor();
@@ -124,11 +135,13 @@ try {
   await page.goto(`${baseURL}/daily/2026-08-01.html`, { waitUntil: "networkidle" });
   const historicalGas = page.locator("[data-owner-gas]");
   const historicalReportId = await page.locator("[data-owner-forms]").getAttribute("data-report-id");
+  await historicalGas.locator("[data-gas-edit]").click();
   await historicalGas.locator("[name=gas-value]").fill("5");
   await historicalGas.locator("[data-gas-save]").click();
   await historicalGas.locator("[data-gas-message]").filter({ hasText: "сохранено" }).waitFor();
   assert.equal((await (await context.request.get(`${baseURL}/api/reports/${encodeURIComponent(historicalReportId)}/gas`)).json()).reading.value_m3, "5");
   assert.equal((await (await context.request.get(`${baseURL}/api/reports/${encodeURIComponent(dayFiveReportId)}/gas`)).json()).reading.value_m3, "10", "different report days keep separate readings");
+  await historicalGas.locator("[data-gas-edit]").click();
   await historicalGas.locator("[name=gas-value]").fill("12");
   await historicalGas.locator("[data-gas-save]").click();
   await historicalGas.locator("[data-gas-message]").filter({ hasText: /конфликт|conflict/i }).waitFor();
@@ -138,6 +151,7 @@ try {
   await historicalGas.locator("[data-gas-message]").filter({ hasText: "сохранено" }).waitFor();
   const resetGas = await (await context.request.get(`${baseURL}/api/reports/${encodeURIComponent(historicalReportId)}/gas`)).json();
   assert.match(resetGas.reading.meter_segment, /^reset:/, "reset creates a meter boundary");
+  await historicalGas.locator("[data-gas-edit]").click();
   await historicalGas.locator("[data-gas-delete]").click();
   await historicalGas.locator("[data-gas-message]").filter({ hasText: "удалено" }).waitFor();
   assert.equal((await (await context.request.get(`${baseURL}/api/reports/${encodeURIComponent(historicalReportId)}/gas`)).json()).reading, null);
@@ -147,6 +161,7 @@ try {
   const card = page.locator(".recommendation[data-recommendation-id]").first();
   await card.waitFor();
   const note = "Stage 1.8 browser feedback survives reload";
+  await card.locator(".feedback-comment > summary").click();
   await card.locator(".feedback-note").fill(note);
   await card.locator('button[data-feedback-status="applied"]').click();
   await card.locator(".feedback-message").filter({ hasText: "сохранена" }).waitFor();
@@ -155,6 +170,16 @@ try {
   await assert.equal(await page.locator(".recommendation .feedback-note").first().inputValue(), note);
   await assert.match(await page.locator(".recommendation .feedback-status").first().textContent(), /Выполнено/);
 
+  await page.locator(".recommendation .feedback-comment > summary").first().click();
+  await page.locator(".recommendation .feedback-note").first().fill(note + " edited");
+  await page.locator(".recommendation [data-feedback-save-note]").first().click();
+  await page.locator(".recommendation .feedback-message").first().filter({hasText:"сохранена"}).waitFor();
+  await page.reload({waitUntil: "networkidle"});
+  assert.equal(await page.locator(".recommendation .feedback-note").first().inputValue(), note + " edited");
+  assert.match(await page.locator(".recommendation .feedback-status").first().textContent(), /Выполнено/);
+  await page.goto(`${baseURL}/latest.html?debug=1`, {waitUntil: "networkidle"});
+  assert.equal(await page.locator("#debug-toggle").isChecked(), true);
+  await page.locator("#debug-toggle").uncheck();
   const legacy = await context.request.get(`${baseURL}/za/daily/2026-08-05.html`);
   assert.equal(legacy.status(), 200, "legacy /za archive remains reachable");
   const rootHealth = await context.request.get(`${baseURL}/api/health`);

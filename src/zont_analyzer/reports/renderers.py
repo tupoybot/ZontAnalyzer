@@ -333,6 +333,8 @@ _ARCHIVE_NAVIGATION_SCRIPT = r"""
   navigation.querySelectorAll("[data-archive-kind]").forEach((button) => {
     button.addEventListener("click", () => {
       activeKind = button.dataset.archiveKind || "daily";
+      const picker = navigation.querySelector(".archive-picker");
+      if (picker) picker.open = true;
       render();
     });
   });
@@ -1039,7 +1041,12 @@ def render_html(
     feedback_api_base_url: str = "/api",
     owner_data: dict[str, Any] | None = None,
     latest_report_href: str = "latest.html",
+    chart_data: dict[str, Any] | None = None,
 ) -> str:
+    from . import presentation as ui
+    from .charts import render_charts
+    from .theme import SCRIPT, STYLE
+
     title = html.escape(f"ZontAnalyzer — {report.kind}")
     from zont_analyzer.reports.owner_forms import render_owner_forms
 
@@ -1054,8 +1061,8 @@ def render_html(
     mode_name = current_mode.get("name") if isinstance(current_mode, dict) else None
     mode_intent = current_mode.get("intent") if isinstance(current_mode, dict) else None
     mode_context = (
-        f"<p><strong>Текущий режим:</strong> {html.escape(str(mode_name))} "
-        f"({html.escape(str(mode_intent))}); <strong>цель:</strong> "
+        f"<p><strong>Режим на конец периода:</strong> {html.escape(str(mode_name))} "
+        f'<span class="debug-only">{html.escape(str(mode_intent))}</span><strong>цель:</strong> '
         f"{html.escape(str(report.context.get('current_target_c')))} °C</p>"
         if mode_name is not None
         else ""
@@ -1063,7 +1070,7 @@ def render_html(
     heating_circuit = report.context.get("heating_circuit")
     sensor_lines = _sensor_context_lines(report.context.get("sensors"))
     sensor_context = (
-        '<section class="sensors"><h2>Датчики</h2><ul>'
+        '<section class="sensors debug-only"><h2>Источники датчиков</h2><ul>'
         + "".join(f"<li>{html.escape(line)}</li>" for line in sensor_lines)
         + "</ul></section>"
         if sensor_lines
@@ -1080,7 +1087,7 @@ def render_html(
             "<p><strong>Автоматический летний переход контура:</strong> "
             f"{'включён' if auto_enabled else 'выключен'}{threshold_text}{active_text}. "
             f"Контроль отопительной уставки активен "
-            f"{100 - float(heating_circuit.get('inactive_time_pct', 0)):g}% периода.</p>"
+            f"{ui.number(100 - float(heating_circuit.get('inactive_time_pct', 0)), '%')} периода.</p>"
         )
     dhw_interaction = report.context.get("dhw_interaction")
     dhw_context = ""
@@ -1118,36 +1125,9 @@ def render_html(
             "Без прямых сигналов клапана, насоса и расхода гидравлическая причина не считается доказанной.</small></p>"
             "</section>"
         )
-    metric_rows: list[str] = []
-    uptime_cards: list[str] = []
-    for metric in report.metrics:
-        value, unit = _metric_display(metric)
-        label = _metric_label(metric.name, metric.context)
-        metric_rows.append(
-            f"<tr><td>{html.escape(label)}</td>"
-            f"<td>{html.escape(value)}</td><td>{html.escape(unit)}</td></tr>"
-        )
-        if metric.name in {"boiler_uptime_seconds", "zont_uptime_seconds"}:
-            uptime_cards.append(
-                f'<article class="uptime-card"><span>{html.escape(label)}</span>'
-                f"<strong>{html.escape(value)}</strong><small>{html.escape(unit)}</small></article>"
-            )
     mttr_reason = _missing_mttr_reason(report)
-    if mttr_reason:
-        metric_rows.append(
-            "<tr><td>MTTR котельного сервиса</td><td>Нет достоверных данных</td>"
-            f"<td><small>{html.escape(mttr_reason)}</small></td></tr>"
-        )
-    metrics = "".join(metric_rows)
-    uptime = f'<section class="uptime-grid">{"".join(uptime_cards)}</section>' if uptime_cards else ""
     temporal_evidence = _temporal_evidence_html(report.context.get("temporal_evidence"))
     historical_evidence = _historical_evidence_html(report.context)
-    events = "".join(
-        f"<tr><td>{html.escape(_local(item.started_at, report.timezone))}</td>"
-        f"<td>{html.escape(item.severity)}</td><td>{html.escape(_event_label(item.kind))}</td>"
-        f"<td>{html.escape(_event_details(item.details))}</td></tr>"
-        for item in report.events[:50]
-    )
 
     def html_list(values: list[str], empty: str) -> str:
         return "<ul>" + "".join(f"<li>{html.escape(value)}</li>" for value in values) + "</ul>" if values else empty
@@ -1164,7 +1144,7 @@ def render_html(
             f"<h3>{html.escape(item.statement)}</h3>"
             f"<p><strong>Статус:</strong> {html.escape(_epistemic_label(item.epistemic_level))}; "
             f"<strong>Интервал:</strong> {html.escape(_interval_text(item.interval, report.timezone))}</p>"
-            f"<p><strong>Свидетельства:</strong> {evidence_html(item.evidence)}</p></article>"
+            f"<p class=\"debug-only\"><strong>Свидетельства:</strong> {evidence_html(item.evidence)}</p></article>"
             for item in report.observed_patterns
         )
         reasoning_parts.append(f"<section><h2>Наблюдаемые паттерны</h2>{cards}</section>")
@@ -1177,8 +1157,8 @@ def render_html(
             f"<p><strong>Уверенность:</strong> {item.confidence:.0%}; "
             f"основание: {html.escape(item.confidence_basis)}. <small>Это не вероятность.</small></p>"
             f"<p><strong>Обоснование:</strong> {html.escape(item.rationale)}</p>"
-            f"<p><strong>Свидетельства за:</strong> {evidence_html(item.evidence_for)}</p>"
-            f"<p><strong>Свидетельства против:</strong> {evidence_html(item.evidence_against)}</p>"
+            f"<p class=\"debug-only\"><strong>Свидетельства за:</strong> {evidence_html(item.evidence_for)}</p>"
+            f"<p class=\"debug-only\"><strong>Свидетельства против:</strong> {evidence_html(item.evidence_against)}</p>"
             f"<p><strong>Альтернативы:</strong></p>{html_list(item.alternatives, '<p>Не указаны.</p>')}"
             "</article>"
             for item in report.hypotheses
@@ -1192,7 +1172,7 @@ def render_html(
             f"<p><strong>Уверенность:</strong> {item.confidence:.0%}; "
             f"основание: {html.escape(item.confidence_basis)}. <small>Это не вероятность.</small></p>"
             f"<p><strong>Допущения:</strong></p>{html_list(item.assumptions, '<p>Не указаны.</p>')}"
-            f"<p><strong>Свидетельства:</strong> {evidence_html(item.evidence)}</p>"
+            f"<p class=\"debug-only\"><strong>Свидетельства:</strong> {evidence_html(item.evidence)}</p>"
             f"<p><strong>План проверки:</strong> {html.escape(item.verification)}</p>"
             "</article>"
             for item in report.predictions
@@ -1203,7 +1183,7 @@ def render_html(
             '<article class="reasoning-item unknown">'
             f"<h3>{html.escape(item.statement)}</h3>"
             f"<p><strong>Интервал:</strong> {html.escape(_interval_text(item.interval, report.timezone))}</p>"
-            f"<p><strong>Свидетельства:</strong> {evidence_html(item.evidence)}</p></article>"
+            f"<p class=\"debug-only\"><strong>Свидетельства:</strong> {evidence_html(item.evidence)}</p></article>"
             for item in report.unknowns
         )
         reasoning_parts.append(f"<section><h2>Неизвестное / недостаток данных</h2>{cards}</section>")
@@ -1217,13 +1197,22 @@ def render_html(
             f"<p><strong>Обоснование:</strong> {html.escape(experiment.rationale)}</p>"
             f"<p><strong>Ожидаемый эффект:</strong> {html.escape(experiment.expected_effect)}</p>"
             f"<p><strong>Срок наблюдения:</strong> {html.escape(experiment.observation_period)}</p>"
-            f"<p><strong>Свидетельства:</strong> {evidence_html(experiment.evidence)}</p>"
+            f"<p class=\"debug-only\"><strong>Свидетельства:</strong> {evidence_html(experiment.evidence)}</p>"
             f"<p><strong>Критерии успеха:</strong></p>{html_list(experiment.success_criteria, '<p>Не указаны.</p>')}"
             f"<p><strong>Когда остановиться:</strong></p>{html_list(experiment.stop_conditions, '<p>Не указано.</p>')}"
             f"<p><strong>Риски:</strong></p>{html_list(experiment.risks, '<p>Не указаны.</p>')}"
             "</article></section>"
         )
     reasoning = "".join(reasoning_parts)
+    # Keep each explanation accessible with its technical evidence in context.
+    for heading in ("Наблюдаемые паттерны", "Гипотезы", "Прогнозы"):
+        prefix = f"<section><h2>{heading}</h2>"
+        start = reasoning.find(prefix)
+        if start >= 0:
+            end = reasoning.index("</section>", start)
+            body = reasoning[start + len(prefix):end]
+            reasoning = (reasoning[:start] + f"<details><summary>{heading}</summary>{body}</details>"
+                         + reasoning[end + len("</section>"):])
 
     feedback_by_id = recommendation_feedback or {}
     status_labels = {
@@ -1232,6 +1221,12 @@ def render_html(
         "rejected": "Отклонено",
         "ignored": "Без реакции",
     }
+    category_labels = {
+        "observe_only": "Наблюдение", "safe_user_setting": "Настройка",
+        "needs_manual_context": "Нужен контекст", "service_required": "Обслуживание",
+        "safety_warning": "Безопасность",
+    }
+    priority_labels = {"low": "низкий", "medium": "средний", "high": "высокий", "critical": "критический"}
     recommendation_cards: list[str] = []
     for recommendation in report.recommendations:
         recommendation_id = recommendation.id or ""
@@ -1241,26 +1236,32 @@ def render_html(
             status = "new"
         owner_note = str(state.get("owner_note") or "")
         disabled = " disabled" if not recommendation_id else ""
+        note_save_hidden = " hidden" if status not in {"applied", "rejected"} else ""
         recommendation_cards.append(
             f'<article class="recommendation" data-recommendation-id="{html.escape(recommendation_id, quote=True)}">'
             f"<h3>{html.escape(recommendation.title)}</h3>"
-            f'<p><strong>ID рекомендации:</strong> <code>{html.escape(recommendation_id or "не сохранена")}</code></p>'
+            f'<p class="debug-only"><strong>ID рекомендации:</strong> '
+            f'<code>{html.escape(recommendation_id or "не сохранена")}</code></p>'
             f'<p><strong>Статус:</strong> <span class="feedback-status status-{html.escape(status)}" '
             f'data-status="{html.escape(status)}">{status_labels[status]}</span></p>'
-            f"<p><strong>Гипотеза:</strong> {html.escape(recommendation.hypothesis)}</p>"
-            f"<p><strong>Действие:</strong> {html.escape(recommendation.suggested_manual_action)}</p>"
+            f"<p><strong>Почему:</strong> {html.escape(recommendation.hypothesis)}</p>"
+            f"<p><strong>Что сделать:</strong> {html.escape(recommendation.suggested_manual_action)}</p>"
             f"<p><strong>Ожидаемый эффект:</strong> {html.escape(recommendation.expected_effect)}</p>"
-            f"<p><strong>Evidence:</strong> "
+            f"<p class=\"debug-only\"><strong>Evidence:</strong> "
             f"{evidence_html((*recommendation.evidence_metric_ids, *recommendation.evidence_event_ids))}</p>"
-            f"<p><small>Приоритет: {html.escape(recommendation.priority)}; "
+            f"<p><small>{html.escape(category_labels[recommendation.category])} · "
+            f"приоритет: {html.escape(priority_labels[recommendation.priority])}; "
             f"уверенность: {recommendation.confidence:.0%}</small></p>"
+            '<details><summary>Риски и условия остановки</summary>'
             f"<p><strong>Риски:</strong></p>{html_list(recommendation.risks, '<p>Не указаны.</p>')}"
             f"<p><strong>Когда остановиться:</strong></p>"
-            f"{html_list(recommendation.stop_conditions, '<p>Не указано.</p>')}"
+            f"{html_list(recommendation.stop_conditions, '<p>Не указано.</p>')}</details>"
             '<div class="feedback-controls">'
-            '<label>Комментарий владельца'
+            '<details class="feedback-comment"><summary>Комментарий… / Изменить</summary><label>Комментарий владельца'
             f'<textarea class="feedback-note" rows="3" maxlength="2000"{disabled}>'
             f"{html.escape(owner_note)}</textarea></label>"
+            f'<button type="button" data-feedback-save-note{disabled}{note_save_hidden}>'
+            'Сохранить комментарий</button><small>Комментарий сохраняется вместе с решением.</small></details>'
             '<div class="feedback-actions">'
             f'<button type="button" data-feedback-status="applied"{disabled}>Выполнено</button>'
             f'<button type="button" class="reject" data-feedback-status="rejected"{disabled}>Отклонить</button>'
@@ -1270,70 +1271,41 @@ def render_html(
             '<p class="feedback-message" role="status" aria-live="polite"></p>'
             "</div></article>"
         )
-    recommendations = "".join(recommendation_cards)
+    recommendations = "".join(recommendation_cards[:1])
+    other_recommendations = "".join(recommendation_cards[1:])
+    by_name = {m.name: m.value for m in report.metrics}
+    pauses = by_name.get("dhw_confirmed_heating_pause_count")
+    pause_minutes = by_name.get("dhw_mean_confirmed_heating_pause_minutes")
+    thermal_interaction = '<p class="interaction">ГВС ↔ отопление: '
+    if pauses is not None:
+        thermal_interaction += f"подтверждённых пауз отопления при догреве ГВС — {int(pauses)}. "
+        if pauses and pause_minutes is not None:
+            thermal_interaction += f"Средняя пауза — {ui.number(pause_minutes, 'мин')}. "
+        returns = by_name.get("dhw_long_heating_return_count")
+        if returns == 0:
+            thermal_interaction += "Долгого возврата отопления после ГВС не наблюдалось."
+    else:
+        thermal_interaction += "недостаточно данных для оценки пауз отопления."
+    thermal_interaction += '</p>'
+    more_actions = (
+        '<section class="full-width more-actions"><h2>Другие рекомендации</h2>'
+        f'<div class="lower-grid">{other_recommendations}</div></section>'
+        if other_recommendations else ''
+    )
     canonical = html.escape(json.dumps(report.model_dump(mode="json"), ensure_ascii=False))
     api_base = html.escape(feedback_api_base_url.rstrip("/"), quote=True)
     latest_href = html.escape(latest_report_href, quote=True)
+    period_date = report.period_start.astimezone(ZoneInfo(report.timezone)).strftime('%d.%m.%Y')
+    kind_label = {'daily': 'День', 'weekly': 'Неделя', 'monthly': 'Месяц',
+                  'initial': 'Обзор', 'seasonal': 'Сезон'}[report.kind]
     return f"""<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>{title}</title><style>
-body{{font:16px system-ui;max-width:960px;margin:2rem auto;padding:0 1rem;color:#20242a}}
-h1{{font-size:1.6rem}}table{{border-collapse:collapse;width:100%}}
-td,th{{padding:.55rem;border-bottom:1px solid #ddd;text-align:left}}
-.archive-navigation{{padding:.65rem;background:#f4f7fb;border:1px solid #d8e0ea;border-radius:.7rem;
-margin:0 0 1rem}}
-.archive-navigation p{{margin:0}}
-.archive-controls{{display:grid;grid-template-columns:max-content max-content;gap:.45rem .65rem}}
-.archive-controls[hidden]{{display:none}}
-.archive-period-tabs,.archive-day-actions,.archive-month-controls{{display:flex;gap:.3rem;align-items:center;
-flex-wrap:wrap}}
-.archive-month-controls,.archive-panel,.archive-status{{grid-column:1/-1}}
-.archive-status:empty{{display:none}}
-.archive-period-tabs button,.archive-day-actions button,
-.archive-month-controls button{{font:inherit;font-size:.82rem;padding:.25rem .45rem;
-border:1px solid #aebdce;border-radius:.4rem;background:white;color:#1d344b;cursor:pointer}}
-.archive-period-tabs button[aria-selected="true"]{{background:#235d92;border-color:#235d92;color:white}}
-.archive-day-actions button:disabled{{opacity:.5;cursor:default}}
-.archive-month-label{{font-size:.85rem;font-weight:600;min-width:9rem;text-align:center}}
-.archive-calendar{{display:grid;grid-template-columns:repeat(7,minmax(1.5rem,1fr));gap:.15rem;max-width:18rem}}
-.archive-weekday,.archive-day{{min-height:1.4rem;font-size:.82rem;display:grid;place-items:center;border-radius:.35rem;font-variant-numeric:tabular-nums}}
-.archive-weekday{{font-size:.7rem;color:#536579}}
-.archive-day.available{{background:#dceefc;color:#123d63;font-weight:600;text-decoration:none}}
-.archive-day.available:hover,.archive-day.available:focus{{outline:2px solid #235d92;outline-offset:1px}}
-.archive-day.selected{{background:#235d92;color:white}}.archive-day.unavailable{{color:#9aa5b1}}
-.archive-periods{{margin:.2rem 0;padding-left:1.25rem}}.archive-periods li{{margin:.45rem 0}}
-.archive-empty-message,.archive-status{{color:#536579}}
-.quality{{padding:.8rem;background:#eef6ff;border-radius:.5rem}}
-article{{border-left:4px solid #568;padding:0 1rem;margin:1rem 0;overflow-wrap:anywhere}}
-.dhw{{padding:.8rem 1rem;background:#fff8e8;border-radius:.5rem}}
-.sensors{{padding:.8rem 1rem;background:#f4f4fb;border-radius:.5rem}}
-.uptime-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.8rem;margin:1rem 0}}
-.uptime-card{{display:grid;gap:.25rem;border:0;background:#edf8f1;border-radius:.7rem;padding:1rem;margin:0}}
-.uptime-card strong{{font-size:1.8rem;font-variant-numeric:tabular-nums}}
-.uptime-card small{{color:#53635a}}
-.feedback-controls{{display:grid;gap:.65rem;padding:.8rem;background:#f6f8fa;border-radius:.5rem;margin:1rem 0}}
-.feedback-controls label{{display:grid;gap:.35rem;font-weight:600}}
-.feedback-note{{box-sizing:border-box;width:100%;font:inherit;padding:.55rem}}
-.feedback-actions{{display:flex;gap:.6rem;flex-wrap:wrap}}
-.feedback-actions button{{font:inherit;padding:.5rem .9rem;border:0;border-radius:.4rem;background:#287943;color:white;
-cursor:pointer}}
-.feedback-actions button.reject{{background:#a33b32}}
-.feedback-actions button:disabled{{opacity:.55;cursor:wait}}
-.feedback-status{{display:inline-block;padding:.15rem .45rem;border-radius:1rem;background:#e9edf2}}
-.status-applied{{background:#dcefe2;color:#185c2d}}.status-rejected{{background:#f7dfdc;color:#812820}}
-.status-ignored{{background:#e9edf2;color:#51606f}}
-.saved-note,.feedback-message{{margin:.1rem 0}}.feedback-message.error{{color:#9b251d}}
-.temporal-evidence{{margin:1rem 0;padding:.8rem 1rem;background:#f5f7fa;border-radius:.5rem;overflow-wrap:anywhere}}
-.temporal-evidence summary{{cursor:pointer;font-weight:600}}.evidence-item{{margin:.45rem 0 0 1rem}}
-.evidence-detail{{margin:.2rem 0 0 2rem;color:#536579;font-size:.92rem}}
-.historical-evidence{{margin:1rem 0;padding:.8rem 1rem;background:#f5f7fa;border-radius:.5rem;overflow-wrap:anywhere}}
-.historical-evidence summary{{cursor:pointer;font-weight:600}}.historical-evidence li{{margin:.45rem 0}}
-.reasoning-item{{border-left-color:#7952b3}}.reasoning-item.prediction{{border-left-color:#b06d18}}
-.reasoning-item.unknown{{border-left-color:#697586}}.reasoning-item.experiment{{border-left-color:#287943}}
-@media(max-width:560px){{body{{margin:1rem auto}}.archive-navigation{{padding:.6rem}}
-.archive-controls{{grid-template-columns:minmax(0,1fr)}}
-td,th{{padding:.4rem;font-size:.9rem;vertical-align:top}}table{{display:block;overflow-x:auto}}}}
-</style></head><body data-feedback-api-base="{api_base}"><h1>{title}</h1>
+<title>{title}</title><style>{STYLE}</style></head><body data-feedback-api-base="{api_base}">
+<a class="skip-link" href="#report">К отчёту</a>
+<header><div class="header-line"><span class="brand">ZontAnalyzer<span class="secondary"> / отчёт</span></span>
+<span class="period-label">{period_date} · {kind_label}</span>
+<div class="header-tools"><label>Debug <input id="debug-toggle" type="checkbox"></label>
+<button type="button" data-open-profile aria-label="Открыть профиль системы">⚙ Профиль системы</button></div></div>
 <nav class="archive-navigation" data-archive-navigation data-report-kind="{archive_kind}"
 data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="Архив отчётов">
 <p class="archive-nojs">Для просмотра другого периода откройте
@@ -1346,30 +1318,40 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="archive-day-actions"><button type="button" data-archive-action="previous">← Предыдущий</button>
 <button type="button" data-archive-action="latest" title="Последний доступный дневной отчёт">Сегодня</button>
 <button type="button" data-archive-action="next">Следующий →</button></div>
-<div class="archive-month-controls">
+<details class="archive-picker"><summary>Архив</summary><div class="archive-month-controls">
 <button type="button" data-archive-month="previous" aria-label="Предыдущий месяц">←</button>
 <span class="archive-month-label" aria-live="polite"></span>
 <button type="button" data-archive-month="next" aria-label="Следующий месяц">→</button></div>
-<p class="archive-status" role="status" aria-live="polite"></p><div class="archive-panel"></div>
+<p class="archive-status" role="status" aria-live="polite"></p><div class="archive-panel"></div></details>
 </div></nav>
-<p><strong>ID:</strong> <code>{html.escape(report.id)}</code></p>
+<div class="debug-only"><p><strong>ID:</strong> <code>{html.escape(report.id)}</code></p>
 <p><strong>Период:</strong> {period}</p>
-<p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"}</p>
-{owner_forms}
-{uptime}
-{mode_context}
-{sensor_context}
-{summer_context}
-{dhw_context}
-<p class="quality">Качество данных: {report.quality.score:.0%}; покрытие {report.quality.coverage_pct:.1f}%</p>
-{temporal_evidence}
-{historical_evidence}
-<p>{html.escape(report.summary)}</p><h2>Метрики</h2><table><tr><th>Метрика</th><th>Значение</th><th>Единица</th></tr>{metrics}</table>
-<h2>События</h2><p>Показано до 50 из {len(report.events)}.</p>
-<table><tr><th>Начало</th><th>Уровень</th><th>Тип</th><th>Детали</th></tr>{events}</table>
-{reasoning}
-<h2>Рекомендации</h2>{recommendations or "<p>Нет рекомендаций.</p>"}
-<details><summary>Канонический JSON</summary><pre>{canonical}</pre></details>
+<p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"};
+{html.escape(report.algorithm_version)}</p></div>
+</header><main id="report" class="report-layout">
+<div class="overview">{ui.hero(report)}{ui.kpis(report)}{ui.reliability(report)}
+{render_charts(report, chart_data, panel_ids=("climate",))}</div>
+<aside class="actions"><span class="eyebrow">СЛЕДУЮЩИЙ ШАГ</span><h2>Что делать</h2>
+{recommendations or '<p>Рекомендаций за этот период нет.</p>'}</aside>
+
+<section class="thermal-system full-width"><h2>Тепловая система</h2>
+<p class="boiler-context">Один котёл · отопление и горячая вода</p>
+<div class="thermal-columns"><section><h3>Отопление</h3>{mode_context}{summer_context}</section>
+<section>{dhw_context or '<h3>ГВС</h3><p>Недостаточно данных о работе ГВС за период.</p>'}</section></div>
+{thermal_interaction}
+<div class="engineering-chart">{render_charts(report, chart_data, panel_ids=("thermal",))}</div>
+</section>
+<div class="lower-grid full-width">{ui.timeline(report)}{ui.quality(report)}</div>
+{more_actions}
+<section class="details-area full-width"><h2>Почему сделаны эти выводы</h2>
+{reasoning or '<p>Дополнительные объяснения за период не сформированы.</p>'}
+</section>
+<div class="details-area full-width">{ui.metric_groups(report, mttr_reason)}{ui.sensors(report)}{sensor_context}
+<div class="debug-only">{temporal_evidence}{historical_evidence}</div>
+<details class="debug-only"><summary>Канонический JSON</summary><pre>{canonical}</pre></details></div>
+<section class="full-width owner-settings" aria-label="Профиль и показания">{owner_forms}</section>
+</main><footer>Период: {period} · ZontAnalyzer</footer>
+<script>{SCRIPT}</script>
 <script>{_ARCHIVE_NAVIGATION_SCRIPT}</script>
 <script>
 (() => {{
@@ -1389,6 +1371,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
     statusNode.className = `feedback-status status-${{status}}`;
     card.querySelector(".feedback-note").value = note;
     card.querySelector(".saved-note span").textContent = note || "нет";
+    card.querySelector("[data-feedback-save-note]").hidden = !["applied", "rejected"].includes(status);
   }}
 
   async function request(card, options) {{
@@ -1404,13 +1387,14 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
     return payload;
   }}
 
+  if (window.location.protocol === "file:") return;
   document.querySelectorAll(".recommendation[data-recommendation-id]").forEach((card) => {{
     const id = card.dataset.recommendationId;
     if (!id) return;
     const message = card.querySelector(".feedback-message");
-    card.querySelectorAll("button[data-feedback-status]").forEach((button) => {{
+    card.querySelectorAll("button[data-feedback-status], button[data-feedback-save-note]").forEach((button) => {{
       button.addEventListener("click", async () => {{
-        const buttons = card.querySelectorAll("button[data-feedback-status]");
+        const buttons = card.querySelectorAll("button[data-feedback-status], button[data-feedback-save-note]");
         buttons.forEach((item) => item.disabled = true);
         message.className = "feedback-message";
         message.textContent = "Сохраняю…";
@@ -1419,7 +1403,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
             method: "PUT",
             headers: {{"Content-Type": "application/json"}},
             body: JSON.stringify({{
-              status: button.dataset.feedbackStatus,
+              status: button.dataset.feedbackStatus || card.querySelector(".feedback-status").dataset.status,
               owner_note: card.querySelector(".feedback-note").value,
             }}),
           }});
@@ -1434,7 +1418,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
     }});
     request(card, {{method: "GET"}}).catch((error) => {{
       message.className = "feedback-message error";
-      message.textContent = error instanceof Error ? error.message : "Не удалось обновить статус.";
+      message.textContent = "Не удалось обновить статус. Показаны сохранённые данные отчёта.";
     }});
   }});
 }})();

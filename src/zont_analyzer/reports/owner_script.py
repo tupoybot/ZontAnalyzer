@@ -89,7 +89,10 @@ OWNER_SCRIPT = r"""
   });
   function applyGas(data) {
     if (!initial.daily) return;
-    form.querySelector('[name=gas-value]').value = data?.reading?.value_m3 ?? '';
+    const value = data?.reading?.value_m3 ?? '';
+    form.querySelector('[name=gas-value]').value = value;
+    form.querySelector('[data-gas-current]').textContent = value === ''
+      ? 'Показание не задано' : `Текущее показание: ${value} м³`;
     form.querySelector('[name=gas-reset]').checked = false;
     form.querySelector('[data-gas-plausibility]').textContent =
       [data?.plausibility?.reason, ...(data?.plausibility?.warnings || [])].filter(Boolean).join(' ');
@@ -158,16 +161,30 @@ OWNER_SCRIPT = r"""
         value_m3: input.value, reset: form.querySelector('[name=gas-reset]').checked,
       });
       applyGas(saved);
+      form.querySelector('#gas-editor')?.removeAttribute('open');
+      form.querySelector('[data-gas-edit]').setAttribute('aria-expanded', 'false');
+      form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'false');
       message(gasMessage, ['Показание сохранено.', saved.publish_warning].filter(Boolean).join(' '));
     } catch (error) { message(gasMessage, error.message, true); }
   });
   form.querySelector('[data-gas-delete]')?.addEventListener('click', async () => {
     try {
       applyGas(await request('/reports/' + encodeURIComponent(reportId) + '/gas', {delete:true}));
+      form.querySelector('#gas-editor')?.removeAttribute('open');
+      form.querySelector('[data-gas-edit]').setAttribute('aria-expanded', 'false');
+      form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'false');
       message(gasMessage, 'Показание удалено.');
     } catch (error) { message(gasMessage, error.message, true); }
   });
+  form.querySelector('[data-gas-edit]')?.addEventListener('click', () => {
+    const editor = form.querySelector('#gas-editor');
+    if (!editor) return;
+    editor.open = !editor.open;
+    form.querySelector('[data-gas-edit]').setAttribute('aria-expanded', String(editor.open));
+    if (editor.open) form.querySelector('[name=gas-value]')?.focus();
+  });
   selectProfiles(profiles); applyGas(initial.gas);
+  if (window.location.protocol === "file:") return;
   request('/equipment').then(data => selectProfiles(data.profiles || []))
     .catch(error => message(profileMessage, error.message, true));
   if (initial.daily) request('/reports/' + encodeURIComponent(reportId) + '/gas').then(applyGas)

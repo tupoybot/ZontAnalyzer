@@ -17,6 +17,7 @@ from zont_analyzer.config import explain_config
 from zont_analyzer.doctor import run_doctor
 from zont_analyzer.logging import configure_logging
 from zont_analyzer.reports import render_html, render_text
+from zont_analyzer.reports.chart_data import cached_chart_data
 from zont_analyzer.runtime import Runtime, build_runtime
 
 app = typer.Typer(help="Read-only ZONT telemetry collector and heating analyst.", no_args_is_help=True)
@@ -251,6 +252,7 @@ def report_export(
         content = render_html(
             report,
             db.recommendation_views_for_report(report.id),
+            chart_data=cached_chart_data(db, report),
             feedback_api_base_url=_runtime(ctx).config.feedback.public_api_base_url,
         )
     elif format_ in {"text", "md"}:
