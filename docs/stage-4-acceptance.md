@@ -1,7 +1,7 @@
 # Этап 4 — техническая приёмка
 
 Дата: 2026-09-06. Ветка `stage4`, от актуального принятого `main` (`3670959`).
-Статус: реализация и локальная приёмка завершены; release/deployment выполняются.
+Статус: реализация, технические проверки и deployment завершены; ожидает приёмки владельца.
 Слияние и закрытие этапа ожидают явной приёмки владельца.
 
 ## Реализовано
@@ -59,5 +59,34 @@
 
 ## Релиз и сервер
 
-Доказательства дополняются после CI и deployment. На HK только deployment/backup
-и bounded smoke; сборки и приёмочный анализ выполняются локально.
+- Коммит приложения `ca0295fa46b12d6f8318a39326ceb22e966a2f5a`, тег `release-4-20260906`.
+- [CI ветки](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34044376786) и
+  [release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34044379521) — success.
+- Registry image: `ghcr.io/tupoybot/zontanalyzer@sha256:19c56fcb6b66918828d6383f732872205f4bfda9524767b68cda89ec102d9d06`.
+  Хеши всех 44 Python-файлов приложения/миграций совпали с release source.
+  Точный registry digest отдельно принят локально без сети; 124 отчёта и все
+  перечисленные выше записи сохранены. `/tmp/zont-stage4/registry-accept.log`.
+- Штатный pre-deployment backup:
+  `/opt/zont-analyzer/data/backups/zont-analyzer-20260906T161235546630Z.sqlite3`.
+- На HK `current` → `20260906-stage4-ca0295f`; worker healthy, OOM нет,
+  первый цикл завершён `2026-09-06T16:15:59Z`. Существующий настоящий архив
+  перерендерен локально; 250 файлов установлены атомарно под publication lock,
+  manifest последним. Синтетические ответы не публиковались.
+- Root/дневной архив/health/equipment/gas/legacy — ожидаемые 200/401. Исходный
+  htpasswd восстановлен побайтно. Хеши профиля, показаний/аудита/границ,
+  interventions и owner feedback до/после совпали; `llm_calls` остались 25.
+  nginx, Xray, Postfix, OpenDKIM и Docker остались active.
+- Доказательства: `/tmp/zont-stage4/{deploy.log,publish-deploy.log,worker-smoke.json,
+  routes-smoke.json,metadata-before.json,metadata-after.json,services-after.txt}`.
+- На HK выполнялись только доставка готового образа, backup/deployment и bounded
+  smoke. Все сборки, тесты и приёмочный анализ выполнены локально/в CI.
+
+В ходе deployment владелец уточнил будущую доставку: несжатые образы, CPU HK
+важнее объёма передачи. Правило записано в `AGENTS.md` и `deploy/OPERATIONS.md`:
+локальный pull/unpack → несжатый Docker archive → передача без gzip/SSH compression.
+Текущий stage4 registry pull к моменту уточнения уже был завершён; перед следующим
+HK release нужно адаптировать существующий pull-based release workflow с проверкой
+immutable image ID и сохранением исходного registry digest. Этот документ не
+утверждает, что новый транспорт уже реализован.
+
+Этап ожидает явной приёмки владельца; `stage4` не слита в `main`.
