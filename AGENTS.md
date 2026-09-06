@@ -66,6 +66,11 @@ Do not use a stronger model merely because it is available.
 ## Plan execution and handoff
 
 - Follow the dependency order and work portions in `docs/implementation_plan.md`.
+- Develop each implementation stage N in its own `stageN` branch created from up-to-date
+  `main` (for example, `stage2`, `stage3`). Work portions such as 2a/2b stay in `stage2`.
+- After completing the stage's acceptance criteria and recording the evidence, push its
+  commits and merge `stageN` into `main`. Do not merge an unaccepted stage; create the next
+  stage branch from the updated `main`.
 - Read the active stage, product requirements and current status first; inspect only relevant
   source/tests instead of repeatedly loading the full historical documentation.
 - A work portion includes implementation and related tests. Keep a short handoff in
