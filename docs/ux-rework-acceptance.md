@@ -131,3 +131,23 @@ checkbox и списка используется один трёхсостоя�
 выведены в HTML вокруг SVG: шрифт больше не уменьшается пропорционально графику.
 Единица °C находится отдельной строкой с отступом; на mobile убраны промежуточные
 временные отметки, чтобы подписи не сталкивались. Данные графиков не меняются.
+
+Проверки r4: 225 тестов, Ruff/mypy, пакет, Docker и Chromium прошли.
+На реальном HTML проверены desktop 1360 px и mobile 390/320 px: подписи
+температур 14 px, отступ от °C не менее 8 px, горизонтального переполнения нет.
+Аптаймы совпадают по положению и ширине с первыми двумя колонками KPI.
+[CI ветки](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34051730371) и
+[release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34051732255) — success.
+Коммит `c2181fd`, тег `release-ux-20260906-r4`, digest:
+`ghcr.io/tupoybot/zontanalyzer@sha256:787bdb9e85d830b2450f74525beff8f8229993cebe0a811043318607f096bbfb`.
+Registry-образ принят локально без сети на изолированной копии online backup
+`zont-analyzer-20260906T180956522145Z.sqlite3`; опубликованы 124 отчёта,
+проверяемые таблицы совпали с исходником, integrity/FK OK, llm_calls=25.
+
+На HK развёрнут `20260906-ux-r4-c2181fd`; worker healthy/OOM=false,
+первый цикл завершён `2026-09-06T18:34:15Z`. Pre-deploy backup:
+`zont-analyzer-20260906T183210203717Z.sqlite3`. Root/архив/API/legacy проверены,
+новая разметка осей присутствует. Хеши данных владельца и состояние соседних
+сервисов совпали до/после; llm_calls=25, htpasswd сохранён.
+Доказательства и screenshots: `/tmp/zont-ux-r4/`.
+Коммиты отправлены в `ux-rework`; merge не выполнялся.
