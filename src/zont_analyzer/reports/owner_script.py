@@ -56,16 +56,17 @@ OWNER_SCRIPT = r"""
       if (state) state.value = value == null ? 'unknown' : value ? 'yes' : 'no';
       const source = node.querySelector('.owner-source');
       if (source) source.textContent = item
-        ? `Источник: ${item.source === 'manual' ? 'владелец' : 'ZONT'}; ${item.provenance || ''}; действует с ${item.effective_from}`
+        ? `Источник: ${item.source === 'manual' ? 'владелец' : 'ZONT'}`
         : 'Не указано';
     }
     const coords = profile?.fields?.coordinates?.value;
     form.querySelector('[data-coordinates-summary]').textContent = coords
       ? `Широта ${coords.latitude}, долгота ${coords.longitude}` : 'Координаты недоступны';
     form.querySelector('[data-profile-history]').textContent = (profile?.history || []).map(item =>
-      `${item.recorded_at}: ${item.field} = ${JSON.stringify(item.value)}; ${item.reset ? 'возврат к авто' : item.source}; ` +
-      `${item.provenance || ''}; действует с ${item.effective_from}`
+      `${new Date(item.recorded_at).toLocaleString('ru-RU')}: ${initial.field_labels?.[item.field] || 'Поле профиля'} = ` +
+      `${JSON.stringify(item.value)}; ${item.reset ? 'возврат к авто' : item.source === 'manual' ? 'владелец' : 'ZONT'}`
     ).join('\n') || 'Нет изменений.';
+    form.querySelector('[data-profile-debug]').textContent = JSON.stringify(profile || {}, null, 2);
   }
   function selectProfiles(values) {
     profiles = values;

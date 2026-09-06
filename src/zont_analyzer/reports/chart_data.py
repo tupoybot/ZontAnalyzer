@@ -97,7 +97,8 @@ def cached_chart_data(db: Database, report: Report) -> dict[str, Any] | None:
 
 def _cache_path(db: Database, report: Report) -> tuple[Path, str]:
     digest = sha256(report.model_dump_json().encode("utf-8")).hexdigest()
-    return db.path.parent / "chart-data-cache" / f"{digest}.json", digest
+    report_key = sha256(report.id.encode("utf-8")).hexdigest()
+    return db.path.parent / "chart-data-cache" / f"{report_key}.json", digest
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:

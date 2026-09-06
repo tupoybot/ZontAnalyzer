@@ -56,6 +56,7 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
     profile: dict[str, Any] = next((item for item in profiles if str(item.get("device_id")) == device_id), {})
     initial = {
         "profiles": profiles,
+        "field_labels": {name: label for name, label, _ in _FIELDS},
         "gas": owner_data.get("gas"),
         "device_id": device_id,
         "report_id": report.id,
@@ -199,6 +200,7 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
 <p data-coordinates-summary></p><label hidden>Устройство <select data-device-select></select></label>
 <div class="owner-fields">{"".join(grouped_fields)}</div>
 <details class="owner-history"><summary>История изменений</summary><pre data-profile-history></pre></details>
+<details class="debug-only"><summary>Технические данные профиля</summary><pre data-profile-debug></pre></details>
 <label class="owner-effective">Дата применимости (необязательно, только профиль) <input type="date" data-effective-from></label>
 <div class="owner-actions"><button type="button" data-profile-save>Сохранить изменения</button></div><p class="owner-message" data-profile-message role="status" aria-live="polite"></p>
 </details>{gas_form}</section>

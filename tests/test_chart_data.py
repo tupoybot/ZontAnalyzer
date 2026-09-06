@@ -151,4 +151,4 @@ def test_chart_data_cache_reuses_canonical_report_and_invalidates_on_change(
     assert len(calls) == 1
     assert cached_chart_data(db, report.model_copy(update={"summary": "Пересчитанный отчёт"})) is not None
     assert len(calls) == 2
-    assert len(list((tmp_path / "chart-data-cache").glob("*.json"))) == 2
+    assert len(list((tmp_path / "chart-data-cache").glob("*.json"))) == 1
