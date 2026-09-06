@@ -92,6 +92,11 @@ class Recommendation(DomainModel):
 class AnalysisResult(DomainModel):
     summary: str
     recommendations: list[Recommendation] = Field(default_factory=list, max_length=3)
+    observed_patterns: list[ObservedPattern] = Field(default_factory=list)
+    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    predictions: list[Prediction] = Field(default_factory=list)
+    unknowns: list[Unknown] = Field(default_factory=list)
+    recommended_experiment: RecommendedExperiment | None = None
 
 
 class Report(DomainModel):
@@ -107,5 +112,22 @@ class Report(DomainModel):
     events: list[DetectedEvent] = Field(default_factory=list)
     recommendations: list[Recommendation] = Field(default_factory=list)
     summary: str
+    observed_patterns: list[ObservedPattern] = Field(default_factory=list)
+    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    predictions: list[Prediction] = Field(default_factory=list)
+    unknowns: list[Unknown] = Field(default_factory=list)
+    recommended_experiment: RecommendedExperiment | None = None
     ai_used: bool = False
     algorithm_version: str = "report-v2"
+
+
+from .reasoning import (  # noqa: E402  # Resolve the Pydantic forward references above.
+    Hypothesis,
+    ObservedPattern,
+    Prediction,
+    RecommendedExperiment,
+    Unknown,
+)
+
+AnalysisResult.model_rebuild()
+Report.model_rebuild()

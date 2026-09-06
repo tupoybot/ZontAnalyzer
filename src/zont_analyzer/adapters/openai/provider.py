@@ -11,13 +11,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
+from zont_analyzer.domain.reasoning import Hypothesis, ObservedPattern, Prediction, RecommendedExperiment, Unknown
+
+PROMPT_VERSION = "analyst-v4"
 
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
 _PACKET_CONTENT_MAX_BYTES = 60 * 1024
 _PACKET_ACCOUNTING_RESERVE_BYTES = 2 * 1024
 
 SYSTEM_PROMPT = """You are a read-only heating telemetry analyst.
-Facts are only the supplied metric and event objects. Never invent numbers.
+Facts are only supplied observations, derived metrics/events and temporal evidence. Never invent numbers.
 Every recommendation must cite existing evidence IDs. If data quality is poor,
 recommend observation/measurement only. An empty recommendation list is a valid
 and often preferable result when the system is behaving normally or evidence is
@@ -32,7 +35,7 @@ that requires licensed or service work; name that evidence and why the work is
 outside a safe user setting. Do not use generic emergency-checking, alarm-checking,
 or specialist boilerplate. Do not invent temperature, pressure, timing, or other
 equipment thresholds; use only supplied values, events, and documented limits.
-Write the summary and all recommendation text in Russian.
+Write all human-readable output in Russian; keep evidence IDs unchanged.
 Use control_context and heating_mode_change/target_temperature_change events when
 interpreting temperature episodes. Do not call an expected response inside a
 transition window an anomaly. Treat source=likely_manual as a hypothesis, not proof.
@@ -44,9 +47,9 @@ a heating alarm. Preserve the supplied epistemic level: observed facts, multi-si
 inferences, and hypotheses must be described differently. A ZONT mode with the DHW
 circuit disabled is authoritative over a stale target sample: do not call that sample
 an active target. Do not state water draw, three-way-valve position, pump operation,
-or hydraulic flow as an observed fact without a direct signal. You may discuss possible
-recirculation only when a supplied dhw_possible_recirculation_activity event supports it,
-and must keep water draw, mixing, heat loss, and sensor noise as alternatives. AUTOADAPT
+or hydraulic flow as an observed fact without a direct signal. Discuss possible recirculation
+using available temporal evidence and equipment context,
+keeping water draw, mixing, heat loss, schedules, and sensor noise as alternatives. AUTOADAPT
 is a possible cause of irregular autonomous recirculation timing, not proof of a feature
 installed at this home. Treat dhw_antilegionella_cycle as an expected autonomous boiler
 service cycle, not a fault. Treat unconfirmed_burner_pulse as telemetry noise already
@@ -67,6 +70,40 @@ period. Use their window IDs in evidence_event_ids when they support a conclusio
 Read each window's time interval, exclusions, signal source/coverage/sample statistics,
 and observed/derived level before reasoning from it. Do not infer a profile setting,
 pump occupancy, water draw, or a diagnosis from a temporal pattern alone.
+Use observed_patterns for useful normal or changed behaviour (observed or derived),
+hypotheses for inferred explanations, and predictions only for explicitly predicted scenarios.
+Each hypothesis needs its interval, evidence for and against, competing explanations,
+and confidence_basis explaining coverage, contradictions and missing signals. A model's
+confidence number is not a calibrated probability. Unknown or no recommendation is success.
+Merge repeated observations; prior_interpretations are earlier AI opinions, never independent
+measurements or corroborating evidence. Explain what changed rather than repeating advice.
+Compare DHW episode profiles by start time, target, temperatures, duration, mode and demand
+indicators, accounting for equipment history, owner interventions and unknown firmware.
+Do not equate temperature recovery with measured water draw. AutoAdapt is equipment context,
+not an obligatory diagnosis or a requirement to describe learning. Do not extrapolate a
+current profile into earlier intervals. Missing samples do not prove absence of an episode.
+Presence/absence can be an inferred hypothesis over an interval only from multiple indirect
+signals (room changes, DHW, cooling, possible recirculation); compare weather, schedules,
+automation and sensor issues. Inactive DHW alone does not prove an empty home. Explicit owner
+context overrides indirect occupancy guesses. Do not reuse your own hypothesis as evidence.
+Explain if the suggested action depends on occupancy or comfort needs.
+For noise pulses, compare supplied home history and observed reliability incidents; no
+promise of future faultlessness. Power outages and controller restarts are not internal
+boiler defects. For outdoor weather, use established source/provenance, explain possible
+control impact; physical sensor compatibility and internet fallback remain unknown unless
+capabilities confirm them. Never invent hydraulic flow, flowmeter positions or room/loop mapping.
+Additional devices are optional improvements only when a concrete evidence gap and benefit
+are explained, including compatibility checks; do not recommend purchases that cannot solve
+the problem. Flowmeter adjustment requires a known loop mapping.
+When ambiguity matters, prefer one minimally invasive recommended_experiment with one safe
+user variable, expected effect, evidence, observation period, success criteria, risks and
+stop/rollback conditions. Leave it null if observation or unknown is sufficient. Do not
+propose competing simultaneous experiments. Recommendations may use existing owner feedback;
+recording structured experiment execution is not available yet.
+Predictions require a scenario, direction/effect, assumptions, evidence and verification plan;
+never present them as measured facts or invent numerical effect sizes.
+Stay concise: at most three distinct patterns, three hypotheses, two predictions and three
+unknowns; populate only useful sections, not every possible field.
 The provenance sidecar defines the epistemic scope of data_quality, legacy metrics/events,
 owner feedback, and context; each temporal numeric statistic carries its own source level.
 """
@@ -115,6 +152,11 @@ class _StructuredAnalysisResult(BaseModel):
 
     summary: str
     recommendations: list[_StructuredRecommendation] = Field(default_factory=list, max_length=3)
+    observed_patterns: list[ObservedPattern] = Field(default_factory=list)
+    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    predictions: list[Prediction] = Field(default_factory=list)
+    unknowns: list[Unknown] = Field(default_factory=list)
+    recommended_experiment: RecommendedExperiment | None = None
 
 
 def _validate_structured_result(result: _StructuredAnalysisResult) -> AnalysisResult:
@@ -143,7 +185,7 @@ class OpenAIAnalyst:
             ],
             text_format=_StructuredAnalysisResult,
             store=False,
-            max_output_tokens=2500,
+            max_output_tokens=6000,
         )
         parsed = response.output_parsed
         if parsed is None:
@@ -155,7 +197,7 @@ class OpenAIAnalyst:
             id=f"llm:{uuid.uuid4()}",
             report_id=None,
             input_hash=digest,
-            prompt_version=self.config.openai.prompt_version,
+            prompt_version=PROMPT_VERSION,
             model=model,
             reasoning_effort=self.config.openai.reasoning_effort,
             input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
@@ -283,7 +325,9 @@ def analysis_packet(
     # remaining budget with individual events or redundant sensor catalogues.
     context_target = packet["control_context"]
     important_context = {
-        "heating_circuit", "dhw_interaction", "reliability", "current_mode", "current_target_c", "equipment_profiles",
+        "heating_circuit", "dhw_interaction", "reliability", "current_mode", "current_target_c",
+        "equipment_profiles", "dhw_profiles",
+        "prior_interpretations", "noise_history", "sensors",
     }
     if isinstance(canonical_context, dict):
         for key in sorted(important_context & canonical_context.keys()):
@@ -407,21 +451,20 @@ def _prioritized_windows(values: Any) -> Any:
 
 
 def _add_windows(packet: dict[str, Any], target: dict[str, Any], values: Any, record_omitted: Any) -> None:
-    """Retain the original DTO unchanged when it fits; otherwise select representative/spread windows."""
+    """Reserve space for context and facts, spreading retained windows across the period."""
+    window_budget = 16 * 1024
     if isinstance(values, list):
         target["windows"] = list(values)
-        if _fits(packet):
+        if _encoded_size(values) <= window_budget and _fits(packet):
             return
         target["windows"] = []
-    _add_sorted_list(
-        packet,
-        target,
-        "windows",
-        _prioritized_windows(values),
-        "temporal_evidence.windows",
-        record_omitted,
-        None,
-    )
+        for value in _prioritized_windows(values):
+            target["windows"].append(value)
+            if _encoded_size(target["windows"]) > window_budget or not _fits(packet):
+                target["windows"].pop()
+                record_omitted("temporal_evidence.windows", value)
+    elif values:
+        record_omitted("temporal_evidence.windows", values)
 
 
 def _add_mapping_item(

@@ -106,6 +106,21 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
                 f'<small class="owner-source">Источник: {source_text or "не сохранено"}</small>'
                 '<button type="button" class="owner-reset">Сбросить к авто</button></div>'
             )
+        elif name == "gas_type":
+            gas_options = ["", "Природный газ (метан)", "Сжиженный газ (пропан-бутан)", "Пропан", "Бутан"]
+            selected = str(value or "")
+            if selected not in gas_options:
+                gas_options.append(selected)
+            options_html = "".join(
+                f'<option value="{html.escape(item, quote=True)}"{" selected" if item == selected else ""}>{html.escape(item or "Не указано")}</option>'
+                for item in gas_options
+            )
+            fields.append(
+                f'<div class="owner-field" data-field="{name}"><label>{label}'
+                f'<select class="owner-value" data-preserve-legacy="true">{options_html}</select></label>'
+                f'<small class="owner-source">Источник: {source_text or "нет"}</small>'
+                '<button type="button" class="owner-reset">Сбросить к авто</button></div>'
+            )
         elif name == "dhw_type":
             options = (("", "Не указано"), ("tank", "БКН"), ("combi", "Двухконтурный котёл"), ("none", "Нет ГВС"))
             selected = str(value or "")

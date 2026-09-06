@@ -216,3 +216,37 @@ def test_packet_shares_budget_between_dhw_dynamics_and_aggregate_metrics() -> No
     assert len(packet["metrics"]) == len(metrics)
     assert packet["provenance"]["truncation"]["omitted"]["events"]["items"] > 0
     assert packet["provenance"]["truncation"]["serialized_bytes"] <= ANALYSIS_PACKET_MAX_BYTES
+
+
+def test_reasoning_provider_preserves_budget_privacy_and_records_actual_prompt(tmp_path) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from zont_analyzer.adapters.openai.provider import PROMPT_VERSION, OpenAIAnalyst
+    from zont_analyzer.adapters.sqlite import Database
+    from zont_analyzer.config import AppConfig
+
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    config = AppConfig.model_validate({"openai": {"prompt_version": "legacy-config"}})
+    analyst = OpenAIAnalyst(api_key="not-a-real-key", config=config, db=db)
+    parse = Mock(return_value=SimpleNamespace(
+        output_parsed=_StructuredAnalysisResult(summary="Причина пока неизвестна", unknowns=[
+            {"id": "u:source", "statement": "Нет подтверждённого погодного источника"}
+        ]), usage=SimpleNamespace(input_tokens=10, output_tokens=20), id="mock:reasoning",
+    ))
+    analyst.client = SimpleNamespace(responses=SimpleNamespace(parse=parse))
+    result = analyst.analyze({"period": {"kind": "daily"}})
+    assert result.unknowns[0].id == "u:source" and result.recommendations == []
+    kwargs = parse.call_args.kwargs
+    assert kwargs["store"] is False and "tools" not in kwargs
+    assert kwargs["max_output_tokens"] == 6000
+    assert db.token_usage_this_month() == 30
+    import sqlite3
+    with sqlite3.connect(db.path) as connection:
+        assert connection.execute("select prompt_version from llm_calls").fetchone()[0] == PROMPT_VERSION
+    config.openai.monthly_token_budget = 30
+    import pytest
+    with pytest.raises(RuntimeError, match="budget"):
+        analyst.analyze({"period": {"kind": "daily"}})
+    assert parse.call_count == 1

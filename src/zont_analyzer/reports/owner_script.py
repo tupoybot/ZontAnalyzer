@@ -41,7 +41,7 @@ OWNER_SCRIPT = r"""
       const input = node.querySelector('.owner-value');
       if (input) {
         const selected = value ?? input.dataset.default ?? '';
-        if (input.tagName === 'SELECT' && input.dataset.default) {
+        if (input.tagName === 'SELECT' && (input.dataset.default || input.dataset.preserveLegacy)) {
           input.querySelectorAll('[data-legacy]').forEach(option => option.remove());
           if (![...input.options].some(option => option.value === selected)) {
             const option = new Option(selected, selected);
