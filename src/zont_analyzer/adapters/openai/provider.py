@@ -12,6 +12,10 @@ from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
 
+ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
+_PACKET_CONTENT_MAX_BYTES = 60 * 1024
+_PACKET_ACCOUNTING_RESERVE_BYTES = 2 * 1024
+
 SYSTEM_PROMPT = """You are a read-only heating telemetry analyst.
 Facts are only the supplied metric and event objects. Never invent numbers.
 Every recommendation must cite existing evidence IDs. If data quality is poor,
@@ -58,6 +62,13 @@ Treat owner_note as authoritative manual context. Do not repeat a rejected recom
 unless the current packet contains materially new contradictory evidence; if revisiting it,
 state what changed. Use applied feedback to assess outcomes without claiming causality that
 the supplied evidence does not establish.
+temporal_evidence contains bounded, timestamped windows selected from the analysed
+period. Use their window IDs in evidence_event_ids when they support a conclusion.
+Read each window's time interval, exclusions, signal source/coverage/sample statistics,
+and observed/derived level before reasoning from it. Do not infer a profile setting,
+pump occupancy, water draw, or a diagnosis from a temporal pattern alone.
+The provenance sidecar defines the epistemic scope of data_quality, legacy metrics/events,
+owner feedback, and context; each temporal numeric statistic carries its own source level.
 """
 
 
@@ -165,11 +176,277 @@ def analysis_packet(
     context: dict[str, Any] | None = None,
     recommendation_feedback: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return {
-        "period": period,
-        "data_quality": quality,
-        "control_context": context or {},
-        "recommendation_feedback": recommendation_feedback or [],
-        "metrics": [metric.model_dump(mode="json") for metric in metrics],
-        "events": [event.model_dump(mode="json") for event in events[:20]],
+    """Build a deterministic, bounded input without cutting JSON text in-place."""
+
+    canonical_context = _json_value(context or {})
+    temporal_evidence = canonical_context.pop("temporal_evidence", None)
+    canonical_metrics = [_json_value(metric.model_dump(mode="json")) for metric in metrics]
+    canonical_events = [_json_value(event.model_dump(mode="json")) for event in events]
+    canonical_feedback = [_json_value(item) for item in (recommendation_feedback or [])]
+    omitted: dict[str, dict[str, int]] = {}
+
+    def record_omitted(name: str, value: Any) -> None:
+        entry = omitted.setdefault(name, {"items": 0, "serialized_bytes": 0})
+        entry["items"] += 1
+        entry["serialized_bytes"] += _encoded_size(value)
+
+    packet: dict[str, Any] = {
+        "period": _bounded_mapping(_json_value(period), 2_048, "period", record_omitted),
+        "data_quality": _bounded_mapping(_json_value(quality), 4_096, "data_quality", record_omitted),
+        "control_context": {"temporal_evidence": {}},
+        "recommendation_feedback": [],
+        "metrics": [],
+        "events": [],
+        "provenance": {
+            "data_quality": {"epistemic_level": "derived", "source_paths": ["data_quality"]},
+            "metrics": {
+                "epistemic_level": "derived",
+                "source_paths": ["metrics[].algorithm_version", "metrics[].context"],
+            },
+            "events": {
+                "epistemic_level": "derived",
+                "source_paths": ["events[].algorithm_version", "events[].details"],
+            },
+            "control_context": {
+                "epistemic_level": "context",
+                "note": "Settings and prior interpretations are not measured telemetry unless explicitly labelled.",
+            },
+            "recommendation_feedback": {"epistemic_level": "owner_confirmed"},
+            "temporal_evidence": {
+                "epistemic_level": "mixed",
+                "source_paths": [
+                    "control_context.temporal_evidence.windows[].signals.*.source",
+                    "control_context.temporal_evidence.windows[].facts.*.source",
+                ],
+            },
+        },
     }
+    evidence = _json_value(temporal_evidence) if temporal_evidence is not None else {}
+    if isinstance(evidence, dict):
+        evidence_target = packet["control_context"]["temporal_evidence"]
+        metadata_keys = (
+            "algorithm_version",
+            "period_start",
+            "period_end",
+            "timezone",
+            "capability_profile",
+            "state_source",
+            "signals",
+            "quality",
+            "exclusions",
+            "unknowns",
+        )
+        for key in metadata_keys:
+            if key in evidence:
+                _add_mapping_item(
+                    packet, evidence_target, key, evidence[key], "temporal_evidence.metadata", record_omitted
+                )
+        _add_sorted_list(
+            packet,
+            evidence_target,
+            "metrics",
+            evidence.get("metrics", []),
+            "temporal_evidence.metrics",
+            record_omitted,
+            lambda item: str(item.get("id", "")) if isinstance(item, dict) else "",
+        )
+        _add_sorted_list(
+            packet,
+            evidence_target,
+            "exclusion_windows",
+            evidence.get("exclusion_windows", []),
+            "temporal_evidence.exclusion_windows",
+            record_omitted,
+            lambda item: (
+                (str(item.get("started_at", "")), str(item.get("id", ""))) if isinstance(item, dict) else ("", "")
+            ),
+        )
+        _add_windows(packet, evidence_target, evidence.get("windows", []), record_omitted)
+        for key in sorted(set(evidence) - set(metadata_keys) - {"metrics", "exclusion_windows", "windows"}):
+            _add_mapping_item(packet, evidence_target, key, evidence[key], "temporal_evidence.extra", record_omitted)
+    elif temporal_evidence is not None:
+        record_omitted("temporal_evidence", evidence)
+    _add_sorted_list(
+        packet,
+        packet,
+        "recommendation_feedback",
+        canonical_feedback,
+        "recommendation_feedback",
+        record_omitted,
+        lambda item: (
+            (str(item.get("recommendation_id", "")), str(item.get("updated_at", "")))
+            if isinstance(item, dict)
+            else ("", "")
+        ),
+    )
+    # Preserve context that changes the meaning of facts before filling the
+    # remaining budget with individual events or redundant sensor catalogues.
+    context_target = packet["control_context"]
+    important_context = {"heating_circuit", "dhw_interaction", "reliability", "current_mode", "current_target_c"}
+    if isinstance(canonical_context, dict):
+        for key in sorted(important_context & canonical_context.keys()):
+            _add_mapping_item(packet, context_target, key, canonical_context[key], "control_context", record_omitted)
+    representatives: list[Any] = []
+    remaining_events: list[Any] = []
+    seen_families: set[str] = set()
+    for event in sorted(canonical_events, key=_event_sort_key):
+        kind = str(event.get("kind", ""))
+        family = kind if any(name in kind for name in ("dhw", "summer", "burner_pulse", "reliability")) else ""
+        if event.get("severity") == "critical" or (family and family not in seen_families):
+            representatives.append(event)
+            seen_families.add(family)
+        else:
+            remaining_events.append(event)
+    # Keep a complete representative episode before aggregates, then share the
+    # remaining budget between metrics and additional episodes. Repeated DHW
+    # episodes must not crowd all comfort/reliability metrics out of the packet.
+    _add_sorted_list(packet, packet, "events", representatives, "events", record_omitted, _event_sort_key)
+    _add_sorted_list(
+        packet, packet, "metrics", canonical_metrics, "metrics", record_omitted, lambda item: str(item.get("id", ""))
+    )
+    _add_sorted_list(packet, packet, "events", remaining_events, "events", record_omitted, _event_sort_key)
+    context_target = packet["control_context"]
+    if isinstance(canonical_context, dict):
+        for key in sorted(canonical_context.keys() - important_context):
+            _add_mapping_item(packet, context_target, key, canonical_context[key], "control_context", record_omitted)
+    else:
+        record_omitted("control_context", canonical_context)
+    packet["provenance"]["truncation"] = {
+        "max_serialized_bytes": ANALYSIS_PACKET_MAX_BYTES,
+        "serialized_bytes": 0,
+        "omitted": omitted,
+    }
+    encoded_size = _record_serialized_size(packet)
+    if encoded_size > ANALYSIS_PACKET_MAX_BYTES:
+        packet["provenance"]["control_context"].pop("note", None)
+        encoded_size = _record_serialized_size(packet)
+    if encoded_size > ANALYSIS_PACKET_MAX_BYTES:
+        raise RuntimeError("analysis packet structural metadata exceeds its byte limit")
+    return packet
+
+
+def _json_value(value: Any) -> Any:
+    """Copy into JSON-safe values; string values stay whole rather than byte-sliced."""
+    return json.loads(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str))
+
+
+def _encoded_size(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+
+def _record_serialized_size(packet: dict[str, Any]) -> int:
+    """Store the self-referential byte count until its digit width is stable."""
+    size = 0
+    for _ in range(8):
+        packet["provenance"]["truncation"]["serialized_bytes"] = size
+        next_size = _encoded_size(packet)
+        if next_size == size:
+            return size
+        size = next_size
+    packet["provenance"]["truncation"]["serialized_bytes"] = size
+    return size
+
+
+def _bounded_mapping(value: Any, byte_limit: int, omission_name: str, record_omitted: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        record_omitted(omission_name, value)
+        return {}
+    result: dict[str, Any] = {}
+    for key in sorted(value):
+        candidate = {key: value[key]}
+        if _encoded_size(result) + _encoded_size(candidate) <= byte_limit:
+            result[key] = value[key]
+        else:
+            record_omitted(omission_name, candidate)
+    return result
+
+
+def _fits(packet: dict[str, Any]) -> bool:
+    return _encoded_size(packet) <= _PACKET_CONTENT_MAX_BYTES - _PACKET_ACCOUNTING_RESERVE_BYTES
+
+
+def _event_sort_key(item: Any) -> tuple[bool, bool, str, str]:
+    if not isinstance(item, dict):
+        return (True, True, "", "")
+    kind = str(item.get("kind", "")).lower()
+    evidence_kind = any(term in kind for term in ("dhw", "summer", "noise", "burner_pulse", "reliability"))
+    return (
+        str(item.get("severity", "")) != "critical",
+        not evidence_kind,
+        str(item.get("started_at", "")),
+        str(item.get("id", "")),
+    )
+
+
+def _prioritized_windows(values: Any) -> Any:
+    """Keep representative windows, then spread the remaining chronology across a long period."""
+    if not isinstance(values, list):
+        return values
+    ordered = sorted(
+        values,
+        key=lambda item: (
+            (str(item.get("started_at", "")), str(item.get("id", ""))) if isinstance(item, dict) else ("", "")
+        ),
+    )
+    representatives = [item for item in ordered if isinstance(item, dict) and item.get("kind") == "representative"]
+    regular = [item for item in ordered if not isinstance(item, dict) or item.get("kind") != "representative"]
+    selected: list[Any] = []
+
+    def spread(items: list[Any]) -> None:
+        if not items:
+            return
+        middle = len(items) // 2
+        selected.append(items[middle])
+        spread(items[:middle])
+        spread(items[middle + 1 :])
+
+    spread(regular)
+    return representatives + selected
+
+
+def _add_windows(packet: dict[str, Any], target: dict[str, Any], values: Any, record_omitted: Any) -> None:
+    """Retain the original DTO unchanged when it fits; otherwise select representative/spread windows."""
+    if isinstance(values, list):
+        target["windows"] = list(values)
+        if _fits(packet):
+            return
+        target["windows"] = []
+    _add_sorted_list(
+        packet,
+        target,
+        "windows",
+        _prioritized_windows(values),
+        "temporal_evidence.windows",
+        record_omitted,
+        None,
+    )
+
+
+def _add_mapping_item(
+    packet: dict[str, Any], target: dict[str, Any], key: str, value: Any, omission_name: str, record_omitted: Any
+) -> None:
+    target[key] = value
+    if not _fits(packet):
+        target.pop(key)
+        record_omitted(omission_name, {key: value})
+
+
+def _add_sorted_list(
+    packet: dict[str, Any],
+    target: dict[str, Any],
+    key: str,
+    values: Any,
+    omission_name: str,
+    record_omitted: Any,
+    sort_key: Any | None,
+) -> None:
+    if not isinstance(values, list):
+        if values:
+            record_omitted(omission_name, values)
+        return
+    selected: list[Any] = target.setdefault(key, [])
+    for value in values if sort_key is None else sorted(values, key=sort_key):
+        selected.append(value)
+        if not _fits(packet):
+            selected.pop()
+            record_omitted(omission_name, value)

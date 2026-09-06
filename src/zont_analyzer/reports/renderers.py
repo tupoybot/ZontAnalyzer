@@ -103,6 +103,67 @@ SENSOR_ORIGIN_LABELS = {
     "boiler_reported_rwt": "значение rwt котла",
 }
 
+EVIDENCE_LABELS = {
+    "burner_starts_per_active_request_hour": "Запуски на час активного запроса отопления",
+    "burner_starts_per_observed_hour": "Запуски на час наблюдаемого сопоставимого периода",
+    "burner_cycle_median_seconds": "Медиана длительности завершённого цикла",
+    "burner_cycle_p90_seconds": "P90 длительности завершённого цикла",
+    "burner_longest_cycle_seconds": "Самый длинный завершённый цикл",
+    "burner_runtime_request_ratio": "Время горения / время запроса отопления",
+    "active_request_without_flame_ratio": "Доля запроса отопления без пламени",
+    "flame_modulation_mean": "Средняя модуляция при горении на отопление",
+    "flame_modulation_median": "Медиана модуляции при горении на отопление",
+    "flow_vs_cs_typical_c": "Типичное отклонение подачи от cs",
+    "flow_vs_cs_p90_c": "P90 отклонения подачи от cs",
+    "flow_vs_cs_max_positive_overshoot_c": "Максимальный положительный перелёт подачи относительно cs",
+    "dhw_temperature": "Температура ГВС",
+    "recirculation": "Прямой сигнал рециркуляции",
+    "heating_request_pct": "Доля наблюдаемого запроса отопления",
+    "flame_pct": "Доля наблюдаемого горения на отопление",
+    "dhw_pct": "Доля наблюдаемого приоритета ГВС",
+    "room": "Дополнительная комната",
+    "control_temperature": "Контрольная температура комнаты",
+    "target_temperature": "Задание температуры комнаты",
+    "outdoor_temperature": "Наружная температура",
+    "flow_temperature": "Фактическая температура подачи",
+    "return_temperature": "Температура обратки",
+    "target_flow_temperature": "Расчётное задание подачи (cs)",
+    "modulation": "Модуляция горелки",
+    "room_error_c": "Ошибка температуры комнаты",
+    "flow_vs_cs_c": "Отклонение подачи от cs",
+    "delta_t_c": "ΔT подачи и обратки",
+    "weather_cadence_seconds": "Шаг обновления наружной температуры",
+    "weather_plateau_transitions": "Переходы плато наружной температуры",
+    "weather_jumps_over_5c": "Скачки наружной температуры свыше 5 °C",
+    "weather_change_c": "Изменение наружной температуры",
+}
+
+EVIDENCE_REASONS = {
+    "insufficient_boiler_state_coverage": "недостаточно наблюдений состояния котла",
+    "no_qualified_active_request": "недостаточно достоверного времени активного запроса отопления",
+    "no_qualified_observed_time": "недостаточно достоверного сопоставимого времени",
+    "no_complete_qualified_flame_cycles": "нет полностью наблюдаемых сопоставимых циклов",
+    "missing_modulation": "ряд модуляции отсутствует",
+    "insufficient_modulation_coverage": "недостаточно модуляции в интервалах горения",
+    "insufficient_flow_cs_coverage": "недостаточно совместных наблюдений подачи и cs при запросе отопления",
+    "unknown:modulation_zero_semantics": "семантика нулевой модуляции не подтверждена профилем",
+}
+
+EVIDENCE_UNITS = {
+    "seconds": "с", "celsius": "°C", "ratio": "доля", "count/hour": "запусков/ч",
+    "vendor_percent": "% шкалы адаптера", "active_request_hour": "ч запроса",
+    "observed_hour": "ч наблюдений", "active_request_seconds": "с запроса",
+    "qualified_heating_seconds": "с сопоставимого запроса отопления",
+}
+
+EVIDENCE_EXCLUSION_LABELS = {
+    "dhw": "приоритет ГВС",
+    "inactive": "неактивное отопление",
+    "transition": "переход режима или уставки",
+    "reliability": "ненадёжная телеметрия",
+    "noise": "шумовой импульс",
+}
+
 
 _ARCHIVE_KINDS = frozenset({"daily", "weekly", "monthly"})
 
@@ -436,6 +497,169 @@ def _missing_mttr_reason(report: Report) -> str | None:
     return "Недостаточно наблюдений восстановления после подтверждённых отказов."
 
 
+def _evidence_number(value: Any) -> str:
+    if value is None:
+        return "неизвестно"
+    if isinstance(value, bool):
+        return "да" if value else "нет"
+    if isinstance(value, (int, float)):
+        return f"{value:g}"
+    return str(value)
+
+
+def _evidence_stat_text(stat: Any) -> str:
+    if not isinstance(stat, Mapping):
+        return _evidence_number(stat)
+    parts: list[str] = []
+    for key, label in (("mean", "среднее"), ("minimum", "мин"), ("maximum", "макс"),
+                       ("change", "изменение"), ("changes", "изменения"), ("delta", "Δ"), ("gaps", "пробелы"),
+                       ("first", "начало"), ("last", "конец"), ("slope_per_hour", "изменение/ч"),
+                       ("stale_seconds", "устар.")):
+        if key in stat and stat[key] is not None:
+            suffix = " с" if key == "stale_seconds" else ""
+            parts.append(f"{label} {_evidence_number(stat[key])}{suffix}")
+    if "coverage_pct" in stat:
+        parts.append(f"покрытие {_evidence_number(stat['coverage_pct'])}%")
+    if "sample_count" in stat:
+        parts.append(f"точек {_evidence_number(stat['sample_count'])}")
+    return "; ".join(parts) or "нет значений"
+
+
+def _evidence_local(value: Any, timezone: str) -> str:
+    if not isinstance(value, str):
+        return _evidence_number(value)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(ZoneInfo(timezone))
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return value
+
+
+def _temporal_evidence_text(packet: Any) -> list[str]:
+    if not isinstance(packet, Mapping):
+        return []
+    lines = ["Временные свидетельства отопления и ГВС:"]
+    period = f"{_evidence_local(packet.get('period_start'), str(packet.get('timezone') or 'UTC'))} — " \
+        f"{_evidence_local(packet.get('period_end'), str(packet.get('timezone') or 'UTC'))} " \
+        f"({packet.get('timezone', 'UTC')})"
+    lines.append(f"- Период: {period}; профиль: {packet.get('capability_profile', 'unknown')}; "
+                 f"алгоритм: {packet.get('algorithm_version', 'unknown')}")
+    metrics = packet.get("metrics")
+    if isinstance(metrics, list) and metrics:
+        lines.append("- Показатели работы отопления:")
+        for metric in metrics:
+            if not isinstance(metric, Mapping):
+                continue
+            value = _evidence_number(metric.get("value"))
+            unit = EVIDENCE_UNITS.get(str(metric.get("unit")), str(metric.get("unit") or ""))
+            details = []
+            if metric.get("denominator") is not None:
+                denominator_unit = str(metric.get("denominator_unit") or "").strip()
+                denominator_unit = EVIDENCE_UNITS.get(denominator_unit, denominator_unit)
+                details.append(
+                    f"знаменатель {_evidence_number(metric['denominator'])} {denominator_unit}".strip()
+                )
+            if metric.get("coverage_pct") is not None:
+                details.append(f"покрытие {_evidence_number(metric['coverage_pct'])}%")
+            if metric.get("unavailable_reason"):
+                reason = str(metric["unavailable_reason"])
+                details.append(f"недоступно: {EVIDENCE_REASONS.get(reason, reason)}")
+            metric_name = str(metric.get("name", metric.get("id", "метрика")))
+            lines.append(f"  - {EVIDENCE_LABELS.get(metric_name, metric_name)}: {value} {unit}"
+                         + (f" ({'; '.join(details)})" if details else "") +
+                         " [расчёт]")
+    signals = packet.get("signals")
+    if isinstance(signals, Mapping) and signals:
+        lines.append("- Источники и качество:")
+        for key, signal in signals.items():
+            if isinstance(signal, Mapping):
+                name = signal.get("display_name", key)
+                role = signal.get("role", "unknown")
+                unit = signal.get("unit", "")
+                quality = signal.get("quality", signal.get("coverage_pct"))
+                suffix = f"; качество {quality}%" if isinstance(quality, (int, float)) else ""
+                lines.append(f"  - {name} ({EVIDENCE_LABELS.get(str(role), role)}; {unit}; ID {key}){suffix}")
+    quality = packet.get("quality")
+    if isinstance(quality, Mapping) and quality:
+        lines.append("- Качество по источникам:")
+        for key, stat in quality.items():
+            source = packet.get("signals", {}).get(key, {}) if isinstance(packet.get("signals"), Mapping) else {}
+            source_name = source.get("display_name", key) if isinstance(source, Mapping) else key
+            lines.append(f"  - {source_name}: {_evidence_stat_text(stat)}")
+    windows = packet.get("windows")
+    if isinstance(windows, list) and windows:
+        lines.append("- Окна:")
+        timezone = str(packet.get("timezone") or "UTC")
+        for window in windows:
+            if not isinstance(window, Mapping):
+                continue
+            start = _evidence_local(window.get("started_at"), timezone)
+            end = _evidence_local(window.get("ended_at"), timezone)
+            lines.append(f"  - {window.get('id', 'без ID')}: {start} — {end} ({window.get('timezone', timezone)})")
+            if window.get("tags"):
+                lines.append("    признаки: " + ", ".join(str(item) for item in window["tags"]))
+            excluded = window.get("excluded_reasons")
+            if excluded:
+                labels = ", ".join(EVIDENCE_EXCLUSION_LABELS.get(str(item), str(item)) for item in excluded)
+                lines.append(f"    исключено: {labels}")
+            for group in ("signals", "facts"):
+                values = window.get(group)
+                if isinstance(values, Mapping):
+                    for name, stat in values.items():
+                        label = EVIDENCE_LABELS.get(str(name), str(name))
+                        unit = ""
+                        if group == "signals" and isinstance(signals, Mapping):
+                            metadata = signals.get(name, {})
+                            if isinstance(metadata, Mapping):
+                                label = f"{metadata.get('display_name', label)} — {label}"
+                                unit = f" ({metadata.get('unit', '')})"
+                        lines.append(f"    {label}{unit} — {_evidence_stat_text(stat)}")
+    unknowns = packet.get("unknowns")
+    if isinstance(unknowns, list) and unknowns:
+        descriptions = []
+        for item in unknowns:
+            if str(item).startswith("missing:"):
+                role = str(item).removeprefix("missing:")
+                descriptions.append(f"нет данных: {EVIDENCE_LABELS.get(role, role)}")
+            else:
+                descriptions.append(EVIDENCE_REASONS.get(str(item), str(item)))
+        lines.append("- Ограничения: " + "; ".join(descriptions))
+    exclusion_windows = packet.get("exclusion_windows")
+    if isinstance(exclusion_windows, list) and exclusion_windows:
+        lines.append("- Точные исключённые интервалы:")
+        timezone = str(packet.get("timezone") or "UTC")
+        for item in exclusion_windows:
+            if isinstance(item, Mapping):
+                reason = EVIDENCE_EXCLUSION_LABELS.get(str(item.get("reason")), str(item.get("reason", "неизвестно")))
+                lines.append(
+                    f"  - {item.get('id', 'без ID')}: {_evidence_local(item.get('started_at'), timezone)} — "
+                    f"{_evidence_local(item.get('ended_at'), timezone)}; {reason}; "
+                    f"источник {item.get('source', 'unknown')}"
+                )
+    return lines
+
+
+def _temporal_evidence_html(packet: Any) -> str:
+    lines = _temporal_evidence_text(packet)
+    if not lines:
+        return ""
+    body: list[str] = []
+    for line in lines[1:]:
+        escaped = html.escape(line)
+        if line.startswith("- "):
+            body.append(f"<p>{escaped}</p>")
+        elif line.startswith("  - "):
+            body.append(f"<p class=\"evidence-item\">{escaped}</p>")
+        elif line.startswith("    "):
+            body.append(f"<p class=\"evidence-detail\">{escaped}</p>")
+        else:
+            body.append(f"<p>{escaped}</p>")
+    return '<section class="temporal-evidence"><details><summary>Временные свидетельства отопления и ГВС</summary>' \
+        + "".join(body) + "</details></section>"
+
+
 def render_text(report: Report) -> str:
     lines = [
         f"ZontAnalyzer — {report.kind}",
@@ -453,6 +677,7 @@ def render_text(report: Report) -> str:
             report.summary,
         ]
     )
+    lines.extend(_temporal_evidence_text(report.context.get("temporal_evidence")))
     current_mode = report.context.get("current_mode")
     if isinstance(current_mode, dict):
         lines.append(
@@ -666,6 +891,7 @@ def render_html(
         )
     metrics = "".join(metric_rows)
     uptime = f'<section class="uptime-grid">{"".join(uptime_cards)}</section>' if uptime_cards else ""
+    temporal_evidence = _temporal_evidence_html(report.context.get("temporal_evidence"))
     events = "".join(
         f"<tr><td>{html.escape(_local(item.started_at, report.timezone))}</td>"
         f"<td>{html.escape(item.severity)}</td><td>{html.escape(_event_label(item.kind))}</td>"
@@ -773,6 +999,9 @@ cursor:pointer}}
 .status-applied{{background:#dcefe2;color:#185c2d}}.status-rejected{{background:#f7dfdc;color:#812820}}
 .status-ignored{{background:#e9edf2;color:#51606f}}
 .saved-note,.feedback-message{{margin:.1rem 0}}.feedback-message.error{{color:#9b251d}}
+.temporal-evidence{{margin:1rem 0;padding:.8rem 1rem;background:#f5f7fa;border-radius:.5rem;overflow-wrap:anywhere}}
+.temporal-evidence summary{{cursor:pointer;font-weight:600}}.evidence-item{{margin:.45rem 0 0 1rem}}
+.evidence-detail{{margin:.2rem 0 0 2rem;color:#536579;font-size:.92rem}}
 @media(max-width:560px){{body{{margin:1rem auto}}.archive-navigation{{padding:.6rem}}
 .archive-controls{{grid-template-columns:minmax(0,1fr)}}
 td,th{{padding:.4rem;font-size:.9rem;vertical-align:top}}table{{display:block;overflow-x:auto}}}}
@@ -804,6 +1033,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 {summer_context}
 {dhw_context}
 <p class="quality">Качество данных: {report.quality.score:.0%}; покрытие {report.quality.coverage_pct:.1f}%</p>
+{temporal_evidence}
 <p>{html.escape(report.summary)}</p><h2>Метрики</h2><table><tr><th>Метрика</th><th>Значение</th><th>Единица</th></tr>{metrics}</table>
 <h2>События</h2><p>Показано до 50 из {len(report.events)}.</p>
 <table><tr><th>Начало</th><th>Уровень</th><th>Тип</th><th>Детали</th></tr>{events}</table>
