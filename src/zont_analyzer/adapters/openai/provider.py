@@ -282,7 +282,9 @@ def analysis_packet(
     # Preserve context that changes the meaning of facts before filling the
     # remaining budget with individual events or redundant sensor catalogues.
     context_target = packet["control_context"]
-    important_context = {"heating_circuit", "dhw_interaction", "reliability", "current_mode", "current_target_c"}
+    important_context = {
+        "heating_circuit", "dhw_interaction", "reliability", "current_mode", "current_target_c", "equipment_profiles",
+    }
     if isinstance(canonical_context, dict):
         for key in sorted(important_context & canonical_context.keys()):
             _add_mapping_item(packet, context_target, key, canonical_context[key], "control_context", record_omitted)

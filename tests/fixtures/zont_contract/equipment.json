@@ -1,0 +1,10 @@
+{
+  "device_id": 701,
+  "name": "Fixture installation",
+  "stationary_location": {"loc": [12.5, 48.25]},
+  "z3k_config": {
+    "location": {"x": 0, "y": 0},
+    "boiler_adapters": [{"id": 910, "adapter_type": 0, "boiler_model": "fixture-boiler-family"}]
+  },
+  "password": "fixture-secret"
+}

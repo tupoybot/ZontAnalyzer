@@ -48,6 +48,18 @@ def publish_reports(runtime: Runtime, *, now: datetime | None = None) -> dict[st
 
 
 def _publish_locked(runtime: Runtime, output_dir: Path, now: datetime) -> dict[str, Any]:
+    from zont_analyzer.application.owner_context import OwnerContextStore
+
+    owner_store = OwnerContextStore(runtime.db)
+    profiles = [owner_store.profile(str(device["id"])) for device in runtime.db.list_devices()]
+
+    def owner_data(report: Report) -> dict[str, Any]:
+        # An old retained export may have no matching DB report; it remains readable.
+        gas = None
+        if report.kind == "daily" and runtime.db.report(report.id) is not None:
+            gas = owner_store.gas(report.id)
+        return {"profiles": profiles, "gas": gas}
+
     # Retain valid existing exports, including dates outside worker catch-up.
     reports: dict[str, Report] = {}
     for kind in KINDS:
@@ -78,6 +90,7 @@ def _publish_locked(runtime: Runtime, output_dir: Path, now: datetime) -> dict[s
             runtime.db.recommendation_views_for_report(report.id),
             feedback_api_base_url=runtime.config.feedback.public_api_base_url,
             latest_report_href="../latest.html",
+            owner_data=owner_data(report),
         )
         _write_changed(html_path, rendered)
         _write_changed(json_path, report.model_dump_json(indent=2) + "\n")
@@ -101,6 +114,7 @@ def _publish_locked(runtime: Runtime, output_dir: Path, now: datetime) -> dict[s
             latest,
             runtime.db.recommendation_views_for_report(latest.id),
             feedback_api_base_url=runtime.config.feedback.public_api_base_url,
+            owner_data=owner_data(latest),
         ))
     return {
         "reports": len(entries),

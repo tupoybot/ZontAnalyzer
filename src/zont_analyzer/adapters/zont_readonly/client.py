@@ -317,7 +317,15 @@ class ZontReadOnlyClient:
         devices = payload.get("devices", [])
         if not isinstance(devices, list):
             raise ZontApiError("ZONT devices response does not contain a list")
-        return [redact(item) for item in devices if isinstance(item, dict)]
+        from zont_analyzer.adapters.zont_readonly.equipment import equipment_facts
+
+        result = []
+        for item in devices:
+            if isinstance(item, dict):
+                sanitized = redact(item)
+                sanitized["_equipment"] = equipment_facts(item)
+                result.append(sanitized)
+        return result
 
     def load_config_snapshot(self) -> list[dict[str, Any]]:
         return self.discover_devices()

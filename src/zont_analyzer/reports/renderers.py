@@ -793,9 +793,13 @@ def render_html(
     recommendation_feedback: Mapping[str, Mapping[str, Any]] | None = None,
     *,
     feedback_api_base_url: str = "/api",
+    owner_data: dict[str, Any] | None = None,
     latest_report_href: str = "latest.html",
 ) -> str:
     title = html.escape(f"ZontAnalyzer — {report.kind}")
+    from zont_analyzer.reports.owner_forms import render_owner_forms
+
+    owner_forms = render_owner_forms(report, owner_data)
     period = html.escape(
         f"{_local(report.period_start, report.timezone)} — {_local(report.period_end, report.timezone)}"
     )
@@ -1027,6 +1031,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <p><strong>ID:</strong> <code>{html.escape(report.id)}</code></p>
 <p><strong>Период:</strong> {period}</p>
 <p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"}</p>
+{owner_forms}
 {uptime}
 {mode_context}
 {sensor_context}
