@@ -95,7 +95,7 @@ color:var(--secondary)}
 font-size:25px;
 letter-spacing:-.5px;
 margin-top:5px}
-.kpi-uptime-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1/-1}
+.kpi-uptime-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-column:1/-1}
 .chart-section,.thermal-system,.details-area{background:var(--surface);
 border:1px solid var(--border);
 border-radius:12px;
@@ -274,7 +274,7 @@ gap:18px}
 .actions{width:100%}
 .hero{padding:22px}
 h1{font-size:28px}
-.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.kpi-grid,.kpi-uptime-row{grid-template-columns:repeat(2,minmax(0,1fr))}
 .chart-section,.thermal-system,.details-area{padding:18px}
 .reliability{flex-wrap:wrap;
 gap:12px;
@@ -301,7 +301,15 @@ body{background:white}
 .more-actions .recommendation{background:var(--surface);padding:24px;border:1px solid var(--border);border-radius:12px}
 .thermal-system .report-chart{padding:0;border:0}
 .report-chart{margin:0;padding:24px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
-.chart-svg{display:block;width:100%;height:auto;margin-top:12px}
+.chart-unit{font-size:14px;color:var(--secondary);margin:12px 0 18px}
+.chart-plot-grid{display:grid;grid-template-columns:48px minmax(0,1fr);gap:12px 0}
+.chart-y-axis{position:relative;font-size:14px;color:var(--secondary)}
+.chart-y-axis span{position:absolute;left:0;transform:translateY(-50%);line-height:1}
+.chart-svg{display:block;width:100%;height:clamp(180px,22vw,260px);min-width:0}
+.chart-x-axis{grid-column:2;position:relative;height:1.6em;font-size:13px;color:var(--secondary)}
+.chart-x-axis span{position:absolute;white-space:nowrap;transform:translateX(-50%)}
+.chart-x-axis .chart-first-tick{transform:none}.chart-x-axis .chart-last-tick{transform:translateX(-100%)}
+@media(max-width:720px){.chart-x-axis .chart-minor-tick{display:none}}
 .chart-legend{display:flex;gap:16px;flex-wrap:wrap;padding:0;margin:12px 0 0;list-style:none;font-size:13px}
 .chart-legend span{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}
 .chart-state-legend{display:flex;gap:12px;flex-wrap:wrap;padding:0;list-style:none;font-size:13px}

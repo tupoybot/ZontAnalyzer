@@ -163,32 +163,31 @@ def _render_panel(
     low, high = min(point.value for point in observed), max(point.value for point in observed)
     padding = max((high - low) * 0.08, 0.5)
     low, high = low - padding, high + padding
-    width, height, inset = 760, 250, 44
-    plot_width, plot_height = width - inset - 14, height - 40 - inset
+    width, height, inset = 760, 180, 0
+    plot_width, plot_height = width, height
     span = max((right - left).total_seconds(), 1.0)
     def scale_x(at: datetime) -> float:
         return inset + ((at - left).total_seconds() / span) * plot_width
 
     def scale_y(value: float) -> float:
-        return 22 + (high - value) / (high - low) * plot_height
+        return (high - value) / (high - low) * plot_height
 
     description = html.escape(", ".join(item.label for item in selected))
     svg_parts = [
-        f'<svg class="chart-svg" viewBox="0 0 {width} {height}" role="img" '
+        f'<svg class="chart-svg" viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img" '
         f'aria-labelledby="{panel_id}-title {panel_id}-desc">',
         f'<title id="{panel_id}-title">{html.escape(title)}</title>',
         f'<desc id="{panel_id}-desc">Временные наблюдения: {description}.</desc>',
-        f'<rect x="{inset}" y="22" width="{plot_width:.2f}" height="{plot_height:.2f}" '
+        f'<rect x="{inset}" y="0" width="{plot_width:.2f}" height="{plot_height:.2f}" '
         'fill="#fbfcfe" stroke="#d9e1ea"/>',
-        f'<text x="4" y="16" fill="#536579" font-size="11">{html.escape(_unit(selected))}</text>',
     ]
+    y_labels: list[str] = []
     for fraction in (0, 0.5, 1):
-        y = 22 + fraction * plot_height
+        y = fraction * plot_height
         value = high - fraction * (high - low)
-        svg_parts.append(
-            f'<path d="M {inset} {y:.2f} H {width - 14}" stroke="#e6ebf0"/>'
-            f'<text x="4" y="{y + 4:.2f}" fill="#536579" font-size="11">{value:.1f}</text>'
-        )
+        svg_parts.append(f'<path d="M {inset} {y:.2f} H {width}" stroke="#e6ebf0"/>')
+        label = f"{value:.1f}".replace(".", ",")
+        y_labels.append(f'<span style="top:{fraction * 100:g}%">{label}</span>')
     visible_bands: list[tuple[str, str]] = []
     # State bands are rendered only when the input explicitly contains intervals.
     for start, end, label, state in bands if panel_id == "thermal" else ():
@@ -197,7 +196,7 @@ def _render_panel(
             continue
         x, band_width = scale_x(clipped_start), scale_x(clipped_end) - scale_x(clipped_start)
         svg_parts.append(
-            f'<rect x="{x:.2f}" y="22" width="{band_width:.2f}" height="{plot_height:.2f}" '
+            f'<rect x="{x:.2f}" y="0" width="{band_width:.2f}" height="{plot_height:.2f}" '
             f'fill="{state_color(state)}" fill-opacity=".24"><title>{html.escape(label)}: '
             f'{html.escape(state)}</title></rect>'
         )
@@ -213,14 +212,14 @@ def _render_panel(
                 f'stroke="{role_style.color}"{dash} stroke-width="2.25" vector-effect="non-scaling-stroke"/>'
             )
         gap_counts[item.role] = gap_count
+    x_labels: list[str] = []
     for fraction in (0, 0.25, 0.5, 0.75, 1):
         at = left + (right - left) * fraction
-        x = scale_x(at)
-        anchor = "start" if fraction == 0 else "end" if fraction == 1 else "middle"
-        svg_parts.append(f'<path d="M {x:.2f} {height - 40} V {height - 35}" stroke="#9aa5b1"/>')
-        svg_parts.append(
-            f'<text x="{x:.2f}" y="{height - 9}" fill="#536579" font-size="11" '
-            f'text-anchor="{anchor}">{html.escape(_axis_time(at, timezone, right - left))}</text>'
+        tick_class = ("chart-first-tick" if fraction == 0 else "chart-last-tick" if fraction == 1
+                      else "chart-minor-tick" if fraction in (0.25, 0.75) else "")
+        x_labels.append(
+            f'<span class="{tick_class}" style="left:{fraction * 100:g}%">'
+            f'{html.escape(_axis_time(at, timezone, right - left))}</span>'
         )
     svg_parts.append("</svg>")
     legend = "".join(
@@ -234,7 +233,10 @@ def _render_panel(
     state_legend = _state_legend(visible_bands)
     return (
         f'<figure class="report-chart" data-chart="{panel_id}"><figcaption><strong>{html.escape(title)}</strong>'
-        f'</figcaption>{"".join(svg_parts)}<ul class="chart-legend">{legend}</ul>{state_legend}{unavailable}</figure>'
+        f'</figcaption><div class="chart-unit">{html.escape(_unit(selected))}</div>'
+        f'<div class="chart-plot-grid"><div class="chart-y-axis">{"".join(y_labels)}</div>'
+        f'{"".join(svg_parts)}<div class="chart-x-axis">{"".join(x_labels)}</div></div>'
+        f'<ul class="chart-legend">{legend}</ul>{state_legend}{unavailable}</figure>'
     )
 
 

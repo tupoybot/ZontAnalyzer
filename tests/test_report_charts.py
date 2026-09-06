@@ -59,8 +59,8 @@ def test_charts_render_real_series_split_gaps_and_explicit_state_bands() -> None
     assert 'data-role="target_temperature"' in rendered and 'stroke-dasharray="7 5"' in rendered
     assert 'data-role="dhw_temperature"' in rendered and "БКН" in rendered
     assert 'aria-labelledby="climate-title climate-desc"' in rendered
-    assert ">°C</text>" in rendered
-    assert ">04:00</text>" in rendered and ">10:00</text>" in rendered
+    assert 'class="chart-unit">°C</div>' in rendered
+    assert ">04:00</span>" in rendered and ">10:00</span>" in rendered
 
 
 def test_charts_discard_invalid_points_and_escape_untrusted_labels() -> None:

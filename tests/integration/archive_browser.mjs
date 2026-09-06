@@ -95,6 +95,12 @@ try {
   assert.equal(hoverColors.color, 'rgb(255, 255, 255)');
   assert.equal(hoverColors.background, 'rgb(57, 75, 96)');
   assert.equal(await page.locator('.kpi-grid .kpi-uptime-row .kpi').count(), 2);
+  const kpiColumns = await page.locator('.kpi-grid').evaluate(grid => {
+    const cells = [...grid.querySelectorAll(':scope > .kpi')].map(n => n.getBoundingClientRect());
+    const uptime = [...grid.querySelectorAll('.kpi-uptime-row .kpi')].map(n => n.getBoundingClientRect());
+    return uptime.every((r, i) => Math.abs(r.x - cells[i].x) < 1 && Math.abs(r.width - cells[i].width) < 1);
+  });
+  assert.equal(kpiColumns, true, 'uptime aligns with the first two KPI columns');
   const profileRequests = [];
   page.on("request", request => {
     if (request.method() === "PUT" && request.url().includes("/equipment/")) profileRequests.push(request.postDataJSON());
