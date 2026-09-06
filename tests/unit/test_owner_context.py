@@ -294,9 +294,6 @@ def test_gas_plausibility_warns_only_against_historical_known_maximum(tmp_path: 
         _manual(
             {
                 "gas_max_m3h": 1.0,
-                "gas_unit": "m3/h",
-                "gas_source": "passport page 4",
-                "gas_applicability": "model / G20",
                 "has_gas_stove": False,
             },
             "1970-01-01T00:00:00Z",

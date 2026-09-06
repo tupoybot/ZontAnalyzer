@@ -68,8 +68,17 @@ Do not use a stronger model merely because it is available.
 - Follow the dependency order and work portions in `docs/implementation_plan.md`.
 - Develop each implementation stage N in its own `stageN` branch created from up-to-date
   `main` (for example, `stage2`, `stage3`). Work portions such as 2a/2b stay in `stage2`.
-- After completing the stage's acceptance criteria and recording the evidence, push its
-  commits and merge `stageN` into `main`. Do not merge an unaccepted stage; create the next
+- Before asking for owner acceptance, complete implementation and technical checks,
+  commit and push the stage's changes, deploy the locally tested immutable image,
+  and verify the running server with bounded smoke checks. Present the deployed result
+  and evidence to the owner. These steps do not wait for owner acceptance; ONLY the
+  merge waits. For documentation-only changes, commit/push and document checks suffice.
+  Merge `stageN`
+  into `main` ONLY AFTER THE OWNER EXPLICITLY ACCEPTS THAT STAGE. Passing tests, CI,
+  isolated acceptance, deployment, smoke checks, or an agent's review does not constitute
+  owner acceptance. A request to implement/complete a stage is not advance acceptance;
+  silence is not acceptance. Until explicit owner acceptance, keep the stage open and
+  do not merge it or start the next stage. After acceptance, merge and create the next
   stage branch from the updated `main`.
 - Read the active stage, product requirements and current status first; inspect only relevant
   source/tests instead of repeatedly loading the full historical documentation.
