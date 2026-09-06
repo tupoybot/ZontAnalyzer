@@ -41,6 +41,57 @@ DTO, canonical report JSON, расчёты, OpenAI-контракт, feedback/ow
 
 ## Приёмка
 
-Проверки и сведения о развёртывании дополняются по фактическим результатам.
-Все тесты, сборки и проверка production-копии выполняются локально.
+Локально прошли 225 тестов (222 без HTTP и 3 с localhost), Ruff и строгий mypy,
+sdist/wheel, production Docker и Docker HTTP test. Chromium/nginx проверили
+Basic Auth, sparse daily/weekly/monthly archive, feedback и изменение комментария
+без смены решения, профиль/reset/legacy values, газ CRUD/границу счётчика,
+Debug default/persistence/query и отсутствие горизонтального overflow.
+
+Реальный HTML проверен на 1360 и 390 px через локальный сервер с настоящим API
+на отдельной копии БД; JavaScript-ошибок нет, mobile с раскрытым canonical JSON
+не расширяет viewport. Скриншоты: `/tmp/zont-ux/{desktop,mobile,mobile-debug}.png`.
+
+Online backup: `/opt/zont-analyzer/data/backups/zont-analyzer-20260906T172245541498Z.sqlite3`.
+Локальный исходник `/tmp/zont-ux/source/production.sqlite3`, отдельная writable-копия
+`/tmp/zont-ux/data`, изолированная публикация `/tmp/zont-ux/publish`.
+Проверены integrity/FK; сохранены 130 canonical reports, 150 рекомендаций,
+13 записей профиля, 4 показания и 4 записи аудита газа, 14 interventions и
+25 прежних llm_calls. Перерендерены 124 реальных архивных отчёта.
+
+Реальный день содержит комнату, цель, улицу, подачу, cs, обратку и ГВС;
+18 наблюдаемых интервалов пламени: 12 CH и 6 ГВС. Недоступные сигналы/периоды
+не подменяются агрегатами. Кэш ограничен одним файлом на report ID.
+
+[CI ветки](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34049618246) и
+[release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34049620184) — success.
+Коммит приложения `5c6f4dd8ecc5fa4bd66c5cf74c560dc082ef27c3`, тег `release-ux-20260906-r2`.
+Точный registry digest принят локально без сети, совпали хеши 50 Python-файлов:
+`ghcr.io/tupoybot/zontanalyzer@sha256:12c2f4563eb172f7e34590f56d8f43ffa9ad0f3d960931b5ce2de57412db9d9d`.
+Повторная публикация registry-образом — 3,143 с на локальной машине;
+это не замер производительности HK. Доказательства: `/tmp/zont-ux/`.
+Все тесты, сборки и проверка production-копии выполнены локально.
 Реальные OpenAI-запросы для этого этапа не требуются и не выполнялись.
+
+
+## Развёртывание и завершение
+
+На HK `current` → `/opt/zont-analyzer/releases/20260906-ux-5c6f4dd`.
+Перед переключением создан штатный online backup
+`/opt/zont-analyzer/data/backups/zont-analyzer-20260906T175334305276Z.sqlite3`.
+Worker работает на указанном registry digest, healthy, OOM=false; первый цикл
+завершён `2026-09-06T17:56:50Z`. Установлены 250 готовых файлов архива под
+publication lock, manifest последним, и локально подготовленный приватный кэш.
+На HK не запускались сборки, тестовые анализы или полная DB-приёмка.
+
+Root/дневной архив/health/equipment/gas/legacy прошли smoke с ожидаемыми 200/401.
+Наличие SVG, Debug и форм проверено на опубликованной странице. Временная
+случайная smoke-учётка удалена, исходный htpasswd восстановлен побайтно.
+Хеши профиля, показаний/аудита/границ, interventions и сохранённых состояний
+feedback до/после совпали; llm_calls остались 25. nginx, Xray, Postfix,
+OpenDKIM и Docker сохранили состояние active.
+
+Доказательства: `/tmp/zont-ux/{deploy.log,publish-deploy.log,worker-smoke.json,
+routes-smoke.json,metadata-before.json,metadata-after.json,services-after.txt}`.
+Результат доступен на `https://za.tupoybot.ru/` и прежнем `/za/`.
+Этап реализован, проверен и развёрнут; ветка остаётся `ux-rework`, без merge.
+Следующий шаг — оценка владельцем; аналитический этап 5 не начинался.
