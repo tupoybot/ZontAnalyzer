@@ -32,7 +32,12 @@ Do not delegate work by default. For small, local, or straightforward tasks, han
 
 When using a subagent:
 
-* choose the lowest-capability model that is sufficient for the task;
+* choose the lowest-capability model and the lowest reasoning effort sufficient for the task;
+* delegate only if saved context/tokens or independent work outweigh setup and review cost;
+* use a short context fork and explicit file ownership, expected result, and validation;
+* prefer low reasoning for mechanical reads/status/commands, medium for bounded implementation;
+  increase model capability or reasoning only for demonstrated ambiguity, failures, or complex design;
+* if the requested model/effort is unavailable, use the smallest suitable available option;
 * give it only the context it actually needs;
 * prefer short, concrete assignments;
 * do not duplicate reasoning between the main agent and subagents;
@@ -57,3 +62,17 @@ Examples:
   * keep in the main agent or use a stronger model only when necessary.
 
 Do not use a stronger model merely because it is available.
+
+## Plan execution and handoff
+
+- Follow the dependency order and work portions in `docs/implementation_plan.md`.
+- Read the active stage, product requirements and current status first; inspect only relevant
+  source/tests instead of repeatedly loading the full historical documentation.
+- A work portion includes implementation and related tests. Keep a short handoff in
+  `docs/status.md`: contracts, changed scope, validation, remaining work and next step.
+- Local checkpoints within a stage do not each require production deployment. A functional
+  release requires local checks/isolated acceptance, a tested immutable image and bounded HK smoke.
+- Documentation-only changes need document/link/diff checks, not an application deployment.
+- Never run test suites, image builds or acceptance analysis on HK, including temporary directories.
+- The one real OpenAI request limit is shared by the main agent and all subagents per user turn;
+  coordinate it explicitly and use mocks for the remaining checks.
