@@ -81,12 +81,4 @@
 - На HK выполнялись только доставка готового образа, backup/deployment и bounded
   smoke. Все сборки, тесты и приёмочный анализ выполнены локально/в CI.
 
-В ходе deployment владелец уточнил будущую доставку: несжатые образы, CPU HK
-важнее объёма передачи. Правило записано в `AGENTS.md` и `deploy/OPERATIONS.md`:
-локальный pull/unpack → несжатый Docker archive → передача без gzip/SSH compression.
-Текущий stage4 registry pull к моменту уточнения уже был завершён; перед следующим
-HK release нужно адаптировать существующий pull-based release workflow с проверкой
-immutable image ID и сохранением исходного registry digest. Этот документ не
-утверждает, что новый транспорт уже реализован.
-
 Этап ожидает явной приёмки владельца; `stage4` не слита в `main`.

@@ -185,18 +185,7 @@ unavailable instead of briefly writable without authentication. The old
 `feedback_token.txt` may be removed only after the new image and the external
 Basic Auth feedback path have both been verified.
 
-**HK transport policy (owner instruction, 2026-09-06):** future releases must
-transfer an uncompressed Docker image archive prepared locally, without gzip,
-zstd or SSH compression. HK CPU load takes priority over transfer size. Pull and
-unpack registry layers locally, then use an uncompressed `docker save` archive;
-verify the loaded immutable image ID and record the original tested registry
-digest. `docker load` still performs filesystem work, so this does not eliminate
-all deployment CPU cost. The registry-pull command below is the existing path
-used for stage 4, not the approved transport for the next HK release. Adapt it
-before the next HK deployment; a loaded Docker archive may not retain RepoDigests,
-so do not silently fall back to a mutable tag.
-
-The existing explicit deployment command pulls the digest, creates and verifies an online
+The explicit deployment command pulls the digest, creates and verifies an online
 backup using the running worker, preserves `.env.previous`, updates only the image
 reference, starts Compose without a build, and waits for container health:
 

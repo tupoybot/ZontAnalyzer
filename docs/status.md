@@ -22,8 +22,6 @@ Registry digest `sha256:19c56fcb6b66918828d6383f732872205f4bfda9524767b68cda89ec
 опубликован архив из 124 дней. На HK `current` — `20260906-stage4-ca0295f`, worker
 healthy, цикл завершён `2026-09-06T16:15:59Z`, root/API/архив/legacy прошли smoke.
 Профиль, газ, feedback/interventions и соседние сервисы сохранены; llm_calls остались 25.
-По уточнению владельца дальнейшие образы доставлять несжатыми без SSH compression;
-перед следующим HK release адаптировать текущий registry-pull путь, см. AGENTS/OPERATIONS.
 Следующий шаг — явная приёмка владельца; только после неё разрешён merge `stage4`.
 
 ## Этап 3 — принят владельцем, закрыт

@@ -15,13 +15,6 @@ For substantial implementation tasks:
 ## HK production host: keep load minimal
 
 - Never build images, packages, or application artifacts on `hk.tupoybot.ru`.
-- For future HK releases, minimize server CPU rather than transfer size: pull and
-  unpack the tested registry image locally, export an uncompressed `docker save`
-  tar, and transfer it without gzip/zstd or SSH compression. Do not make HK pull
-  and decompress registry layers. Verify the loaded image against the locally
-  tested immutable image ID and retain its registry digest in release evidence.
-  Adapt the release workflow before its next use: the existing `release.sh`
-  registry-pull path does not yet implement this transport.
 - Run builds, full tests, integration tests, and production-data acceptance locally.
 - When real data is needed, create a SQLite online backup on HK, download it, and
   test against a separately writable local copy with an isolated publication directory.
