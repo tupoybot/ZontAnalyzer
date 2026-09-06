@@ -42,6 +42,7 @@ class AnalysisConfig(StrictModel):
     default_experiment_days: int = Field(default=7, ge=1, le=60)
     minimum_quality_score: float = Field(default=0.70, ge=0, le=1)
     short_cycle_minutes: float = Field(default=5.0, gt=0, le=60)
+    modulation_capability_profile: Literal["unknown", "flame_zero_is_minimum"] = "unknown"
 
 
 class DomesticHotWaterConfig(StrictModel):

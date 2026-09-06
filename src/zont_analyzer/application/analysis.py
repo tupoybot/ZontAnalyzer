@@ -27,6 +27,15 @@ from zont_analyzer.analytics import (
     detect_unconfirmed_burner_pulses,
     temperature_metrics,
 )
+from zont_analyzer.analytics.dhw import parse_opentherm_flags
+from zont_analyzer.analytics.evidence import (
+    ExclusionWindow,
+    NumericSample,
+    SignalMetadata,
+    SignalSeries,
+    StateSample,
+    build_evidence,
+)
 from zont_analyzer.application.ingestion import _object_names, heating_circuit_sensor_links
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import DetectedEvent, MetricValue, QualityResult, Recommendation, Report
@@ -568,6 +577,13 @@ class AnalysisService:
                 "data_quality": dhw_quality.model_dump(mode="json"),
             }
         temperature_interpretation = self._annotate_temperature_attribution(metrics, events)
+        control_context["temporal_evidence"] = self._temporal_evidence(
+            start=start, end=end, period_id=period_id, series=series,
+            selected_control=temperature_series, selected_target=target_series,
+            selected_boiler=boiler_state_series,
+            transition_windows=transition_windows, inactive_windows=inactive_windows,
+            noise_windows=flame_noise_windows, events=events,
+        )
         if temperature_interpretation:
             control_context["temperature_above_setpoint_interpretation"] = temperature_interpretation
         events.sort(key=lambda item: item.started_at)
@@ -653,6 +669,97 @@ class AnalysisService:
         )
         self.db.save_report(report, render_text(report))
         return report
+
+    def _temporal_evidence(
+        self, *, start: datetime, end: datetime, period_id: str,
+        series: list[dict[str, Any]], selected_control: dict[str, Any] | None,
+        selected_target: dict[str, Any] | None, selected_boiler: dict[str, Any] | None,
+        transition_windows: list[tuple[datetime, datetime]],
+        inactive_windows: list[tuple[datetime, datetime]],
+        noise_windows: list[tuple[datetime, datetime]], events: list[DetectedEvent],
+    ) -> dict[str, Any]:
+        # A bounded lookback supplies a preceding value, never a future sample.
+        # Freshness/coverage is assessed independently by the evidence engine.
+        lookback = start - timedelta(hours=6)
+
+        def identity(item: dict[str, Any]) -> str:
+            return "/".join(str(item[key]) for key in ("device_id", "source_type", "entity_id", "metric_key"))
+
+        def unique(role: str) -> dict[str, Any] | None:
+            candidates = [item for item in series if item["role"] == role]
+            anchor = selected_target or selected_control or selected_boiler
+            if anchor:
+                candidates = [item for item in candidates if item["device_id"] == anchor["device_id"]]
+            if selected_boiler and role in {"flow_temperature", "target_flow_temperature"}:
+                candidates = [item for item in candidates if item["entity_id"] == selected_boiler["entity_id"]]
+            overrides = [item for item in candidates if item.get("provenance") == "config.entity_overrides"]
+            if role == "return_temperature" and not overrides:
+                # External return is a distinct measurement, not the adapter's
+                # potentially unsupported rwt placeholder. Keep ambiguous sensors unknown.
+                candidates = [item for item in candidates if item["source_type"] != "z3k_boiler_adapter"]
+            candidates = overrides or candidates
+            return candidates[0] if len(candidates) == 1 else None
+
+        chosen: dict[str, dict[str, Any] | None] = {
+            "control_temperature": selected_control,
+            "target_temperature": selected_target,
+            **{role: unique(role) for role in (
+                "outdoor_temperature", "flow_temperature", "return_temperature",
+                "target_flow_temperature", "dhw_temperature", "recirculation",
+            )},
+        }
+        modulation = [item for item in series if item["metric_key"] in {"rml", "modulation"}
+                      and (selected_boiler is None or item["entity_id"] == selected_boiler["entity_id"])]
+        chosen["modulation"] = modulation[0] if len(modulation) == 1 else None
+        for item in series:
+            if item["role"] == "room_temperature":
+                chosen[f"room:{identity(item)}"] = item
+            if (selected_target and item["entity_id"] == selected_target["entity_id"]
+                    and item["metric_key"] in {"mode_id", "status"}):
+                chosen[f"setting:{item['metric_key']}"] = item
+        signals: list[SignalSeries] = []
+        for key, selected in sorted(chosen.items()):
+            if selected is None:
+                continue
+            item = selected
+            role: Any = "room" if key.startswith("room:") else "other" if key.startswith("setting:") else key
+            signals.append(SignalSeries(
+                key=key,
+                metadata=SignalMetadata(
+                    identity=identity(item), display_name=str(item.get("display_name") or item["entity_id"]),
+                    unit=str(item.get("unit") or "state"), role=role,
+                    provenance=f"{item.get('origin', item['source_type'])}; {item.get('provenance', 'unknown')}",
+                ),
+                samples=tuple(NumericSample(timestamp, value)
+                              for timestamp, value in self.db.fetch_samples(int(item["id"]), lookback, end)),
+            ))
+        exclusions = [
+            *[ExclusionWindow(left, right, "transition") for left, right in transition_windows],
+            *[ExclusionWindow(left, right, "inactive") for left, right in inactive_windows],
+            *[ExclusionWindow(left, right, "noise") for left, right in noise_windows],
+        ]
+        for event in events:
+            if (event.kind == "boiler_connection_loss"
+                    and event.details.get("service_impact") != "confirmed_service_running"):
+                exclusions.append(ExclusionWindow(event.started_at, event.ended_at or end, "reliability"))
+            if event.kind in {"dhw_reheat_episode", "dhw_long_heating_return"} and event.ended_at:
+                exclusions.append(ExclusionWindow(event.started_at, event.ended_at, "dhw"))
+            if event.kind == "dhw_reheat_episode" and event.ended_at:
+                hot_tail = event.details.get("facts", {}).get("hot_flow_tail_minutes")
+                if isinstance(hot_tail, (int, float)) and hot_tail > 0:
+                    exclusions.append(ExclusionWindow(
+                        event.ended_at, event.ended_at + timedelta(minutes=hot_tail), "dhw",
+                    ))
+        states = [StateSample(timestamp, parse_opentherm_flags(encoded), identity(selected_boiler))
+                  for timestamp, encoded in self.db.fetch_text_samples(int(selected_boiler["id"]), lookback, end)
+                  ] if selected_boiler else []
+        packet = build_evidence(
+            start=start, end=end, timezone=self.config.home.timezone, period_id=period_id,
+            signals=signals, state_samples=states, exclusions=exclusions,
+            capability_profile=self.config.analysis.modulation_capability_profile,
+            min_coverage_pct=self.config.analysis.minimum_quality_score * 100,
+        )
+        return packet.model_dump(mode="json", exclude_none=True)
 
     @staticmethod
     def _purpose_flame_samples(
