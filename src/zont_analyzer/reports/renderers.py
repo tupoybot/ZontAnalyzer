@@ -435,7 +435,11 @@ def _event_details(item: Any) -> str:
 
 
 def _local(value: datetime, timezone: str) -> str:
-    return value.astimezone(ZoneInfo(timezone)).strftime("%Y-%m-%d %H:%M %Z")
+    try:
+        zone = ZoneInfo(timezone)
+    except Exception:
+        zone = ZoneInfo("UTC")
+    return value.astimezone(zone).strftime("%Y-%m-%d %H:%M %Z")
 
 
 def _duration_dd_hh_mm(seconds: float) -> str:
@@ -660,6 +664,182 @@ def _temporal_evidence_html(packet: Any) -> str:
         + "".join(body) + "</details></section>"
 
 
+def _epistemic_label(level: str) -> str:
+    return {"observed": "наблюдение", "derived": "расчёт по наблюдениям", "inferred": "гипотеза",
+            "predicted": "прогноз"}.get(level, level)
+
+
+def _known_evidence_ids(report: Report) -> set[str]:
+    """Collect IDs we can verify locally, without rejecting unknown AI references."""
+
+    known = {item.id for item in report.metrics}
+    known.update(item.id for item in report.events)
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            identifier = value.get("id")
+            if isinstance(identifier, str):
+                known.add(identifier)
+            for nested in value.values():
+                collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(report.context.get("temporal_evidence"))
+    dhw_profiles = report.context.get("dhw_profiles")
+    if isinstance(dhw_profiles, dict):
+        current = dhw_profiles.get("current")
+        if isinstance(current, list):
+            for episode in current:
+                if isinstance(episode, dict) and isinstance(episode.get("id"), str):
+                    known.add(episode["id"])
+        history = dhw_profiles.get("history")
+        if isinstance(history, list):
+            for source in history:
+                if not isinstance(source, dict) or not isinstance(source.get("episodes"), list):
+                    continue
+                for episode in source["episodes"]:
+                    if isinstance(episode, dict) and isinstance(episode.get("id"), str):
+                        known.add(episode["id"])
+    noise_history = report.context.get("noise_history")
+    if isinstance(noise_history, list):
+        for source in noise_history:
+            if not isinstance(source, dict) or not isinstance(source.get("events"), list):
+                continue
+            for event in source["events"]:
+                if isinstance(event, dict) and isinstance(event.get("id"), str):
+                    known.add(event["id"])
+    return known
+
+
+def _evidence_text(references: Any, known: set[str]) -> str:
+    identifiers = [str(getattr(item, "id", item)) for item in references]
+    if not identifiers:
+        return "не указаны"
+    return ", ".join(
+        identifier if identifier in known else f"{identifier} (неподтверждённая ссылка)"
+        for identifier in identifiers
+    )
+
+
+def _interval_text(interval: Any, timezone: str) -> str:
+    if interval is None:
+        return "интервал не указан"
+    display_timezone = interval.timezone or timezone
+    return (
+        f"{_local(interval.started_at, display_timezone)} — "
+        f"{_local(interval.ended_at, display_timezone)}"
+    )
+
+
+def _context_time(value: Any, timezone: str) -> str:
+    if isinstance(value, datetime):
+        return _local(value, timezone)
+    if isinstance(value, str):
+        try:
+            return _local(datetime.fromisoformat(value), timezone)
+        except ValueError:
+            return value
+    return "не указано"
+
+
+def _episode_values(episode: Mapping[str, Any]) -> str:
+    facts = episode.get("facts")
+    inference = episode.get("inference")
+    values: list[str] = []
+    labels = {
+        "dhw_target_c": "цель",
+        "start_temperature_c": "начальная температура",
+        "end_temperature_c": "конечная температура",
+        "peak_temperature_c": "максимум",
+        "dhw_temperature_start_c": "начальная температура",
+        "dhw_temperature_end_c": "конечная температура",
+        "dhw_temperature_peak_c": "максимум",
+        "duration_minutes": "длительность",
+        "mode": "режим",
+        "selected_system_mode_name": "режим",
+        "demand": "признак спроса",
+    }
+    for source in (facts, inference):
+        if not isinstance(source, dict):
+            continue
+        for key, label in labels.items():
+            value = source.get(key)
+            if value is not None:
+                values.append(f"{label}: {value}")
+    return "; ".join(values) if values else "ключевые значения не сохранены"
+
+
+def _historical_evidence_text(context: Mapping[str, Any]) -> list[str]:
+    lines: list[str] = []
+    profiles = context.get("dhw_profiles")
+    if isinstance(profiles, dict):
+        current = profiles.get("current")
+        history = profiles.get("history")
+        if isinstance(current, list) or isinstance(history, list):
+            lines.append("Профили эпизодов ГВС (свидетельства):")
+        if isinstance(current, list):
+            for episode in current:
+                if isinstance(episode, dict):
+                    timezone = str(episode.get("timezone") or "UTC")
+                    lines.append(
+                        f"- текущий [{episode.get('id', 'без ID')}]: "
+                        f"{_context_time(episode.get('started_at'), timezone)} — "
+                        f"{_context_time(episode.get('ended_at'), timezone)}; {_episode_values(episode)}"
+                    )
+        if isinstance(history, list):
+            for source in history:
+                if not isinstance(source, dict):
+                    continue
+                timezone = str(source.get("timezone") or "UTC")
+                quality = source.get("quality")
+                quality_text = (
+                    f"качество {quality.get('score', 'не указано')}; "
+                    f"покрытие {quality.get('coverage_pct', 'не указано')}%"
+                    if isinstance(quality, dict)
+                    else "качество не указано"
+                )
+                for episode in source.get("episodes", []):
+                    if isinstance(episode, dict):
+                        lines.append(
+                            f"- история {source.get('report_id', 'без ID отчёта')} "
+                            f"({_context_time(source.get('period_start'), timezone)} — "
+                            f"{_context_time(source.get('period_end'), timezone)}; {quality_text}) "
+                            f"[{episode.get('id', 'без ID')}]: "
+                            f"{_context_time(episode.get('started_at'), timezone)} — "
+                            f"{_context_time(episode.get('ended_at'), timezone)}; {_episode_values(episode)}"
+                        )
+    noise_history = context.get("noise_history")
+    if isinstance(noise_history, list) and any(isinstance(item, dict) and item.get("events") for item in noise_history):
+        lines.append("История шумовых и надёжностных событий (свидетельства):")
+        for source in noise_history:
+            if not isinstance(source, dict):
+                continue
+            for event in source.get("events", []):
+                if isinstance(event, dict):
+                    timezone = str(source.get("timezone") or "UTC")
+                    lines.append(
+                        f"- история {source.get('report_id', 'без ID отчёта')} "
+                        f"[{event.get('id', 'без ID')}]: {event.get('kind', 'тип не указан')}; "
+                        f"{_context_time(event.get('started_at'), timezone)} — "
+                        f"{_context_time(event.get('ended_at'), timezone)}; "
+                        f"покрытие {source.get('coverage_pct', 'не указано')}%"
+                    )
+    return lines
+
+
+def _historical_evidence_html(context: Mapping[str, Any]) -> str:
+    lines = _historical_evidence_text(context)
+    if not lines:
+        return ""
+    body = "".join(f"<li>{html.escape(line[2:] if line.startswith('- ') else line)}</li>" for line in lines[1:])
+    return (
+        '<section class="historical-evidence"><details><summary>'
+        f"{html.escape(lines[0])}</summary><ul>{body}</ul></details></section>"
+    )
+
+
 def render_text(report: Report) -> str:
     lines = [
         f"ZontAnalyzer — {report.kind}",
@@ -678,6 +858,7 @@ def render_text(report: Report) -> str:
         ]
     )
     lines.extend(_temporal_evidence_text(report.context.get("temporal_evidence")))
+    lines.extend(_historical_evidence_text(report.context))
     current_mode = report.context.get("current_mode")
     if isinstance(current_mode, dict):
         lines.append(
@@ -756,35 +937,98 @@ def render_text(report: Report) -> str:
         lines.append("Метрики:")
         for metric in report.metrics:
             value, unit = _metric_display(metric)
-            lines.append(f"- {_metric_label(metric.name, metric.context)}: {value} {unit}")
+            lines.append(f"- [{metric.id}] {_metric_label(metric.name, metric.context)}: {value} {unit}")
     if report.events:
         lines.append(f"События (показано до 20 из {len(report.events)}):")
         lines.extend(
-            f"- [{event.severity}] {_local(event.started_at, report.timezone)} — {_event_label(event.kind)}: "
+            f"- [{event.id}] [{event.severity}] {_local(event.started_at, report.timezone)} — "
+            f"{_event_label(event.kind)}: "
             f"{_event_details(event.details)}"
             for event in report.events[:20]
         )
     mttr_reason = _missing_mttr_reason(report)
     if mttr_reason:
         lines.append(f"MTTR котельного сервиса: нет достоверных данных. {mttr_reason}")
+    known_evidence = _known_evidence_ids(report)
+    if report.observed_patterns:
+        lines.append("Наблюдаемые паттерны:")
+        for pattern in report.observed_patterns:
+            lines.extend([
+                f"- [{_epistemic_label(pattern.epistemic_level)}] {pattern.statement}",
+                f"  Временной интервал: {_interval_text(pattern.interval, report.timezone)}",
+                f"  Свидетельства: {_evidence_text(pattern.evidence, known_evidence)}",
+            ])
+    if report.hypotheses:
+        lines.append("Гипотезы:")
+        for hypothesis in report.hypotheses:
+            lines.extend([
+                f"- [{_epistemic_label(hypothesis.epistemic_level)}] {hypothesis.statement}",
+                f"  Временной интервал: {_interval_text(hypothesis.interval, report.timezone)}",
+                f"  Уверенность: {hypothesis.confidence:.0%}; "
+                f"основание: {hypothesis.confidence_basis}. Это не вероятность.",
+                f"  Обоснование: {hypothesis.rationale}",
+                f"  Свидетельства за: {_evidence_text(hypothesis.evidence_for, known_evidence)}",
+                f"  Свидетельства против: {_evidence_text(hypothesis.evidence_against, known_evidence)}",
+            ])
+            if hypothesis.alternatives:
+                lines.append("  Альтернативы: " + "; ".join(hypothesis.alternatives))
+    if report.predictions:
+        lines.append("Прогнозы:")
+        for prediction in report.predictions:
+            lines.extend([
+                f"- [{_epistemic_label(prediction.epistemic_level)}] Сценарий: {prediction.scenario}",
+                f"  Ожидаемый эффект: {prediction.expected_effect}",
+                f"  Уверенность: {prediction.confidence:.0%}; "
+                f"основание: {prediction.confidence_basis}. Это не вероятность.",
+                "  Допущения: " + ("; ".join(prediction.assumptions) if prediction.assumptions else "не указаны"),
+                f"  Свидетельства: {_evidence_text(prediction.evidence, known_evidence)}",
+                f"  Проверка: {prediction.verification}",
+            ])
+    if report.unknowns:
+        lines.append("Неизвестное / недостаток данных:")
+        for unknown in report.unknowns:
+            lines.extend([
+                f"- {unknown.statement}",
+                f"  Временной интервал: {_interval_text(unknown.interval, report.timezone)}",
+                f"  Свидетельства: {_evidence_text(unknown.evidence, known_evidence)}",
+            ])
+    if report.recommended_experiment is not None:
+        experiment = report.recommended_experiment
+        lines.extend([
+            "Рекомендуемый ручной эксперимент:",
+            f"- Переменная: {experiment.variable}; текущее значение: {experiment.current_value}; "
+            f"изменение: {experiment.proposed_change}",
+            f"  Обоснование: {experiment.rationale}",
+            f"  Ожидаемый эффект: {experiment.expected_effect}",
+            f"  Срок наблюдения: {experiment.observation_period}",
+            f"  Свидетельства: {_evidence_text(experiment.evidence, known_evidence)}",
+            "  Критерии успеха: "
+            + ("; ".join(experiment.success_criteria) if experiment.success_criteria else "не указаны"),
+            "  Когда остановиться: "
+            + ("; ".join(experiment.stop_conditions) if experiment.stop_conditions else "не указано"),
+            "  Риски: " + ("; ".join(experiment.risks) if experiment.risks else "не указаны"),
+        ])
     if report.recommendations:
         lines.append("Рекомендации:")
-        for item in report.recommendations:
+        for recommendation in report.recommendations:
             lines.extend(
                 [
-                    f"- [{item.priority}] {item.title} (уверенность {item.confidence:.0%})",
-                    f"  Гипотеза: {item.hypothesis}",
-                    f"  Действие: {item.suggested_manual_action}",
-                    f"  Ожидаемый эффект: {item.expected_effect}",
-                    "  Evidence: " + ", ".join((*item.evidence_metric_ids, *item.evidence_event_ids)),
+                    f"- [{recommendation.priority}] {recommendation.title} "
+                    f"(уверенность {recommendation.confidence:.0%})",
+                    f"  Гипотеза: {recommendation.hypothesis}",
+                    f"  Действие: {recommendation.suggested_manual_action}",
+                    f"  Ожидаемый эффект: {recommendation.expected_effect}",
+                    "  Свидетельства: " + _evidence_text(
+                        (*recommendation.evidence_metric_ids, *recommendation.evidence_event_ids), known_evidence
+                    ),
                 ]
             )
-            if item.risks:
+            if recommendation.risks:
                 lines.append("  Риски:")
-                lines.extend(f"    - {risk}" for risk in item.risks)
-            if item.stop_conditions:
+                lines.extend(f"    - {risk}" for risk in recommendation.risks)
+            if recommendation.stop_conditions:
                 lines.append("  Когда остановиться:")
-                lines.extend(f"    - {condition}" for condition in item.stop_conditions)
+                lines.extend(f"    - {condition}" for condition in recommendation.stop_conditions)
     return "\n".join(lines)
 
 
@@ -880,7 +1124,8 @@ def render_html(
         value, unit = _metric_display(metric)
         label = _metric_label(metric.name, metric.context)
         metric_rows.append(
-            f"<tr><td>{html.escape(label)}</td><td>{html.escape(value)}</td><td>{html.escape(unit)}</td></tr>"
+            f'<tr><td>{html.escape(label)}<br><small class="evidence-id">{html.escape(metric.id)}</small></td>'
+            f"<td>{html.escape(value)}</td><td>{html.escape(unit)}</td></tr>"
         )
         if metric.name in {"boiler_uptime_seconds", "zont_uptime_seconds"}:
             uptime_cards.append(
@@ -896,15 +1141,90 @@ def render_html(
     metrics = "".join(metric_rows)
     uptime = f'<section class="uptime-grid">{"".join(uptime_cards)}</section>' if uptime_cards else ""
     temporal_evidence = _temporal_evidence_html(report.context.get("temporal_evidence"))
+    historical_evidence = _historical_evidence_html(report.context)
     events = "".join(
         f"<tr><td>{html.escape(_local(item.started_at, report.timezone))}</td>"
         f"<td>{html.escape(item.severity)}</td><td>{html.escape(_event_label(item.kind))}</td>"
-        f"<td>{html.escape(_event_details(item.details))}</td></tr>"
+        f"<td>{html.escape(_event_details(item.details))}<br>"
+        f'<small class="evidence-id">{html.escape(item.id)}</small></td></tr>'
         for item in report.events[:50]
     )
 
     def html_list(values: list[str], empty: str) -> str:
         return "<ul>" + "".join(f"<li>{html.escape(value)}</li>" for value in values) + "</ul>" if values else empty
+
+    known_evidence = _known_evidence_ids(report)
+
+    def evidence_html(references: Any) -> str:
+        return html.escape(_evidence_text(references, known_evidence))
+
+    reasoning_parts: list[str] = []
+    if report.observed_patterns:
+        cards = "".join(
+            '<article class="reasoning-item observed">'
+            f"<h3>{html.escape(item.statement)}</h3>"
+            f"<p><strong>Статус:</strong> {html.escape(_epistemic_label(item.epistemic_level))}; "
+            f"<strong>Интервал:</strong> {html.escape(_interval_text(item.interval, report.timezone))}</p>"
+            f"<p><strong>Свидетельства:</strong> {evidence_html(item.evidence)}</p></article>"
+            for item in report.observed_patterns
+        )
+        reasoning_parts.append(f"<section><h2>Наблюдаемые паттерны</h2>{cards}</section>")
+    if report.hypotheses:
+        cards = "".join(
+            '<article class="reasoning-item hypothesis">'
+            f"<h3>{html.escape(item.statement)}</h3>"
+            f"<p><strong>Статус:</strong> {html.escape(_epistemic_label(item.epistemic_level))}; "
+            f"<strong>Интервал:</strong> {html.escape(_interval_text(item.interval, report.timezone))}</p>"
+            f"<p><strong>Уверенность:</strong> {item.confidence:.0%}; "
+            f"основание: {html.escape(item.confidence_basis)}. <small>Это не вероятность.</small></p>"
+            f"<p><strong>Обоснование:</strong> {html.escape(item.rationale)}</p>"
+            f"<p><strong>Свидетельства за:</strong> {evidence_html(item.evidence_for)}</p>"
+            f"<p><strong>Свидетельства против:</strong> {evidence_html(item.evidence_against)}</p>"
+            f"<p><strong>Альтернативы:</strong></p>{html_list(item.alternatives, '<p>Не указаны.</p>')}"
+            "</article>"
+            for item in report.hypotheses
+        )
+        reasoning_parts.append(f"<section><h2>Гипотезы</h2>{cards}</section>")
+    if report.predictions:
+        cards = "".join(
+            '<article class="reasoning-item prediction">'
+            f"<h3>Сценарий: {html.escape(item.scenario)}</h3>"
+            f"<p><strong>Ожидаемый эффект:</strong> {html.escape(item.expected_effect)}</p>"
+            f"<p><strong>Уверенность:</strong> {item.confidence:.0%}; "
+            f"основание: {html.escape(item.confidence_basis)}. <small>Это не вероятность.</small></p>"
+            f"<p><strong>Допущения:</strong></p>{html_list(item.assumptions, '<p>Не указаны.</p>')}"
+            f"<p><strong>Свидетельства:</strong> {evidence_html(item.evidence)}</p>"
+            f"<p><strong>План проверки:</strong> {html.escape(item.verification)}</p>"
+            "</article>"
+            for item in report.predictions
+        )
+        reasoning_parts.append(f"<section><h2>Прогнозы</h2>{cards}</section>")
+    if report.unknowns:
+        cards = "".join(
+            '<article class="reasoning-item unknown">'
+            f"<h3>{html.escape(item.statement)}</h3>"
+            f"<p><strong>Интервал:</strong> {html.escape(_interval_text(item.interval, report.timezone))}</p>"
+            f"<p><strong>Свидетельства:</strong> {evidence_html(item.evidence)}</p></article>"
+            for item in report.unknowns
+        )
+        reasoning_parts.append(f"<section><h2>Неизвестное / недостаток данных</h2>{cards}</section>")
+    if report.recommended_experiment is not None:
+        experiment = report.recommended_experiment
+        reasoning_parts.append(
+            '<section><h2>Рекомендуемый ручной эксперимент</h2><article class="reasoning-item experiment">'
+            f"<p><strong>Переменная:</strong> {html.escape(experiment.variable)}</p>"
+            f"<p><strong>Текущее значение:</strong> {html.escape(experiment.current_value)}</p>"
+            f"<p><strong>Изменение:</strong> {html.escape(experiment.proposed_change)}</p>"
+            f"<p><strong>Обоснование:</strong> {html.escape(experiment.rationale)}</p>"
+            f"<p><strong>Ожидаемый эффект:</strong> {html.escape(experiment.expected_effect)}</p>"
+            f"<p><strong>Срок наблюдения:</strong> {html.escape(experiment.observation_period)}</p>"
+            f"<p><strong>Свидетельства:</strong> {evidence_html(experiment.evidence)}</p>"
+            f"<p><strong>Критерии успеха:</strong></p>{html_list(experiment.success_criteria, '<p>Не указаны.</p>')}"
+            f"<p><strong>Когда остановиться:</strong></p>{html_list(experiment.stop_conditions, '<p>Не указано.</p>')}"
+            f"<p><strong>Риски:</strong></p>{html_list(experiment.risks, '<p>Не указаны.</p>')}"
+            "</article></section>"
+        )
+    reasoning = "".join(reasoning_parts)
 
     feedback_by_id = recommendation_feedback or {}
     status_labels = {
@@ -914,8 +1234,8 @@ def render_html(
         "ignored": "Без реакции",
     }
     recommendation_cards: list[str] = []
-    for item in report.recommendations:
-        recommendation_id = item.id or ""
+    for recommendation in report.recommendations:
+        recommendation_id = recommendation.id or ""
         state = feedback_by_id.get(recommendation_id, {})
         status = str(state.get("status", "new"))
         if status not in status_labels:
@@ -924,19 +1244,20 @@ def render_html(
         disabled = " disabled" if not recommendation_id else ""
         recommendation_cards.append(
             f'<article class="recommendation" data-recommendation-id="{html.escape(recommendation_id, quote=True)}">'
-            f"<h3>{html.escape(item.title)}</h3>"
+            f"<h3>{html.escape(recommendation.title)}</h3>"
             f'<p><strong>ID рекомендации:</strong> <code>{html.escape(recommendation_id or "не сохранена")}</code></p>'
             f'<p><strong>Статус:</strong> <span class="feedback-status status-{html.escape(status)}" '
             f'data-status="{html.escape(status)}">{status_labels[status]}</span></p>'
-            f"<p><strong>Гипотеза:</strong> {html.escape(item.hypothesis)}</p>"
-            f"<p><strong>Действие:</strong> {html.escape(item.suggested_manual_action)}</p>"
-            f"<p><strong>Ожидаемый эффект:</strong> {html.escape(item.expected_effect)}</p>"
+            f"<p><strong>Гипотеза:</strong> {html.escape(recommendation.hypothesis)}</p>"
+            f"<p><strong>Действие:</strong> {html.escape(recommendation.suggested_manual_action)}</p>"
+            f"<p><strong>Ожидаемый эффект:</strong> {html.escape(recommendation.expected_effect)}</p>"
             f"<p><strong>Evidence:</strong> "
-            f"{html.escape(', '.join((*item.evidence_metric_ids, *item.evidence_event_ids)))}</p>"
-            f"<p><small>Приоритет: {html.escape(item.priority)}; уверенность: {item.confidence:.0%}</small></p>"
-            f"<p><strong>Риски:</strong></p>{html_list(item.risks, '<p>Не указаны.</p>')}"
+            f"{evidence_html((*recommendation.evidence_metric_ids, *recommendation.evidence_event_ids))}</p>"
+            f"<p><small>Приоритет: {html.escape(recommendation.priority)}; "
+            f"уверенность: {recommendation.confidence:.0%}</small></p>"
+            f"<p><strong>Риски:</strong></p>{html_list(recommendation.risks, '<p>Не указаны.</p>')}"
             f"<p><strong>Когда остановиться:</strong></p>"
-            f"{html_list(item.stop_conditions, '<p>Не указано.</p>')}"
+            f"{html_list(recommendation.stop_conditions, '<p>Не указано.</p>')}"
             '<div class="feedback-controls">'
             '<label>Комментарий владельца'
             f'<textarea class="feedback-note" rows="3" maxlength="2000"{disabled}>'
@@ -1006,6 +1327,11 @@ cursor:pointer}}
 .temporal-evidence{{margin:1rem 0;padding:.8rem 1rem;background:#f5f7fa;border-radius:.5rem;overflow-wrap:anywhere}}
 .temporal-evidence summary{{cursor:pointer;font-weight:600}}.evidence-item{{margin:.45rem 0 0 1rem}}
 .evidence-detail{{margin:.2rem 0 0 2rem;color:#536579;font-size:.92rem}}
+.historical-evidence{{margin:1rem 0;padding:.8rem 1rem;background:#f5f7fa;border-radius:.5rem;overflow-wrap:anywhere}}
+.historical-evidence summary{{cursor:pointer;font-weight:600}}.historical-evidence li{{margin:.45rem 0}}
+.evidence-id{{overflow-wrap:anywhere;word-break:break-word}}
+.reasoning-item{{border-left-color:#7952b3}}.reasoning-item.prediction{{border-left-color:#b06d18}}
+.reasoning-item.unknown{{border-left-color:#697586}}.reasoning-item.experiment{{border-left-color:#287943}}
 @media(max-width:560px){{body{{margin:1rem auto}}.archive-navigation{{padding:.6rem}}
 .archive-controls{{grid-template-columns:minmax(0,1fr)}}
 td,th{{padding:.4rem;font-size:.9rem;vertical-align:top}}table{{display:block;overflow-x:auto}}}}
@@ -1039,9 +1365,11 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 {dhw_context}
 <p class="quality">Качество данных: {report.quality.score:.0%}; покрытие {report.quality.coverage_pct:.1f}%</p>
 {temporal_evidence}
+{historical_evidence}
 <p>{html.escape(report.summary)}</p><h2>Метрики</h2><table><tr><th>Метрика</th><th>Значение</th><th>Единица</th></tr>{metrics}</table>
 <h2>События</h2><p>Показано до 50 из {len(report.events)}.</p>
 <table><tr><th>Начало</th><th>Уровень</th><th>Тип</th><th>Детали</th></tr>{events}</table>
+{reasoning}
 <h2>Рекомендации</h2>{recommendations or "<p>Нет рекомендаций.</p>"}
 <details><summary>Канонический JSON</summary><pre>{canonical}</pre></details>
 <script>{_ARCHIVE_NAVIGATION_SCRIPT}</script>

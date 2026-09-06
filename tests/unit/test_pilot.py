@@ -187,6 +187,8 @@ def test_ai_is_called_only_for_first_yesterday_report_and_reused_afterward(
     ai_report = runtime.db.reports[yesterday_id].model_copy(
         update={"ai_used": True, "summary": "AI summary"}
     )
+    from zont_analyzer.domain.reasoning import Unknown
+    ai_report.unknowns = [Unknown(id="unknown:presence", statement="Присутствие неизвестно")]
     if legacy_policy:
         ai_report.context.pop("recommendation_policy")
     runtime.db.reports[yesterday_id] = ai_report
@@ -202,6 +204,7 @@ def test_ai_is_called_only_for_first_yesterday_report_and_reused_afterward(
         return
     assert retained.ai_used is True
     assert retained.summary == "AI summary"
+    assert retained.unknowns == ai_report.unknowns
     assert retained.context["pilot_ai_reuse"]["reason"].startswith("daily facts recomputed")
 
 

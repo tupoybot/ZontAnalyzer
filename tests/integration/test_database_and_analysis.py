@@ -411,8 +411,10 @@ def test_openai_refresh_failure_reuses_last_valid_interpretation(tmp_path: Path,
     class SuccessfulAnalyst:
         def analyze(self, _packet):
             from zont_analyzer.domain import AnalysisResult
-
-            return AnalysisResult(summary="Последняя валидная AI-интерпретация")
+            from zont_analyzer.domain.reasoning import Unknown
+            return AnalysisResult(summary="Последняя валидная AI-интерпретация", unknowns=[
+                Unknown(id="unknown:presence", statement="Присутствие неизвестно")
+            ])
 
     class FailingAnalyst:
         def analyze(self, _packet):
@@ -445,6 +447,7 @@ def test_openai_refresh_failure_reuses_last_valid_interpretation(tmp_path: Path,
         return
     assert refreshed.ai_used is True
     assert refreshed.summary == "Последняя валидная AI-интерпретация"
+    assert refreshed.unknowns == first.unknowns
     assert refreshed.context["ai_interpretation_reuse"]["source_generated_at"] == first.generated_at.isoformat()
 
 

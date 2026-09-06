@@ -65,6 +65,9 @@ try {
   await page.waitForURL("**/monthly/2026-07-01.html");
 
   await page.goto(`${baseURL}/daily/2026-08-05.html`, { waitUntil: "networkidle" });
+  assert.match(await page.locator(".reasoning-item.hypothesis").textContent(), /Синтетическая гипотеза <unsafe>/);
+  assert.match(await page.locator(".reasoning-item.hypothesis").textContent(), /неподтверждённая ссылка/);
+  assert.equal(await page.locator(".reasoning-item unsafe").count(), 0);
   const ownerForm = page.locator("[data-owner-forms]");
   await ownerForm.waitFor();
   const dayFiveReportId = await ownerForm.getAttribute("data-report-id");
@@ -95,6 +98,21 @@ try {
   await autoAdapt.locator(".owner-reset").click();
   await ownerForm.locator("[data-profile-message]").filter({ hasText: "сброшено" }).waitFor();
   assert.equal((await context.request.get(`${baseURL}/api/equipment`)).status(), 200);
+
+  const gasType = ownerForm.locator("[data-field=gas_type] select.owner-value");
+  assert.equal(await gasType.inputValue(), "", "unknown gas is not silently defaulted");
+  await gasType.selectOption("Природный газ (метан)");
+  await ownerForm.locator("[data-profile-save]").click();
+  await ownerForm.locator("[data-profile-message]").filter({ hasText: "сохранён" }).waitFor();
+  assert.equal(profileRequests.at(-1).fields.gas_type.value, "Природный газ (метан)");
+  await page.reload({ waitUntil: "networkidle" });
+  assert.equal(await gasType.inputValue(), "Природный газ (метан)");
+  await context.request.put(`${baseURL}/api/equipment/browser-synthetic-device`, {
+    data: {fields: {gas_type: {value: "Исторический газ <custom>"}}},
+  });
+  await page.reload({ waitUntil: "networkidle" });
+  assert.equal(await gasType.inputValue(), "Исторический газ <custom>", "legacy gas survives refresh");
+  assert.equal(await gasType.locator("custom").count(), 0);
 
   const gas = ownerForm.locator("[data-owner-gas]");
   await gas.locator("[name=gas-value]").fill("10");

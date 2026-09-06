@@ -37,8 +37,9 @@ from zont_analyzer.analytics.evidence import (
     build_evidence,
 )
 from zont_analyzer.application.ingestion import _object_names, heating_circuit_sensor_links
+from zont_analyzer.application.reasoning_context import reasoning_context, reasoning_payload
 from zont_analyzer.config import AppConfig
-from zont_analyzer.domain import DetectedEvent, MetricValue, QualityResult, Recommendation, Report
+from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue, QualityResult, Recommendation, Report
 from zont_analyzer.reports import render_text
 
 logger = logging.getLogger(__name__)
@@ -619,6 +620,8 @@ class AnalysisService:
         report_id = self.report_id_for(kind, start)
         previous_report = self.db.report(report_id)
         ai_used = False
+        reasoning = reasoning_payload(AnalysisResult(summary=""))
+        control_context.update(reasoning_context(events, self.db.prior_reports(start), self.config.home.timezone))
         should_use_ai = (
             use_ai
             and self.analyst is not None
@@ -648,6 +651,7 @@ class AnalysisService:
                         recommendation_feedback=self.db.recommendation_feedback(),
                     )
                 )
+                reasoning = reasoning_payload(result)
                 summary = result.summary
                 recommendations = result.recommendations[: self.config.analysis.max_recommendations_per_report]
                 ai_used = True
@@ -658,6 +662,7 @@ class AnalysisService:
                     and previous_report.ai_used
                     and previous_report.context.get("recommendation_policy") == "p2-1.7"
                 ):
+                    reasoning = reasoning_payload(previous_report)
                     summary = previous_report.summary
                     recommendations = previous_report.recommendations
                     ai_used = True
@@ -681,6 +686,7 @@ class AnalysisService:
             recommendations=recommendations,
             summary=summary,
             ai_used=ai_used,
+            **reasoning,
         )
         self.db.save_report(report, render_text(report))
         return report

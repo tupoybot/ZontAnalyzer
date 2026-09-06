@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from zont_analyzer.application.reasoning_context import reasoning_payload
 from zont_analyzer.domain import Report
 from zont_analyzer.reports import render_html, render_text
 
@@ -237,6 +238,7 @@ class PilotService:
                                 "summary": previous_report.summary,
                                 "recommendations": previous_report.recommendations,
                                 "ai_used": True,
+                                **reasoning_payload(previous_report),
                             }
                         )
                         self.runtime.db.save_report(report, render_text(report))

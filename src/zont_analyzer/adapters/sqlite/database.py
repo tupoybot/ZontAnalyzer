@@ -815,6 +815,17 @@ class Database:
             row = session.scalar(select(ReportRow).order_by(ReportRow.generated_at.desc()).limit(1))
             return Report.model_validate_json(row.canonical_json) if row else None
 
+    def prior_reports(self, before: datetime, *, limit: int = 7) -> list[Report]:
+        """Bounded, non-overlapping daily history; never import a future period."""
+        with self.session() as session:
+            rows = session.scalars(
+                select(ReportRow)
+                .where(ReportRow.kind == "daily", ReportRow.period_end <= int(before.timestamp()))
+                .order_by(ReportRow.period_end.desc(), ReportRow.id)
+                .limit(max(0, min(limit, 7)))
+            )
+            return [Report.model_validate_json(row.canonical_json) for row in rows]
+
     def completed_reports(self, now: datetime) -> list[Report]:
         """Existing calendar reports calculated after their entire period ended."""
         with self.session() as session:

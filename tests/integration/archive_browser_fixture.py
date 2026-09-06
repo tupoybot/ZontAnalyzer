@@ -6,6 +6,8 @@ from pathlib import Path
 
 from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.application.publication import publish_reports
+from zont_analyzer.domain import Hypothesis, TimeInterval
+from zont_analyzer.reports import render_text
 from zont_analyzer.runtime import build_runtime
 
 runtime = build_runtime(Path("/config/config.yaml"), Path("/data"))
@@ -26,7 +28,14 @@ analysis = runtime.analysis(no_ai=True)
 
 # The gaps are intentional: navigation must skip 2 and 4 August.
 for selected in (date(2026, 8, 1), date(2026, 8, 3), date(2026, 8, 5)):
-    analysis.analyze_daily(selected, use_ai=False)
+    report = analysis.analyze_daily(selected, use_ai=False)
+    report.hypotheses = [Hypothesis(
+        id="h:browser", statement="Синтетическая гипотеза <unsafe>", confidence=.4,
+        confidence_basis="Нет прямого сигнала", rationale="Только косвенные признаки",
+        interval=TimeInterval(started_at=report.period_start, ended_at=report.period_end, timezone=report.timezone),
+        alternatives=["Автоматика"], evidence_for=[{"id": "unconfirmed:browser"}],
+    )]
+    runtime.db.save_report(report, render_text(report))
 analysis.analyze_week(2026, 31, use_ai=False)
 analysis.analyze_month(2026, 7, use_ai=False)
 
