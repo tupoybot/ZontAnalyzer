@@ -1,7 +1,7 @@
 # Этап 3 — профиль оборудования и ранние показания газа
 
 Ветка `stage3` создана от актуального `main` (`dfc2a6e`). Приёмка: 2026-09-06.
-До завершения registry/HK smoke этап не считается закрытым.
+**Этап 3 закрыт:** реализация, локальная/registry-приёмка и bounded HK smoke выполнены.
 
 ## Контракт реализации
 
@@ -73,5 +73,45 @@
 
 ## Релиз
 
-Digest, CI, приёмка опубликованного образа и bounded HK smoke будут записаны после
-прохождения этих проверок. До этого этап открыт.
+- Коммит приложения: `e4562afc865aa7187ffe8cf6af3cbab2f5331ddf`.
+- Тег: `release-3-20260906`.
+- [CI ветки](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34038342210) и
+  [release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34038343942) — success.
+- Образ: `ghcr.io/tupoybot/zontanalyzer@sha256:4620302c796f68a53dec34dd6f3f8f2b7ea7111b51878490b1d5541faf6560e6`.
+  Digest совпал с publish log CI. OCI revision label отсутствует; SHA-256 всех
+  36 файлов приложения в image совпали с принятым коммитом.
+- Опубликованный digest отдельно принят с отключённой сетью, read-only root filesystem,
+  штатным UID и отдельными writable mounts. Копия: `/tmp/zont-stage3/registry/data/`,
+  публикация: `/tmp/zont-stage3/registry/publish/`, журнал: `registry-acceptance.log`.
+  Обе реальные даты, миграция, integrity/FK, 14 решений и 14 interventions прошли.
+- В опубликованном архиве 124 завершённых дня, 2026-05-05–2026-09-05, без пропусков
+  внутри доступного диапазона. Нужда в дополнительном историческом пересчёте не возникла.
+  Для отсутствующего дневного отчёта используется штатный локальный `analyze daily --date
+  YYYY-MM-DD --no-ai` и `report publish`; форма не создаёт отчётов или показаний скрыто.
+- Перед HK upgrade штатный `release.sh` создал дополнительный online backup:
+  `/opt/zont-analyzer/data/backups/zont-analyzer-20260906T141706700701Z.sqlite3`.
+  Миграция при штатном старте завершилась в `2026-09-06T14:19:49Z`.
+
+## Рабочая проверка HK
+
+- `current`: `/opt/zont-analyzer/releases/20260906-stage3-e4562af`; worker использует
+  указанный digest, `healthy`, OOM нет. Первый штатный цикл завершён в
+  `2026-09-06T14:20:50Z`; штатный `latest.html` обновлён в `14:20:49Z`, день — 2026-09-05.
+- Root, архивный день, health, equipment и gas GET прошли аутентифицированный 200 smoke;
+  root/equipment/gas без аутентификации возвращают 401. Legacy HTML/equipment — 200.
+  Временный случайный проверочный пользователь удалён, исходный htpasswd файл совпал
+  побайтно. Синтетические показания/feedback в production не записывались.
+- Все 14 решений, комментарии и payload рекомендаций сохранены. У трёх рекомендаций
+  штатного пересчитанного дня изменился только служебный `updated_at`; это подтверждено
+  сравнением конкретных колонок с pre-upgrade backup (`feedback-diff.json`). Все 14
+  interventions совпали полностью. nginx, Xray, Postfix, OpenDKIM и Docker остались active.
+- Финальный короткий metadata read подтвердил обе обнаруженные величины и 0 новых
+  AI-вызовов относительно pre-upgrade backup. К этому моменту в рабочей БД уже было
+  одно показание газа; приёмочные проверки его не создавали и не изменяли.
+- Доказательства: `/tmp/zont-stage3/{deploy.log,worker-smoke.json,routes-smoke.json,
+  production-before.json,production-after.json,feedback-diff.json,services-after.txt}`.
+  На HK выполнялись только backup, deployment и краткие проверки. Сборок, тестовых
+  наборов, backfill и приёмочных анализов на сервере не было.
+
+Остаток продуктового плана — этап 4. Модель/калибровка газа относятся к этапу 8;
+отсутствие показаний не блокирует работу приложения или следующие этапы.
