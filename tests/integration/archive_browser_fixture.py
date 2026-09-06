@@ -4,10 +4,24 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.application.publication import publish_reports
 from zont_analyzer.runtime import build_runtime
 
 runtime = build_runtime(Path("/config/config.yaml"), Path("/data"))
+# Keep one deliberately synthetic installation available to the equipment API.
+runtime.db.save_devices([{
+    "device_id": "browser-synthetic-device",
+    "name": "Browser synthetic boiler",
+    "model": "FutureModel XSS-safe",
+    "_equipment": {
+        "coordinates": {"value": {"latitude": 48.25, "longitude": 12.5}, "source": "fixture:loc"},
+        "boiler_model": {"value": "FutureModel XSS-safe", "source": "fixture:adapter"},
+    },
+}])
+OwnerContextStore(runtime.db).update_profile("browser-synthetic-device", {
+    "fields": {"installation_notes": {"value": "<b>synthetic owner note</b>"}},
+})
 analysis = runtime.analysis(no_ai=True)
 
 # The gaps are intentional: navigation must skip 2 and 4 August.

@@ -45,6 +45,9 @@ class FakeDatabase:
     def __init__(self) -> None:
         self.reports: dict[str, Report] = {}
 
+    def list_devices(self) -> list[dict[str, Any]]:
+        return []
+
     def earliest_sample_time(self) -> datetime:
         return datetime(2026, 8, 1, 12, tzinfo=UTC)
 
@@ -62,6 +65,20 @@ class FakeDatabase:
 
     def flush_log_outbox(self) -> list[str]:
         return ["report notification"]
+
+
+@pytest.fixture(autouse=True)
+def fake_owner_store(monkeypatch):
+    from zont_analyzer.application.owner_context import OwnerContextStore
+
+    original = OwnerContextStore.gas
+
+    def gas(store, report_id):
+        if isinstance(store.db, FakeDatabase):
+            return {"report_id": report_id, "reading": None, "audit": []}
+        return original(store, report_id)
+
+    monkeypatch.setattr(OwnerContextStore, "gas", gas)
 
 
 class FakeAnalysis:

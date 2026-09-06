@@ -271,6 +271,9 @@ class Database:
             cursor.close()
 
     def initialize(self, backup_dir: Path | None = None) -> MigrationResult:
+        # Register the additive owner-input tables before schema inspection.
+        from zont_analyzer.application import owner_context  # noqa: F401
+
         result = self._migrate(backup_dir or self.path.parent / "backups")
         with self.session() as session:
             session.merge(AppMetaRow(key="schema_version", value=result.revision))
@@ -411,6 +414,19 @@ class Database:
                     device_id=device_id, content_hash=digest, payload_json=encoded, captured_at=utcnow()
                 )
                 session.execute(statement.on_conflict_do_nothing(index_elements=["content_hash"]))
+        from zont_analyzer.adapters.zont_readonly.equipment import equipment_facts
+        from zont_analyzer.application.owner_context import OwnerContextStore
+
+        store = OwnerContextStore(self)
+        for saved_device in self.list_devices():
+            raw = saved_device["raw"]
+            facts = raw.get("_equipment", equipment_facts(raw))
+            if "_equipment" in raw and isinstance(facts, dict):
+                facts = dict(facts)
+                for field in ("coordinates", "boiler_model"):
+                    facts.setdefault(field, {"value": None, "source": f"zont:devices.{field}:unavailable_or_ambiguous"})
+            if isinstance(facts, dict) and facts:
+                store.observe_auto(str(saved_device["id"]), facts)
         return count
 
     def list_devices(self) -> list[dict[str, Any]]:

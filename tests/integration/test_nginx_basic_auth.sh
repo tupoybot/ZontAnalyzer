@@ -35,7 +35,7 @@ until curl -fsS -u stage16:stage16-secret http://127.0.0.1:18086/za/ >/dev/null;
     sleep 1
 done
 
-for path in /za/ /za/latest.html /za/daily/ /za/api/health; do
+for path in /za/ /za/latest.html /za/daily/ /za/api/health /za/api/equipment /za/api/reports/example/gas; do
     code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:18086$path")
     test "$code" = 401
     curl -fsS -u stage16:stage16-secret "http://127.0.0.1:18086$path" >/dev/null

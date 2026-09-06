@@ -384,6 +384,21 @@ class AnalysisService:
         control_context["burner_activity_scope"] = burner_activity_scope
         control_context["sensors"] = _sensor_report_context(series, temperature_series)
         control_context["recommendation_policy"] = "p2-1.7"
+        from zont_analyzer.application.owner_context import OwnerContextStore
+
+        owner_store = OwnerContextStore(self.db)
+        control_context["equipment_profiles"] = [
+            {
+                "device_id": str(device["id"]),
+                "fields": owner_store.profile(str(device["id"]), as_of=start)["fields"],
+                "applicable_at": start.isoformat(),
+                "changes_during_period": [
+                    item for item in owner_store.profile(str(device["id"]), as_of=end)["history"]
+                    if start < datetime.fromisoformat(item["effective_from"]).replace(tzinfo=UTC) < end
+                ],
+            }
+            for device in devices
+        ]
         dhw_temperature_samples = (
             self.db.fetch_samples(int(dhw_temperature_series["id"]), start, end) if dhw_temperature_series else []
         )

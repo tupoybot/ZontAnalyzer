@@ -626,7 +626,7 @@ def test_fresh_database_is_created_at_alembic_head(tmp_path: Path) -> None:
     result = db.initialize()
 
     assert result.previous_revision is None
-    assert result.revision == "9f4a2c8d1e70"
+    assert result.revision == "b81c3d4e5f60"
     assert result.backup_path is None
     assert db.current_revision() == result.revision
     assert db.status()["schema_revision"] == result.revision
@@ -671,7 +671,7 @@ def test_previous_version_is_backed_up_and_migrated_with_series_semantics(tmp_pa
     result = upgraded.initialize(tmp_path / "migration-backups")
 
     assert result.previous_revision == "5a9ce2bd8b34"
-    assert result.revision == "9f4a2c8d1e70"
+    assert result.revision == "b81c3d4e5f60"
     assert result.backup_path is not None and result.backup_path.exists()
     series = upgraded.list_series()[0]
     assert series["confidence"] == 0.3
