@@ -104,3 +104,22 @@ checkbox и списка используется один трёхсостоя�
 в оранжевый/синий диапазоны с opacity 0,24. Аптаймы ZONT и котла перенесены
 в третью строку KPI на desktop; статус связи и Debug-основания сохранены.
 Браузерная регрессия проверяет высоту полей/кнопок, hover и расположение аптаймов.
+
+Проверки r3: 225 тестов локально, Ruff/mypy, сборка пакета и Docker, Chromium
+с проверкой размеров полей, hover, KPI и CRUD прошли. Реальные screenshots
+профиля, графика, KPI и hover проверены на desktop, профиль — также на 390 px.
+[CI ветки](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34050868159) и
+[release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34050870597) — success.
+Коммит `37bd717`, тег `release-ux-20260906-r3`, registry digest:
+`ghcr.io/tupoybot/zontanalyzer@sha256:04e5ee73a84eeed020ff57a0e3ae253da8eda1ab493d911b7538b92e81d2c195`.
+Он принят локально без сети на свежем online backup
+`zont-analyzer-20260906T180956522145Z.sqlite3`; перерендерены 124 отчёта,
+все проверяемые таблицы совпали с исходником, integrity/FK OK, llm_calls=25.
+Артефакты: `/tmp/zont-ux-r3/`.
+
+На HK развёрнут `20260906-ux-r3-37bd717`; worker healthy/OOM=false, первый цикл
+завершён `2026-09-06T18:18:28Z`. Pre-deploy backup:
+`zont-analyzer-20260906T181558471002Z.sqlite3`. Root/архив/API/legacy и наличие
+исправлений в опубликованном HTML проверены. Хеши данных владельца и состояние
+соседних сервисов совпали до/после; llm_calls остались 25, htpasswd не изменён.
+Ветка `ux-rework` остаётся открытой, merge не выполнялся.
