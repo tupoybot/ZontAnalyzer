@@ -85,6 +85,16 @@ try {
   assert.equal(await ownerForm.locator("[data-field=installation_notes] input").inputValue(), "<b>synthetic owner note</b>");
   assert.equal(await ownerForm.locator("[data-field=installation_notes] b").count(), 0, "owner text is not interpreted as HTML");
   await ownerForm.locator(".owner-equipment > summary").click();
+  assert.equal(await ownerForm.locator('.owner-tristate').count(), 0);
+  const sizes = await ownerForm.locator('.owner-reset, .owner-field input').evaluateAll(nodes =>
+    nodes.filter(n => n.getBoundingClientRect().height > 0).map(n => n.getBoundingClientRect().height));
+  assert.ok(sizes.every(h => h <= 60), 'profile controls keep their natural height');
+  const editGas = ownerForm.locator('[data-gas-edit]');
+  await editGas.hover();
+  const hoverColors = await editGas.evaluate(n => ({color:getComputedStyle(n).color, background:getComputedStyle(n).backgroundColor}));
+  assert.equal(hoverColors.color, 'rgb(255, 255, 255)');
+  assert.equal(hoverColors.background, 'rgb(57, 75, 96)');
+  assert.equal(await page.locator('.kpi-grid .kpi-uptime-row .kpi').count(), 2);
   const profileRequests = [];
   page.on("request", request => {
     if (request.method() === "PUT" && request.url().includes("/equipment/")) profileRequests.push(request.postDataJSON());

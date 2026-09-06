@@ -71,12 +71,10 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
         value_text = html.escape(str(value) if value is not None else "", quote=True)
         source_text = html.escape(str(source), quote=True)
         if kind == "tristate":
-            checked = " checked" if value is True else ""
             unknown = "yes" if value is True else "no" if value is False else "unknown"
             fields.append(
-                f'<div class="owner-field" data-field="{name}"><label>{label}: '
-                f'<input type="checkbox" class="owner-tristate"{checked}> да</label>'
-                f'<select class="owner-unknown" aria-label="{label}, состояние"><option value="unknown"{" selected" if unknown == "unknown" else ""}>'
+                f'<div class="owner-field" data-field="{name}"><label for="profile-{name}">{label}</label>'
+                f'<select id="profile-{name}" class="owner-unknown" aria-label="{label}, состояние"><option value="unknown"{" selected" if unknown == "unknown" else ""}>'
                 f'неизвестно</option><option value="no"{" selected" if unknown == "no" else ""}>нет</option><option value="yes"{" selected" if unknown == "yes" else ""}>да</option></select>'
                 f'<small class="owner-source">Источник: {source_text or "нет"}</small>'
                 '<button type="button" class="owner-reset">Сбросить к авто</button></div>'
@@ -182,14 +180,17 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
 </section>"""
     return f"""<style>
 .owner-forms{{margin:1.2rem 0;font:inherit}}.owner-form{{padding:1rem;margin:.8rem 0;background:#f6f8fa;border-radius:.6rem}}
-.owner-form summary{{cursor:pointer;font-weight:700;font-size:1.1rem}}.owner-fields{{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:.7rem;margin-top:1rem}}
-.owner-field-group{{min-width:0;margin:1rem 0 0;padding:.7rem;border:1px solid #dfe5eb;border-radius:.45rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:.7rem}}.owner-field-group legend{{padding:0 .35rem;font-weight:700;color:#334155;grid-column:1/-1}}
-.owner-field{{min-width:0;display:grid;gap:.3rem;padding:.65rem;background:white;border:1px solid #dfe5eb;border-radius:.45rem}}
+.owner-form summary{{cursor:pointer;font-weight:700;font-size:1.1rem}}.owner-fields{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:1rem;margin-top:1rem}}
+.owner-field-group{{min-width:0;margin:1rem 0 0;padding:.7rem;border:1px solid #dfe5eb;border-radius:.45rem;display:grid;grid-template-columns:1fr;align-content:start;gap:.7rem}}.owner-field-group legend{{padding:0 .35rem;font-weight:700;color:#334155;grid-column:1/-1}}
+.owner-field{{min-width:0;display:grid;align-content:start;align-items:start;gap:.5rem;padding:.65rem;background:white;border:1px solid #dfe5eb;border-radius:.45rem}}
 .owner-field label,.owner-gas label{{display:grid;gap:.3rem;font-weight:600}}.owner-inline{{display:flex!important;align-items:center;margin:.7rem 0;font-weight:400!important}}
 .owner-field input,.owner-gas input,.owner-field select{{box-sizing:border-box;width:100%;font:inherit;padding:.4rem;border:1px solid #aeb9c4;border-radius:.3rem}}
 .owner-inline input,.owner-tristate{{width:auto!important}}.owner-source,.owner-help{{overflow-wrap:anywhere;color:#536579;font-size:.9rem}}.owner-actions{{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.7rem}}
 .owner-actions button,.owner-reset,.owner-secondary{{font:inherit;padding:.4rem .7rem;border:0;border-radius:.35rem;background:#287943;color:#fff;cursor:pointer}}
-.owner-secondary{{background:#516275}}.owner-gas-summary{{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}}.owner-gas-summary p{{margin:.2rem 0;font-weight:700}}
+.owner-secondary{{background:#516275}}
+.owner-forms .owner-secondary:hover,.owner-forms .owner-reset:hover{{background:#394b60;color:#fff}}
+.owner-forms .owner-actions button:hover{{background:#1b6033;color:#fff}}
+.owner-forms .owner-reset{{justify-self:start;min-height:40px}}.owner-gas-summary{{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}}.owner-gas-summary p{{margin:.2rem 0;font-weight:700}}
 .owner-gas-editor{{margin-top:.8rem;padding:.7rem;background:#fff;border:1px solid #dfe5eb;border-radius:.45rem}}.owner-gas-editor summary{{font-size:1rem}}
 .owner-reset{{background:#687789;font-size:.85rem}}.owner-message.error{{color:#9b251d}}.owner-message.ok{{color:#185c2d}}
 .owner-forms pre{{white-space:pre-wrap;overflow-wrap:anywhere}}

@@ -20,16 +20,16 @@ ROLE_STYLES = {
     "target_flow_temperature": ChartRoleStyle("#b58217", "7 5"),
     "return_temperature": ChartRoleStyle("#3f78a8"),
     "dhw_temperature": ChartRoleStyle("#b13e7b"),
-    "burner_ch": ChartRoleStyle("#d25a31", marker="CH"),
-    "burner_dhw": ChartRoleStyle("#805ad5", marker="ГВС"),
+    "burner_ch": ChartRoleStyle("#b85c00", marker="CH"),
+    "burner_dhw": ChartRoleStyle("#0066b3", marker="ГВС"),
     "heating_request": ChartRoleStyle("#4c6f92", marker="CH"),
     "unknown": ChartRoleStyle("#697586", "3 3", marker="?"),
     "missing": ChartRoleStyle("#9aa5b1", "2 3", marker="—"),
 }
 
 STATE_COLORS = {
-    "ch": "#d25a31", "dhw": "#805ad5", "burner": "#e07a35",
-    "ch_flame": "#d25a31", "dhw_flame": "#805ad5", "concurrent_unknown": "#697586",
+    "ch": "#b85c00", "dhw": "#0066b3", "burner": "#e07a35",
+    "ch_flame": "#b85c00", "dhw_flame": "#0066b3", "concurrent_unknown": "#697586",
     "unknown": "#697586", "missing": "#9aa5b1",
 }
 

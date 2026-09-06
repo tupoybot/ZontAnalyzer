@@ -92,14 +92,19 @@ def kpis(report: Report) -> str:
         + "".join(
             f'<div class="kpi"><span>{esc(label)}</span><strong>{esc(value)}</strong></div>' for label, value in values
         )
+        + reliability(report)
         + "</section>"
     )
 
 
 def reliability(report: Report) -> str:
     cards = []
-    for metric in report.metrics:
-        if metric.name not in {"zont_uptime_seconds", "boiler_uptime_seconds"}:
+    by_name = {metric.name: metric for metric in report.metrics}
+    for key in ("zont_uptime_seconds", "boiler_uptime_seconds"):
+        metric = by_name.get(key)
+        if metric is None:
+            label = "ZONT" if key.startswith("zont") else "Котёл"
+            cards.append(f'<div class="kpi"><span>Аптайм {label}</span><strong>Нет данных</strong></div>')
             continue
         name = "ZONT" if metric.name.startswith("zont") else "Котёл"
         online = metric.context.get("online")
@@ -113,11 +118,11 @@ def reliability(report: Report) -> str:
             else f"{int(seconds // 60)} мин"
         )
         cards.append(
-            f"<div><strong>{name}</strong><span>{status}</span><span>{duration}</span>"
+            f'<div class="kpi"><span>Аптайм {name}</span><strong>{duration}</strong><small>{status}</small>'
             + debug(metric.model_dump(), "Основание аптайма")
             + "</div>"
         )
-    return '<section class="reliability" aria-label="Надёжность">' + "".join(cards) + "</section>" if cards else ""
+    return '<div class="kpi-uptime-row" aria-label="Надёжность">' + "".join(cards) + "</div>"
 
 
 def metric_groups(report: Report, missing_mttr: str | None) -> str:

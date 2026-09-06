@@ -95,16 +95,7 @@ color:var(--secondary)}
 font-size:25px;
 letter-spacing:-.5px;
 margin-top:5px}
-.reliability{display:flex;
-gap:24px;
-margin-top:18px;
-padding:16px 20px}
-.reliability>div{display:flex;
-flex-wrap:wrap;
-gap:12px;
-align-items:center;
-font-size:14px}
-.reliability span{color:var(--secondary)}
+.kpi-uptime-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-column:1/-1}
 .chart-section,.thermal-system,.details-area{background:var(--surface);
 border:1px solid var(--border);
 border-radius:12px;

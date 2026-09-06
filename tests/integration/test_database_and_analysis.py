@@ -254,7 +254,7 @@ def test_reliability_events_persist_and_uptime_is_prominent(tmp_path: Path) -> N
     rendered_html = render_html(report)
     assert "Аптайм котла: 01:22:00 дд:чч:мм" in rendered_text
     assert "Аптайм ZONT: 02:00:00 дд:чч:мм" in rendered_text
-    assert 'class="reliability"' in rendered_html
+    assert 'class="kpi-uptime-row"' in rendered_html
     assert "1 дн." in rendered_html
     assert "2 дн." in rendered_html
     assert "Аптайм котла" in rendered_html  # Exact values remain in metric details.

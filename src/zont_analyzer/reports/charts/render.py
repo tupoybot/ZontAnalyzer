@@ -198,7 +198,7 @@ def _render_panel(
         x, band_width = scale_x(clipped_start), scale_x(clipped_end) - scale_x(clipped_start)
         svg_parts.append(
             f'<rect x="{x:.2f}" y="22" width="{band_width:.2f}" height="{plot_height:.2f}" '
-            f'fill="{state_color(state)}" fill-opacity=".12"><title>{html.escape(label)}: '
+            f'fill="{state_color(state)}" fill-opacity=".24"><title>{html.escape(label)}: '
             f'{html.escape(state)}</title></rect>'
         )
         visible_bands.append((label, state))
