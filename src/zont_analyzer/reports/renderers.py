@@ -937,11 +937,11 @@ def render_text(report: Report) -> str:
         lines.append("Метрики:")
         for metric in report.metrics:
             value, unit = _metric_display(metric)
-            lines.append(f"- [{metric.id}] {_metric_label(metric.name, metric.context)}: {value} {unit}")
+            lines.append(f"- {_metric_label(metric.name, metric.context)}: {value} {unit}")
     if report.events:
         lines.append(f"События (показано до 20 из {len(report.events)}):")
         lines.extend(
-            f"- [{event.id}] [{event.severity}] {_local(event.started_at, report.timezone)} — "
+            f"- [{event.severity}] {_local(event.started_at, report.timezone)} — "
             f"{_event_label(event.kind)}: "
             f"{_event_details(event.details)}"
             for event in report.events[:20]
@@ -1124,7 +1124,7 @@ def render_html(
         value, unit = _metric_display(metric)
         label = _metric_label(metric.name, metric.context)
         metric_rows.append(
-            f'<tr><td>{html.escape(label)}<br><small class="evidence-id">{html.escape(metric.id)}</small></td>'
+            f"<tr><td>{html.escape(label)}</td>"
             f"<td>{html.escape(value)}</td><td>{html.escape(unit)}</td></tr>"
         )
         if metric.name in {"boiler_uptime_seconds", "zont_uptime_seconds"}:
@@ -1145,8 +1145,7 @@ def render_html(
     events = "".join(
         f"<tr><td>{html.escape(_local(item.started_at, report.timezone))}</td>"
         f"<td>{html.escape(item.severity)}</td><td>{html.escape(_event_label(item.kind))}</td>"
-        f"<td>{html.escape(_event_details(item.details))}<br>"
-        f'<small class="evidence-id">{html.escape(item.id)}</small></td></tr>'
+        f"<td>{html.escape(_event_details(item.details))}</td></tr>"
         for item in report.events[:50]
     )
 
@@ -1329,7 +1328,6 @@ cursor:pointer}}
 .evidence-detail{{margin:.2rem 0 0 2rem;color:#536579;font-size:.92rem}}
 .historical-evidence{{margin:1rem 0;padding:.8rem 1rem;background:#f5f7fa;border-radius:.5rem;overflow-wrap:anywhere}}
 .historical-evidence summary{{cursor:pointer;font-weight:600}}.historical-evidence li{{margin:.45rem 0}}
-.evidence-id{{overflow-wrap:anywhere;word-break:break-word}}
 .reasoning-item{{border-left-color:#7952b3}}.reasoning-item.prediction{{border-left-color:#b06d18}}
 .reasoning-item.unknown{{border-left-color:#697586}}.reasoning-item.experiment{{border-left-color:#287943}}
 @media(max-width:560px){{body{{margin:1rem auto}}.archive-navigation{{padding:.6rem}}

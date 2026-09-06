@@ -193,7 +193,8 @@ def test_reasoning_rendering_labels_predictions_confidence_and_unknown_reference
     assert "Профили эпизодов ГВС (свидетельства):" in text
     assert "цель: 48; длительность: 9" in text
     assert "История шумовых и надёжностных событий (свидетельства):" in text
-    assert "[metric:known]" in text
+    assert "[metric:known]" not in text
+    assert 'class="evidence-id"' not in rendered
     assert "Рекомендуемый ручной эксперимент:" in text
     assert "<h2>Прогнозы</h2>" in rendered
     assert "Это не вероятность." in rendered
