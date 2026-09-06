@@ -88,5 +88,17 @@
 Служебные ID метрик/событий полностью убраны из основных таблиц HTML и списков
 текстового отчёта — без мелкого шрифта и раскрываемых ID. Понятные подписи и значения
 сохранены; внутренний контракт ссылок AI/JSON не менялся.
-Локально прошли 210 тестов без HTTP, Ruff/mypy и Chromium/Docker.
-Исправление готовится к deployment в ветке `stage4`; приёмка владельца ещё не получена.
+Локально прошли 210 тестов без HTTP + 3 HTTP, Ruff/mypy, sdist/wheel и Chromium/Docker.
+Коммит `dcd7183`, тег `release-4-20260906-r2`.
+[CI ветки](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34045335959) и
+[release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34045338354) — success.
+Registry digest `ghcr.io/tupoybot/zontanalyzer@sha256:48acefbdd1523e5b480e4c7a074c6cc88ce53d06f7a4f5341790276c8762a173`
+принят локально без сети: совпали 44 хеша файлов, сохранены все проверяемые записи
+production-копии, перерендерены 124 отчёта без ID в таблицах, integrity/FK OK.
+На HK `current` → `20260906-stage4-ui-dcd7183`, healthy/OOM=false,
+цикл завершён `2026-09-06T16:33:46Z`. Штатный backup:
+`/opt/zont-analyzer/data/backups/zont-analyzer-20260906T163031376941Z.sqlite3`.
+Архив установлен атомарно. Root/архив/API/legacy smoke прошёл, отсутствие подписей
+ID на странице проверено; htpasswd восстановлен. Хеши данных владельца и состояние
+соседних сервисов не изменились, новых AI-запросов нет. Артефакты — `/tmp/zont-stage4-ui/`.
+Ветка `stage4` остаётся без merge до приёмки владельца.
