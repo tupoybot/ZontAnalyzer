@@ -311,7 +311,7 @@ _ARCHIVE_NAVIGATION_SCRIPT = r"""
     }
     panel.innerHTML = `<ul class="archive-periods">${[...periods].reverse().map((item) => {
       const selected = item.start === reportStart && reportKind === activeKind ? " aria-current=\"page\"" : "";
-      const boundaries = `${formatBoundary(item.start)} — ${formatBoundary(item.end)} (конец не включён)`;
+      const boundaries = `${formatBoundary(item.start)} — ${formatBoundary(item.end)}`;
       const partial = item.complete === false ? " · промежуточный" : "";
       const season = {spring: "Весна", summer: "Лето", autumn: "Осень", winter: "Зима"}[item.season];
       const label = `${season ? season + ": " : ""}${boundaries}${partial}`;
