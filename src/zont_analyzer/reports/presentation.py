@@ -93,6 +93,9 @@ def _gas_value(value: Any, unit: str = "") -> str:
 
 
 _GAS_REASONS = {
+    "invalid_exposure": "Некорректный интервал телеметрии",
+    "no_calibrated_rate": "Недостаточно данных для калибровки расхода",
+    "insufficient_observed_flame": "Наблюдений горения недостаточно для оценки пропусков",
     "incomplete_passport_range": "Паспортный диапазон расхода указан не полностью",
     "invalid_meter_interval": "Некорректный интервал показаний исключён",
     "invalid_feature_shape": "Неполные признаки режима исключены",
@@ -172,7 +175,7 @@ def gas_period_card(report: Report) -> str:
         }.get(str(scope), str(scope)))
     stale = (
         '<p class="gas-period-stale" role="status"><strong>Объяснение AI устарело:</strong> '
-        'оно относится к предыдущей версии модели расхода.</p>'
+        'оно предшествует обновлённому расчёту расхода.</p>'
         if gas.get("ai_stale") is True else ""
     )
     intervals = gas.get("measured_intervals")

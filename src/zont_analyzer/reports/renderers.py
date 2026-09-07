@@ -1186,7 +1186,7 @@ def render_html(
     gas_context = report.context.get("gas")
     if isinstance(gas_context, dict) and gas_context.get("ai_stale") is True:
         question_html = ('<p class="gas-period-stale" role="status"><strong>AI-интерпретация историческая:</strong> '
-                         'расход газа был пересчитан по новой версии модели.</p>' + question_html)
+                         'расчёт расхода газа обновлён после этого AI-ответа.</p>' + question_html)
 
     def html_list(values: list[str], empty: str) -> str:
         return "<ul>" + "".join(f"<li>{html.escape(value)}</li>" for value in values) + "</ul>" if values else empty
