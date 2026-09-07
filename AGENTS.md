@@ -9,6 +9,10 @@
 - Keep `docs/status.md` short: current state, deployed version, validation, remaining work
   and next step. Move completed release narratives to the archive; retain active contracts
   and unresolved work in current documents. Do not revive archived P0–P5 plans.
+- Keep product goals, current architecture and rationale, model-selection policy, data flows
+  and still-relevant integration plans in current docs, even when implemented in code.
+  Mark implemented, planned and exploratory scope explicitly; archive only superseded
+  decisions and completed execution history. Reduce context through selective reading.
 - Stage 9 is ongoing pilot production operation and improvements. Stages 10 (multi-room)
   and 11 (control) are optional and deferred; do not start them automatically.
 
