@@ -3,7 +3,7 @@
 Ветка `stage7` от принятого `main` (`89fe9c8`). Реализация и техническая
 приёмка завершены, результат развёрнут. Владелец явно принял этап 2026-09-07:
 «Текущий этап принимаю». UI-техдолг компоновки поля «Вопрос для AI» перенесён
-в порцию 8.1 [плана](./implementation_plan.md).
+в порцию 8.1 [плана](implementation_plan.md).
 
 ## Контракты
 
@@ -43,7 +43,7 @@
 
 ## Проверки
 
-Матрица: [stage-7-evaluation.md](./stage-7-evaluation.md).
+Матрица: [stage-7-evaluation.md](stage-7-evaluation.md).
 Изолированные артефакты: `/tmp/zont-stage7/`.
 Online backup HK: `/opt/zont-analyzer/data/backups/zont-stage7-20260907.sqlite3`.
 Исходная копия: `source/production.sqlite3`; рабочая: `data/zont-analyzer.sqlite3`;

@@ -1,3 +1,17 @@
+# Documentation entrypoint and context budget
+
+- Start with `docs/status.md` and only the relevant section of `docs/implementation_plan.md`.
+- Use `docs/README.md` as the document map; read product requirements and architecture only
+  for contracts relevant to the task. Do not load every Markdown file or completed stage.
+- `docs/archive/` is historical evidence, not current instructions or backlog. Exclude it
+  from broad searches. Open a specific archived section only for a concrete historical
+  question that current docs and code cannot answer, or when the user explicitly asks.
+- Keep `docs/status.md` short: current state, deployed version, validation, remaining work
+  and next step. Move completed release narratives to the archive; retain active contracts
+  and unresolved work in current documents. Do not revive archived P0–P5 plans.
+- Stage 9 is ongoing pilot production operation and improvements. Stages 10 (multi-room)
+  and 11 (control) are optional and deferred; do not start them automatically.
+
 # Development workflow
 
 For substantial implementation tasks:
@@ -6,7 +20,8 @@ For substantial implementation tasks:
 - Delegate exploration, frontend, backend, and testing to subagents where useful.
 - Avoid concurrent edits to the same files.
 - The main agent owns integration and final verification.
-- Run the application, linters, type checks, and tests before completion.
+- For application changes, run the application, linters, type checks, and tests before completion.
+- Documentation-only changes require document/link/diff checks, not application builds or deployment.
 - Do not stop after producing a plan when implementation was requested.
 - Use openai requests if it necessary for testing, but not more than 1 request per dialog iteration
 
@@ -75,7 +90,9 @@ Do not use a stronger model merely because it is available.
 
 - Follow the dependency order and work portions in `docs/implementation_plan.md`.
 - Develop each implementation stage N in its own `stageN` branch created from up-to-date
-  `main` (for example, `stage2`, `stage3`). Work portions such as 2a/2b stay in `stage2`.
+  `main`. For the open-ended stage 9, use `stage9/<topic>` per bounded improvement;
+  acceptance and merge apply to that improvement, not the entire operation period.
+  Use `docs/<topic>` for documentation-only work.
 - Before asking for owner acceptance, complete implementation and technical checks,
   commit and push the stage's changes, deploy the locally tested immutable image,
   and verify the running server with bounded smoke checks. Present the deployed result
@@ -88,8 +105,8 @@ Do not use a stronger model merely because it is available.
   silence is not acceptance. Until explicit owner acceptance, keep the stage open and
   do not merge it or start the next stage. After acceptance, merge and create the next
   stage branch from the updated `main`.
-- Read the active stage, product requirements and current status first; inspect only relevant
-  source/tests instead of repeatedly loading the full historical documentation.
+- Follow the documentation entrypoint above; inspect only relevant source/tests.
+- Detailed release criteria are in `docs/release-process.md`; read them when preparing a release.
 - A work portion includes implementation and related tests. Keep a short handoff in
   `docs/status.md`: contracts, changed scope, validation, remaining work and next step.
 - Local checkpoints within a stage do not each require production deployment. A functional
