@@ -15,9 +15,9 @@ def render_regeneration(report: object, feedback_api_base_url: str = "/api") -> 
     api = json.dumps(feedback_api_base_url.rstrip("/"), ensure_ascii=False).replace("<", "\\u003c")
     js_id = json.dumps(report_id, ensure_ascii=False).replace("<", "\\u003c")
     return f'''<section class="full-width report-regeneration" data-report-id="{rid}">
-  <label for="counterfactual-question">Вопрос о небольшом изменении ПЗА (необязательно)</label>
+  <label for="counterfactual-question">Вопрос для AI</label>
   <textarea id="counterfactual-question" class="counterfactual-question" maxlength="500" rows="2"
-    placeholder="Например: что будет при небольшом изменении ПЗА?" aria-label="Вопрос о небольшом изменении ПЗА"></textarea>
+    placeholder="Необязательно. Например: что изменится, если снизить уставку?" aria-label="Вопрос для AI"></textarea>
   <button type="button" class="regenerate-report">Перегенерировать отчёт</button>
   <span class="regeneration-status" role="status" aria-live="polite"></span>
 </section>
