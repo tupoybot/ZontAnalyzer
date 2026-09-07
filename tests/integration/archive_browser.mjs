@@ -262,8 +262,10 @@ try {
   const counterfactual = page.locator(".counterfactual-question");
   await counterfactual.waitFor();
   await assert.equal(await counterfactual.getAttribute("maxlength"), "500");
+  const regenerationReload = page.waitForEvent("load", {timeout: 30000});
   await regenerate.click();
   await assert.equal(await regenerate.isDisabled(), true, "duplicate regeneration click is disabled while active");
+  await regenerationReload;
   await page.waitForLoadState("networkidle");
   await page.waitForURL("**/latest.html");
   await page.locator(".regenerate-report").waitFor();
