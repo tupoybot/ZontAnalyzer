@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from zont_analyzer.application.pilot import atomic_write_text, reports_directory
 from zont_analyzer.domain import Report
 from zont_analyzer.reports import render_html
+from zont_analyzer.reports.chart_data import cached_chart_data
 
 if TYPE_CHECKING:
     from zont_analyzer.runtime import Runtime
@@ -88,6 +89,7 @@ def _publish_locked(runtime: Runtime, output_dir: Path, now: datetime) -> dict[s
         rendered = render_html(
             report,
             runtime.db.recommendation_views_for_report(report.id),
+            chart_data=cached_chart_data(runtime.db, report),
             feedback_api_base_url=runtime.config.feedback.public_api_base_url,
             latest_report_href="../latest.html",
             owner_data=owner_data(report),
@@ -113,6 +115,7 @@ def _publish_locked(runtime: Runtime, output_dir: Path, now: datetime) -> dict[s
         _write_changed(output_dir / "latest.html", render_html(
             latest,
             runtime.db.recommendation_views_for_report(latest.id),
+            chart_data=cached_chart_data(runtime.db, latest),
             feedback_api_base_url=runtime.config.feedback.public_api_base_url,
             owner_data=owner_data(latest),
         ))

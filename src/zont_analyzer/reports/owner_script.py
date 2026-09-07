@@ -56,16 +56,17 @@ OWNER_SCRIPT = r"""
       if (state) state.value = value == null ? 'unknown' : value ? 'yes' : 'no';
       const source = node.querySelector('.owner-source');
       if (source) source.textContent = item
-        ? `Источник: ${item.source === 'manual' ? 'владелец' : 'ZONT'}; ${item.provenance || ''}; действует с ${item.effective_from}`
+        ? `Источник: ${item.source === 'manual' ? 'владелец' : 'ZONT'}`
         : 'Не указано';
     }
     const coords = profile?.fields?.coordinates?.value;
     form.querySelector('[data-coordinates-summary]').textContent = coords
       ? `Широта ${coords.latitude}, долгота ${coords.longitude}` : 'Координаты недоступны';
     form.querySelector('[data-profile-history]').textContent = (profile?.history || []).map(item =>
-      `${item.recorded_at}: ${item.field} = ${JSON.stringify(item.value)}; ${item.reset ? 'возврат к авто' : item.source}; ` +
-      `${item.provenance || ''}; действует с ${item.effective_from}`
+      `${new Date(item.recorded_at).toLocaleString('ru-RU')}: ${initial.field_labels?.[item.field] || 'Поле профиля'} = ` +
+      `${JSON.stringify(item.value)}; ${item.reset ? 'возврат к авто' : item.source === 'manual' ? 'владелец' : 'ZONT'}`
     ).join('\n') || 'Нет изменений.';
+    form.querySelector('[data-profile-debug]').textContent = JSON.stringify(profile || {}, null, 2);
   }
   function selectProfiles(values) {
     profiles = values;
@@ -89,7 +90,10 @@ OWNER_SCRIPT = r"""
   });
   function applyGas(data) {
     if (!initial.daily) return;
-    form.querySelector('[name=gas-value]').value = data?.reading?.value_m3 ?? '';
+    const value = data?.reading?.value_m3 ?? '';
+    form.querySelector('[name=gas-value]').value = value;
+    form.querySelector('[data-gas-current]').textContent = value === ''
+      ? 'Показание не задано' : `Текущее показание: ${value} м³`;
     form.querySelector('[name=gas-reset]').checked = false;
     form.querySelector('[data-gas-plausibility]').textContent =
       [data?.plausibility?.reason, ...(data?.plausibility?.warnings || [])].filter(Boolean).join(' ');
@@ -158,16 +162,30 @@ OWNER_SCRIPT = r"""
         value_m3: input.value, reset: form.querySelector('[name=gas-reset]').checked,
       });
       applyGas(saved);
+      form.querySelector('#gas-editor')?.removeAttribute('open');
+      form.querySelector('[data-gas-edit]').setAttribute('aria-expanded', 'false');
+      form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'false');
       message(gasMessage, ['Показание сохранено.', saved.publish_warning].filter(Boolean).join(' '));
     } catch (error) { message(gasMessage, error.message, true); }
   });
   form.querySelector('[data-gas-delete]')?.addEventListener('click', async () => {
     try {
       applyGas(await request('/reports/' + encodeURIComponent(reportId) + '/gas', {delete:true}));
+      form.querySelector('#gas-editor')?.removeAttribute('open');
+      form.querySelector('[data-gas-edit]').setAttribute('aria-expanded', 'false');
+      form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'false');
       message(gasMessage, 'Показание удалено.');
     } catch (error) { message(gasMessage, error.message, true); }
   });
+  form.querySelector('[data-gas-edit]')?.addEventListener('click', () => {
+    const editor = form.querySelector('#gas-editor');
+    if (!editor) return;
+    editor.open = !editor.open;
+    form.querySelector('[data-gas-edit]').setAttribute('aria-expanded', String(editor.open));
+    if (editor.open) form.querySelector('[name=gas-value]')?.focus();
+  });
   selectProfiles(profiles); applyGas(initial.gas);
+  if (window.location.protocol === "file:") return;
   request('/equipment').then(data => selectProfiles(data.profiles || []))
     .catch(error => message(profileMessage, error.message, true));
   if (initial.daily) request('/reports/' + encodeURIComponent(reportId) + '/gas').then(applyGas)

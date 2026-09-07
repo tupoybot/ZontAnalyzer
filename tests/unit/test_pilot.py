@@ -44,8 +44,12 @@ def _report(selected: date) -> Report:
 class FakeDatabase:
     def __init__(self) -> None:
         self.reports: dict[str, Report] = {}
+        self.path = Path("/tmp/zont-analyzer-fake.sqlite3")
 
     def list_devices(self) -> list[dict[str, Any]]:
+        return []
+
+    def list_series(self) -> list[dict[str, Any]]:
         return []
 
     def earliest_sample_time(self) -> datetime:
