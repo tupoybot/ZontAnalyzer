@@ -417,6 +417,7 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
     status_label = {"measured": "измерено", "estimated": "оценено", "extrapolated": "экстраполяция"}.get(
         status, "нет данных"
     )
+    status_prefix = f"{esc(status_label)} · " if status != "estimated" else ""
     split = gas.get("purpose_split")
     confidence = gas.get("reliability_index_pct")
     confidence_label = (
@@ -425,7 +426,7 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
     )
     heading = (
         '<div class="gas-kpi-total"><span>Расход газа</span>'
-        f'<strong>{esc(meter_volume)}</strong><small>{esc(status_label)} · '
+        f'<strong>{esc(meter_volume)}</strong><small>{status_prefix}'
         f'<span class="gas-reliability" title="Индекс надёжности оценки, не вероятность точности">'
         f'Надёжность: {esc(confidence_label)}</span></small></div>'
     )
