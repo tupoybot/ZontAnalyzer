@@ -23,6 +23,7 @@ from zont_analyzer.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 _PREFIX = "report-regeneration:"
+MAX_COUNTERFACTUAL_QUESTION_LENGTH = 500
 _thread_lock = threading.Lock()
 
 
@@ -47,6 +48,18 @@ def _read(runtime: Runtime, report_id: str) -> dict[str, Any] | None:
 
 def _write(runtime: Runtime, report_id: str, value: dict[str, Any]) -> None:
     runtime.db.set_app_meta(_key(report_id), json.dumps(value, ensure_ascii=False, sort_keys=True))
+
+
+def normalize_counterfactual_question(question: str | None) -> str | None:
+    """Validate and normalize the optional owner question for one regeneration."""
+    if question is None:
+        return None
+    if not isinstance(question, str):
+        raise ValueError("Вопрос должен быть строкой.")
+    value = question.strip()
+    if len(value) > MAX_COUNTERFACTUAL_QUESTION_LENGTH:
+        raise ValueError("Вопрос слишком длинный (максимум 500 символов).")
+    return value or None
 
 
 def _publication_snapshot(runtime: Runtime) -> dict[Path, tuple[bytes, int]]:
@@ -104,19 +117,25 @@ def _lock_path(runtime: Runtime, report_id: str) -> Path:
     return reports_directory(runtime) / (".regenerate-" + safe + ".lock")
 
 
-def _run(runtime: Runtime, report_id: str, lock: Any) -> None:
+def _run(runtime: Runtime, report_id: str, lock: Any, question: str | None = None) -> None:
     old = runtime.db.report(report_id)
     if old is None:
         _write(runtime, report_id, {
             "report_id": report_id, "status": "error", "error": "Отчёт не найден.", "updated_at": _now(),
         })
         return
-    _write(runtime, report_id, {"report_id": report_id, "status": "running", "updated_at": _now()})
+    running = {"report_id": report_id, "status": "running", "updated_at": _now()}
+    if question is not None:
+        running["question"] = question
+    _write(runtime, report_id, running)
     try:
         # AnalysisService.regenerate is deliberately the single integration
         # point: it computes fresh evidence/AI and does not persist the
         # candidate until this job has accepted it.
-        candidate = runtime.analysis().regenerate(old, request_nonce=_now())
+        kwargs: dict[str, str] = {"request_nonce": _now()}
+        if question is not None:
+            kwargs["question"] = question
+        candidate = runtime.analysis().regenerate(old, **kwargs)
         # Serialize the complete commit with worker and feedback publication.
         output_dir = reports_directory(runtime)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -131,10 +150,13 @@ def _run(runtime: Runtime, report_id: str, lock: Any) -> None:
                 raise
             finally:
                 fcntl.flock(publication_lock, fcntl.LOCK_UN)
-        _write(runtime, report_id, {
+        result = {
             "report_id": report_id, "status": "success", "updated_at": _now(),
             "generated_at": candidate.generated_at.isoformat(),
-        })
+        }
+        if question is not None:
+            result["question"] = question
+        _write(runtime, report_id, result)
     except BaseException as exc:  # background failures must become observable state
         logger.exception("Report regeneration failed for %s", report_id)
         _write(runtime, report_id, {
@@ -143,8 +165,9 @@ def _run(runtime: Runtime, report_id: str, lock: Any) -> None:
         })
 
 
-def start(runtime: Runtime, report_id: str) -> dict[str, Any]:
+def start(runtime: Runtime, report_id: str, question: str | None = None) -> dict[str, Any]:
     """Start one job, returning the durable state for duplicate clicks too."""
+    question = normalize_counterfactual_question(question)
     report = runtime.db.report(report_id)
     if report is None:
         raise KeyError(report_id)
@@ -163,18 +186,37 @@ def start(runtime: Runtime, report_id: str) -> dict[str, Any]:
     # A completed result is idempotent until a later explicit click starts a
     # new run; an active run is represented by the held OS lock.
     with _thread_lock:
-        _write(runtime, report_id, {"report_id": report_id, "status": "queued", "updated_at": _now()})
+        queued = {"report_id": report_id, "status": "queued", "updated_at": _now()}
+        if question is not None:
+            queued["question"] = question
+        _write(runtime, report_id, queued)
         thread = threading.Thread(
-            target=_run_and_close, args=(runtime, report_id, lock), daemon=True,
+            target=_run_and_close, args=(runtime, report_id, lock, question), daemon=True,
             name=f"regenerate-{report_id}",
         )
         thread.start()
     return status(runtime, report_id)
 
 
-def _run_and_close(runtime: Runtime, report_id: str, lock: Any) -> None:
+def run_sync(runtime: Runtime, report_id: str, question: str | None = None) -> dict[str, Any]:
+    """Run one regeneration in the foreground for the CLI process."""
+    question = normalize_counterfactual_question(question)
+    report = runtime.db.report(report_id)
+    if report is None:
+        raise KeyError(report_id)
+    if report.kind == "initial":
+        raise ValueError("Перегенерация доступна для дневного, недельного, месячного и сезонного отчёта.")
+    path = _lock_path(runtime, report_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _run(runtime, report_id, lock, question)
+    return status(runtime, report_id)
+
+
+def _run_and_close(runtime: Runtime, report_id: str, lock: Any, question: str | None = None) -> None:
     try:
-        _run(runtime, report_id, lock)
+        _run(runtime, report_id, lock, question)
     finally:
         fcntl.flock(lock, fcntl.LOCK_UN)
         lock.close()

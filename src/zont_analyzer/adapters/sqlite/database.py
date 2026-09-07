@@ -451,7 +451,8 @@ class Database:
         with self.session() as session:
             rows = session.scalars(select(DeviceRow).order_by(DeviceRow.id)).all()
             return [
-                {"id": row.id, "name": row.name, "model": row.model, "raw": json.loads(row.raw_json)} for row in rows
+                {"id": row.id, "name": row.name, "model": row.model, "raw": json.loads(row.raw_json),
+                 "discovered_at": row.discovered_at.replace(tzinfo=UTC).isoformat()} for row in rows
             ]
 
     def upsert_entity(

@@ -303,3 +303,21 @@ def test_gas_plausibility_warns_only_against_historical_known_maximum(tmp_path: 
     result = store.update_gas("r2", {"value_m3": 100})
     assert result["plausibility"]["status"] == "warning"
     assert result["plausibility"]["warnings"]
+
+
+def test_default_profile_time_is_refreshed_after_waiting_for_writer(tmp_path: Path, monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    _, store = _store(tmp_path)
+    store.update_profile("device", _manual({"auto_adapt": False}))
+    validate = store._manual_fields
+
+    def delayed_request(payload):
+        values, _ = validate(payload)
+        # The request arrived before the previously committed writer but acquired
+        # its write lock later. Explicit historical edits retain their semantics.
+        return values, datetime(2000, 1, 1, tzinfo=UTC)
+
+    monkeypatch.setattr(store, "_manual_fields", delayed_request)
+    store.update_profile("device", _manual({"auto_adapt": False}))
+    assert len(store.profile("device")["history"]) == 1

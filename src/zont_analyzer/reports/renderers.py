@@ -691,6 +691,8 @@ def _known_evidence_ids(report: Report) -> set[str]:
                 collect(nested)
 
     collect(report.context.get("temporal_evidence"))
+    collect(report.context.get("heating_analysis"))
+    collect(report.context.get("control_settings"))
     dhw_profiles = report.context.get("dhw_profiles")
     if isinstance(dhw_profiles, dict):
         current = dhw_profiles.get("current")
@@ -862,6 +864,8 @@ def render_text(report: Report) -> str:
             report.summary,
         ]
     )
+    if report.context.get("counterfactual_question"):
+        lines.append("Вопрос владельца: " + str(report.context["counterfactual_question"]))
     lines.extend(_temporal_evidence_text(report.context.get("temporal_evidence")))
     lines.extend(_historical_evidence_text(report.context))
     from zont_analyzer.reports.period_context import period_text
@@ -1148,6 +1152,10 @@ def render_html(
     mttr_reason = _missing_mttr_reason(report)
     temporal_evidence = _temporal_evidence_html(report.context.get("temporal_evidence"))
     historical_evidence = _historical_evidence_html(report.context)
+    question = report.context.get("counterfactual_question")
+    question_html = (
+        "<p><strong>Вопрос владельца:</strong> " + html.escape(str(question)) + "</p>" if question else ""
+    )
 
     def html_list(values: list[str], empty: str) -> str:
         return "<ul>" + "".join(f"<li>{html.escape(value)}</li>" for value in values) + "</ul>" if values else empty
@@ -1366,7 +1374,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="lower-grid full-width">{ui.timeline(report)}{ui.quality(report)}</div>
 {more_actions}
 <section class="details-area full-width"><h2>Почему сделаны эти выводы</h2>
-{reasoning or '<p>Дополнительные объяснения за период не сформированы.</p>'}
+{question_html}{reasoning or '<p>Дополнительные объяснения за период не сформированы.</p>'}
 </section>
 <div class="details-area full-width">{ui.metric_groups(report, mttr_reason)}{ui.sensors(report)}{sensor_context}
 <div class="debug-only">{temporal_evidence}{historical_evidence}</div>

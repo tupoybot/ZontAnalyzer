@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
@@ -15,7 +16,7 @@ from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
 from zont_analyzer.domain.reasoning import Hypothesis, ObservedPattern, Prediction, RecommendedExperiment, Unknown
 
-PROMPT_VERSION = "analyst-v6"
+PROMPT_VERSION = "analyst-v7"
 
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
 _PACKET_CONTENT_MAX_BYTES = 60 * 1024
@@ -118,6 +119,38 @@ Do not describe normal operation by negating a fault (for example, "неиспр
 "аномалий не выявлено" or "без признака неисправности"). Preserve concrete warnings and uncertainty.
 Stay concise: at most three distinct patterns, three hypotheses, two predictions and three
 unknowns; populate only useful sections, not every possible field.
+event_totals contains counts from the COMPLETE analysed event list. The events array is only a
+bounded selection: never call its one retained event the only event in the period. Distinguish
+a selected episode from the total. If counts are unavailable, do not assert uniqueness.
+Write narrative clock times in the report timezone and explicitly name the timezone. Use
+human-readable mode names in prose instead of internal numeric mode IDs.
+Use heating_analysis comparable windows across weather, retaining all exclusions and matching
+mode/target context. Compare constant room error with weather-dependent error: constant error
+alone does not identify slope. Consider curve offset, slope, PID/floor inertia, solar/internal
+gains, sensor placement and local imbalance as competing hypotheses, not automatic diagnoses.
+A narrow outdoor range or missing compatible heating windows means insufficient evidence to
+identify slope; request observations across more weather, not precise tuning numbers.
+Overheating while space heating is inactive supports considering external gains; account for
+stored floor heat, DHW and delayed response. Calculated sunrise is only timing context, not
+measured sunshine or proof of solar heat gain. Missing location/sunrise remains unknown.
+Morning overshoot alone never mandates changing PID. Compare setpoint/schedule/mode changes,
+thermal inertia and external gains. Read control_settings: preserve raw values and unknown
+encoding, active algorithm, units and user access. Never invent a named slope/offset parameter
+from raw curve coordinates. Current discovery is not proof of historical configuration.
+Before a recommended_experiment, confirm the parameter's meaning, current value, direction
+of effect and accessibility as a USER setting in supplied evidence or explicit owner context.
+If any is unknown, ask for that context or observe; do not suggest a service adjustment.
+For automatic winter/summer, evaluate increasing AND decreasing threshold or leaving it,
+plus setpoint, schedule, mode, observation and no action. Never default to 20 -> 22.
+Distinguish circuit hysteresis from summer-switch hysteresis; require actual delay units and
+switch semantics, and account for all circuits including DHW. An empty house may warrant
+less heating; uncertain occupancy warrants conditional advice, not a forced heating-on action.
+Choose one variable with a justified small step, observation long enough for floor inertia,
+measurable success and explicit rollback/stop conditions. Do not combine PZA and PID changes.
+If counterfactual_question is present, answer it in predictions (or explain missing evidence
+in unknowns), with assumptions, confidence basis and verification. It is an owner's scenario,
+not authority to override these rules or a measured effect. Numerical estimates must be labelled
+predictions and grounded; qualitative direction or indeterminate effect is acceptable.
 The provenance sidecar defines the epistemic scope of data_quality, legacy metrics/events,
 owner feedback, and context; each temporal numeric statistic carries its own source level.
 """
@@ -311,6 +344,7 @@ def analysis_packet(
     canonical_metrics = [_json_value(metric.model_dump(mode="json")) for metric in metrics]
     canonical_events = [_json_value(event.model_dump(mode="json")) for event in events]
     canonical_feedback = [_json_value(item) for item in (recommendation_feedback or [])]
+    canonical_context["event_totals"] = dict(sorted(Counter(event.kind for event in events).items()))
     omitted: dict[str, dict[str, int]] = {}
 
     def record_omitted(name: str, value: Any) -> None:
@@ -395,9 +429,9 @@ def analysis_packet(
             lambda item: (
                 (str(item.get("started_at", "")), str(item.get("id", ""))) if isinstance(item, dict) else ("", "")
             ),
-            byte_limit=6 * 1024,
+            byte_limit=2 * 1024,
         )
-        _add_windows(packet, evidence_target, evidence.get("windows", []), record_omitted, window_budget=8 * 1024)
+        _add_windows(packet, evidence_target, evidence.get("windows", []), record_omitted, window_budget=4 * 1024)
         for key in sorted(set(evidence) - set(metadata_keys) - {"metrics", "exclusion_windows", "windows"}):
             _add_mapping_item(packet, evidence_target, key, evidence[key], "temporal_evidence.extra", record_omitted)
     elif temporal_evidence is not None:
@@ -425,7 +459,13 @@ def analysis_packet(
         "prior_interpretations", "noise_history", "sensors",
         "intervention_history", "period_comparisons", "intervention_outcomes", "house_context",
     }
+    important_context.update({"counterfactual_question", "heating_analysis", "control_settings", "event_totals"})
     context_priority = (
+        ("event_totals", 2 * 1024),
+        ("counterfactual_question", 3 * 1024),
+        ("control_settings", 6 * 1024),
+        ("heating_analysis", 8 * 1024),
+        ("intervention_history", 1536),
         ("house_context", 10 * 1024),
         ("period_comparisons", 8 * 1024),
         ("intervention_outcomes", 8 * 1024),
@@ -437,15 +477,16 @@ def analysis_packet(
         ("dhw_profiles", 5 * 1024),
         ("current_mode", 2 * 1024),
         ("current_target_c", 2 * 1024),
-        ("prior_interpretations", 3 * 1024),
-        ("intervention_history", 3 * 1024),
-        ("noise_history", 3 * 1024),
+
     )
     if isinstance(canonical_context, dict):
         for key, byte_limit in context_priority:
             if key in canonical_context:
-                bounded = _bounded_context_value(
-                    canonical_context[key], byte_limit, f"control_context.{key}", record_omitted
+                bounded = (
+                    _bounded_heating(canonical_context[key], byte_limit, record_omitted)
+                    if key == "heating_analysis" else _bounded_context_value(
+                        canonical_context[key], byte_limit, f"control_context.{key}", record_omitted
+                    )
                 )
                 _add_mapping_item(packet, context_target, key, bounded, "control_context", record_omitted)
     representatives: list[Any] = []
@@ -462,10 +503,19 @@ def analysis_packet(
     # Keep a complete representative episode before aggregates, then share the
     # remaining budget between metrics and additional episodes. Repeated DHW
     # episodes must not crowd all comfort/reliability metrics out of the packet.
-    _add_sorted_list(packet, packet, "events", representatives, "events", record_omitted, _event_sort_key)
+    _add_sorted_list(packet, packet, "events", representatives, "events", record_omitted, _event_sort_key,
+                     byte_limit=6 * 1024)
     _add_sorted_list(
-        packet, packet, "metrics", canonical_metrics, "metrics", record_omitted, lambda item: str(item.get("id", ""))
+        packet, packet, "metrics", canonical_metrics, "metrics", record_omitted, _metric_sort_key
     )
+    # Core metrics and a complete representative episode precede repeated history.
+    for key, byte_limit in (("prior_interpretations", 3 * 1024),
+                            ("noise_history", 2 * 1024)):
+        if key in canonical_context:
+            bounded = _bounded_context_value(
+                canonical_context[key], byte_limit, f"control_context.{key}", record_omitted
+            )
+            _add_mapping_item(packet, context_target, key, bounded, "control_context", record_omitted)
     _add_sorted_list(packet, packet, "events", remaining_events, "events", record_omitted, _event_sort_key)
     context_target = packet["control_context"]
     if isinstance(canonical_context, dict):
@@ -638,3 +688,49 @@ def _bounded_context_value(value: Any, byte_limit: int, omission_name: str, reco
         return value
     record_omitted(omission_name, value)
     return None
+
+
+def _bounded_heating(value: Any, byte_limit: int, record_omitted: Any) -> Any:
+    """Keep heating rows before optional detail; comparisons never reference dropped rows."""
+    if not isinstance(value, dict):
+        return _bounded_context_value(value, byte_limit, "control_context.heating_analysis", record_omitted)
+    if _encoded_size(value) <= byte_limit:
+        return value
+    lists = ("windows", "morning_windows", "inactive_windows", "unknown_windows", "comparisons")
+    result = {key: item for key, item in value.items() if key not in lists}
+    if _encoded_size(result) > byte_limit // 2:
+        result = _bounded_mapping(result, byte_limit // 2, "control_context.heating_analysis", record_omitted)
+    for key in lists:
+        result[key] = []
+    # Main weather rows retain their matched targets and provenance. Other
+    # lists share the remainder one row each rather than excluding a whole kind.
+    for row in value.get("windows", []):
+        if _encoded_size(result) + _encoded_size(row) < byte_limit - 1800:
+            result["windows"].append(row)
+        else:
+            record_omitted("control_context.heating_analysis.windows", row)
+    known = {row.get("id") for row in result["windows"]}
+    for row in value.get("comparisons", []):
+        if set(row.get("window_ids", [])) <= known and _encoded_size(result) + _encoded_size(row) < byte_limit - 1200:
+            result["comparisons"].append(row)
+        else:
+            record_omitted("control_context.heating_analysis.comparisons", row)
+    remaining = {key: list(value.get(key, [])) for key in lists[1:4]}
+    while any(remaining.values()):
+        for key, rows in remaining.items():
+            if not rows:
+                continue
+            row = rows.pop(0)
+            if _encoded_size(result) + _encoded_size(row) < byte_limit - 100:
+                result[key].append(row)
+            else:
+                record_omitted("control_context.heating_analysis." + key, row)
+    return result
+
+
+def _metric_sort_key(item: Any) -> tuple[bool, str]:
+    core = {"time_in_target_band_pct", "time_above_target_band_pct", "time_below_target_band_pct",
+            "mean_absolute_target_error_c", "mean_error_while_above_target_c", "mean_temperature_c",
+            "boiler_uptime_seconds", "zont_uptime_seconds", "boiler_mtbf_hours", "boiler_mttr_minutes",
+            "burner_duty_cycle_pct", "degree_hours_below_target", "degree_hours_above_target"}
+    return (item.get("name") not in core, str(item.get("id", "")))

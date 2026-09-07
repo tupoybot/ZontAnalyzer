@@ -341,6 +341,10 @@ class OwnerContextStore:
     def update_profile(self, device_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         values, effective = self._manual_fields(payload)
         with self._write_session() as session:
+            # Concurrent requests may acquire the lock in reverse arrival order.
+            # An implicit "now" must include the preceding committed revision.
+            if payload.get("effective_from") is None:
+                effective = utcnow()
             if session.get(DeviceRow, device_id) is None:
                 raise KeyError(device_id)
             current = self._profile_state(self._ordered_profile_rows(session, device_id, effective))

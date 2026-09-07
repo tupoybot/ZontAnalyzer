@@ -259,6 +259,9 @@ try {
   await page.goto(`${baseURL}/latest.html`, { waitUntil: "networkidle" });
   const regenerate = page.locator(".regenerate-report");
   await regenerate.waitFor();
+  const counterfactual = page.locator(".counterfactual-question");
+  await counterfactual.waitFor();
+  await assert.equal(await counterfactual.getAttribute("maxlength"), "500");
   await regenerate.click();
   await assert.equal(await regenerate.isDisabled(), true, "duplicate regeneration click is disabled while active");
   await page.waitForLoadState("networkidle");
