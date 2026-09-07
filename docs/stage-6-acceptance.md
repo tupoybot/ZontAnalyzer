@@ -109,18 +109,47 @@ OCI revision совпадает с коммитом; повторная лока
 143 публикации, пустой schedule, сезон 92 дня за 0.096 с / 97 MiB; owner rows
 и feedback сохранены. Логи: `registry-accept.log`, `registry-owner-check.json`.
 
-Deployment пока не выполнен: после первого online backup SSH forwarding
-перестал работать. Старый `SSH_AUTH_SOCK` исчез, локальный
-`/run/user/1000/openssh_agent` не содержит ключей; HK отвергает авторизацию.
-Пользователю отправлен запрос восстановить агент. До этого HK остаётся на stage5.
-Готовые локальные файлы для продолжения: `/tmp/zont-stage6/deploy-prepared.sh`,
-`preflight.py`, `release-source.tar.gz`, `release-artifacts.tar.gz`.
-SHA256 пакета отчётов/кэша:
+## Развёртывание и smoke
+
+SSH восстановлен владельцем; 2026-09-07 release развёрнут на HK.
+`current` → `/opt/zont-analyzer/releases/20260907-stage6-ed59a91`.
+Container OCI revision `ed59a91ea34131ac437f86a0a73c3774340b5cb5`, image digest
+совпадает с локально принятым registry image выше. Перед переключением создан
+online backup `/opt/zont-analyzer/data/backups/zont-analyzer-20260907T053321003846Z.sqlite3`.
+Новая схема не требовалась, ревизия миграций остаётся `e5a1f0c4d920`.
+
+Импортированы 19 подготовленных canonical отчётов (последний daily и 18 длинных)
+и одна ранее выполненная AI-запись; перенесён приватный chart cache и AI ledger.
+Живая telemetry/owner DB не заменялась. Importer проверил сохранность всех
+защищённых строк и 150 прежних решений, контрольный hash:
+`283fa06abd33d088f65c039bb7d2f58524d74762331b0af84e87da225c5740de`.
+Тот же hash получен после запуска worker. LLM calls = 27, новых запросов на HK нет.
+Исторические длинные отчёты подготовлены детерминированно; отдельная реальная
+AI-интерпретация этой приёмки — недельный отчёт 31 августа. У остальных явно
+указано отсутствие AI. Последующие новые периоды проходят обычный AI scheduler.
+
+Короткая проверка только signatures дала `pending_long_periods=[]`.
+Первый цикл `05:35:30Z` завершился `05:36:10Z`: state `ok`, `long_periods=[]`,
+143 публикации. Первые два healthcheck превысили 20 с во время запуска/публикации;
+следующий завершился успешно за 12 с. Итоговый worker `healthy`, OOM=false.
+Сборки, тестовые наборы, backfill и повторный анализ на HK не запускались.
+
+Все 15 bounded GET-проверок прошли: root/weekly/seasonal/manifest/health,
+equipment, дневное показание газа, idle-state regeneration и прежние
+`https://hk.tupoybot.ru/za/` / `/za/api/health`; анонимные запросы дают 401.
+Временная smoke-учётка удалена, Basic Auth файл восстановлен побайтно.
+nginx, Xray, Postfix, OpenDKIM и Docker — active.
+
+Локальные доказательства: `/tmp/zont-stage6/{deployment.log,registry-accept.log,
+registry-owner-check.json,metadata-after.json,routes-smoke.json,health-status.json,
+deployed-state.txt}`. Пакет переноса `release-artifacts.tar.gz`, SHA256
 `52edc76018f95fca9a528a718f64e103ede8639b9d64a1aedf570f48a866ea05`.
-Importer проверен на отдельной исходной копии: 19 отчётов, 150 прежних feedback,
-все защищённые строки неизменны. После восстановления SSH: загрузить готовый
-release и artifacts, online backup, короткий останов worker, импорт отчётов и
-кэша, проверка только schedule signatures, `up --no-build` по digest и bounded
-smoke. Полные проверки/анализ на HK не запускать. Deployment evidence и личная
-приёмка владельца остаются открытыми.
-Личная оценка полезности владельцем ещё не получена.
+
+Для личной приёмки:
+- [Реальный недельный отчёт с AI](https://za.tupoybot.ru/weekly/2026-08-31.html).
+- [Промежуточная осень](https://za.tupoybot.ru/seasonal/2026-09-01.html).
+- [Последний дневной отчёт](https://za.tupoybot.ru/).
+
+Реализация, технические проверки и deployment завершены. Личная оценка полезности
+владельцем ещё не получена. Ветка `stage6` остаётся открытой; merge в `main` и
+переход к этапу 7 — только после явной приёмки владельца согласно AGENTS.md.
