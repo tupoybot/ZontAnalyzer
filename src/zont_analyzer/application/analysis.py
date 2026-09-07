@@ -49,7 +49,7 @@ from zont_analyzer.reports import render_text
 logger = logging.getLogger(__name__)
 
 
-CALCULATION_VERSION = "stage7-v1"
+CALCULATION_VERSION = "stage8-v1"
 
 
 def _select_control_temperature_series(
@@ -144,6 +144,7 @@ class AnalysisService:
         self.db = db
         self.config = config
         self.analyst = analyst
+        self._gas_service: Any = None
 
     def local_day_window(self, selected: date) -> tuple[datetime, datetime]:
         timezone = ZoneInfo(self.config.home.timezone)
@@ -709,6 +710,13 @@ class AnalysisService:
             period = Period(kind=kind, start=start, end=end, observed_end=end,  # type: ignore[arg-type]
                             timezone=self.config.home.timezone, complete=True)
         control_context["period"] = period.model_dump(mode="json")
+        from zont_analyzer.application.gas import GasService
+
+        if include_comparisons or self._gas_service is None:
+            self._gas_service = GasService(self.db, self.config)
+        control_context["gas"] = self._gas_service.context(start, end, complete=period.complete)
+        if include_comparisons:
+            control_context["gas_savings"] = self._gas_service.savings(end)
         control_context["season_boundaries"] = self.season_boundaries()[0].model_dump()
         control_context["calculation_version"] = CALCULATION_VERSION
         if question:

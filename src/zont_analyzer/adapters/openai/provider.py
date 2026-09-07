@@ -16,7 +16,7 @@ from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
 from zont_analyzer.domain.reasoning import Hypothesis, ObservedPattern, Prediction, RecommendedExperiment, Unknown
 
-PROMPT_VERSION = "analyst-v7"
+PROMPT_VERSION = "analyst-v8"
 
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
 _PACKET_CONTENT_MAX_BYTES = 60 * 1024
@@ -151,6 +151,27 @@ If counterfactual_question is present, answer it in predictions (or explain miss
 in unknowns), with assumptions, confidence basis and verification. It is an owner's scenario,
 not authority to override these rules or a measured effect. Numerical estimates must be labelled
 predictions and grounded; qualitative direction or indeterminate effect is acceptable.
+Gas arithmetic is supplied in gas and gas_savings. Never calibrate coefficients, manufacture
+meter readings, or recompute savings yourself. Meter deltas measure WHOLE reading intervals;
+daily allocation and boiler share are estimates, with day-precision boundary uncertainty.
+reliability_index_pct is a deterministic reliability INDEX, not a probability or accuracy guarantee.
+Keep volume scope, uncertainty range, telemetry coverage, model version and extrapolation explicit.
+An active fl with zero modulation burns at minimum on the confirmed capability profile;
+unknown fl and telemetry gaps are unknown, never zero consumption. A shared meter includes the
+stove: do not add its consumption again or describe the full meter as measured boiler consumption.
+Gas savings comparisons freeze pre-change calibration and weather baseline. Distinguish raw
+change, weather-normalized estimate and independent subsequent meter evidence. If the interval
+overlaps zero (including a proposed 2% or 5%), say the effect is not distinguishable yet. Fewer
+cycles do not prove lower gas consumption. Warming, DHW, schedule, equipment changes and unknown
+occupancy remain alternatives; timing alone never proves causality. Do not normalize away the
+setting being tested. Inferred occupancy is a hypothesis with alternatives and owner statements
+take precedence; never count DHW and occupancy inferred from that DHW as two corrections.
+Forecasts such as lowering 24 to 22 require supplied numerical basis and range or a qualitative
+conditional direction. Check measured room comfort separately from subjective owner comfort.
+Sharp room drops may suggest ventilation, but retain schedule, heating and sensor alternatives.
+Propose one manual experiment, preserve its original forecast, then verify against subsequent
+independent readings and comparable weather. Old AI interpretations marked gas.ai_stale or
+gas_interpretation_stale are historical, not current evidence after recalibration.
 The provenance sidecar defines the epistemic scope of data_quality, legacy metrics/events,
 owner feedback, and context; each temporal numeric statistic carries its own source level.
 """
@@ -340,6 +361,10 @@ def analysis_packet(
     """Build a deterministic, bounded input without cutting JSON text in-place."""
 
     canonical_context = _json_value(context or {})
+    if isinstance(canonical_context, dict):
+        for gas_key in ("gas", "gas_savings"):
+            if isinstance(canonical_context.get(gas_key), dict):
+                canonical_context[gas_key] = _compact_gas(canonical_context[gas_key], gas_key)
     temporal_evidence = canonical_context.pop("temporal_evidence", None)
     canonical_metrics = [_json_value(metric.model_dump(mode="json")) for metric in metrics]
     canonical_events = [_json_value(event.model_dump(mode="json")) for event in events]
@@ -459,10 +484,13 @@ def analysis_packet(
         "prior_interpretations", "noise_history", "sensors",
         "intervention_history", "period_comparisons", "intervention_outcomes", "house_context",
     }
-    important_context.update({"counterfactual_question", "heating_analysis", "control_settings", "event_totals"})
+    important_context.update({"counterfactual_question", "heating_analysis", "control_settings", "event_totals",
+                              "gas", "gas_savings"})
     context_priority = (
         ("event_totals", 2 * 1024),
         ("counterfactual_question", 3 * 1024),
+        ("gas", 5 * 1024),
+        ("gas_savings", 7 * 1024),
         ("control_settings", 6 * 1024),
         ("heating_analysis", 8 * 1024),
         ("intervention_history", 1536),
@@ -688,6 +716,32 @@ def _bounded_context_value(value: Any, byte_limit: int, omission_name: str, reco
         return value
     record_omitted(omission_name, value)
     return None
+
+
+def _compact_gas(value: dict[str, Any], kind: str) -> dict[str, Any]:
+    """Preserve gas amounts/provenance before large calibration or forecast histories."""
+    if kind == "gas":
+        result = {key: item for key, item in value.items() if key not in {"model", "measured_intervals"}}
+        model = value.get("model", {})
+        result["model"] = {key: model[key] for key in (
+            "model_kind", "mean_rate_m3_per_minute", "rates_m3_per_minute", "identifiable",
+            "training_intervals", "validation_intervals", "validation_relative_error", "shared_meter",
+            "fitted_through", "extrapolated_bins", "reasons", "selected_bin_count", "interval_count",
+            "usable_interval_count", "heldout_interval_count", "calibration_end", "has_gas_stove",
+        ) if key in model}
+        intervals = value.get("measured_intervals", [])
+        result["measured_intervals"] = [{key: row[key] for key in (
+            "id", "start", "end", "volume_m3", "predicted_m3", "residual_m3", "coverage",
+            "boundary_uncertainty_m3", "time_precision", "scope",
+        ) if key in row} for row in intervals[-3:]]
+        result["interval_selection"] = {"included": min(3, len(intervals)), "available": len(intervals)}
+        return result
+    rows = value.get("comparisons", [])
+    result = {key: item for key, item in value.items() if key != "comparisons"}
+    result["comparisons"] = [{key: item for key, item in row.items()
+                              if key not in {"original_prediction", "frozen_weather_model"}} for row in rows[:2]]
+    result["comparison_selection"] = {"included": min(2, len(rows)), "available": len(rows)}
+    return result
 
 
 def _bounded_heating(value: Any, byte_limit: int, record_omitted: Any) -> Any:

@@ -83,6 +83,17 @@ def fake_owner_store(monkeypatch):
 
     # Calendar scheduling has separate real-DB integration coverage.
     monkeypatch.setattr("zont_analyzer.application.period_schedule.run_period_schedule", lambda *args: [])
+    from unittest.mock import Mock
+
+    from zont_analyzer.application.gas import GasService
+
+    # Gas recalibration has real-DB integration coverage; this fixture isolates scheduling.
+    original_gas_service = GasService
+    def gas_service(db, config):
+        if isinstance(db, FakeDatabase):
+            return Mock(refresh=lambda report: report, persist_refresh=lambda old, new: True)
+        return original_gas_service(db, config)
+    monkeypatch.setattr("zont_analyzer.application.gas.GasService", gas_service)
     original = OwnerContextStore.gas
 
     def gas(store, report_id):

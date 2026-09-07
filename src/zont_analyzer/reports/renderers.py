@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from zont_analyzer.domain import Report
 from zont_analyzer.reports.experiment_forms import experiment_form
-from zont_analyzer.reports.presentation import number, period_target
+from zont_analyzer.reports.presentation import _gas_value, gas_savings_text, number, period_target
 from zont_analyzer.reports.wording import normalize_report_for_display
 
 METRIC_LABELS = {
@@ -693,6 +693,8 @@ def _known_evidence_ids(report: Report) -> set[str]:
     collect(report.context.get("temporal_evidence"))
     collect(report.context.get("heating_analysis"))
     collect(report.context.get("control_settings"))
+    collect(report.context.get("gas"))
+    collect(report.context.get("gas_savings"))
     dhw_profiles = report.context.get("dhw_profiles")
     if isinstance(dhw_profiles, dict):
         current = dhw_profiles.get("current")
@@ -864,6 +866,31 @@ def render_text(report: Report) -> str:
             report.summary,
         ]
     )
+    gas = report.context.get("gas")
+    if isinstance(gas, dict):
+        status = str(gas.get("status") or "unknown")
+        labels = {"unknown": "нет данных", "measured": "измерено", "estimated": "оценено",
+                  "extrapolated": "экстраполировано"}
+        lines.append(
+            f"Расход газа за период: {_gas_value(gas.get('volume_m3'), 'м³')} "
+            f"({labels.get(status, 'нет данных')})"
+        )
+        for key, label, unit in (("average_daily_m3", "Среднее за наблюдаемый день", "м³/сутки"),
+                                 ("average_weekly_m3", "Среднее за наблюдаемую неделю", "м³/неделю")):
+            if isinstance(gas.get(key), (int, float)):
+                lines.append(f"{label}: {_gas_value(gas[key], unit)}")
+        if isinstance(gas.get("flame_hours"), (int, float)):
+            denominator = gas.get("observed_hours")
+            suffix = f" за {denominator:g} ч наблюдений" if isinstance(denominator, (int, float)) else ""
+            lines.append(f"Время работы горелки: {_gas_value(gas['flame_hours'], 'ч')}{suffix}")
+        lines.append(f"Индекс надёжности: {_gas_value(gas.get('reliability_index_pct'), '%')}; не вероятность.")
+        lines.append(f"Диапазон: {_gas_value(gas.get('lower_m3'), 'м³')} — "
+                     f"{_gas_value(gas.get('upper_m3'), 'м³')}; покрытие {_gas_value(gas.get('coverage_pct'), '%')}")
+        lines.append(f"Версия расчёта: {gas.get('model_version', 'неизвестна')}")
+        lines.append(str(gas.get('source', '')))
+        if gas.get('ai_stale'):
+            lines.append("AI-интерпретация историческая и не учитывает текущую версию расчёта газа.")
+    lines.extend(gas_savings_text(report))
     if report.context.get("counterfactual_question"):
         lines.append("Вопрос владельца: " + str(report.context["counterfactual_question"]))
     lines.extend(_temporal_evidence_text(report.context.get("temporal_evidence")))
@@ -1156,6 +1183,10 @@ def render_html(
     question_html = (
         "<p><strong>Вопрос владельца:</strong> " + html.escape(str(question)) + "</p>" if question else ""
     )
+    gas_context = report.context.get("gas")
+    if isinstance(gas_context, dict) and gas_context.get("ai_stale") is True:
+        question_html = ('<p class="gas-period-stale" role="status"><strong>AI-интерпретация историческая:</strong> '
+                         'расход газа был пересчитан по новой версии модели.</p>' + question_html)
 
     def html_list(values: list[str], empty: str) -> str:
         return "<ul>" + "".join(f"<li>{html.escape(value)}</li>" for value in values) + "</ul>" if values else empty
@@ -1359,7 +1390,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"};
 {html.escape(report.algorithm_version)}</p></div>
 </header><main id="report" class="report-layout">
-<div class="overview">{ui.hero(report)}{ui.kpis(report)}
+<div class="overview">{ui.hero(report)}{ui.kpis(report)}{ui.gas_period_card(report)}
 {render_charts(report, chart_data, panel_ids=("climate",))}</div>
 <aside class="actions"><span class="eyebrow">СЛЕДУЮЩИЙ ШАГ</span><h2>Что делать</h2>
 {recommendations or '<p>Рекомендаций за этот период нет.</p>'}</aside>
@@ -1379,6 +1410,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="details-area full-width">{ui.metric_groups(report, mttr_reason)}{ui.sensors(report)}{sensor_context}
 <div class="debug-only">{temporal_evidence}{historical_evidence}</div>
 <details class="debug-only"><summary>Канонический JSON</summary><pre>{canonical}</pre></details></div>
+{ui.gas_savings_section(report)}
 {period_context}
 {regeneration}
 <section class="full-width owner-settings" aria-label="Профиль и показания">{owner_forms}</section>
