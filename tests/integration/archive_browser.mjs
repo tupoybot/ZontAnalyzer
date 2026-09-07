@@ -387,10 +387,11 @@ try {
       return [...range.getClientRects()].map(r => ({x:r.x, y:r.y, right:r.right}));
     }));
     assert(rects.every(lines => lines.length === 1), 'numbers and units stay on one line');
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-    const notes = await page.locator('.gas-kpi-notes').boundingBox();
-    const distribution = await page.locator('.gas-distribution').boundingBox();
-    assert(notes.y >= Math.max(money.y + money.height, distribution.y + distribution.height));
+    const strip = await page.locator('.kpi-gas-strip').boundingBox();
+    assert(strip.x >= 0 && strip.x + strip.width <= width, 'gas block fits viewport');
+    assert(await page.locator('.kpi-gas-strip').evaluate(el => el.scrollWidth <= el.clientWidth), 'gas content fits block');
+    assert(rects.flat().every(r => r.x >= strip.x && r.right <= strip.x + strip.width), 'gas values fit block');
+    assert.match(await total.locator(':scope > span').textContent(), /Расход газа \(надёжность 35%\)/);
     assert.doesNotMatch(await page.locator('.gas-distribution-legend').textContent(), /руб/);
   }
 } finally {

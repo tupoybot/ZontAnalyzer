@@ -576,18 +576,16 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
         if money and money != "Стоимость неизвестна" else ""
     )
     heading = (
-        '<div class="gas-kpi-total"><span>Расход газа</span>'
+        '<div class="gas-kpi-total"><span>Расход газа '
+        '<span class="gas-reliability" title="Индекс надёжности оценки, не вероятность точности">'
+        f'(надёжность {esc(confidence_label)})</span></span>'
         f'<strong>{esc(meter_volume)}</strong>{money_html}</div>'
-    )
-    auxiliary = (
-        f'<span class="gas-reliability" title="Индекс надёжности оценки, не вероятность точности">'
-        f'Надёжность: {esc(confidence_label)}</span>'
     )
 
     def render(distribution: str = "") -> str:
         return (
             f'<section class="kpi gas-kpi kpi-gas-strip">{heading}{distribution}'
-            f'<div class="gas-kpi-notes">{auxiliary}</div></section>'
+            '</section>'
         )
 
     if not isinstance(split, dict):

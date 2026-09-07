@@ -129,7 +129,7 @@ def test_dashboard_uses_short_burner_labels_and_modelled_gas_denominator() -> No
     dashboard = kpis(report)
     assert "12 запусков · 75%" in dashboard
     assert "30 мин · 12,5%" in dashboard
-    assert "Надёжность: 72%" in dashboard
+    assert "(надёжность 72%)" in dashboard
     assert "времени горения" not in dashboard
     assert dashboard.index("Качество данных") < dashboard.index("Отопление · горелка")
     assert dashboard.index("Отопление · горелка") < dashboard.index("ГВС · догревы")
