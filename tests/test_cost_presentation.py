@@ -61,7 +61,8 @@ def test_partial_and_unknown_costs_are_explicit_and_never_fabricated() -> None:
     assert "2,00 м³ · 8,01 руб. (частично)" in partial_page
     assert "с тарифом 1,00 м³; без тарифа 1,00 м³" in partial_page
     unknown_page = render_html(unknown)
-    assert "1,00 м³ · Стоимость неизвестна" in unknown_page
+    assert "1,00 м³" in unknown_page
+    assert "· Стоимость неизвестна" not in unknown_page
     assert "для расхода нет действующего тарифа" in unknown_page
     assert "0,00 руб." not in unknown_page
 

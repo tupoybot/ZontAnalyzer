@@ -1388,6 +1388,8 @@ def render_html(
     api_base = html.escape(feedback_api_base_url.rstrip("/"), quote=True)
     latest_href = html.escape(latest_report_href, quote=True)
     period_date = report.period_start.astimezone(ZoneInfo(report.timezone)).strftime('%d.%m.%Y')
+    period_end_date = report.period_end.astimezone(ZoneInfo(report.timezone)).strftime('%d.%m.%Y')
+    period_dates = period_date if report.kind == 'daily' else f'{period_date} - {period_end_date}'
     kind_label = {'daily': 'День', 'weekly': 'Неделя', 'monthly': 'Месяц',
                   'initial': 'Обзор', 'seasonal': 'Сезон'}[report.kind]
     return f"""<!doctype html>
@@ -1395,7 +1397,7 @@ def render_html(
 <title>{title}</title><style>{STYLE}</style></head><body data-feedback-api-base="{api_base}">
 <a class="skip-link" href="#report">К отчёту</a>
 <header><div class="header-line"><span class="brand">ZontAnalyzer<span class="secondary"> / отчёт</span></span>
-<span class="period-label">{period_date} · {kind_label}</span>
+<span class="period-label">{period_dates} · {kind_label}</span>
 <div class="header-tools"><label>Debug <input id="debug-toggle" type="checkbox"></label>
 <button type="button" data-open-profile aria-label="Открыть профиль системы">⚙ Профиль системы</button></div></div>
 <nav class="archive-navigation" data-archive-navigation data-report-kind="{archive_kind}"

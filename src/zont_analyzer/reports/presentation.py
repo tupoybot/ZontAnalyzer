@@ -113,7 +113,7 @@ def _cost_value(cost: Any) -> str | None:
 def _volume_and_cost(value: Any, cost: Any, unit: str = "м³") -> str:
     volume = _gas_value(value, unit)
     money = _cost_value(cost)
-    return f"{volume} · {money}" if money is not None else volume
+    return f"{volume} · {money}" if money and money != "Стоимость неизвестна" else volume
 
 
 def gas_cost_lines(cost: Any) -> list[str]:
