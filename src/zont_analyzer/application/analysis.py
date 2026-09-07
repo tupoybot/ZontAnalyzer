@@ -699,9 +699,16 @@ class AnalysisService:
             "observed_end": end.isoformat(),
             "telemetry": self.db.period_data_revision(start, end),
             "prompt_version": self.config.openai.prompt_version,
-            "refresh": ("Automatic once per completed period; current season daily; "
+            "refresh": ("Automatic once per completed period; current season weekly; "
                         "explicit regeneration for corrections"),
         }
+        if kind in {"daily", "weekly", "monthly", "seasonal"} and "period_target_mean_c" not in control_context:
+            target_stat = control_context.get("temporal_evidence", {}).get("quality", {}).get("target_temperature", {})
+            mean, coverage = target_stat.get("mean"), target_stat.get("coverage_pct", 0)
+            known = isinstance(mean, (int, float)) and isinstance(coverage, (int, float)) and coverage > 0
+            control_context["period_target_mean_c"] = mean if known else None
+            control_context["period_target_coverage_pct"] = coverage if known else 0
+            control_context["period_target_source"] = "historical target telemetry; time-weighted evidence statistic"
         if include_comparisons:
             from zont_analyzer.application.comparison_context import build_comparison_context
 

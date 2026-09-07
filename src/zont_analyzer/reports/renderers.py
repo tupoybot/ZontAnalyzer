@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from zont_analyzer.domain import Report
 from zont_analyzer.reports.experiment_forms import experiment_form
+from zont_analyzer.reports.presentation import number, period_target
 from zont_analyzer.reports.wording import normalize_report_for_display
 
 METRIC_LABELS = {
@@ -872,8 +873,12 @@ def render_text(report: Report) -> str:
             f"Текущий режим: {current_mode.get('name', current_mode.get('id'))} "
             f"({current_mode.get('intent', 'unknown')}, политика цели: {current_mode.get('target_policy', 'unknown')})"
         )
-    if report.context.get("current_target_c") is not None:
-        lines.append(f"Текущая целевая температура: {report.context['current_target_c']:g} °C")
+    target_value, target_coverage = period_target(report)
+    is_period_mean = report.kind in {"weekly", "monthly", "seasonal"}
+    if target_value is not None:
+        target_label = "Средняя целевая температура за период" if is_period_mean else "Текущая целевая температура"
+        coverage_note = f" (покрытие {target_coverage:g}% периода)" if is_period_mean else ""
+        lines.append(f"{target_label}: {target_value:g} °C{coverage_note}")
     sensor_lines = _sensor_context_lines(report.context.get("sensors"))
     if sensor_lines:
         lines.append("Датчики:")
@@ -1072,10 +1077,13 @@ def render_html(
     current_mode = report.context.get("current_mode")
     mode_name = current_mode.get("name") if isinstance(current_mode, dict) else None
     mode_intent = current_mode.get("intent") if isinstance(current_mode, dict) else None
+    target_value, target_coverage = period_target(report)
+    is_period_mean = report.kind in {"weekly", "monthly", "seasonal"}
+    target_label = "Средняя цель за период" if is_period_mean else "Цель на конец периода"
     mode_context = (
         f"<p><strong>Режим на конец периода:</strong> {html.escape(str(mode_name))} "
-        f'<span class="debug-only">{html.escape(str(mode_intent))}</span><strong>цель:</strong> '
-        f"{html.escape(str(report.context.get('current_target_c')))} °C</p>"
+        f'<span class="debug-only">{html.escape(str(mode_intent))}</span></p>'
+        f'<p><strong>{target_label}:</strong> {html.escape(number(target_value, "°C"))}</p>'
         if mode_name is not None
         else ""
     )

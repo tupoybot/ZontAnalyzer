@@ -39,6 +39,7 @@ def _daily(
     ratio: float,
     denominator: float,
     quality: float = 0.8,
+    target: float | None = None,
     summary: str = "DAILY AI TEXT MUST NOT BE COPIED",
 ) -> Report:
     stamp = int(start.timestamp())
@@ -80,6 +81,11 @@ def _daily(
                 "quality": {
                     "control_temperature": {"coverage_pct": quality * 100},
                     "outdoor_temperature": {"coverage_pct": quality * 100},
+                    **(
+                        {"target_temperature": {"coverage_pct": quality * 100, "mean": target}}
+                        if target is not None
+                        else {}
+                    ),
                 },
                 "metrics": [
                     {
@@ -191,3 +197,37 @@ def test_empty_period_is_explicit_and_contains_no_synthetic_metrics(tmp_path: Pa
     assert report.context["long_period_aggregation"]["missing_dates"] == ["2026-05-01", "2026-05-02"]
     assert report.context["latest_daily_context"]["source_report_id"] is None
     assert "no_completed_daily_reports" in report.quality.flags
+
+
+def test_long_period_target_is_duration_weighted_and_unknown_without_coverage(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    start = datetime(2026, 6, 1, tzinfo=UTC)
+    _save(
+        db,
+        _daily(start, start + timedelta(days=1), count=1, outdoor=10, ratio=0.5, denominator=100, target=20, quality=1),
+    )
+    _save(db, _daily(start + timedelta(days=1), start + timedelta(days=2), count=1, outdoor=10, ratio=0.5,
+                     denominator=100, target=24, quality=.25))
+
+    report = aggregate_long_period(db, _period(start, start + timedelta(days=2)))
+
+    assert report.context["period_target_mean_c"] == 20.8
+    assert report.context["target_aggregation"]["covered_duration_seconds"] == 1.25 * 86400
+    assert report.context["period_target_coverage_pct"] == 62.5
+    empty = aggregate_long_period(_db(tmp_path / "empty"), _period(start, start + timedelta(days=2)))
+    assert empty.context["period_target_mean_c"] is None
+
+
+def test_enriched_legacy_target_means_count_only_observed_days(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    start = datetime(2026, 6, 1, tzinfo=UTC)
+    first = _daily(start, start + timedelta(days=1), count=1, outdoor=10, ratio=.5, denominator=100)
+    first.context.update(period_target_mean_c=20, period_target_coverage_pct=50, current_target_c=30)
+    second = _daily(start + timedelta(days=1), start + timedelta(days=2), count=1, outdoor=10,
+                    ratio=.5, denominator=100)
+    second.context['current_target_c'] = 30
+    _save(db, first)
+    _save(db, second)
+    result = aggregate_long_period(db, _period(start, start + timedelta(days=3)))
+    assert result.context['period_target_mean_c'] == 20
+    assert result.context['period_target_coverage_pct'] == pytest.approx(16.67)

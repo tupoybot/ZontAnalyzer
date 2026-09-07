@@ -122,6 +122,7 @@ def aggregate_long_period(db: Database, period: Period) -> Report:
     latest_context: dict[str, Any] = {}
     latest_report_id: str | None = None
     latest_end: datetime | None = None
+    target_means: list[tuple[float, float]] = []
 
     statement = (
         select(ReportRow.canonical_json)
@@ -174,6 +175,21 @@ def aggregate_long_period(db: Database, period: Period) -> Report:
 
             evidence = _daily_evidence(report)
             evidence_by_name = {item.name: item for item in evidence}
+            target_signal = report.context.get("temporal_evidence", {}).get("quality", {}).get(
+                "target_temperature", {}
+            )
+            target_mean = report.context.get("period_target_mean_c", (
+                target_signal.get("mean") if isinstance(target_signal, dict) else None
+            ))
+            target_coverage = report.context.get("period_target_coverage_pct", (
+                target_signal.get("coverage_pct") if isinstance(target_signal, dict) else None
+            ))
+            if (
+                isinstance(target_mean, (int, float))
+                and isinstance(target_coverage, (int, float))
+                and target_coverage > 0
+            ):
+                target_means.append((float(target_mean), duration * float(target_coverage) / 100))
             for evidence_metric in evidence:
                 if evidence_metric.value is None:
                     continue
@@ -361,6 +377,24 @@ def aggregate_long_period(db: Database, period: Period) -> Report:
             "scope": "latest completed daily context; not a period-wide historical fact",
             "fields": sorted(latest_context),
             "values": {key: value for key, value in latest_context.items() if key != "sensors"},
+        },
+        "period_target_mean_c": (
+            round(
+                sum(value * weight for value, weight in target_means)
+                / sum(weight for _value, weight in target_means),
+                3,
+            )
+            if target_means else None
+        ),
+        "period_target_coverage_pct": round(
+            100 * sum(weight for _value, weight in target_means) / expected_seconds, 2
+        ) if expected_seconds else 0.0,
+        "period_target_source": "historical daily target means weighted by covered duration",
+        "target_aggregation": {
+            "aggregation": "duration_weighted_daily_target_mean",
+            "covered_duration_seconds": sum(weight for _value, weight in target_means),
+            "source": "daily temporal evidence target stream",
+            "unknown_when_uncovered": True,
         },
         **({"sensors": latest_context["sensors"]} if "sensors" in latest_context else {}),
     }

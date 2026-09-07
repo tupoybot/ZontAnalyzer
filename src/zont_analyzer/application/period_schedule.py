@@ -13,12 +13,14 @@ from zont_analyzer.domain.periods import SEASONS, Period, active_season, calenda
 
 if TYPE_CHECKING:
     from zont_analyzer.application.analysis import AnalysisService
+    from zont_analyzer.domain import Report
     from zont_analyzer.runtime import Runtime
 
 
 def scheduled_periods(analysis: AnalysisService, first: date, today: date) -> list[Period]:
     timezone = analysis.config.home.timezone
     cutoff = midnight(today, timezone)
+    weekly_cutoff = midnight(today - timedelta(days=today.weekday()), timezone)
     periods: dict[tuple[str, str], Period] = {}
     for kind in ("weekly", "monthly"):
         selected = first
@@ -33,6 +35,10 @@ def scheduled_periods(analysis: AnalysisService, first: date, today: date) -> li
         for name in SEASONS:
             try:
                 period = analysis.seasonal_period(year, name, as_of=cutoff)
+                if not period.complete:
+                    # Refresh the running season with the completed week's data.
+                    # A season ending midweek still receives its final report immediately.
+                    period = analysis.seasonal_period(year, name, as_of=weekly_cutoff)
             except ValueError:
                 continue  # Future season has no completed observations yet.
             if period.end > midnight(first, timezone):
@@ -66,6 +72,17 @@ def schedule_signature(analysis: AnalysisService, period: Period) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
+def _already_current(previous: Report | None, period: Period, signature: str) -> bool:
+    if previous is None:
+        return False
+    if previous.context.get("schedule_signature") == signature:
+        return True
+    # Do not buy another seasonal analysis within the same weekly checkpoint,
+    # including after manual regeneration or corrections to older telemetry.
+    # The former daily policy may also have already included newer days.
+    return period.kind == "seasonal" and not period.complete and previous.period_end >= period.observed_end
+
+
 def run_period_schedule(
     runtime: Runtime, analysis: AnalysisService, today: date, *, limit: int = 1
 ) -> list[dict[str, Any]]:
@@ -80,7 +97,7 @@ def run_period_schedule(
         identifier = analysis.report_id_for(period.kind, period.start)
         signature = schedule_signature(analysis, period)
         previous = runtime.db.report(identifier)
-        if previous and previous.context.get("schedule_signature") == signature:
+        if _already_current(previous, period, signature):
             continue
         path = _lock_path(runtime, identifier)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,7 +107,7 @@ def run_period_schedule(
             except BlockingIOError:
                 continue
             previous = runtime.db.report(identifier)
-            if previous and previous.context.get("schedule_signature") == signature:
+            if _already_current(previous, period, signature):
                 continue
             report = analysis.analyze_period(period)
             report.context["schedule_signature"] = signature
