@@ -101,5 +101,26 @@ house/comparison/intervention/reliability/sensor context и полное пре�
 рассчитан локально. При переносе импортируются только отчёты и запись одного
 AI-вызова, живая БД не заменяется. Подробные локальные логи и screenshots:
 `/tmp/zont-stage6/`; тестовые screenshot — `/tmp/zont-stage18-archive-mobile.png`.
-Registry digest, CI и deployment дополняются после публикации образа.
+Коммит приложения `ed59a91`, тег `release-6-20260907`; [release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34082055059)
+и [branch CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34082042160) зелёные.
+Проверен именно registry image:
+`ghcr.io/tupoybot/zontanalyzer@sha256:014fd7e7cdbf102ba7830db48b1dc05cf74e3bf3bb6e76b818bc05fa6f72480f`.
+OCI revision совпадает с коммитом; повторная локальная приёмка: integrity OK,
+143 публикации, пустой schedule, сезон 92 дня за 0.096 с / 97 MiB; owner rows
+и feedback сохранены. Логи: `registry-accept.log`, `registry-owner-check.json`.
+
+Deployment пока не выполнен: после первого online backup SSH forwarding
+перестал работать. Старый `SSH_AUTH_SOCK` исчез, локальный
+`/run/user/1000/openssh_agent` не содержит ключей; HK отвергает авторизацию.
+Пользователю отправлен запрос восстановить агент. До этого HK остаётся на stage5.
+Готовые локальные файлы для продолжения: `/tmp/zont-stage6/deploy-prepared.sh`,
+`preflight.py`, `release-source.tar.gz`, `release-artifacts.tar.gz`.
+SHA256 пакета отчётов/кэша:
+`52edc76018f95fca9a528a718f64e103ede8639b9d64a1aedf570f48a866ea05`.
+Importer проверен на отдельной исходной копии: 19 отчётов, 150 прежних feedback,
+все защищённые строки неизменны. После восстановления SSH: загрузить готовый
+release и artifacts, online backup, короткий останов worker, импорт отчётов и
+кэша, проверка только schedule signatures, `up --no-build` по digest и bounded
+smoke. Полные проверки/анализ на HK не запускать. Deployment evidence и личная
+приёмка владельца остаются открытыми.
 Личная оценка полезности владельцем ещё не получена.
