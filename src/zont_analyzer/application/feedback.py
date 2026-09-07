@@ -11,6 +11,7 @@ from urllib.parse import unquote, urlsplit
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.application.publication import publish_reports
+from zont_analyzer.application.regeneration import normalize_counterfactual_question
 from zont_analyzer.application.regeneration import start as start_regeneration
 from zont_analyzer.application.regeneration import status as regeneration_status
 from zont_analyzer.runtime import Runtime
@@ -260,9 +261,16 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                     raise ValueError("Некорректный размер запроса.")
                 if size:
                     payload = json.loads(self.rfile.read(size))
-                    if not isinstance(payload, dict) or payload:
-                        raise ValueError("Ожидается пустой JSON-объект.")
-                value = start_regeneration(runtime, regeneration_id)
+                    if not isinstance(payload, dict) or set(payload) - {"question"}:
+                        raise ValueError("Допустим только необязательный вопрос.")
+                    question = normalize_counterfactual_question(payload.get("question"))
+                else:
+                    question = None
+                value = (
+                    start_regeneration(runtime, regeneration_id, question)
+                    if question is not None
+                    else start_regeneration(runtime, regeneration_id)
+                )
             except KeyError:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "Отчёт не найден."})
                 return

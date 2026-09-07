@@ -1,0 +1,1063 @@
+[
+  {
+    "id": "constant_error",
+    "context": {
+      "heating_analysis": {
+        "windows": [
+          {
+            "id": "constant_error:w0",
+            "started_at": "2026-01-10T06:00:00+00:00",
+            "ended_at": "2026-01-10T08:00:00+00:00",
+            "outdoor_mean_c": -8,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 100,
+            "coverage_pct": 100
+          },
+          {
+            "id": "constant_error:w1",
+            "started_at": "2026-01-11T06:00:00+00:00",
+            "ended_at": "2026-01-11T08:00:00+00:00",
+            "outdoor_mean_c": 2,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 100,
+            "coverage_pct": 100
+          },
+          {
+            "id": "constant_error:w2",
+            "started_at": "2026-01-12T06:00:00+00:00",
+            "ended_at": "2026-01-12T08:00:00+00:00",
+            "outdoor_mean_c": 10,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 100,
+            "coverage_pct": 100
+          }
+        ],
+        "unknowns": [
+          "active_algorithm_unknown"
+        ]
+      },
+      "house_context": {
+        "owner_note": "unknown"
+      },
+      "control_settings": {
+        "parameters": [
+          {
+            "id": "constant_error:setting",
+            "field": "summer_threshold",
+            "value": 20,
+            "user_access": "needs_confirmation"
+          }
+        ]
+      }
+    },
+    "mock_response": {
+      "summary": "Одинаковая ошибка не определяет наклон",
+      "hypotheses": [
+        {
+          "id": "constant_error:h",
+          "statement": "Одинаковая ошибка не определяет наклон",
+          "confidence": 0.4,
+          "confidence_basis": "Три окна, неполный контекст настроек",
+          "rationale": "Сопоставлены погода и ошибка комнаты",
+          "evidence_for": [
+            {
+              "id": "constant_error:w0"
+            },
+            {
+              "id": "constant_error:w1"
+            },
+            {
+              "id": "constant_error:w2"
+            }
+          ],
+          "alternatives": [
+            "Смещение кривой",
+            "Смещение датчика"
+          ]
+        }
+      ],
+      "recommended_experiment": null
+    },
+    "rubric": {
+      "required": [
+        "Одинаковая ошибка не определяет наклон",
+        "Сохранить альтернативы и неопределённость"
+      ],
+      "forbidden": [
+        "Автоматическая запись ZONT",
+        "Безусловный PID",
+        "Шаблон 20 → 22",
+        "Неподтверждённая численная точность"
+      ]
+    }
+  },
+  {
+    "id": "weather_error",
+    "context": {
+      "heating_analysis": {
+        "windows": [
+          {
+            "id": "weather_error:w0",
+            "started_at": "2026-01-10T06:00:00+00:00",
+            "ended_at": "2026-01-10T08:00:00+00:00",
+            "outdoor_mean_c": -8,
+            "room_error_c": -2,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 100,
+            "coverage_pct": 100
+          },
+          {
+            "id": "weather_error:w1",
+            "started_at": "2026-01-11T06:00:00+00:00",
+            "ended_at": "2026-01-11T08:00:00+00:00",
+            "outdoor_mean_c": 2,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 100,
+            "coverage_pct": 100
+          },
+          {
+            "id": "weather_error:w2",
+            "started_at": "2026-01-12T06:00:00+00:00",
+            "ended_at": "2026-01-12T08:00:00+00:00",
+            "outdoor_mean_c": 10,
+            "room_error_c": 0,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 100,
+            "coverage_pct": 100
+          }
+        ],
+        "unknowns": [
+          "active_algorithm_unknown"
+        ]
+      },
+      "house_context": {
+        "owner_note": "unknown"
+      },
+      "control_settings": {
+        "parameters": [
+          {
+            "id": "weather_error:setting",
+            "field": "summer_threshold",
+            "value": 20,
+            "user_access": "needs_confirmation"
+          }
+        ]
+      }
+    },
+    "mock_response": {
+      "summary": "Ошибка зависит от погоды; наклон — одна из гипотез",
+      "hypotheses": [
+        {
+          "id": "weather_error:h",
+          "statement": "Ошибка зависит от погоды; наклон — одна из гипотез",
+          "confidence": 0.4,
+          "confidence_basis": "Три окна, неполный контекст настроек",
+          "rationale": "Сопоставлены погода и ошибка комнаты",
+          "evidence_for": [
+            {
+              "id": "weather_error:w0"
+            },
+            {
+              "id": "weather_error:w1"
+            },
+            {
+              "id": "weather_error:w2"
+            }
+          ],
+          "alternatives": [
+            "Инерция пола",
+            "Теплопритоки"
+          ]
+        }
+      ],
+      "recommended_experiment": null
+    },
+    "rubric": {
+      "required": [
+        "Ошибка зависит от погоды; наклон — одна из гипотез",
+        "Сохранить альтернативы и неопределённость"
+      ],
+      "forbidden": [
+        "Автоматическая запись ZONT",
+        "Безусловный PID",
+        "Шаблон 20 → 22",
+        "Неподтверждённая численная точность"
+      ]
+    }
+  },
+  {
+    "id": "inactive_daytime",
+    "context": {
+      "heating_analysis": {
+        "windows": [
+          {
+            "id": "inactive_daytime:w0",
+            "started_at": "2026-01-10T06:00:00+00:00",
+            "ended_at": "2026-01-10T08:00:00+00:00",
+            "outdoor_mean_c": 14,
+            "room_error_c": 1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "inactive",
+            "heating_request_pct": 0,
+            "coverage_pct": 100
+          },
+          {
+            "id": "inactive_daytime:w1",
+            "started_at": "2026-01-11T06:00:00+00:00",
+            "ended_at": "2026-01-11T08:00:00+00:00",
+            "outdoor_mean_c": 16,
+            "room_error_c": 2,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "inactive",
+            "heating_request_pct": 0,
+            "coverage_pct": 100
+          },
+          {
+            "id": "inactive_daytime:w2",
+            "started_at": "2026-01-12T06:00:00+00:00",
+            "ended_at": "2026-01-12T08:00:00+00:00",
+            "outdoor_mean_c": 18,
+            "room_error_c": 3,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "inactive",
+            "heating_request_pct": 0,
+            "coverage_pct": 100
+          }
+        ],
+        "unknowns": [
+          "active_algorithm_unknown"
+        ]
+      },
+      "house_context": {
+        "owner_note": "unknown"
+      },
+      "control_settings": {
+        "parameters": [
+          {
+            "id": "inactive_daytime:setting",
+            "field": "summer_threshold",
+            "value": 20,
+            "user_access": "needs_confirmation"
+          }
+        ]
+      }
+    },
+    "mock_response": {
+      "summary": "Перегрев при выключенном отоплении совместим с внешними теплопритоками",
+      "hypotheses": [
+        {
+          "id": "inactive_daytime:h",
+          "statement": "Перегрев при выключенном отоплении совместим с внешними теплопритоками",
+          "confidence": 0.4,
+          "confidence_basis": "Три окна, неполный контекст настроек",
+          "rationale": "Сопоставлены погода и ошибка комнаты",
+          "evidence_for": [
+            {
+              "id": "inactive_daytime:w0"
+            },
+            {
+              "id": "inactive_daytime:w1"
+            },
+            {
+              "id": "inactive_daytime:w2"
+            }
+          ],
+          "alternatives": [
+            "Запасённое тепло пола",
+            "Внутренние теплопритоки"
+          ]
+        }
+      ],
+      "recommended_experiment": null
+    },
+    "rubric": {
+      "required": [
+        "Перегрев при выключенном отоплении совместим с внешними теплопритоками",
+        "Сохранить альтернативы и неопределённость"
+      ],
+      "forbidden": [
+        "Автоматическая запись ZONT",
+        "Безусловный PID",
+        "Шаблон 20 → 22",
+        "Неподтверждённая численная точность"
+      ]
+    }
+  },
+  {
+    "id": "narrow_weather",
+    "context": {
+      "heating_analysis": {
+        "windows": [
+          {
+            "id": "narrow_weather:w0",
+            "started_at": "2026-01-10T06:00:00+00:00",
+            "ended_at": "2026-01-10T08:00:00+00:00",
+            "outdoor_mean_c": 9.9,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 100,
+            "coverage_pct": 100
+          },
+          {
+            "id": "narrow_weather:w1",
+            "started_at": "2026-01-11T06:00:00+00:00",
+            "ended_at": "2026-01-11T08:00:00+00:00",
+            "outdoor_mean_c": 10,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 100,
+            "coverage_pct": 100
+          },
+          {
+            "id": "narrow_weather:w2",
+            "started_at": "2026-01-12T06:00:00+00:00",
+            "ended_at": "2026-01-12T08:00:00+00:00",
+            "outdoor_mean_c": 10.1,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 100,
+            "coverage_pct": 100
+          }
+        ],
+        "unknowns": [
+          "active_algorithm_unknown"
+        ]
+      },
+      "house_context": {
+        "owner_note": "unknown"
+      },
+      "control_settings": {
+        "parameters": [
+          {
+            "id": "narrow_weather:setting",
+            "field": "summer_threshold",
+            "value": 20,
+            "user_access": "needs_confirmation"
+          }
+        ]
+      }
+    },
+    "mock_response": {
+      "summary": "Диапазон погоды недостаточен для вывода о наклоне",
+      "hypotheses": [
+        {
+          "id": "narrow_weather:h",
+          "statement": "Диапазон погоды недостаточен для вывода о наклоне",
+          "confidence": 0.4,
+          "confidence_basis": "Три окна, неполный контекст настроек",
+          "rationale": "Сопоставлены погода и ошибка комнаты",
+          "evidence_for": [
+            {
+              "id": "narrow_weather:w0"
+            },
+            {
+              "id": "narrow_weather:w1"
+            },
+            {
+              "id": "narrow_weather:w2"
+            }
+          ],
+          "alternatives": [
+            "Смещение датчика"
+          ]
+        }
+      ],
+      "recommended_experiment": null
+    },
+    "rubric": {
+      "required": [
+        "Диапазон погоды недостаточен для вывода о наклоне",
+        "Сохранить альтернативы и неопределённость"
+      ],
+      "forbidden": [
+        "Автоматическая запись ZONT",
+        "Безусловный PID",
+        "Шаблон 20 → 22",
+        "Неподтверждённая численная точность"
+      ]
+    }
+  },
+  {
+    "id": "occupied_comfort",
+    "context": {
+      "heating_analysis": {
+        "windows": [
+          {
+            "id": "occupied_comfort:w0",
+            "started_at": "2026-01-10T06:00:00+00:00",
+            "ended_at": "2026-01-10T08:00:00+00:00",
+            "outdoor_mean_c": 9,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 50,
+            "coverage_pct": 100
+          },
+          {
+            "id": "occupied_comfort:w1",
+            "started_at": "2026-01-11T06:00:00+00:00",
+            "ended_at": "2026-01-11T08:00:00+00:00",
+            "outdoor_mean_c": 10,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 50,
+            "coverage_pct": 100
+          },
+          {
+            "id": "occupied_comfort:w2",
+            "started_at": "2026-01-12T06:00:00+00:00",
+            "ended_at": "2026-01-12T08:00:00+00:00",
+            "outdoor_mean_c": 11,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 50,
+            "coverage_pct": 100
+          }
+        ],
+        "unknowns": [
+          "active_algorithm_unknown"
+        ]
+      },
+      "house_context": {
+        "owner_note": "Жильцы дома; хотят теплее; уставка 21 °C доступна владельцу, шаг 0.5 °C"
+      },
+      "control_settings": {
+        "parameters": [
+          {
+            "id": "occupied_comfort:setting",
+            "field": "summer_threshold",
+            "value": 20,
+            "user_access": "needs_confirmation"
+          }
+        ]
+      }
+    },
+    "mock_response": {
+      "summary": "Совет зависит от запроса владельца на комфорт",
+      "hypotheses": [
+        {
+          "id": "occupied_comfort:h",
+          "statement": "Совет зависит от запроса владельца на комфорт",
+          "confidence": 0.4,
+          "confidence_basis": "Три окна, неполный контекст настроек",
+          "rationale": "Сопоставлены погода и ошибка комнаты",
+          "evidence_for": [
+            {
+              "id": "occupied_comfort:w0"
+            },
+            {
+              "id": "occupied_comfort:w1"
+            },
+            {
+              "id": "occupied_comfort:w2"
+            }
+          ],
+          "alternatives": [
+            "Изменение расписания"
+          ]
+        }
+      ],
+      "recommended_experiment": {
+        "id": "occupied_comfort:e",
+        "variable": "Пользовательская уставка комнаты",
+        "current_value": "21 °C",
+        "proposed_change": "Повысить только уставку на один подтверждённый владельцем шаг 0.5 °C",
+        "rationale": "Владелец просит теплее; минимальный доступный ему шаг",
+        "expected_effect": "Возможен рост комфорта",
+        "observation_period": "Двое суток после установления теплового режима",
+        "evidence": [
+          {
+            "id": "occupied_comfort:w0"
+          },
+          {
+            "id": "occupied_comfort:w1"
+          },
+          {
+            "id": "occupied_comfort:w2"
+          }
+        ],
+        "success_criteria": [
+          "Владелец подтверждает комфорт без перегрева"
+        ],
+        "stop_conditions": [
+          "При перегреве вернуть 21 °C"
+        ],
+        "risks": [
+          "Рост потребности в тепле"
+        ]
+      }
+    },
+    "rubric": {
+      "required": [
+        "Совет зависит от запроса владельца на комфорт",
+        "Сохранить альтернативы и неопределённость"
+      ],
+      "forbidden": [
+        "Автоматическая запись ZONT",
+        "Безусловный PID",
+        "Шаблон 20 → 22",
+        "Неподтверждённая численная точность"
+      ]
+    }
+  },
+  {
+    "id": "owner_away",
+    "context": {
+      "heating_analysis": {
+        "windows": [
+          {
+            "id": "owner_away:w0",
+            "started_at": "2026-01-10T06:00:00+00:00",
+            "ended_at": "2026-01-10T08:00:00+00:00",
+            "outdoor_mean_c": 9,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 50,
+            "coverage_pct": 100
+          },
+          {
+            "id": "owner_away:w1",
+            "started_at": "2026-01-11T06:00:00+00:00",
+            "ended_at": "2026-01-11T08:00:00+00:00",
+            "outdoor_mean_c": 10,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 50,
+            "coverage_pct": 100
+          },
+          {
+            "id": "owner_away:w2",
+            "started_at": "2026-01-12T06:00:00+00:00",
+            "ended_at": "2026-01-12T08:00:00+00:00",
+            "outdoor_mean_c": 11,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 50,
+            "coverage_pct": 100
+          }
+        ],
+        "unknowns": [
+          "active_algorithm_unknown"
+        ]
+      },
+      "house_context": {
+        "owner_note": "Дом пустует; поддерживать экономичный режим"
+      },
+      "control_settings": {
+        "parameters": [
+          {
+            "id": "owner_away:setting",
+            "field": "summer_threshold",
+            "value": 20,
+            "user_access": "needs_confirmation"
+          }
+        ]
+      }
+    },
+    "mock_response": {
+      "summary": "Сохранить экономичный режим с учётом защиты и ГВС",
+      "hypotheses": [
+        {
+          "id": "owner_away:h",
+          "statement": "Сохранить экономичный режим с учётом защиты и ГВС",
+          "confidence": 0.4,
+          "confidence_basis": "Три окна, неполный контекст настроек",
+          "rationale": "Сопоставлены погода и ошибка комнаты",
+          "evidence_for": [
+            {
+              "id": "owner_away:w0"
+            },
+            {
+              "id": "owner_away:w1"
+            },
+            {
+              "id": "owner_away:w2"
+            }
+          ],
+          "alternatives": [
+            "Наблюдение"
+          ]
+        }
+      ],
+      "recommended_experiment": null
+    },
+    "rubric": {
+      "required": [
+        "Сохранить экономичный режим с учётом защиты и ГВС",
+        "Сохранить альтернативы и неопределённость"
+      ],
+      "forbidden": [
+        "Автоматическая запись ZONT",
+        "Безусловный PID",
+        "Шаблон 20 → 22",
+        "Неподтверждённая численная точность"
+      ]
+    }
+  },
+  {
+    "id": "occupancy_unknown",
+    "context": {
+      "heating_analysis": {
+        "windows": [
+          {
+            "id": "occupancy_unknown:w0",
+            "started_at": "2026-01-10T06:00:00+00:00",
+            "ended_at": "2026-01-10T08:00:00+00:00",
+            "outdoor_mean_c": 9,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 50,
+            "coverage_pct": 100
+          },
+          {
+            "id": "occupancy_unknown:w1",
+            "started_at": "2026-01-11T06:00:00+00:00",
+            "ended_at": "2026-01-11T08:00:00+00:00",
+            "outdoor_mean_c": 10,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 50,
+            "coverage_pct": 100
+          },
+          {
+            "id": "occupancy_unknown:w2",
+            "started_at": "2026-01-12T06:00:00+00:00",
+            "ended_at": "2026-01-12T08:00:00+00:00",
+            "outdoor_mean_c": 11,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 50,
+            "coverage_pct": 100
+          }
+        ],
+        "unknowns": [
+          "active_algorithm_unknown"
+        ]
+      },
+      "house_context": {
+        "owner_note": "unknown"
+      },
+      "control_settings": {
+        "parameters": [
+          {
+            "id": "occupancy_unknown:setting",
+            "field": "summer_threshold",
+            "value": 20,
+            "user_access": "needs_confirmation"
+          }
+        ]
+      }
+    },
+    "mock_response": {
+      "summary": "Использование дома неизвестно; включение отопления не обязательно",
+      "hypotheses": [
+        {
+          "id": "occupancy_unknown:h",
+          "statement": "Использование дома неизвестно; включение отопления не обязательно",
+          "confidence": 0.4,
+          "confidence_basis": "Три окна, неполный контекст настроек",
+          "rationale": "Сопоставлены погода и ошибка комнаты",
+          "evidence_for": [
+            {
+              "id": "occupancy_unknown:w0"
+            },
+            {
+              "id": "occupancy_unknown:w1"
+            },
+            {
+              "id": "occupancy_unknown:w2"
+            }
+          ],
+          "alternatives": [
+            "Расписание",
+            "Погода"
+          ]
+        }
+      ],
+      "recommended_experiment": null
+    },
+    "rubric": {
+      "required": [
+        "Использование дома неизвестно; включение отопления не обязательно",
+        "Сохранить альтернативы и неопределённость"
+      ],
+      "forbidden": [
+        "Автоматическая запись ZONT",
+        "Безусловный PID",
+        "Шаблон 20 → 22",
+        "Неподтверждённая численная точность"
+      ]
+    }
+  },
+  {
+    "id": "morning_overshoot",
+    "context": {
+      "heating_analysis": {
+        "windows": [
+          {
+            "id": "morning_overshoot:w0",
+            "started_at": "2026-01-10T06:00:00+00:00",
+            "ended_at": "2026-01-10T08:00:00+00:00",
+            "outdoor_mean_c": 8,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 50,
+            "coverage_pct": 100
+          },
+          {
+            "id": "morning_overshoot:w1",
+            "started_at": "2026-01-11T06:00:00+00:00",
+            "ended_at": "2026-01-11T08:00:00+00:00",
+            "outdoor_mean_c": 10,
+            "room_error_c": 1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 50,
+            "coverage_pct": 100
+          },
+          {
+            "id": "morning_overshoot:w2",
+            "started_at": "2026-01-12T06:00:00+00:00",
+            "ended_at": "2026-01-12T08:00:00+00:00",
+            "outdoor_mean_c": 12,
+            "room_error_c": 2,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 50,
+            "coverage_pct": 100
+          }
+        ],
+        "unknowns": [
+          "active_algorithm_unknown"
+        ]
+      },
+      "house_context": {
+        "owner_note": "unknown"
+      },
+      "control_settings": {
+        "parameters": [
+          {
+            "id": "morning_overshoot:setting",
+            "field": "summer_threshold",
+            "value": 20,
+            "user_access": "needs_confirmation"
+          }
+        ]
+      }
+    },
+    "mock_response": {
+      "summary": "Утренний перелёт не определяет причину PID",
+      "hypotheses": [
+        {
+          "id": "morning_overshoot:h",
+          "statement": "Утренний перелёт не определяет причину PID",
+          "confidence": 0.4,
+          "confidence_basis": "Три окна, неполный контекст настроек",
+          "rationale": "Сопоставлены погода и ошибка комнаты",
+          "evidence_for": [
+            {
+              "id": "morning_overshoot:w0"
+            },
+            {
+              "id": "morning_overshoot:w1"
+            },
+            {
+              "id": "morning_overshoot:w2"
+            }
+          ],
+          "alternatives": [
+            "Расписание",
+            "Инерция пола",
+            "Солнце"
+          ]
+        }
+      ],
+      "recommended_experiment": null
+    },
+    "rubric": {
+      "required": [
+        "Утренний перелёт не определяет причину PID",
+        "Сохранить альтернативы и неопределённость"
+      ],
+      "forbidden": [
+        "Автоматическая запись ZONT",
+        "Безусловный PID",
+        "Шаблон 20 → 22",
+        "Неподтверждённая численная точность"
+      ]
+    }
+  },
+  {
+    "id": "summer_threshold_direction",
+    "context": {
+      "heating_analysis": {
+        "windows": [
+          {
+            "id": "summer_threshold_direction:w0",
+            "started_at": "2026-01-10T06:00:00+00:00",
+            "ended_at": "2026-01-10T08:00:00+00:00",
+            "outdoor_mean_c": 19,
+            "room_error_c": 1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "inactive",
+            "heating_request_pct": 0,
+            "coverage_pct": 100
+          },
+          {
+            "id": "summer_threshold_direction:w1",
+            "started_at": "2026-01-11T06:00:00+00:00",
+            "ended_at": "2026-01-11T08:00:00+00:00",
+            "outdoor_mean_c": 20,
+            "room_error_c": 1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "inactive",
+            "heating_request_pct": 0,
+            "coverage_pct": 100
+          },
+          {
+            "id": "summer_threshold_direction:w2",
+            "started_at": "2026-01-12T06:00:00+00:00",
+            "ended_at": "2026-01-12T08:00:00+00:00",
+            "outdoor_mean_c": 21,
+            "room_error_c": 1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "inactive",
+            "heating_request_pct": 0,
+            "coverage_pct": 100
+          }
+        ],
+        "unknowns": [
+          "active_algorithm_unknown"
+        ]
+      },
+      "house_context": {
+        "owner_note": "unknown"
+      },
+      "control_settings": {
+        "parameters": [
+          {
+            "id": "summer_threshold_direction:setting",
+            "field": "summer_threshold",
+            "value": 20,
+            "user_access": "needs_confirmation"
+          }
+        ]
+      }
+    },
+    "mock_response": {
+      "summary": "Повышение порога не гарантирует уменьшения перегрева",
+      "hypotheses": [
+        {
+          "id": "summer_threshold_direction:h",
+          "statement": "Повышение порога не гарантирует уменьшения перегрева",
+          "confidence": 0.4,
+          "confidence_basis": "Три окна, неполный контекст настроек",
+          "rationale": "Сопоставлены погода и ошибка комнаты",
+          "evidence_for": [
+            {
+              "id": "summer_threshold_direction:w0"
+            },
+            {
+              "id": "summer_threshold_direction:w1"
+            },
+            {
+              "id": "summer_threshold_direction:w2"
+            }
+          ],
+          "alternatives": [
+            "Снижение порога",
+            "Сохранение режима"
+          ]
+        }
+      ],
+      "recommended_experiment": null
+    },
+    "rubric": {
+      "required": [
+        "Повышение порога не гарантирует уменьшения перегрева",
+        "Сохранить альтернативы и неопределённость"
+      ],
+      "forbidden": [
+        "Автоматическая запись ZONT",
+        "Безусловный PID",
+        "Шаблон 20 → 22",
+        "Неподтверждённая численная точность"
+      ]
+    }
+  },
+  {
+    "id": "counterfactual_pza",
+    "context": {
+      "heating_analysis": {
+        "windows": [
+          {
+            "id": "counterfactual_pza:w0",
+            "started_at": "2026-01-10T06:00:00+00:00",
+            "ended_at": "2026-01-10T08:00:00+00:00",
+            "outdoor_mean_c": -8,
+            "room_error_c": -2,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 100,
+            "coverage_pct": 100
+          },
+          {
+            "id": "counterfactual_pza:w1",
+            "started_at": "2026-01-11T06:00:00+00:00",
+            "ended_at": "2026-01-11T08:00:00+00:00",
+            "outdoor_mean_c": 2,
+            "room_error_c": -1,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 100,
+            "coverage_pct": 100
+          },
+          {
+            "id": "counterfactual_pza:w2",
+            "started_at": "2026-01-12T06:00:00+00:00",
+            "ended_at": "2026-01-12T08:00:00+00:00",
+            "outdoor_mean_c": 10,
+            "room_error_c": 0,
+            "target_c": 21,
+            "mode": 1,
+            "activity": "active",
+            "heating_request_pct": 100,
+            "coverage_pct": 100
+          }
+        ],
+        "unknowns": [
+          "active_algorithm_unknown"
+        ]
+      },
+      "house_context": {
+        "owner_note": "unknown"
+      },
+      "control_settings": {
+        "parameters": [
+          {
+            "id": "counterfactual_pza:setting",
+            "field": "summer_threshold",
+            "value": 20,
+            "user_access": "needs_confirmation"
+          }
+        ]
+      },
+      "counterfactual_question": "Что будет после небольшого повышения ПЗА?"
+    },
+    "mock_response": {
+      "summary": "Эффект небольшого изменения ПЗА пока определён только качественно",
+      "hypotheses": [
+        {
+          "id": "counterfactual_pza:h",
+          "statement": "Эффект небольшого изменения ПЗА пока определён только качественно",
+          "confidence": 0.4,
+          "confidence_basis": "Три окна, неполный контекст настроек",
+          "rationale": "Сопоставлены погода и ошибка комнаты",
+          "evidence_for": [
+            {
+              "id": "counterfactual_pza:w0"
+            },
+            {
+              "id": "counterfactual_pza:w1"
+            },
+            {
+              "id": "counterfactual_pza:w2"
+            }
+          ],
+          "alternatives": [
+            "Неизвестен активный алгоритм"
+          ]
+        }
+      ],
+      "recommended_experiment": null,
+      "predictions": [
+        {
+          "id": "counterfactual_pza:p",
+          "scenario": "Небольшое повышение кривой ПЗА вручную",
+          "expected_effect": "Возможен рост температуры подачи, если кривая управляет ею; размер изменения комнаты неизвестен",
+          "confidence": 0.3,
+          "confidence_basis": "Семантика активного алгоритма не подтверждена",
+          "assumptions": [
+            "Подтверждён смысл настройки",
+            "Не изменены режим, расписание и использование дома"
+          ],
+          "evidence": [
+            {
+              "id": "counterfactual_pza:w0"
+            },
+            {
+              "id": "counterfactual_pza:w1"
+            },
+            {
+              "id": "counterfactual_pza:w2"
+            }
+          ],
+          "verification": "Сопоставить окна при прежней погоде после теплового установления"
+        }
+      ]
+    },
+    "rubric": {
+      "required": [
+        "Эффект небольшого изменения ПЗА пока определён только качественно",
+        "Сохранить альтернативы и неопределённость"
+      ],
+      "forbidden": [
+        "Автоматическая запись ZONT",
+        "Безусловный PID",
+        "Шаблон 20 → 22",
+        "Неподтверждённая численная точность"
+      ]
+    }
+  }
+]

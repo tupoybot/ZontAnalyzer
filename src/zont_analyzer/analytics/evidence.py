@@ -160,6 +160,7 @@ def build_evidence(
     period_id: str = "period",
     capability_profile: Literal["unknown", "flame_zero_is_minimum"] = "unknown",
     max_windows: int = 24,
+    window_sink: list[EvidenceWindow] | None = None,
     min_coverage_pct: float = 70.0,
 ) -> EvidencePacket:
     """Build a compact packet using interval sweeps, never minute expansion."""
@@ -203,6 +204,8 @@ def build_evidence(
         )
         for window_start, window_end in selected
     ]
+    if window_sink is not None:
+        window_sink.extend(windows)
     metrics, state_unknowns = _operational_metrics(
         period_id=period_id,
         start=start,

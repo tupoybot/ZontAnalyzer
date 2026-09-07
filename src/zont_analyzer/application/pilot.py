@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from zont_analyzer.application.analysis import CALCULATION_VERSION
 from zont_analyzer.application.reasoning_context import reasoning_payload
 from zont_analyzer.domain import Report
 from zont_analyzer.reports import render_html, render_text
@@ -223,7 +224,7 @@ class PilotService:
 
                 empty_revision = hashlib.sha256(b"[]").hexdigest()
                 must_analyze = report is None or (
-                    selected == yesterday and report.context.get("calculation_version") != "stage6-v1"
+                    selected == yesterday and report.context.get("calculation_version") != CALCULATION_VERSION
                 ) or (
                     data_revision != empty_revision and report is not None
                     and report.context.get("input_revision", {}).get("telemetry") != data_revision

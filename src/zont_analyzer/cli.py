@@ -13,6 +13,7 @@ import typer
 
 from zont_analyzer.application.feedback import start_feedback_server
 from zont_analyzer.application.pilot import PilotService, worker_health, worker_status_path
+from zont_analyzer.application.regeneration import run_sync
 from zont_analyzer.config import explain_config
 from zont_analyzer.doctor import run_doctor
 from zont_analyzer.logging import configure_logging
@@ -235,6 +236,25 @@ def report_show(ctx: typer.Context, report_id: str) -> None:
     if report is None:
         raise typer.BadParameter(f"Unknown report: {report_id}")
     _json(report.model_dump(mode="json"))
+
+
+@report_app.command("regenerate")
+def report_regenerate(
+    ctx: typer.Context,
+    report_id: str,
+    question: Annotated[
+        str | None,
+        typer.Option("--question", help="Optional counterfactual question (up to 500 characters)"),
+    ] = None,
+) -> None:
+    """Regenerate one report in the foreground, optionally answering an owner question."""
+    try:
+        result = run_sync(_runtime(ctx), report_id, question)
+    except KeyError as exc:
+        raise typer.BadParameter(f"Unknown report: {report_id}") from exc
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _json(result)
 
 
 @report_app.command("export")

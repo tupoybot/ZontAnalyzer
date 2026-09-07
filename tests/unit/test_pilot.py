@@ -265,3 +265,16 @@ def test_health_rejects_stale_status(tmp_path: Path) -> None:
 
     assert result["ok"] is False
     assert result["age_seconds"] == 120
+
+
+def test_current_calculation_version_does_not_recompute_yesterday_on_each_poll(tmp_path: Path) -> None:
+    from zont_analyzer.application.analysis import CALCULATION_VERSION
+
+    runtime = FakeRuntime(tmp_path, {"complete": True, "samples": 4, "errors": []})
+    for day in (1, 2, 3):
+        report = _report(date(2026, 8, day))
+        report.context["calculation_version"] = CALCULATION_VERSION
+        runtime.db.reports[report.id] = report
+    PilotService(runtime).run_cycle()  # type: ignore[arg-type]
+    PilotService(runtime).run_cycle()  # type: ignore[arg-type]
+    assert runtime.analysis_service.calls == []

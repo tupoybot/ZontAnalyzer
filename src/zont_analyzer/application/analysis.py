@@ -11,7 +11,7 @@ from statistics import median
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from zont_analyzer.adapters.openai.provider import Analyst, analysis_packet
+from zont_analyzer.adapters.openai.provider import PROMPT_VERSION, Analyst, analysis_packet
 from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.analytics import (
     ReliabilityEvidencePoint,
@@ -31,6 +31,7 @@ from zont_analyzer.analytics import (
 )
 from zont_analyzer.analytics.dhw import parse_opentherm_flags
 from zont_analyzer.analytics.evidence import (
+    EvidenceWindow,
     ExclusionWindow,
     NumericSample,
     SignalMetadata,
@@ -46,6 +47,9 @@ from zont_analyzer.domain.periods import Period, SeasonBoundaries, midnight, sea
 from zont_analyzer.reports import render_text
 
 logger = logging.getLogger(__name__)
+
+
+CALCULATION_VERSION = "stage7-v1"
 
 
 def _select_control_temperature_series(
@@ -204,9 +208,15 @@ class AnalysisService:
     def analyze_period(self, period: Period, *, use_ai: bool = True) -> Report:
         return self._analyze(period.start, period.observed_end, kind=period.kind, use_ai=use_ai, period=period)
 
-    def regenerate(self, report: Report, *, request_nonce: str | None = None) -> Report:
+    def regenerate(self, report: Report, *, request_nonce: str | None = None, question: str | None = None) -> Report:
         if self.config.openai.enabled and self.analyst is None:
             raise RuntimeError("AI включён, но ключ недоступен. Прежний отчёт сохранён.")
+        if question is not None:
+            question = question.strip() or None
+            if question is not None and len(question) > 500:
+                raise ValueError("Вопрос должен содержать не более 500 символов")
+            if question and (not self.config.openai.enabled or self.analyst is None):
+                raise RuntimeError("Для ответа на вопрос требуется включённый AI")
         raw_period = report.context.get("period")
         period = Period.model_validate(raw_period) if raw_period else None
         if period and period.kind == "seasonal" and period.season and period.year:
@@ -214,7 +224,7 @@ class AnalysisService:
         start, end = (period.start, period.observed_end) if period else (report.period_start, report.period_end)
         candidate = self._analyze(start, end, kind=report.kind, use_ai=self.config.openai.enabled,
                                  force_ai=self.config.openai.enabled, persist=False, period=period,
-                                 request_nonce=request_nonce or datetime.now(UTC).isoformat())
+                                 request_nonce=request_nonce or datetime.now(UTC).isoformat(), question=question)
         previous = {item.model_dump_json(exclude={"id"}): item.id for item in report.recommendations}
         for recommendation in candidate.recommendations:
             payload = recommendation.model_dump_json(exclude={"id"})
@@ -227,7 +237,7 @@ class AnalysisService:
     def _analyze(
         self, start: datetime, end: datetime, *, kind: str, use_ai: bool,
         persist: bool = True, include_comparisons: bool = True, force_ai: bool = False,
-        period: Period | None = None, request_nonce: str | None = None,
+        period: Period | None = None, request_nonce: str | None = None, question: str | None = None,
     ) -> Report:
         if kind == "seasonal" and end - start > timedelta(days=31):
             from zont_analyzer.application.long_periods import aggregate_long_period
@@ -238,7 +248,7 @@ class AnalysisService:
                 start, end, kind=kind, use_ai=use_ai, persist=persist, include_comparisons=include_comparisons,
                 force_ai=force_ai, period=period, request_nonce=request_nonce, quality=aggregated.quality,
                 metrics=aggregated.metrics, events=aggregated.events, control_context=aggregated.context,
-                summary=aggregated.summary, recommendations=aggregated.recommendations,
+                summary=aggregated.summary, recommendations=aggregated.recommendations, question=question,
             )
         period_id = f"{kind}:{int(start.timestamp())}"
         context_start = start - timedelta(days=7)
@@ -429,6 +439,12 @@ class AnalysisService:
             (event.started_at, event.started_at + timedelta(hours=2)) for event in availability_events
         )
         control_context["heating_circuit"] = availability_context
+        from zont_analyzer.analytics.settings import control_settings
+
+        selected_device = next((item for item in devices if str(item["id"]) == device_id), {})
+        control_context["control_settings"] = control_settings(
+            selected_device.get("raw", {}), circuit_id, captured_at=selected_device.get("discovered_at"),
+        )
         control_context["burner_activity_scope"] = burner_activity_scope
         control_context["sensors"] = _sensor_report_context(series, temperature_series)
         control_context["recommendation_policy"] = "p2-1.7"
@@ -667,7 +683,8 @@ class AnalysisService:
         return self._finish_analysis(
             start, end, kind=kind, use_ai=use_ai, persist=persist, include_comparisons=include_comparisons,
             force_ai=force_ai, period=period, request_nonce=request_nonce, quality=quality, metrics=metrics,
-            events=events, control_context=control_context, summary=summary, recommendations=recommendations,
+            events=events, control_context=control_context, summary=summary,
+            recommendations=recommendations, question=question,
         )
 
     def _finish_analysis(
@@ -676,6 +693,7 @@ class AnalysisService:
         period: Period | None, request_nonce: str | None,
         quality: QualityResult, metrics: list[MetricValue], events: list[DetectedEvent],
         control_context: dict[str, Any], summary: str, recommendations: list[Recommendation],
+        question: str | None = None,
     ) -> Report:
         report_id = self.report_id_for(kind, start)
         previous_report = self.db.report(report_id)
@@ -692,13 +710,15 @@ class AnalysisService:
                             timezone=self.config.home.timezone, complete=True)
         control_context["period"] = period.model_dump(mode="json")
         control_context["season_boundaries"] = self.season_boundaries()[0].model_dump()
-        control_context["calculation_version"] = "stage6-v1"
+        control_context["calculation_version"] = CALCULATION_VERSION
+        if question:
+            control_context["counterfactual_question"] = question
         control_context["input_revision"] = {
             "settings_hash": hashlib.sha256(json.dumps(self.config.model_dump(mode="json"),
                                                        sort_keys=True).encode()).hexdigest(),
             "observed_end": end.isoformat(),
             "telemetry": self.db.period_data_revision(start, end),
-            "prompt_version": self.config.openai.prompt_version,
+            "prompt_version": PROMPT_VERSION,
             "refresh": ("Automatic once per completed period; current season weekly; "
                         "explicit regeneration for corrections"),
         }
@@ -723,6 +743,12 @@ class AnalysisService:
                     left, right, kind="initial", use_ai=False, persist=False, include_comparisons=False,
                 ),
             ))
+        from zont_analyzer.application.heating_context import heating_context
+
+        if include_comparisons:
+            control_context.update(heating_context(self.db, control_context, start, end))
+        else:
+            control_context.get("temporal_evidence", {}).pop("heating_source_windows", None)
         should_use_ai = (
             use_ai
             and self.analyst is not None
@@ -891,13 +917,17 @@ class AnalysisService:
         states = [StateSample(timestamp, parse_opentherm_flags(encoded), identity(selected_boiler))
                   for timestamp, encoded in self.db.fetch_text_samples(int(selected_boiler["id"]), lookback, end)
                   ] if selected_boiler else []
+        heating_windows: list[EvidenceWindow] = []
         packet = build_evidence(
             start=start, end=end, timezone=self.config.home.timezone, period_id=period_id,
-            signals=signals, state_samples=states, exclusions=exclusions,
+            signals=signals, state_samples=states, exclusions=exclusions, window_sink=heating_windows,
             capability_profile=self.config.analysis.modulation_capability_profile,
             min_coverage_pct=self.config.analysis.minimum_quality_score * 100,
         )
-        return packet.model_dump(mode="json", exclude_none=True)
+        result = packet.model_dump(mode="json", exclude_none=True)
+        result["heating_source_windows"] = [window.model_dump(mode="json", exclude_none=True)
+                                            for window in heating_windows]
+        return result
 
     @staticmethod
     def _purpose_flame_samples(

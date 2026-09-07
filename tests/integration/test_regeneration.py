@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from zont_analyzer.application import regeneration
+from zont_analyzer.application import feedback, regeneration
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.feedback import build_feedback_server
 from zont_analyzer.domain import DetectedEvent, MetricValue
@@ -220,6 +220,42 @@ def test_regeneration_api_rejects_cross_site_post(tmp_path: Path) -> None:
         thread.join(timeout=2)
 
 
+def test_regeneration_api_passes_counterfactual_question_and_rejects_invalid_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, report = _runtime(tmp_path)
+    runtime.config.feedback.listen_port = 0
+    captured: list[str | None] = []
+
+    def fake_start(_runtime, _report_id: str, question: str | None = None):
+        captured.append(question)
+        return {"report_id": report.id, "status": "queued", "question": question}
+
+    monkeypatch.setattr(feedback, "start_regeneration", fake_start)
+    server = build_feedback_server(runtime)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}/api/reports/{report.id}/regenerate"
+    try:
+        request = Request(
+            url, data='{"question":"Что будет при небольшом изменении ПЗА?"}'.encode(), method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urlopen(request) as response:
+            assert response.status == 202
+        assert captured == ["Что будет при небольшом изменении ПЗА?"]
+
+        for body in (b'{"question":42}', b'{"question":"' + b"x" * 501 + b'"}'):
+            request = Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})
+            with pytest.raises(HTTPError) as error:
+                urlopen(request)
+            assert error.value.code == 422
+        assert captured == ["Что будет при небольшом изменении ПЗА?"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
 def test_regeneration_markup_escapes_id_and_keeps_prefixed_api_root() -> None:
     markup = render_regeneration('<script>alert(1)</script>', '/za/api')
     assert 'data-report-id="&lt;script&gt;alert(1)&lt;/script&gt;"' in markup
@@ -227,3 +263,25 @@ def test_regeneration_markup_escapes_id_and_keeps_prefixed_api_root() -> None:
     assert 'const configured = "/za/api"' in markup
     assert "location.pathname.startsWith('/za/')" in markup
     assert "api + '/reports/'" in markup
+
+
+def test_counterfactual_question_is_optional_bounded_and_normalized() -> None:
+    assert regeneration.normalize_counterfactual_question(None) is None
+    assert regeneration.normalize_counterfactual_question("   ") is None
+    assert regeneration.normalize_counterfactual_question("  Что будет при изменении ПЗА?  ") == (
+        "Что будет при изменении ПЗА?"
+    )
+    assert regeneration.normalize_counterfactual_question("x" * 500) == "x" * 500
+    with pytest.raises(ValueError, match="500"):
+        regeneration.normalize_counterfactual_question("x" * 501)
+    with pytest.raises(ValueError, match="строкой"):
+        regeneration.normalize_counterfactual_question(42)  # type: ignore[arg-type]
+
+
+def test_regeneration_markup_has_bounded_question_input_without_interpolation() -> None:
+    markup = render_regeneration('<script>alert("q")</script>', "/api")
+    assert 'maxlength="500"' in markup
+    assert 'class="counterfactual-question"' in markup
+    assert "JSON.stringify({question:text})" in markup
+    assert ": '{}'" in markup
+    assert 'alert("q")' not in markup
