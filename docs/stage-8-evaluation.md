@@ -19,7 +19,7 @@ online-копией SQLite. Синтетическая точность не я�
 | Конкурентная AI-перегенерация не затёрта публикацией газа | `test_gas_publication_does_not_overwrite_concurrent_ai_revision` |
 | Погодная модель заморожена, нет утечки последующих показаний | `tests/unit/test_gas_savings.py` |
 | Реальная/ложная экономия, изменение ГВС, эффект 2% меньше неопределённости | `tests/unit/test_gas_savings.py` |
-| Присутствие/комфорт/проветривание остаются гипотезами | контракт `analyst-v8`, сравнение с owner note; реальные AI-ответы в приёмке |
+| Присутствие/комфорт/проветривание остаются гипотезами | контракт `analyst-v8`, сравнение с owner note; ограничение реальной AI-проверки описано в приёмке |
 | Все типы отчётов, карточка в свободной ячейке, часы и знаменатели | `test_gas_presentation.py`, Chromium archive browser |
 | Desktop/mobile поле вопроса и кнопка доступны и не перекрываются | геометрия в `archive_browser.mjs` |
 | Компактный AI-пакет сохраняет объём, диапазон, версию и происхождение | `test_gas_packet_keeps_amounts_and_provenance_despite_large_calibration_history` |
