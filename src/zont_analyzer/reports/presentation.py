@@ -386,20 +386,30 @@ def burner_usage_rows(report: Report) -> list[tuple[str, str]]:
 def metric_groups(report: Report, missing_mttr: str | None) -> str:
     from .renderers import _metric_display, _metric_label
 
-    groups: dict[str, list[str]] = {k: [] for k in ("Комфорт", "Отопление", "ГВС", "Надёжность", "Качество данных")}
+    groups: dict[str, list[str]] = {k: [] for k in (
+        "Комфорт и отопление", "ГВС", "Взаимодействие ГВС и отопления", "Котёл и горелка",
+        "Погода", "Надёжность", "Качество данных", "Другие показатели",
+    )}
+    interaction_metrics = {
+        "dhw_concurrent_or_ambiguous_time_pct", "dhw_confirmed_heating_pause_count",
+        "dhw_mean_confirmed_heating_pause_minutes", "dhw_mean_heating_return_delay_minutes",
+        "dhw_long_heating_return_count", "dhw_residual_heat_return_count", "dhw_long_hot_flow_tail_count",
+    }
     for m in report.metrics:
         if m.name in LEGACY_DUTY_METRICS:
             continue
         group = (
-            "ГВС"
-            if m.name.startswith("dhw_")
-            else "Надёжность"
-            if any(t in m.name for t in ("uptime", "mtbf", "mttr", "mtbr"))
-            else "Качество данных"
-            if any(t in m.name for t in ("quality", "coverage", "noise", "unconfirmed"))
-            else "Комфорт"
-            if any(t in m.name for t in ("temperature", "target", "degree_hours"))
-            else "Отопление"
+            "Взаимодействие ГВС и отопления" if m.name in interaction_metrics
+            else "Надёжность" if any(t in m.name for t in ("uptime", "mtbf", "mttr", "mtbr"))
+            else "Качество данных" if any(t in m.name for t in ("quality", "coverage", "noise", "unconfirmed"))
+            else "Погода" if m.name.startswith("outdoor_")
+            else "ГВС" if m.name.startswith("dhw_")
+            else "Комфорт и отопление" if m.context.get("activity_scope") == "space_heating_only"
+            or any(t in m.name for t in ("temperature", "target", "degree_hours"))
+            else "Котёл и горелка" if m.name in {
+                "burner_starts", "burner_starts_per_hour", "short_cycle_share_pct", "median_burner_cycle_minutes",
+            }
+            else "Другие показатели"
         )
         value, unit = _metric_display(m)
         if unit != "дд:чч:мм":
@@ -410,7 +420,7 @@ def metric_groups(report: Report, missing_mttr: str | None) -> str:
             + f"</th><td>{esc(value)} {esc(unit)}</td></tr>"
         )
     for label, value in burner_usage_rows(report):
-        groups["Отопление"].append(
+        groups["Котёл и горелка"].append(
             f'<tr><th scope="row">{esc(label)}</th><td>{esc(value)}</td></tr>'
         )
     if missing_mttr:

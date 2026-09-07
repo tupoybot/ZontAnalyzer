@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 from zoneinfo import ZoneInfo
 
-from zont_analyzer.application.publication import publish_reports
+from zont_analyzer.application.publication import publish_report, publish_reports
 from zont_analyzer.application.regeneration import normalize_counterfactual_question
 from zont_analyzer.application.regeneration import start as start_regeneration
 from zont_analyzer.application.regeneration import status as regeneration_status
@@ -42,10 +42,7 @@ def _public_feedback(value: dict[str, Any]) -> dict[str, Any]:
 
 def publish_feedback_report(runtime: Runtime, report_id: str) -> None:
     """Refresh public HTML artifacts after a lifecycle write."""
-    report = runtime.db.report(report_id)
-    if report is None:
-        return
-    publish_reports(runtime)
+    publish_report(runtime, report_id)
 
 
 class FeedbackHttpServer(ThreadingHTTPServer):

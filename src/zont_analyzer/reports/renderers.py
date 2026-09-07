@@ -342,10 +342,14 @@ _ARCHIVE_NAVIGATION_SCRIPT = r"""
 
   navigation.querySelectorAll("[data-archive-kind]").forEach((button) => {
     button.addEventListener("click", () => {
-      activeKind = button.dataset.archiveKind || "daily";
-      const picker = navigation.querySelector(".archive-picker");
-      if (picker) picker.open = true;
-      render();
+      const kind = button.dataset.archiveKind || "daily";
+      if (kind === activeKind) return;
+      const newest = reports.filter((item) => item.kind === kind).sort(byStart).at(-1);
+      if (newest) {
+        window.location.assign(directUrl(newest));
+        return;
+      }
+      status.textContent = "Нет опубликованных отчётов для выбранного типа периода.";
     });
   });
   navigation.querySelector(".archive-period-tabs")?.addEventListener("keydown", (event) => {

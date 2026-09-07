@@ -60,26 +60,20 @@ try {
   await page.locator('[data-archive-month="next"]').click();
   assert.equal(page.url(), beforeMonthArrow, "month arrows never navigate the report");
 
-  await page.locator('[data-archive-kind="weekly"]').click();
-  const weekly = page.locator(".archive-periods a");
-  await assert.equal(await weekly.count(), 3);
-  await assert.match(await weekly.first().textContent(), /27 июля 2026.*3 августа 2026/s);
-  await weekly.first().click();
-  await page.waitForURL("**/weekly/2026-07-27.html");
-
-  await page.locator('[data-archive-kind="monthly"]').click();
-  const monthly = page.locator(".archive-periods a");
-  await assert.equal(await monthly.count(), 3);
-  await assert.match(await monthly.first().textContent(), /1 июля 2026.*1 августа 2026/s);
-  await monthly.first().click();
-  await page.waitForURL("**/monthly/2026-07-01.html");
-
-  await page.locator('[data-archive-kind="seasonal"]').click();
-  const seasonal = page.locator(".archive-periods a");
-  await assert.equal(await seasonal.count(), 3);
-  await assert.match(await seasonal.first().textContent(), /осень/i);
-  await seasonal.first().click();
-  await page.waitForURL("**/seasonal/2026-09-01.html");
+  // Changing report kind opens its newest publication with the picker closed.
+  for (const prefix of ["/", "/za/"]) {
+    await page.setViewportSize({width: prefix === "/" ? 1280 : 390, height: 900});
+    await page.goto(`${baseURL}${prefix}daily/2026-08-01.html`, {waitUntil: "networkidle"});
+    for (const [kind, date] of [["weekly", "2026-07-27"], ["monthly", "2026-07-01"],
+      ["seasonal", "2026-09-01"], ["daily", "2026-08-05"]]) {
+      await page.locator('[data-archive-kind="' + kind + '"]').click();
+      await page.waitForURL(`${baseURL}${prefix}${kind}/${date}.html`, {waitUntil: "networkidle"});
+      assert.equal(await page.locator(".archive-picker").getAttribute("open"), null);
+      assert.equal(await page.locator('[data-archive-kind="' + kind + '"]').getAttribute("aria-selected"), "true");
+      await page.locator(".archive-picker > summary").click();
+      assert.equal(await page.locator(kind === "daily" ? ".archive-day.available" : ".archive-periods a").count(), 3);
+    }
+  }
 
   // Long-period arrows must follow published neighbours, skipping missing periods.
   for (const prefix of ["/", "/za/"]) {
@@ -121,9 +115,10 @@ try {
   });
   await page.goto(`${baseURL}/weekly/2026-07-27.html`, {waitUntil: "networkidle"});
   await page.locator('[data-archive-kind="seasonal"]').click();
-  for (const action of ["previous", "latest", "next"]) {
-    assert.equal(await page.locator(`[data-archive-action="${action}"]`).isDisabled(), true);
-  }
+  assert.equal(page.url(), `${baseURL}/weekly/2026-07-27.html`, "empty kind keeps current report");
+  assert.equal(await page.locator('[data-archive-kind="weekly"]').getAttribute("aria-selected"), "true");
+  assert.equal(await page.locator(".archive-picker").getAttribute("open"), null);
+  assert.match(await page.locator(".archive-status").textContent(), /Нет опубликованных отчётов/);
   await page.unroute("**/reports.json");
 
   await page.goto(`${baseURL}/daily/2026-08-05.html`, { waitUntil: "networkidle" });
