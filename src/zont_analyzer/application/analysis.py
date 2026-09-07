@@ -49,6 +49,9 @@ from zont_analyzer.reports import render_text
 logger = logging.getLogger(__name__)
 
 
+CALCULATION_VERSION = "stage7-v1"
+
+
 def _select_control_temperature_series(
     series: list[dict[str, Any]],
     devices: list[dict[str, Any]],
@@ -707,7 +710,7 @@ class AnalysisService:
                             timezone=self.config.home.timezone, complete=True)
         control_context["period"] = period.model_dump(mode="json")
         control_context["season_boundaries"] = self.season_boundaries()[0].model_dump()
-        control_context["calculation_version"] = "stage7-v1"
+        control_context["calculation_version"] = CALCULATION_VERSION
         if question:
             control_context["counterfactual_question"] = question
         control_context["input_revision"] = {
