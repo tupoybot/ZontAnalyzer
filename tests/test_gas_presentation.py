@@ -26,7 +26,9 @@ def test_gas_card_renders_measurement_provenance_and_flame_denominator() -> None
     assert "Индекс надёжности: 72,0 %" in page
     assert "Знаменатель: 1 календарных суток" in page
     assert "Время работы горелки" in page
-    assert "4,0 ч" in page and "за 20 ч наблюдений" in page
+    assert "4,0 ч" in page and "за 24,0 ч периода" in page
+    assert "16,7 % от всего периода" in page
+    assert "в пробелах работа горелки неизвестна" in page
     assert "Период неполный" in page
     assert "Модель: gas-1" in page
 

@@ -103,7 +103,7 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                     effective = payload.get("effective_from")
                     if kind == "profile" and isinstance(effective, str) and len(effective) == 10:
                         payload["effective_from"] = datetime.fromisoformat(effective).replace(
-                            tzinfo=ZoneInfo(runtime.config.home.timezone)
+                            tzinfo=ZoneInfo(runtime.config.home.effective_timezone)
                         ).astimezone(UTC).isoformat()
                     value = (store.update_profile(identifier, payload) if kind == "profile"
                              else store.update_gas(identifier, payload))
@@ -225,7 +225,7 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                 if isinstance(experiment, dict) and experiment.get("performed_at"):
                     when = datetime.fromisoformat(experiment["performed_at"])
                     if when.tzinfo is None:
-                        when = when.replace(tzinfo=ZoneInfo(runtime.config.home.timezone))
+                        when = when.replace(tzinfo=ZoneInfo(runtime.config.home.effective_timezone))
                     experiment = {**experiment, "performed_at": when.astimezone(UTC).isoformat()}
                 value = runtime.db.set_recommendation_feedback(
                     recommendation_id, status, owner_note, experiment=experiment,

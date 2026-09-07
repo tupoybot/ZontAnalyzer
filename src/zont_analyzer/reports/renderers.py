@@ -9,7 +9,15 @@ from zoneinfo import ZoneInfo
 
 from zont_analyzer.domain import Report
 from zont_analyzer.reports.experiment_forms import experiment_form
-from zont_analyzer.reports.presentation import _gas_value, gas_savings_text, number, period_target
+from zont_analyzer.reports.presentation import (
+    LEGACY_DUTY_METRICS,
+    _gas_value,
+    burner_usage_rows,
+    gas_savings_text,
+    number,
+    period_target,
+    timezone_note,
+)
 from zont_analyzer.reports.wording import normalize_report_for_display
 
 METRIC_LABELS = {
@@ -854,6 +862,7 @@ def render_text(report: Report) -> str:
         f"ZontAnalyzer — {report.kind}",
         f"ID отчёта: {report.id}",
         f"Период: {_local(report.period_start, report.timezone)} — {_local(report.period_end, report.timezone)}",
+        timezone_note(report),
         f"AI-интерпретация: {'да' if report.ai_used else 'нет'}",
     ]
     for metric in report.metrics:
@@ -879,10 +888,7 @@ def render_text(report: Report) -> str:
                                  ("average_weekly_m3", "Среднее за наблюдаемую неделю", "м³/неделю")):
             if isinstance(gas.get(key), (int, float)):
                 lines.append(f"{label}: {_gas_value(gas[key], unit)}")
-        if isinstance(gas.get("flame_hours"), (int, float)):
-            denominator = gas.get("observed_hours")
-            suffix = f" за {denominator:g} ч наблюдений" if isinstance(denominator, (int, float)) else ""
-            lines.append(f"Время работы горелки: {_gas_value(gas['flame_hours'], 'ч')}{suffix}")
+        lines.extend(f"{label}: {value}" for label, value in burner_usage_rows(report))
         lines.append(f"Индекс надёжности: {_gas_value(gas.get('reliability_index_pct'), '%')}; не вероятность.")
         lines.append(f"Диапазон: {_gas_value(gas.get('lower_m3'), 'м³')} — "
                      f"{_gas_value(gas.get('upper_m3'), 'м³')}; покрытие {_gas_value(gas.get('coverage_pct'), '%')}")
@@ -979,6 +985,8 @@ def render_text(report: Report) -> str:
     if report.metrics:
         lines.append("Метрики:")
         for metric in report.metrics:
+            if metric.name in LEGACY_DUTY_METRICS:
+                continue
             value, unit = _metric_display(metric)
             lines.append(f"- {_metric_label(metric.name, metric.context)}: {value} {unit}")
     if report.events:
@@ -1385,6 +1393,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <button type="button" data-archive-month="next" aria-label="Следующий месяц">→</button></div>
 <p class="archive-status" role="status" aria-live="polite"></p><div class="archive-panel"></div></details>
 </div></nav>
+<p class="timezone-note">{html.escape(timezone_note(report))}</p>
 <div class="debug-only"><p><strong>ID:</strong> <code>{html.escape(report.id)}</code></p>
 <p><strong>Период:</strong> {period}</p>
 <p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"};

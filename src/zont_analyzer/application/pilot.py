@@ -156,7 +156,7 @@ class PilotService:
         yesterday = today - timedelta(days=1)
         earliest = self.runtime.db.earliest_sample_time()
         earliest_date = (
-            earliest.astimezone(ZoneInfo(self.runtime.config.home.timezone)).date() if earliest else yesterday
+            earliest.astimezone(ZoneInfo(self.runtime.config.home.effective_timezone)).date() if earliest else yesterday
         )
         bounded_start = yesterday - timedelta(days=self.runtime.config.pilot.max_catchup_days - 1)
         start = max(min(earliest_date, yesterday), bounded_start)

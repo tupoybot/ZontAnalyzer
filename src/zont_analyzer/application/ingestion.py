@@ -173,6 +173,8 @@ class IngestionService:
     def discover(self) -> dict[str, Any]:
         devices = self.client.discover_devices()
         saved = self.db.save_devices(devices)
+        from zont_analyzer.application.timezone import apply_device_timezone
+        apply_device_timezone(self.db, self.config)
         return {
             "devices": saved,
             "inventory": [

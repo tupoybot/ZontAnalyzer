@@ -4,6 +4,7 @@
 # .access/.openai_access_token.txt
 home:
   seasons: {spring: "03-01", summer: "06-01", autumn: "09-01", winter: "12-01"}
+  # Резерв: основной часовой пояс берётся из настроек устройства ZONT.
   timezone: Europe/Samara
 
 preferences:

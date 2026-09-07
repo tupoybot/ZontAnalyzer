@@ -44,7 +44,11 @@ def _utc(day: date, timezone: str, hour: int = 0) -> datetime:
 class GasService:
     def __init__(self, db: Database, config: AppConfig):
         self.db, self.config = db, config
-        self.timezone = config.home.timezone
+        from zont_analyzer.application.timezone import apply_device_timezone
+
+        apply_device_timezone(db, config)
+        self.timezone = config.home.effective_timezone
+        self.timezone_provenance = config.home.timezone_provenance
         self.series = db.list_series()
         states = [s for s in self.series if s['source_type'] == 'z3k_boiler_adapter' and s['metric_key'] == 's']
         self.state = states[0] if len(states) == 1 else None
@@ -221,12 +225,12 @@ class GasService:
             'reliability_index_pct': estimate.reliability_index, 'coverage_pct': estimate.coverage*100,
             'model_version': version, 'algorithm_version': VERSION, 'reasons': list(estimate.reasons),
             'observed_days': days,
+            'timezone_provenance': self.timezone_provenance,
             'average_daily_m3': estimate.volume_m3/days if estimate.volume_m3 is not None else None,
             'average_weekly_m3': estimate.volume_m3/days*7 if estimate.volume_m3 is not None else None,
             'scope': 'boiler' if self.fields.get('has_gas_stove', {}).get('value') is False else 'shared_meter',
             'flame_hours': w['flame_minutes']/60 if w['observed_minutes'] else None,
             'observed_hours': w['observed_minutes']/60,
-            'flame_pct': w['flame_minutes']/w['observed_minutes']*100 if w['observed_minutes'] else None,
             'heating_flame_hours': w['heating_minutes']/60 if w['observed_minutes'] else None,
             'dhw_flame_hours': w['dhw_minutes']/60 if w['observed_minutes'] else None,
             'purpose_unknown_flame_hours': max(0, w['flame_minutes']-w['heating_minutes']-w['dhw_minutes'])/60,
@@ -242,6 +246,9 @@ class GasService:
                                    for i in intervals if i.start < end and i.end > start][-12:],
             'ai_stale': False,
         }
+        from zont_analyzer.analytics.burner_usage import burner_usage
+
+        result.update(burner_usage(result, (end-start).total_seconds()/3600))
         # Match dates only as a day-precision accounting interval, never claim
         # those readings were taken at the report's midnight boundaries.
         local_start = start.astimezone(ZoneInfo(self.timezone))
@@ -279,7 +286,9 @@ class GasService:
         old = report.context.get('gas')
         reused = bool(report.context.get('pilot_ai_reuse') or report.context.get('ai_interpretation_reuse'))
         stale = report.ai_used and (reused or not old or old.get('model_version') != gas['model_version'] or
-                                   old.get('volume_m3') != gas['volume_m3'] or old.get('ai_stale', False))
+                                   old.get('volume_m3') != gas['volume_m3'] or
+                                   old.get('burner_usage_version') != gas['burner_usage_version'] or
+                                   old.get('ai_stale', False))
         gas['ai_stale'] = stale
         if old and old.get('updated'):
             gas['updated'] = True

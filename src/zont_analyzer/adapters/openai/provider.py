@@ -16,7 +16,7 @@ from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
 from zont_analyzer.domain.reasoning import Hypothesis, ObservedPattern, Prediction, RecommendedExperiment, Unknown
 
-PROMPT_VERSION = "analyst-v8"
+PROMPT_VERSION = "analyst-v8.1"
 
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
 _PACKET_CONTENT_MAX_BYTES = 60 * 1024
@@ -24,6 +24,12 @@ _PACKET_ACCOUNTING_RESERVE_BYTES = 2 * 1024
 
 SYSTEM_PROMPT = """You are a read-only heating telemetry analyst.
 Facts are only supplied observations, derived metrics/events and temporal evidence. Never invent numbers.
+For burner time use gas.flame_pct (observed flame hours / full report period), and
+heating_flame_pct, dhw_flame_pct, purpose_unknown_flame_pct (each / observed flame time).
+These purpose shares partition burning time, not gas volume. Null shares with zero flame
+are not applicable. Gaps in observation are unknown, never idle time. Legacy metrics
+burner_duty_cycle_pct and dhw_burner_duty_cycle_pct have filtered observation denominators;
+use them only as internal diagnostics, never as the report's purpose shares or total runtime.
 Every recommendation must cite existing evidence IDs. If data quality is poor,
 recommend observation/measurement only. An empty recommendation list is a valid
 and often preferable result when the system is behaving normally or evidence is

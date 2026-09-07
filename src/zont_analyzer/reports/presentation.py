@@ -332,11 +332,64 @@ def reliability(report: Report) -> str:
     return '<div class="kpi-uptime-row" aria-label="Надёжность и газ">' + "".join(cards) + "</div>"
 
 
+def timezone_note(report: Report) -> str:
+    gas = report.context.get("gas", {})
+    provenance = report.context.get("timezone_provenance") or (
+        gas.get("timezone_provenance") if isinstance(gas, dict) else None
+    )
+    zone = ZoneInfo(report.timezone)
+    offset = report.period_start.astimezone(zone).strftime("%z")
+    label = f"UTC{offset[:3]}:{offset[3:]}"
+    if isinstance(provenance, dict) and provenance.get("timezone"):
+        current = ZoneInfo(provenance["timezone"])
+        same = all(moment.astimezone(zone).utcoffset() == moment.astimezone(current).utcoffset()
+                   for moment in (report.period_start, report.period_end))
+        if same and provenance.get("source") == "zont":
+            return f"Часовой пояс: {label} · настройки ZONT"
+        if same and provenance.get("source") == "configuration_fallback":
+            return f"Часовой пояс: {label} · резервная настройка ZontAnalyzer; пояс ZONT не определён"
+    return f"Часовой пояс: {label} · сохранён при расчёте отчёта ({report.timezone})"
+
+
+LEGACY_DUTY_METRICS = {"burner_duty_cycle_pct", "dhw_burner_duty_cycle_pct"}
+
+
+def burner_usage_rows(report: Report) -> list[tuple[str, str]]:
+    from zont_analyzer.analytics.burner_usage import burner_usage
+
+    gas = report.context.get("gas")
+    if not isinstance(gas, dict):
+        return []
+    usage = burner_usage(gas, (report.period_end - report.period_start).total_seconds() / 3600)
+    flame = gas.get("flame_hours")
+    value = (
+        f"{_gas_value(flame, 'ч')} за {number(usage['period_hours'], 'ч')} периода; "
+        f"{_gas_value(usage['flame_pct'], '%')} от всего периода"
+        if usage["flame_pct"] is not None else "Нет данных о горении"
+    )
+    rows = [("Время работы горелки", value)]
+    for key, label in (("heating", "Доля горения на отопление"),
+                       ("dhw", "Доля горения на ГВС"),
+                       ("purpose_unknown", "Доля горения с неопределённым назначением")):
+        percent = usage[f"{key}_flame_pct"]
+        share = (f"{_gas_value(percent, '%')} от времени горения"
+                 if percent is not None else "Не применимо: горения не было" if flame == 0 else "Нет данных")
+        rows.append((label, f"{share}; {_gas_value(gas.get(f'{key}_flame_hours'), 'ч')}"))
+    unknown = usage["unobserved_hours"]
+    if unknown is None or unknown > 1 / 3600:
+        rows.append(("Пробелы наблюдения за горелкой",
+                     f"{_gas_value(unknown, 'ч')}. Указано только наблюдавшееся горение; "
+                     "в пробелах работа горелки неизвестна. Доли по назначению относятся к наблюдавшемуся горению."))
+    return rows
+
+
 def metric_groups(report: Report, missing_mttr: str | None) -> str:
     from .renderers import _metric_display, _metric_label
 
     groups: dict[str, list[str]] = {k: [] for k in ("Комфорт", "Отопление", "ГВС", "Надёжность", "Качество данных")}
     for m in report.metrics:
+        if m.name in LEGACY_DUTY_METRICS:
+            continue
         group = (
             "ГВС"
             if m.name.startswith("dhw_")
@@ -356,33 +409,10 @@ def metric_groups(report: Report, missing_mttr: str | None) -> str:
             + debug(m.model_dump(), "Метрика / evidence")
             + f"</th><td>{esc(value)} {esc(unit)}</td></tr>"
         )
-    gas = report.context.get("gas")
-    if isinstance(gas, dict):
-        flame_hours = gas.get("flame_hours")
-        observed_hours = gas.get("observed_hours")
-        flame_pct = gas.get("flame_pct")
-        if isinstance(flame_hours, (int, float)) and not isinstance(flame_hours, bool):
-            denominator = (
-                f" за {observed_hours:g} ч наблюдений"
-                if isinstance(observed_hours, (int, float)) and not isinstance(observed_hours, bool)
-                else ""
-            )
-            percent = (
-                f"; {_gas_value(flame_pct, '%')} от наблюдаемого времени"
-                if isinstance(flame_pct, (int, float)) and not isinstance(flame_pct, bool)
-                else ""
-            )
-            groups["Отопление"].append(
-                '<tr><th scope="row">Время работы горелки</th>'
-                f'<td>{esc(_gas_value(flame_hours, "ч"))}{esc(denominator)}{esc(percent)}</td></tr>'
-            )
-            for key, label in (("heating_flame_hours", "Горение в режиме отопления"),
-                               ("dhw_flame_hours", "Горение в режиме ГВС"),
-                               ("purpose_unknown_flame_hours", "Горение с неопределённым назначением")):
-                if isinstance(gas.get(key), (int, float)):
-                    groups["Отопление"].append(
-                        f'<tr><th scope="row">{label}</th><td>{esc(_gas_value(gas[key], "ч"))}</td></tr>'
-                    )
+    for label, value in burner_usage_rows(report):
+        groups["Отопление"].append(
+            f'<tr><th scope="row">{esc(label)}</th><td>{esc(value)}</td></tr>'
+        )
     if missing_mttr:
         groups["Надёжность"].append(
             f'<tr><th scope="row">MTTR котельного сервиса</th><td>Нет достоверных данных. {esc(missing_mttr)}</td></tr>'
