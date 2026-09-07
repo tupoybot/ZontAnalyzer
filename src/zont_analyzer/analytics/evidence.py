@@ -6,6 +6,7 @@ does not diagnose a heating system from those measurements.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -16,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ALGORITHM_VERSION = "heating-evidence-v1"
+ALGORITHM_VERSION = "heating-evidence-v2"
 MAX_PACKET_BYTES = 40_000
 MAX_SIGNAL_SERIES = 24
 
@@ -36,6 +37,7 @@ class SignalMetadata:
     unit: str
     origin: Literal["observed", "derived"] = "observed"
     provenance: str = "unknown"
+    value_kind: Literal["measurement", "setpoint"] = "measurement"
     role: Literal[
         "control_temperature",
         "target_temperature",
@@ -62,6 +64,7 @@ class SignalSeries:
     key: str
     metadata: SignalMetadata
     samples: tuple[NumericSample, ...]
+    unknown_at: tuple[datetime, ...] = ()
 
 
 @dataclass(frozen=True, order=True)
@@ -224,6 +227,7 @@ def build_evidence(
             "origin": series.metadata.origin,
             "provenance": series.metadata.provenance,
             "role": series.metadata.role,
+            "value_kind": series.metadata.value_kind,
         }
         for key, series in ordered_signals.items()
     }
@@ -346,6 +350,7 @@ def _normalise_series(series: SignalSeries) -> SignalSeries:
         origin=series.metadata.origin,
         provenance=_safe_text(series.metadata.provenance, 160),
         role=series.metadata.role,
+        value_kind=series.metadata.value_kind,
     )
     return SignalSeries(
         _safe_text(series.key, 96),
@@ -353,8 +358,9 @@ def _normalise_series(series: SignalSeries) -> SignalSeries:
         tuple(
             NumericSample(timestamp, next(iter(values[timestamp])))
             for timestamp in sorted(values)
-            if len(values[timestamp]) == 1
+            if len(values[timestamp]) == 1 and timestamp not in series.unknown_at
         ),
+        tuple(sorted(set(series.unknown_at) | {ts for ts, variants in values.items() if len(variants) > 1})),
     )
 
 
@@ -409,6 +415,17 @@ def _cadence_seconds(samples: tuple[NumericSample, ...]) -> float:
     return max(60.0, median(gaps) * 3) if gaps else 0.0
 
 
+def _usable_until(series: SignalSeries, sample: NumericSample, end: datetime, cadence: float) -> datetime:
+    """A setpoint holds until changed/unknown; only measurements expire by cadence."""
+    limit = end
+    if series.metadata.value_kind == "measurement":
+        limit = min(limit, sample.timestamp + timedelta(seconds=cadence))
+    index = bisect_left(series.unknown_at, sample.timestamp)
+    if index < len(series.unknown_at):
+        limit = min(limit, series.unknown_at[index])
+    return limit
+
+
 def _statistic(
     series: SignalSeries,
     start: datetime,
@@ -416,12 +433,13 @@ def _statistic(
     transform: Callable[[float], float] | None = None,
 ) -> EvidenceStatistic:
     samples = series.samples
-    cadence = _cadence_seconds(samples)
-    if not samples or cadence <= 0:
+    cadence = _cadence_seconds(samples) if series.metadata.value_kind == "measurement" else 0.0
+    if not samples:
         return EvidenceStatistic(coverage_pct=0, sample_count=0, source="derived")
     points = [sample for sample in samples if start <= sample.timestamp <= end]
     previous = next((sample for sample in reversed(samples) if sample.timestamp < start), None)
-    timeline = [start] + [sample.timestamp for sample in points if start < sample.timestamp < end] + [end]
+    timeline = sorted({start, end, *(sample.timestamp for sample in points if start < sample.timestamp < end),
+                       *(at for at in series.unknown_at if start < at < end)})
     weighted = 0.0
     observed = 0.0
     values: list[float] = []
@@ -434,7 +452,7 @@ def _statistic(
             point_index += 1
         if current is None:
             continue
-        usable_end = min(right, current.timestamp + timedelta(seconds=cadence))
+        usable_end = _usable_until(series, current, right, cadence)
         seconds = max(0.0, (usable_end - left).total_seconds())
         if seconds:
             value = transform(current.value) if transform else current.value
@@ -443,7 +461,8 @@ def _statistic(
             values.append(value)
             weights.append(seconds)
     latest = next((sample for sample in reversed(samples) if sample.timestamp <= end), None)
-    stale = (end - latest.timestamp).total_seconds() if latest is not None else None
+    stale = ((end - latest.timestamp).total_seconds()
+             if latest is not None and series.metadata.value_kind == "measurement" else None)
     first = values[0] if values else None
     last = values[-1] if values else None
     duration_hours = (end - start).total_seconds() / 3600
@@ -481,10 +500,9 @@ def _derived_statistic(
     boundaries.update(sample.timestamp for sample in right.samples if start < sample.timestamp < end)
     boundaries.update(item.start for item in exclusions if start < item.start < end)
     boundaries.update(item.end for item in exclusions if start < item.end < end)
-    left_cadence = _cadence_seconds(left.samples)
-    right_cadence = _cadence_seconds(right.samples)
-    if not left_cadence or not right_cadence:
-        return EvidenceStatistic(coverage_pct=0, sample_count=0, source="derived")
+    boundaries.update(at for at in (*left.unknown_at, *right.unknown_at) if start < at < end)
+    left_cadence = _cadence_seconds(left.samples) if left.metadata.value_kind == "measurement" else 0.0
+    right_cadence = _cadence_seconds(right.samples) if right.metadata.value_kind == "measurement" else 0.0
     left_value = _value_before(left.samples, start)
     right_value = _value_before(right.samples, start)
     left_points = iter(sample for sample in left.samples if start <= sample.timestamp < end)
@@ -505,8 +523,8 @@ def _derived_statistic(
             continue
         fresh_until = min(
             window_end,
-            left_value.timestamp + timedelta(seconds=left_cadence),
-            right_value.timestamp + timedelta(seconds=right_cadence),
+            _usable_until(left, left_value, window_end, left_cadence),
+            _usable_until(right, right_value, window_end, right_cadence),
         )
         seconds = (
             0.0

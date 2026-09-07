@@ -189,7 +189,9 @@ def test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild(tm
     r, store, reports = history(tmp_path)
     for report in reports:
         path, digest = chart_data._cache_path(r.db, report)
-        chart_data._atomic_write_json(path, {'schema_version': 1, 'report_digest': digest, 'data': {'series': {}}})
+        chart_data._atomic_write_json(path, {
+            'schema_version': chart_data.CHART_DATA_SCHEMA_VERSION, 'report_digest': digest, 'data': {'series': {}},
+        })
     store.update_gas(reports[0].id, {'value_m3': 100})
     store.update_gas(reports[2].id, {'value_m3': 292})
 

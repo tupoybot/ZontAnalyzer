@@ -61,9 +61,13 @@ def hero(report: Report) -> str:
         if any(phrase in report.summary.lower() for phrase in normal):
             title, state = "Система работает штатно", "success"
     summary = report.summary
+    correction = (
+        '<p class="chart-note">Расчёты уставок обновлены. Текст AI сохранён из предыдущей версии отчёта.</p>'
+        if report.ai_used and report.context.get("setpoint_recalculation") else ""
+    )
     return (
         f'<section class="hero {state}"><span class="eyebrow">СОСТОЯНИЕ СИСТЕМЫ</span>'
-        f'<h1>{esc(title)}</h1><p class="lead">{esc(summary)}</p></section>'
+        f'<h1>{esc(title)}</h1><p class="lead">{esc(summary)}</p>{correction}</section>'
     )
 
 

@@ -90,7 +90,7 @@ def install_chart_cache(database: Path, source: Path) -> int:
             raise ValueError('unexpected chart cache member')
         content = path.read_bytes()
         packet = json.loads(content)
-        if (not isinstance(packet, dict) or packet.get('schema_version') != 1
+        if (not isinstance(packet, dict) or packet.get('schema_version') != 2
                 or not isinstance(packet.get('data'), dict)
                 or packet.get('report_digest') != expected.get(path.stem)):
             raise ValueError('chart cache does not match accepted report: '+path.name)

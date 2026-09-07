@@ -92,6 +92,17 @@ def test_episode_uses_target_that_was_active_at_its_start() -> None:
     assert episode.details["facts"]["recovery_minutes"] == 5
 
 
+def test_dhw_target_none_stops_evaluation_until_next_known_state() -> None:
+    result = _base_analysis(
+        dhw_target_samples=[(_at(0), 55.0), (_at(7), None), (_at(13), 55.0)],
+    )
+
+    # Temperature is continuously measured to minute 35.  The two explicit
+    # target states evaluate [0, 7) and [13, 35), while [7, 13) is unknown.
+    assert _metrics(result)["dhw_target_evaluation_time_pct"] == 72.5
+    assert result.context["dhw_circuit"]["current_target_c"] == 55.0
+
+
 def test_selected_mode_can_disable_dhw_and_excludes_below_target_time() -> None:
     result = _base_analysis(
         boiler_state_samples=[(_at(0), "[]"), (_at(5), "[]"), (_at(10), "[]")],

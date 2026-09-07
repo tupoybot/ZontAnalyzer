@@ -7,7 +7,6 @@ import json
 import logging
 from collections.abc import Collection
 from datetime import UTC, date, datetime, time, timedelta
-from statistics import median
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -39,6 +38,7 @@ from zont_analyzer.analytics.evidence import (
     StateSample,
     build_evidence,
 )
+from zont_analyzer.analytics.series_semantics import is_setpoint_series
 from zont_analyzer.application.ingestion import _object_names, heating_circuit_sensor_links
 from zont_analyzer.application.reasoning_context import reasoning_context, reasoning_payload
 from zont_analyzer.config import AppConfig
@@ -383,7 +383,9 @@ class AnalysisService:
             self.db.fetch_samples(int(quality_series["id"]), start, end) if quality_series else burner_samples
         )
         quality = assess_quality(quality_samples, start, end)
-        target_samples = self.db.fetch_samples(int(target_series["id"]), start, end) if target_series else []
+        target_samples = (self.db.fetch_numeric_observations(
+            int(target_series["id"]), start, end, include_previous=True,
+        ) if target_series else [])
         mode_samples = self.db.fetch_samples(int(mode_series["id"]), start, end) if mode_series else []
         circuit_id = str(target_series["entity_id"]).rsplit(":", 1)[-1] if target_series else ""
         device_id = str(target_series["device_id"]) if target_series else ""
@@ -471,7 +473,9 @@ class AnalysisService:
             self.db.fetch_samples(int(dhw_temperature_series["id"]), start, end) if dhw_temperature_series else []
         )
         dhw_target_samples = (
-            self.db.fetch_samples(int(dhw_target_series["id"]), context_start, end) if dhw_target_series else []
+            self.db.fetch_numeric_observations(
+                int(dhw_target_series["id"]), context_start, end, include_previous=True,
+            ) if dhw_target_series else []
         )
         dhw_mode_samples = (
             self.db.fetch_samples(int(dhw_mode_series["id"]), context_start, end) if dhw_mode_series else []
@@ -488,7 +492,9 @@ class AnalysisService:
             else []
         )
         heating_target_context_samples = (
-            self.db.fetch_samples(int(target_series["id"]), context_start, end) if target_series else []
+            self.db.fetch_numeric_observations(
+                int(target_series["id"]), context_start, end, include_previous=True,
+            ) if target_series else []
         )
         interaction_state_samples: list[tuple[datetime, str | Collection[str]]] = list(
             self.db.fetch_text_samples(int(boiler_state_series["id"]), context_start, end)
@@ -501,8 +507,8 @@ class AnalysisService:
             availability_by_time[inactive_end] = True
         heating_available_samples = sorted(availability_by_time.items())
         target_c = self.config.preferences.target_temperature_c
-        if target_c is None and target_series and target_samples:
-            target_c = median(value for _timestamp, value in target_samples)
+        # Historical setpoints are states. Never use their median as a target
+        # before the first known state or during an explicit unknown interval.
         effective_target_samples = [] if self.config.preferences.target_temperature_c is not None else target_samples
         metrics = temperature_metrics(
             temperature_samples,
@@ -901,15 +907,20 @@ class AnalysisService:
                 continue
             item = selected
             role: Any = "room" if key.startswith("room:") else "other" if key.startswith("setting:") else key
+            is_setpoint = is_setpoint_series(str(item["source_type"]), str(item["metric_key"]))
+            observations = self.db.fetch_numeric_observations(
+                int(item["id"]), lookback, end, include_previous=is_setpoint,
+            )
             signals.append(SignalSeries(
                 key=key,
                 metadata=SignalMetadata(
                     identity=identity(item), display_name=str(item.get("display_name") or item["entity_id"]),
                     unit=str(item.get("unit") or "state"), role=role,
                     provenance=f"{item.get('origin', item['source_type'])}; {item.get('provenance', 'unknown')}",
+                    value_kind="setpoint" if is_setpoint else "measurement",
                 ),
-                samples=tuple(NumericSample(timestamp, value)
-                              for timestamp, value in self.db.fetch_samples(int(item["id"]), lookback, end)),
+                samples=tuple(NumericSample(ts, value) for ts, value in observations if value is not None),
+                unknown_at=tuple(timestamp for timestamp, value in observations if value is None),
             ))
         exclusions = [
             *[ExclusionWindow(left, right, "transition") for left, right in transition_windows],

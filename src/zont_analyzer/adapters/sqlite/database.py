@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 import sqlite3
 import uuid
@@ -632,6 +633,34 @@ class Database:
                 .order_by(TelemetrySampleRow.timestamp_utc)
             )
             return [(datetime.fromtimestamp(ts, UTC), float(value)) for ts, value in session.execute(query).all()]
+
+    def fetch_numeric_observations(
+        self, series_id: int, start: datetime, end: datetime, *, include_previous: bool = False,
+    ) -> list[tuple[datetime, float | None]]:
+        """Read numeric states without erasing explicit unknown/invalid markers."""
+        with self.session() as session:
+            rows = list(session.execute(
+                select(TelemetrySampleRow.timestamp_utc, TelemetrySampleRow.value_num, TelemetrySampleRow.quality)
+                .where(
+                    TelemetrySampleRow.series_id == series_id,
+                    TelemetrySampleRow.timestamp_utc >= int(start.timestamp()),
+                    TelemetrySampleRow.timestamp_utc < int(end.timestamp()),
+                ).order_by(TelemetrySampleRow.timestamp_utc)
+            ).all())
+            if include_previous:
+                previous = session.execute(
+                    select(TelemetrySampleRow.timestamp_utc, TelemetrySampleRow.value_num, TelemetrySampleRow.quality)
+                    .where(TelemetrySampleRow.series_id == series_id,
+                           TelemetrySampleRow.timestamp_utc < int(start.timestamp()))
+                    .order_by(TelemetrySampleRow.timestamp_utc.desc()).limit(1)
+                ).first()
+                if previous is not None:
+                    rows.insert(0, previous)
+            return [
+                (datetime.fromtimestamp(ts, UTC),
+                 float(value) if quality == "valid" and value is not None and math.isfinite(value) else None)
+                for ts, value, quality in rows
+            ]
 
     def fetch_text_samples(self, series_id: int, start: datetime, end: datetime) -> list[tuple[datetime, str]]:
         with self.session() as session:

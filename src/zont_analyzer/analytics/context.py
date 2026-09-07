@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -264,7 +265,7 @@ def _near_mode_selection_schedule(timestamp: datetime, mode: dict[str, Any], tim
 def detect_control_context(
     *,
     mode_samples: list[tuple[datetime, float]],
-    target_samples: list[tuple[datetime, float]],
+    target_samples: Sequence[tuple[datetime, float | None]],
     mode_catalog: dict[int, dict[str, Any]],
     period_id: str,
     timezone: str,
@@ -309,7 +310,9 @@ def detect_control_context(
 
     previous_target: float | None = None
     for timestamp, target in ordered_targets:
-        if previous_target is not None and abs(target - previous_target) > 0.01:
+        # An unknown value is loss of knowledge, not a manual target change.
+        changed = target is not None and previous_target is not None and abs(target - previous_target) > 0.01
+        if changed:
             target_mode_id = _mode_at(ordered_modes, timestamp)
             mode = mode_catalog.get(target_mode_id) if target_mode_id is not None else None
             follows_mode_change = any(
@@ -331,8 +334,8 @@ def detect_control_context(
                     severity="info",
                     details={
                         "source": source,
-                        "from_target_c": round(previous_target, 3),
-                        "to_target_c": round(target, 3),
+                        "from_target_c": round(previous_target, 3) if previous_target is not None else None,
+                        "to_target_c": round(target, 3) if target is not None else None,
                         "mode_id": target_mode_id,
                         "mode_name": mode.get("name") if mode else None,
                     },

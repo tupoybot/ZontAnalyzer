@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from zont_analyzer.analytics.events import detect_burner_events
+from zont_analyzer.analytics.events import detect_burner_events, detect_temperature_events
 from zont_analyzer.analytics.flame import detect_unconfirmed_burner_pulses
 from zont_analyzer.analytics.metrics import burner_metrics, temperature_metrics
 from zont_analyzer.analytics.quality import assess_quality
@@ -28,6 +28,93 @@ def test_temperature_metrics_are_time_weighted() -> None:
     assert by_name["degree_hours_above_target"].value == pytest.approx(50 / 60, abs=0.001)
     assert by_name["degree_hours_above_target"].unit == "°C·h"
     assert "degree_minutes_above_target" not in by_name
+
+
+def test_target_history_is_stateful_and_none_invalidates_it() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    samples = [(start + timedelta(hours=hour), 20.0) for hour in range(5)]
+    metrics = temperature_metrics(
+        samples,
+        period_id="setpoint-state",
+        target_c=22.0,
+        comfort_band_c=0.5,
+        # The fallback current target must not leak into the first hour; None
+        # invalidates the target for the third hour.
+        target_samples=[
+            (start + timedelta(hours=1), 21.0),
+            (start + timedelta(hours=2), None),
+            (start + timedelta(hours=3), 20.0),
+        ],
+    )
+
+    by_name = {item.name: item.value for item in metrics}
+    assert by_name["heating_target_evaluation_time_pct"] == 50
+    assert by_name["time_in_target_band_pct"] == 50
+    assert by_name["time_below_target_band_pct"] == 50
+
+
+def test_constant_target_does_not_bridge_a_sensor_outage() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    samples = [
+        (start, 20.0),
+        (start + timedelta(minutes=10), 20.0),
+        (start + timedelta(minutes=20), 20.0),
+        (start + timedelta(hours=8), 20.0),
+        (start + timedelta(hours=8, minutes=10), 20.0),
+    ]
+    metrics = temperature_metrics(
+        samples,
+        period_id="outage",
+        target_c=None,
+        comfort_band_c=0.5,
+        target_samples=[(start, 20.0)],
+    )
+
+    by_name = {item.name: item.value for item in metrics}
+    # The single user-set target is valid throughout; the generic sensor gap
+    # rule still excludes the eight-hour missing-temperature interval.
+    assert by_name["heating_target_evaluation_time_pct"] == 100
+
+
+def test_unknown_target_ends_temperature_event_before_next_sensor_sample() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    events = detect_temperature_events(
+        [(start, 24.0), (start + timedelta(hours=2), 24.0)],
+        period_id="target-null-event",
+        target_c=None,
+        comfort_band_c=0.5,
+        target_samples=[(start, 20.0), (start + timedelta(hours=1), None)],
+    )
+
+    assert len(events) == 1
+    assert events[0].ended_at == start + timedelta(hours=1)
+
+
+def test_repeated_polled_setpoint_is_equivalent_to_one_state_transition() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    temperatures = [(start + timedelta(minutes=10 * item), 24.0) for item in range(5)]
+    sparse = [(start, 20.0)]
+    repeated = [(start + timedelta(minutes=item), 20.0) for item in range(500)]
+
+    sparse_events = detect_temperature_events(
+        temperatures, period_id="sparse-target", target_c=None, comfort_band_c=0.5, target_samples=sparse
+    )
+    repeated_events = detect_temperature_events(
+        temperatures, period_id="repeated-target", target_c=None, comfort_band_c=0.5, target_samples=repeated
+    )
+    sparse_metrics = temperature_metrics(
+        temperatures, period_id="sparse-target", target_c=None, comfort_band_c=0.5, target_samples=sparse
+    )
+    repeated_metrics = temperature_metrics(
+        temperatures, period_id="repeated-target", target_c=None, comfort_band_c=0.5, target_samples=repeated
+    )
+
+    assert len(sparse_events) == len(repeated_events) == 1
+    assert sparse_events[0].started_at == repeated_events[0].started_at
+    assert sparse_events[0].ended_at == repeated_events[0].ended_at
+    assert [(item.name, item.value) for item in sparse_metrics] == [
+        (item.name, item.value) for item in repeated_metrics
+    ]
 
 
 def test_quality_flags_large_gaps() -> None:

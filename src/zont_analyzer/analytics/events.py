@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from statistics import median
 
 from zont_analyzer.domain import DetectedEvent
+
+
+def _target_transitions(
+    samples: Sequence[tuple[datetime, float | None]],
+) -> list[tuple[datetime, float | None]]:
+    ordered = sorted({timestamp: value for timestamp, value in samples}.items())
+    result: list[tuple[datetime, float | None]] = []
+    seen = False
+    previous: float | None = None
+    for timestamp, value in ordered:
+        if not seen or value != previous:
+            result.append((timestamp, value))
+            previous = value
+            seen = True
+    return result
 
 
 def _maximum_continuous_gap(samples: list[tuple[datetime, float]]) -> float:
@@ -21,10 +37,10 @@ def detect_temperature_events(
     period_id: str,
     target_c: float | None,
     comfort_band_c: float,
-    target_samples: list[tuple[datetime, float]] | None = None,
+    target_samples: Sequence[tuple[datetime, float | None]] | None = None,
     ignore_windows: list[tuple[datetime, datetime]] | None = None,
 ) -> list[DetectedEvent]:
-    ordered_targets = sorted(target_samples or [])
+    ordered_targets = _target_transitions(target_samples or [])
     if target_c is None and not ordered_targets:
         return []
     ordered = sorted(samples)
@@ -35,22 +51,51 @@ def detect_temperature_events(
     previous_timestamp: datetime | None = None
     maximum_gap = _maximum_continuous_gap(ordered)
     target_index = 0
-    current_target = target_c
+    # Historical setpoints are state transitions.  A supplied history must not
+    # use the current target as an invented value before its first observation.
+    current_target: float | None = target_c if not ordered_targets else None
+
+    def close_active(ended_at: datetime) -> None:
+        nonlocal active_kind, active_start, peak
+        if active_kind and active_start:
+            events.append(
+                DetectedEvent(
+                    id=f"event:{period_id}:{active_kind}:{int(active_start.timestamp())}:events-v2",
+                    kind=active_kind,
+                    started_at=active_start,
+                    ended_at=ended_at,
+                    severity="warning" if peak > comfort_band_c * 2 else "info",
+                    details={"peak_error_c": round(peak, 3)},
+                )
+            )
+        active_kind = None
+        active_start = None
+        peak = 0.0
+
     for timestamp, value in ordered:
+        if previous_timestamp is not None and (timestamp - previous_timestamp).total_seconds() > maximum_gap:
+            close_active(previous_timestamp)
+        # A target transition has a precise time even when temperature samples
+        # are sparse.  Do not let an event claim continuity across a changed or
+        # explicitly unknown setpoint.
+        pending_targets = []
         while target_index < len(ordered_targets) and ordered_targets[target_index][0] <= timestamp:
-            current_target = ordered_targets[target_index][1]
+            pending_targets.append(ordered_targets[target_index])
             target_index += 1
+        if previous_timestamp is not None:
+            changed_at = next(
+                (target_time for target_time, _target in pending_targets if target_time > previous_timestamp),
+                None,
+            )
+            if changed_at is not None:
+                close_active(changed_at)
+        for _target_time, target in pending_targets:
+            current_target = target
         ignored = any(start <= timestamp < end for start, end in (ignore_windows or []))
         if ignored or current_target is None:
-            active_kind = None
-            active_start = None
-            peak = 0.0
+            close_active(timestamp)
             previous_timestamp = timestamp
             continue
-        if previous_timestamp is not None and (timestamp - previous_timestamp).total_seconds() > maximum_gap:
-            active_kind = None
-            active_start = None
-            peak = 0.0
         error = value - current_target
         kind = (
             "temperature_above_heating_setpoint"
@@ -61,16 +106,7 @@ def detect_temperature_events(
         )
         if kind != active_kind:
             if active_kind and active_start:
-                events.append(
-                    DetectedEvent(
-                        id=f"event:{period_id}:{active_kind}:{int(active_start.timestamp())}:events-v2",
-                        kind=active_kind,
-                        started_at=active_start,
-                        ended_at=timestamp,
-                        severity="warning" if peak > comfort_band_c * 2 else "info",
-                        details={"peak_error_c": round(peak, 3)},
-                    )
-                )
+                close_active(timestamp)
             active_kind = kind
             active_start = timestamp if kind else None
             peak = abs(error) if kind else 0.0
@@ -78,16 +114,7 @@ def detect_temperature_events(
             peak = max(peak, abs(error))
         previous_timestamp = timestamp
     if active_kind and active_start and ordered:
-        events.append(
-            DetectedEvent(
-                id=f"event:{period_id}:{active_kind}:{int(active_start.timestamp())}:events-v2",
-                kind=active_kind,
-                started_at=active_start,
-                ended_at=ordered[-1][0],
-                severity="warning" if peak > comfort_band_c * 2 else "info",
-                details={"peak_error_c": round(peak, 3)},
-            )
-        )
+        close_active(ordered[-1][0])
     return events
 
 

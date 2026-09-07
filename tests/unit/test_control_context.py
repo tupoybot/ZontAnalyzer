@@ -146,6 +146,21 @@ def test_dynamic_target_metrics_and_transition_window() -> None:
     assert events[0].started_at == start + timedelta(hours=3)
 
 
+def test_control_context_marks_explicitly_unknown_target() -> None:
+    start = datetime(2026, 8, 3, tzinfo=UTC)
+    events, context, _windows = detect_control_context(
+        mode_samples=[(start, 10)],
+        target_samples=[(start, 21.0), (start + timedelta(hours=1), None)],
+        mode_catalog=build_mode_catalog(_devices(), device_id="1", circuit_id="200"),
+        period_id="unknown-target",
+        timezone="UTC",
+    )
+
+    assert not [event for event in events if event.kind == "target_temperature_change"]
+    assert context["current_target_c"] is None
+    assert _windows == []
+
+
 def test_automatic_summer_state_is_independent_from_selected_mode() -> None:
     start = datetime(2026, 8, 3, tzinfo=UTC)
     catalog = build_mode_catalog(_devices(), device_id="1", circuit_id="200")

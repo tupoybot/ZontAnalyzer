@@ -131,3 +131,9 @@ def test_detailed_metrics_follow_physical_scope_in_every_report_kind():
         report.metrics[-1].context["activity_scope"] = "space_heating_only"
         scoped = metric_groups(report, None).split('<details class="metric-group">')[1]
         assert "Запуски горелки на отопление" in scoped
+
+
+def test_recalculated_setpoints_do_not_claim_ai_was_regenerated():
+    report = fixture_report().model_copy(update={"ai_used": True})
+    report.context["setpoint_recalculation"] = {"version": "setpoints-v1"}
+    assert "Текст AI сохранён из предыдущей версии отчёта" in render_html(report)

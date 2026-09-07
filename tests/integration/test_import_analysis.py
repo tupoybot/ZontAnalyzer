@@ -56,7 +56,7 @@ def test_prebuilt_chart_cache_is_guarded_and_idempotent(tmp_path):
     source = tmp_path/'prepared'
     source.mkdir()
     name = hashlib.sha256(report.id.encode()).hexdigest()+'.json'
-    packet = {'schema_version': 1, 'report_digest': hashlib.sha256(canonical.encode()).hexdigest(),
+    packet = {'schema_version': 2, 'report_digest': hashlib.sha256(canonical.encode()).hexdigest(),
               'data': {'series': {}, 'timezone': 'UTC'}}
     path = source/name
     path.write_text(json.dumps(packet))
