@@ -120,6 +120,10 @@ def test_full_accounting_interval_is_measured_with_day_precision_not_daily_inter
     gas = service.context(reports[0].period_start, reports[2].period_start)
     assert gas['status'] == 'measured' and gas['volume_m3'] == 192
     assert gas['scope'] == 'whole_meter' and gas['measurement_time_precision'] == 'day'
+    split = gas['purpose_split']
+    assert split['scope'] == 'modelled_boiler'
+    assert split['total_modelled_m3'] is not None
+    assert split['components']['heating']['volume_m3'] is not None
     daily = service.context(reports[1].period_start, reports[1].period_end)
     assert daily['status'] != 'measured'
     assert len(service.readings) == 2
@@ -189,7 +193,9 @@ def test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild(tm
     r, store, reports = history(tmp_path)
     for report in reports:
         path, digest = chart_data._cache_path(r.db, report)
-        chart_data._atomic_write_json(path, {'schema_version': 1, 'report_digest': digest, 'data': {'series': {}}})
+        chart_data._atomic_write_json(path, {
+            'schema_version': chart_data.CHART_DATA_SCHEMA_VERSION, 'report_digest': digest, 'data': {'series': {}},
+        })
     store.update_gas(reports[0].id, {'value_m3': 100})
     store.update_gas(reports[2].id, {'value_m3': 292})
 
@@ -199,3 +205,19 @@ def test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild(tm
     monkeypatch.setattr(chart_data, 'build_chart_data', forbidden)
     r.config.pilot.reports_dir = str(tmp_path/'publish')
     assert publish_reports(r)['reports'] == len(reports)
+
+
+def test_gas_context_holds_old_setpoint_until_explicit_unknown(tmp_path: Path):
+    import pytest
+
+    r = build_runtime(None, tmp_path)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    points = [TelemetryPoint(device_id='1', entity_id='circuit', source_type='z3k_heating_circuit',
+                             metric_key='target_temp', timestamp_utc=stamp, value_num=value)
+              for stamp, value in [(start-timedelta(days=3), 22.0),
+                                   (start+timedelta(hours=1), None),
+                                   (start+timedelta(hours=2), 24.0)]]
+    r.db.upsert_samples(points, roles={'circuit': 'target_temperature'})
+    window = GasService(r.db, r.config).window(start, start+timedelta(hours=3))
+    assert window['target_hours'] == pytest.approx(2)
+    assert window['target_degree_hours'] == pytest.approx(46)

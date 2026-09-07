@@ -60,26 +60,20 @@ try {
   await page.locator('[data-archive-month="next"]').click();
   assert.equal(page.url(), beforeMonthArrow, "month arrows never navigate the report");
 
-  await page.locator('[data-archive-kind="weekly"]').click();
-  const weekly = page.locator(".archive-periods a");
-  await assert.equal(await weekly.count(), 3);
-  await assert.match(await weekly.first().textContent(), /27 июля 2026.*3 августа 2026/s);
-  await weekly.first().click();
-  await page.waitForURL("**/weekly/2026-07-27.html");
-
-  await page.locator('[data-archive-kind="monthly"]').click();
-  const monthly = page.locator(".archive-periods a");
-  await assert.equal(await monthly.count(), 3);
-  await assert.match(await monthly.first().textContent(), /1 июля 2026.*1 августа 2026/s);
-  await monthly.first().click();
-  await page.waitForURL("**/monthly/2026-07-01.html");
-
-  await page.locator('[data-archive-kind="seasonal"]').click();
-  const seasonal = page.locator(".archive-periods a");
-  await assert.equal(await seasonal.count(), 3);
-  await assert.match(await seasonal.first().textContent(), /осень/i);
-  await seasonal.first().click();
-  await page.waitForURL("**/seasonal/2026-09-01.html");
+  // Changing report kind opens its newest publication with the picker closed.
+  for (const prefix of ["/", "/za/"]) {
+    await page.setViewportSize({width: prefix === "/" ? 1280 : 390, height: 900});
+    await page.goto(`${baseURL}${prefix}daily/2026-08-01.html`, {waitUntil: "networkidle"});
+    for (const [kind, date] of [["weekly", "2026-07-27"], ["monthly", "2026-07-01"],
+      ["seasonal", "2026-09-01"], ["daily", "2026-08-05"]]) {
+      await page.locator('[data-archive-kind="' + kind + '"]').click();
+      await page.waitForURL(`${baseURL}${prefix}${kind}/${date}.html`, {waitUntil: "networkidle"});
+      assert.equal(await page.locator(".archive-picker").getAttribute("open"), null);
+      assert.equal(await page.locator('[data-archive-kind="' + kind + '"]').getAttribute("aria-selected"), "true");
+      await page.locator(".archive-picker > summary").click();
+      assert.equal(await page.locator(kind === "daily" ? ".archive-day.available" : ".archive-periods a").count(), 3);
+    }
+  }
 
   // Long-period arrows must follow published neighbours, skipping missing periods.
   for (const prefix of ["/", "/za/"]) {
@@ -121,16 +115,19 @@ try {
   });
   await page.goto(`${baseURL}/weekly/2026-07-27.html`, {waitUntil: "networkidle"});
   await page.locator('[data-archive-kind="seasonal"]').click();
-  for (const action of ["previous", "latest", "next"]) {
-    assert.equal(await page.locator(`[data-archive-action="${action}"]`).isDisabled(), true);
-  }
+  assert.equal(page.url(), `${baseURL}/weekly/2026-07-27.html`, "empty kind keeps current report");
+  assert.equal(await page.locator('[data-archive-kind="weekly"]').getAttribute("aria-selected"), "true");
+  assert.equal(await page.locator(".archive-picker").getAttribute("open"), null);
+  assert.match(await page.locator(".archive-status").textContent(), /Нет опубликованных отчётов/);
   await page.unroute("**/reports.json");
 
   await page.goto(`${baseURL}/daily/2026-08-05.html`, { waitUntil: "networkidle" });
-  const gasCard = page.locator(".gas-period-card");
+  const gasCard = page.locator("#metrics .gas-period-card");
   await gasCard.waitFor();
   assert.match(await gasCard.textContent(), /Расход газа за период/);
-  assert.match(await gasCard.textContent(), /12,3 м³/);
+  assert.match(await gasCard.textContent(), /12,30 м³/);
+  assert.equal(await page.locator('.overview .gas-period-card').count(), 0);
+  assert.match(await page.locator('.gas-reliability').textContent(), /Надёжность/);
   assert.match(await gasCard.textContent(), /Индекс надёжности/);
   assert.match(await gasCard.textContent(), /Модель: gas-browser-1/);
   assert.match(await gasCard.textContent(), /Объяснение AI устарело/);
@@ -187,13 +184,17 @@ try {
   const hoverColors = await editGas.evaluate(n => ({color:getComputedStyle(n).color, background:getComputedStyle(n).backgroundColor}));
   assert.equal(hoverColors.color, 'rgb(255, 255, 255)');
   assert.equal(hoverColors.background, 'rgb(57, 75, 96)');
-  assert.equal(await page.locator('.kpi-grid .kpi-uptime-row .kpi').count(), 3);
+  assert.equal(await page.locator('.kpi-grid > .kpi:not(.kpi-gas-strip)').count(), 6);
+  assert.equal(await page.locator('.kpi-grid > .gas-kpi.kpi-gas-strip').count(), 1);
+  assert.equal(await page.locator('.kpi-grid > .kpi-uptime-row').count(), 1);
   const kpiColumns = await page.locator('.kpi-grid').evaluate(grid => {
-    const cells = [...grid.querySelectorAll(':scope > .kpi')].map(n => n.getBoundingClientRect());
-    const uptime = [...grid.querySelectorAll('.kpi-uptime-row .kpi')].map(n => n.getBoundingClientRect());
-    return uptime.every((r, i) => Math.abs(r.x - cells[i].x) < 1 && Math.abs(r.width - cells[i].width) < 1);
+    const cells = [...grid.querySelectorAll(':scope > .kpi:not(.kpi-gas-strip)')]
+      .map(n => n.getBoundingClientRect());
+    return cells.length === 6
+      && [0, 1, 2].every(i => Math.abs(cells[i + 3].x - cells[i].x) < 1)
+      && [0, 1, 2].every(i => Math.abs(cells[i + 3].width - cells[i].width) < 1);
   });
-  assert.equal(kpiColumns, true, 'uptime aligns with the first two KPI columns');
+  assert.equal(kpiColumns, true, 'second KPI row aligns with the temperature cards');
   const profileRequests = [];
   page.on("request", request => {
     if (request.method() === "PUT" && request.url().includes("/equipment/")) profileRequests.push(request.postDataJSON());

@@ -93,6 +93,19 @@ def test_chart_data_gap_marker_is_never_joined_after_decimation() -> None:
     assert "разрывы: 1" in climate
 
 
+def test_explicit_setpoint_packet_does_not_infer_gap_and_renders_step() -> None:
+    rendered = render_charts(_report(), {"gap_policy": "explicit", "series": {
+        "target_temperature": {"points": [
+            {"timestamp": "2026-09-05T00:00:00+00:00", "value": 22},
+            {"timestamp": "2026-09-05T04:00:00+00:00", "value": 22},
+            {"timestamp": "2026-09-05T08:00:00+00:00", "value": 23},
+        ], "interpolation": "step"},
+    }})
+    climate = rendered.split('data-chart="thermal"', 1)[0]
+    assert "разрывы:" not in climate
+    assert climate.count('<path data-role="target_temperature"') == 1
+
+
 def test_requested_panel_can_be_rendered_independently() -> None:
     rendered = render_charts(_report(), panel_ids=("climate",))
 

@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from math import ceil, sqrt
 from typing import Any
 
-ALGORITHM_VERSION = "gas-model-v2"
+ALGORITHM_VERSION = "gas-model-v3"
 DEFAULT_BIN_EDGES = (0.0, 25.0, 50.0, 75.0, 100.0)
 MIN_CALIBRATION_COVERAGE = 0.8
 MIN_ESTIMATE_COVERAGE = 0.8
@@ -67,6 +67,14 @@ class Exposure:
     # Explicit because flame time includes active samples with unknown modulation.
     flame_minutes: float = 0.0
     ambiguous_purpose_minutes: float = 0.0
+    # Purpose exposures retain the modulation mix.  Time shares alone are not a
+    # gas allocation: DHW and heating may run at different modulation ranges.
+    heating_bin_minutes: tuple[float, ...] = ()
+    dhw_bin_minutes: tuple[float, ...] = ()
+    ambiguous_purpose_bin_minutes: tuple[float, ...] = ()
+    heating_unknown_modulation_minutes: float = 0.0
+    dhw_unknown_modulation_minutes: float = 0.0
+    ambiguous_purpose_unknown_modulation_minutes: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -237,6 +245,10 @@ def integrate_exposure(
     edges = _edges(bin_edges)
     bins = [0.0] * (len(edges) - 1)
     unknown = observed = heating = dhw = flame = ambiguous = 0.0
+    heating_bins = [0.0] * (len(edges) - 1)
+    dhw_bins = [0.0] * (len(edges) - 1)
+    ambiguous_bins = [0.0] * (len(edges) - 1)
+    heating_unknown = dhw_unknown = ambiguous_unknown = 0.0
     if end <= start:
         return Exposure(0.0, tuple(bins), 0.0, 0.0)
     for point, minutes in _segments(start, end, samples, max_gap_minutes):
@@ -254,10 +266,21 @@ def integrate_exposure(
         # Purpose is attributed only when the flags identify one exclusive mode.
         if point.heating is True and point.dhw is False:
             heating += minutes
+            purpose_bins, purpose_unknown = heating_bins, "heating"
         elif point.dhw is True and point.heating is False:
             dhw += minutes
+            purpose_bins, purpose_unknown = dhw_bins, "dhw"
         else:
             ambiguous += minutes
+            purpose_bins, purpose_unknown = ambiguous_bins, "ambiguous"
+        if index >= 0:
+            purpose_bins[index] += minutes
+        elif purpose_unknown == "heating":
+            heating_unknown += minutes
+        elif purpose_unknown == "dhw":
+            dhw_unknown += minutes
+        else:
+            ambiguous_unknown += minutes
     return Exposure(
         (end - start).total_seconds() / 60.0,
         tuple(bins),
@@ -267,6 +290,12 @@ def integrate_exposure(
         dhw,
         flame,
         ambiguous,
+        tuple(heating_bins),
+        tuple(dhw_bins),
+        tuple(ambiguous_bins),
+        heating_unknown,
+        dhw_unknown,
+        ambiguous_unknown,
     )
 
 
@@ -905,6 +934,86 @@ def estimate_exposure(
     )
 
 
+def estimate_gas_purpose_split(exposure: Exposure, model: GasModel, estimate: GasEstimate) -> dict[str, Any]:
+    """Allocate *observed* modelled boiler gas by exclusive operating purpose.
+
+    This deliberately does not allocate telemetry gaps.  A meter difference is a
+    whole-meter measurement, so callers must keep it separate from this modelled
+    boiler allocation (including when the period happens to match meter dates).
+    """
+    count = len(model.bin_edges) - 1
+    if model.mean_rate_m3_per_minute is None or len(model.rates_m3_per_minute) != count:
+        return {
+            "scope": "modelled_boiler",
+            "status": "unknown",
+            "total_modelled_m3": estimate.volume_m3,
+            "allocated_observed_m3": None,
+            "unallocated_m3": estimate.estimated_gap_m3,
+            "reasons": ["no_calibrated_rate"],
+            "components": {},
+        }
+    mean_rate = model.mean_rate_m3_per_minute
+
+    lower_rates = model.rate_lower_m3_per_minute or tuple(rate * 0.7 for rate in model.rates_m3_per_minute)
+    upper_rates = model.rate_upper_m3_per_minute or tuple(rate * 1.3 for rate in model.rates_m3_per_minute)
+    mean_spread = max(0.3, model.boundary_relative_uncertainty)
+    mean_low = max(0.0, mean_rate * (1.0 - mean_spread))
+    mean_high = mean_rate * (1.0 + mean_spread)
+    if model.passport_min_m3_per_minute is not None:
+        mean_low = max(model.passport_min_m3_per_minute, mean_low)
+    if model.passport_max_m3_per_minute is not None:
+        mean_high = min(model.passport_max_m3_per_minute, mean_high)
+
+    def component(name: str, bins: tuple[float, ...], unknown: float, flame: float) -> dict[str, Any]:
+        if len(bins) != count:
+            return {"volume_m3": None, "lower_m3": None, "upper_m3": None,
+                    "flame_minutes": flame, "status": "unknown", "reasons": ["invalid_purpose_exposure"]}
+        volume = sum(minutes * rate for minutes, rate in zip(bins, model.rates_m3_per_minute, strict=True))
+        volume += unknown * mean_rate
+        low = sum(minutes * rate for minutes, rate in zip(bins, lower_rates, strict=True)) + unknown * mean_low
+        high = sum(minutes * rate for minutes, rate in zip(bins, upper_rates, strict=True)) + unknown * mean_high
+        reasons: list[str] = []
+        if unknown:
+            reasons.append("extrapolated_unknown_modulation")
+        if any(bins[index] > 0 for index in set((*model.extrapolated_bins, *model.low_support_bins))):
+            reasons.append("extrapolated_modulation_range")
+        return {"volume_m3": volume, "lower_m3": max(0.0, min(low, volume)),
+                "upper_m3": max(volume, high), "flame_minutes": flame,
+                "status": "extrapolated" if reasons else "estimated", "reasons": reasons}
+
+    components = {
+        "heating": component("heating", exposure.heating_bin_minutes, exposure.heating_unknown_modulation_minutes,
+                             exposure.heating_minutes),
+        "dhw": component("dhw", exposure.dhw_bin_minutes, exposure.dhw_unknown_modulation_minutes,
+                         exposure.dhw_minutes),
+        "purpose_unknown": component(
+            "purpose_unknown", exposure.ambiguous_purpose_bin_minutes,
+            exposure.ambiguous_purpose_unknown_modulation_minutes, exposure.ambiguous_purpose_minutes,
+        ),
+    }
+    complete_purpose_exposure = all(item["volume_m3"] is not None for item in components.values())
+    allocated = sum(float(item["volume_m3"]) for item in components.values()) if complete_purpose_exposure else None
+    unallocated = estimate.estimated_gap_m3
+    # The allocation partitions observed flame only.  It must conserve the
+    # modelled total once the explicitly unallocated telemetry gap is included.
+    return {
+        "scope": "modelled_boiler" if model.has_gas_stove is False else "shared_meter_model",
+        "status": (
+            "estimated" if estimate.volume_m3 is not None and complete_purpose_exposure
+            else "partial" if complete_purpose_exposure else "unknown"
+        ),
+        "total_modelled_m3": estimate.volume_m3,
+        "allocated_observed_m3": allocated,
+        "unallocated_m3": unallocated,
+        "components": components,
+        "reasons": list(dict.fromkeys((
+            *( ["telemetry_gap_unallocated"] if unallocated else [] ),
+            *( ["invalid_purpose_exposure"] if not complete_purpose_exposure else [] ),
+            *(model.reasons if model.has_gas_stove is not False else ()),
+        ))),
+    }
+
+
 def estimate_gas(
     start: datetime,
     end: datetime,
@@ -933,4 +1042,5 @@ __all__ = [
     "estimate_gas",
     "fit_intervals",
     "estimate_exposure",
+    "estimate_gas_purpose_split",
 ]

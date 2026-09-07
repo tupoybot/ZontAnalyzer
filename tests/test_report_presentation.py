@@ -96,3 +96,44 @@ def test_periods_share_components_and_keep_empty_states_honest():
         assert "Grafana" not in page
         report.quality.score = 0.2
         assert "Недостаточно данных для оценки" in render_html(report)
+
+
+def test_detailed_metrics_follow_physical_scope_in_every_report_kind():
+    from zont_analyzer.reports.presentation import metric_groups
+
+    cases = {
+        "mean_temperature_c": "Комфорт и отопление",
+        "heating_target_evaluation_time_pct": "Комфорт и отопление",
+        "outdoor_mean_temperature_c": "Погода",
+        "dhw_burner_starts": "ГВС",
+        "dhw_mean_recovery_minutes": "ГВС",
+        "dhw_confirmed_heating_pause_count": "Взаимодействие ГВС и отопления",
+        "dhw_mean_heating_return_delay_minutes": "Взаимодействие ГВС и отопления",
+        "boiler_uptime_seconds": "Надёжность",
+        "unconfirmed_burner_pulse_count": "Качество данных",
+        "unknown_future_metric": "Другие показатели",
+        "burner_starts": "Котёл и горелка",
+    }
+    for kind in ("daily", "weekly", "monthly", "seasonal"):
+        report = fixture_report(kind)
+        report.metrics = [MetricValue(id=name, name=name, value=1, unit="") for name in cases]
+        report.context["gas"] = {"flame_hours": 2, "heating_flame_hours": 1, "dhw_flame_hours": 1,
+                                 "purpose_unknown_flame_hours": 0, "flame_observed_hours": 24}
+        output = metric_groups(report, None)
+        sections = output.split('<details class="metric-group">')[1:]
+        for name, group in cases.items():
+            matching = [section for section in sections if f'"name": "{name}"' in section.replace('&quot;', '"')]
+            assert len(matching) == 1, name
+            assert matching[0].startswith(f"<summary>{group}</summary>"), name
+        boiler = next(section for section in sections if section.startswith("<summary>Котёл и горелка</summary>"))
+        for label in ("Время работы горелки", "Доля горения на отопление", "Доля горения на ГВС"):
+            assert label in boiler
+        report.metrics[-1].context["activity_scope"] = "space_heating_only"
+        scoped = metric_groups(report, None).split('<details class="metric-group">')[1]
+        assert "Запуски горелки на отопление" in scoped
+
+
+def test_recalculated_setpoints_do_not_claim_ai_was_regenerated():
+    report = fixture_report().model_copy(update={"ai_used": True})
+    report.context["setpoint_recalculation"] = {"version": "setpoints-v1"}
+    assert "Текст AI сохранён из предыдущей версии отчёта" in render_html(report)

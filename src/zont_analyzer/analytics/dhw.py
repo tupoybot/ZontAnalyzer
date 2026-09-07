@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -150,13 +150,28 @@ def _dhw_episodes(intervals: list[_StateInterval]) -> list[_Episode]:
     return result
 
 
-def _value_at(samples: list[tuple[datetime, _T]], timestamp: datetime) -> _T | None:
+def _value_at(samples: Sequence[tuple[datetime, _T]], timestamp: datetime) -> _T | None:
     current: _T | None = None
     for sample_time, value in sorted(samples, key=lambda item: item[0]):
         if sample_time > timestamp:
             break
         current = value
     return current
+
+
+def _target_transitions(
+    samples: Sequence[tuple[datetime, float | None]],
+) -> list[tuple[datetime, float | None]]:
+    ordered = sorted({timestamp: value for timestamp, value in samples}.items())
+    result: list[tuple[datetime, float | None]] = []
+    seen = False
+    previous: float | None = None
+    for timestamp, value in ordered:
+        if not seen or value != previous:
+            result.append((timestamp, value))
+            previous = value
+            seen = True
+    return result
 
 
 def _values_between(
@@ -278,7 +293,7 @@ def classify_heating_demand(
     heating_status_samples: list[tuple[datetime, float]] | None = None,
     heating_worktime_samples: list[tuple[datetime, float]] | None = None,
     indoor_temperature_samples: list[tuple[datetime, float]] | None = None,
-    heating_target_samples: list[tuple[datetime, float]] | None = None,
+    heating_target_samples: Sequence[tuple[datetime, float | None]] | None = None,
     comfort_band_c: float = 0.5,
     lookback_minutes: float = 15.0,
 ) -> tuple[HeatingDemand, dict[str, Any]]:
@@ -339,7 +354,7 @@ def _metric(period_id: str, name: str, value: float, unit: str, **context: Any) 
 def _temperature_target_metrics(
     *,
     temperatures: list[tuple[datetime, float]],
-    targets: list[tuple[datetime, float]],
+    targets: Sequence[tuple[datetime, float | None]],
     mode_samples: list[tuple[datetime, float]],
     mode_catalog: dict[int, dict[str, Any]],
     period_start: datetime,
@@ -353,21 +368,26 @@ def _temperature_target_metrics(
         return 0.0, 0.0, 0.0
     maximum_gap = _maximum_gap([timestamp for timestamp, _ in ordered])
     evaluated = below = degree_hours = 0.0
+    ordered_targets = _target_transitions(targets)
     for (start, value), (end, _next) in zip(ordered, ordered[1:], strict=False):
         if start < period_start or end > period_end or (end - start).total_seconds() > maximum_gap:
             continue
-        target = _value_at(targets, start)
-        if target is None:
-            continue
-        explicitly_enabled = _mode_enabled_at(mode_samples, mode_catalog, start)
-        if explicitly_enabled is False:
-            continue
-        seconds = (end - start).total_seconds()
-        evaluated += seconds
-        deficit = target - value
-        if deficit > hysteresis_c:
-            below += seconds
-            degree_hours += deficit * seconds / 3600
+        boundaries = [start]
+        boundaries.extend(timestamp for timestamp, _target in ordered_targets if start < timestamp < end)
+        boundaries.append(end)
+        for part_start, part_end in zip(boundaries, boundaries[1:], strict=False):
+            target = _value_at(ordered_targets, part_start)
+            if target is None:
+                continue
+            explicitly_enabled = _mode_enabled_at(mode_samples, mode_catalog, part_start)
+            if explicitly_enabled is False:
+                continue
+            seconds = (part_end - part_start).total_seconds()
+            evaluated += seconds
+            deficit = target - value
+            if deficit > hysteresis_c:
+                below += seconds
+                degree_hours += deficit * seconds / 3600
     return evaluated, below, degree_hours
 
 
@@ -443,7 +463,7 @@ def analyze_dhw_interactions(
     period_end: datetime,
     boiler_state_samples: list[tuple[datetime, str | Collection[str]]],
     dhw_temperature_samples: list[tuple[datetime, float]],
-    dhw_target_samples: list[tuple[datetime, float]],
+    dhw_target_samples: Sequence[tuple[datetime, float | None]],
     dhw_mode_samples: list[tuple[datetime, float]] | None = None,
     dhw_status_samples: list[tuple[datetime, float]] | None = None,
     dhw_worktime_samples: list[tuple[datetime, float]] | None = None,
@@ -455,7 +475,7 @@ def analyze_dhw_interactions(
     heating_mode_catalog: dict[int, dict[str, Any]] | None = None,
     heating_available_samples: list[tuple[datetime, float | bool]] | None = None,
     indoor_temperature_samples: list[tuple[datetime, float]] | None = None,
-    heating_target_samples: list[tuple[datetime, float]] | None = None,
+    heating_target_samples: Sequence[tuple[datetime, float | None]] | None = None,
     flow_temperature_samples: list[tuple[datetime, float]] | None = None,
     quality_score: float = 1.0,
     minimum_quality_score: float = 0.7,

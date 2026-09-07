@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from zont_analyzer.domain import QualityResult, Report
+from zont_analyzer.domain import MetricValue, QualityResult, Report
 from zont_analyzer.reports import render_html
 
 
@@ -22,7 +22,9 @@ def test_gas_card_renders_measurement_provenance_and_flame_denominator() -> None
         "scope": "boiler", "reasons": ["неполный интервал"], "complete": False,
     }))
     assert "Расход газа за период" in page
-    assert "12,3 м³" in page
+    assert "12,30 м³" in page
+    assert 'class="metric-group gas-period-card"' in page
+    assert page.index('id="metrics"') < page.index('id="gas-period-title"')
     assert "Индекс надёжности: 72,0 %" in page
     assert "Знаменатель: 1 календарных суток" in page
     assert "Время работы горелки" in page
@@ -63,5 +65,94 @@ def test_gas_savings_shows_normalized_range_and_keeps_causality_qualified() -> N
     }
     page = render_html(report)
     assert "Экономия газа" in page
-    assert "Диапазон эффекта: -3,0 м³ — 1,0 м³" in page
+    assert "Диапазон эффекта: -3,00 м³ — 1,00 м³" in page
     assert "Причинность по одному сравнению не доказана" in page
+
+
+def test_purpose_split_keeps_meter_total_separate_and_unknown_visible() -> None:
+    from zont_analyzer.reports.presentation import gas_purpose_text
+
+    report = _report({
+        "status": "measured", "scope": "whole_meter", "volume_m3": 5,
+        "purpose_split": {
+            "status": "estimated", "scope": "shared_meter_model", "total_modelled_m3": 1,
+            "unallocated_m3": .1,
+            "components": {"heating": {"volume_m3": .6}, "dhw": {"volume_m3": .25},
+                           "purpose_unknown": {"volume_m3": .05}},
+        },
+    })
+    lines = gas_purpose_text(report)
+    assert "Отопление: 0,60 м³ · 60,0%" in lines
+    assert "ГВС: 0,25 м³ · 25,0%" in lines
+    assert "Назначение не определено: 0,05 м³ · 5,0%" in lines
+    assert "Не распределено из-за пропусков телеметрии: 0,10 м³" in lines
+    assert any("их итоги могут отличаться" in line for line in lines)
+    assert any("другие газовые потребители не отделены" in line for line in lines)
+    assert "Отопление: 0,60 м³ · 60,0%" in render_html(report)
+    assert report.context["gas"]["volume_m3"] == 5
+
+
+def test_partial_purpose_split_does_not_invent_percentages_or_zero() -> None:
+    from zont_analyzer.reports.presentation import gas_purpose_text
+
+    report = _report({"purpose_split": {
+        "status": "partial", "total_modelled_m3": None, "unallocated_m3": None,
+        "components": {"heating": {"volume_m3": .2}, "dhw": {"volume_m3": 0},
+                       "purpose_unknown": {"volume_m3": None}},
+    }})
+    lines = gas_purpose_text(report)
+    assert "Отопление: 0,20 м³" in lines
+    assert "ГВС: 0,00 м³" in lines
+    assert "Назначение не определено: Нет данных" in lines
+    assert not any("%" in line for line in lines)
+
+
+def test_dashboard_uses_short_burner_labels_and_modelled_gas_denominator() -> None:
+    from zont_analyzer.reports.presentation import kpis
+
+    report = _report({
+        "status": "measured", "scope": "whole_meter", "volume_m3": 5,
+        "flame_hours": 4, "heating_flame_hours": 3, "dhw_flame_hours": .5,
+        "reliability_index_pct": 72,
+        "purpose_split": {
+            "status": "estimated", "total_modelled_m3": 1, "unallocated_m3": .1,
+            "components": {"heating": {"volume_m3": .6}, "dhw": {"volume_m3": .25},
+                           "purpose_unknown": {"volume_m3": .05}},
+        },
+    })
+    report.metrics = [
+        MetricValue(id="starts", name="burner_starts", value=12, unit=""),
+        MetricValue(id="dhw", name="dhw_episode_count", value=4, unit=""),
+        MetricValue(id="zont", name="zont_uptime_seconds", value=86400, unit="", context={"online": True}),
+        MetricValue(id="boiler", name="boiler_uptime_seconds", value=7200, unit="", context={"online": False}),
+    ]
+    dashboard = kpis(report)
+    assert "12 запусков · 75%" in dashboard
+    assert "30 мин · 12,5%" in dashboard
+    assert "Надёжность: 72%" in dashboard
+    assert "времени горения" not in dashboard
+    assert dashboard.index("Качество данных") < dashboard.index("Отопление · горелка")
+    assert dashboard.index("Отопление · горелка") < dashboard.index("ГВС · догревы")
+    assert 'class="gas-distribution-bar"' in dashboard
+    assert "Распределение расхода</span>" in dashboard
+    assert "Распределение — оценка 1,00 м³; показание счётчика учитывается отдельно." in dashboard
+    assert "Не определено <b>0,15 м³ · 15%" in dashboard
+    assert 'class="kpi-uptime-row" aria-label="Статус и аптаймы"' in dashboard
+    assert "ZONT · на связи · аптайм 1 дн." in dashboard
+    assert "Котёл · не на связи · аптайм 2 ч" in dashboard
+
+
+def test_dashboard_does_not_draw_a_gas_bar_without_complete_modelled_parts() -> None:
+    from zont_analyzer.reports.presentation import kpis
+
+    report = _report({
+        "status": "estimated", "volume_m3": 1,
+        "purpose_split": {
+            "status": "partial", "total_modelled_m3": None, "unallocated_m3": None,
+            "components": {"heating": {"volume_m3": .2}, "dhw": {"volume_m3": 0},
+                           "purpose_unknown": {"volume_m3": None}},
+        },
+    })
+    dashboard = kpis(report)
+    assert 'class="gas-distribution-bar"' not in dashboard
+    assert "Распределение по модели: Нет данных" in dashboard

@@ -18,7 +18,9 @@ CMD ["run"]
 
 FROM runtime AS test
 USER root
-RUN pip install --no-cache-dir '.[dev]'
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir '.[dev]' 'hatchling>=1.25'
 COPY tests ./tests
 USER zont
 ENTRYPOINT ["pytest"]

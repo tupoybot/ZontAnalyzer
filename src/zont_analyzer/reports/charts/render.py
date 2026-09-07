@@ -27,6 +27,8 @@ class _Series:
     label: str
     unit: str
     points: tuple[_Point, ...]
+    explicit_gaps: bool = False
+    step: bool = False
 
 
 _PANELS = (
@@ -91,6 +93,7 @@ def _parse_packet(packet: Any) -> tuple[dict[str, _Series], list[tuple[datetime,
     if not isinstance(packet, Mapping):
         return {}, []
     raw_series = packet.get("series")
+    explicit_gaps = packet.get("gap_policy") == "explicit"
     parsed: dict[str, _Series] = {}
     if isinstance(raw_series, Mapping):
         for role, raw in raw_series.items():
@@ -100,7 +103,8 @@ def _parse_packet(packet: Any) -> tuple[dict[str, _Series], list[tuple[datetime,
             if points:
                 parsed[role] = _Series(
                     role, str(raw.get("label") or _FALLBACK_LABELS.get(role, role)),
-                    str(raw.get("unit") or ""), tuple(points),
+                    str(raw.get("unit") or ""), tuple(points), explicit_gaps=explicit_gaps,
+                    step=raw.get("interpolation") == "step",
                 )
     bands: list[tuple[datetime, datetime, str, str]] = []
     raw_bands = packet.get("state_bands")
@@ -203,7 +207,7 @@ def _render_panel(
         visible_bands.append((label, state))
     gap_counts: dict[str, int] = {}
     for item in selected:
-        paths, gap_count = _paths(item.points, scale_x, scale_y)
+        paths, gap_count = _paths(item.points, scale_x, scale_y, explicit_gaps=item.explicit_gaps, step=item.step)
         role_style = style_for(item.role)
         dash = f' stroke-dasharray="{role_style.dasharray}"' if role_style.dasharray else ""
         for path in paths:
@@ -240,7 +244,9 @@ def _render_panel(
     )
 
 
-def _paths(points: tuple[_Point, ...], scale_x: Any, scale_y: Any) -> tuple[list[str], int]:
+def _paths(
+    points: tuple[_Point, ...], scale_x: Any, scale_y: Any, *, explicit_gaps: bool = False, step: bool = False,
+) -> tuple[list[str], int]:
     gaps = [
         (right.at - left.at).total_seconds()
         for left, right in zip(points, points[1:], strict=False)
@@ -252,12 +258,16 @@ def _paths(points: tuple[_Point, ...], scale_x: Any, scale_y: Any) -> tuple[list
     gap_count = 0
     previous: _Point | None = None
     for point in points:
-        if previous is None or point.gap_before or (point.at - previous.at).total_seconds() > threshold:
+        inferred_gap = (point.at - previous.at).total_seconds() > threshold if previous is not None else False
+        if previous is None or point.gap_before or (not explicit_gaps and inferred_gap):
             if current:
                 result.append(" ".join(current))
             current = [f"M {scale_x(point.at):.2f} {scale_y(point.value):.2f}"]
             if previous is not None:
                 gap_count += 1
+        elif step:
+            current.append(f"L {scale_x(point.at):.2f} {scale_y(previous.value):.2f}")
+            current.append(f"L {scale_x(point.at):.2f} {scale_y(point.value):.2f}")
         else:
             current.append(f"L {scale_x(point.at):.2f} {scale_y(point.value):.2f}")
         previous = point

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from statistics import median
 
@@ -25,13 +26,29 @@ def _segments(samples: list[tuple[datetime, float]]) -> list[tuple[datetime, dat
     return result
 
 
+def _target_transitions(
+    samples: Sequence[tuple[datetime, float | None]],
+) -> list[tuple[datetime, float | None]]:
+    """Collapse polling duplicates; setpoints change state only when value changes."""
+    ordered = sorted({timestamp: value for timestamp, value in samples}.items())
+    result: list[tuple[datetime, float | None]] = []
+    seen = False
+    previous: float | None = None
+    for timestamp, value in ordered:
+        if not seen or value != previous:
+            result.append((timestamp, value))
+            previous = value
+            seen = True
+    return result
+
+
 def temperature_metrics(
     samples: list[tuple[datetime, float]],
     *,
     period_id: str,
     target_c: float | None,
     comfort_band_c: float,
-    target_samples: list[tuple[datetime, float]] | None = None,
+    target_samples: Sequence[tuple[datetime, float | None]] | None = None,
     ignore_windows: list[tuple[datetime, datetime]] | None = None,
 ) -> list[MetricValue]:
     segments = _segments(samples)
@@ -61,7 +78,7 @@ def temperature_metrics(
         for segment in segments
         if not any(window_start <= segment[0] < window_end for window_start, window_end in (ignore_windows or []))
     ]
-    ordered_targets = sorted(target_samples or [])
+    ordered_targets = _target_transitions(target_samples or [])
     if target_c is None and not ordered_targets:
         return metrics
     in_band = 0.0
@@ -71,26 +88,33 @@ def temperature_metrics(
     above_degree_hours = 0.0
     below_degree_hours = 0.0
     targeted_seconds = 0.0
+    # A target is a user-controlled state, rather than sampled telemetry.  When
+    # its history is supplied, it is authoritative: do not project the current
+    # target backwards before the first observation.
     target_index = 0
-    current_target = target_c
+    current_target: float | None = target_c if not ordered_targets else None
     for start, end, value in target_segments:
-        while target_index < len(ordered_targets) and ordered_targets[target_index][0] <= start:
-            current_target = ordered_targets[target_index][1]
-            target_index += 1
-        if current_target is None:
-            continue
-        seconds = (end - start).total_seconds()
-        targeted_seconds += seconds
-        error = value - current_target
-        if abs(error) <= comfort_band_c:
-            in_band += seconds
-        elif error > comfort_band_c:
-            above_seconds += seconds
-        else:
-            below_seconds += seconds
-        absolute_error += abs(error) * seconds
-        above_degree_hours += max(0.0, error) * seconds / 3600
-        below_degree_hours += max(0.0, -error) * seconds / 3600
+        boundaries = [start]
+        boundaries.extend(timestamp for timestamp, _target in ordered_targets if start < timestamp < end)
+        boundaries.append(end)
+        for part_start, part_end in zip(boundaries, boundaries[1:], strict=False):
+            while target_index < len(ordered_targets) and ordered_targets[target_index][0] <= part_start:
+                current_target = ordered_targets[target_index][1]
+                target_index += 1
+            if current_target is None:
+                continue
+            seconds = (part_end - part_start).total_seconds()
+            targeted_seconds += seconds
+            error = value - current_target
+            if abs(error) <= comfort_band_c:
+                in_band += seconds
+            elif error > comfort_band_c:
+                above_seconds += seconds
+            else:
+                below_seconds += seconds
+            absolute_error += abs(error) * seconds
+            above_degree_hours += max(0.0, error) * seconds / 3600
+            below_degree_hours += max(0.0, -error) * seconds / 3600
     if targeted_seconds == 0:
         return metrics
     values_to_add = [

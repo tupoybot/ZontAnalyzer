@@ -10,6 +10,7 @@ from zont_analyzer.analytics.gas import (
     build_intervals,
     estimate_exposure,
     estimate_gas,
+    estimate_gas_purpose_split,
     fit_gas_model,
     fit_intervals,
     integrate_exposure,
@@ -95,6 +96,61 @@ def test_unknown_modulation_keeps_explicit_flame_and_purpose_is_exclusive() -> N
     assert exposure.heating_minutes == 5.0
     assert exposure.dhw_minutes == 5.0
     assert exposure.ambiguous_purpose_minutes == 5.0
+    assert exposure.heating_bin_minutes == (0.0, 0.0, 0.0, 0.0)
+    assert exposure.heating_unknown_modulation_minutes == 5.0
+    assert exposure.dhw_bin_minutes == (0.0, 0.0, 0.0, 5.0)
+    assert exposure.ambiguous_purpose_bin_minutes == (0.0, 0.0, 5.0, 0.0)
+
+
+def test_purpose_split_uses_mode_rates_and_leaves_telemetry_gap_unallocated() -> None:
+    model = fit_intervals(rich_intervals(), has_gas_stove=False)
+    exposure = Exposure(
+        minutes=100,
+        bin_minutes=(40.0, 0.0, 0.0, 40.0),
+        unknown_modulation_minutes=0,
+        observed_minutes=80,
+        flame_minutes=80,
+        heating_minutes=40,
+        dhw_minutes=40,
+        heating_bin_minutes=(40.0, 0.0, 0.0, 0.0),
+        dhw_bin_minutes=(0.0, 0.0, 0.0, 40.0),
+        ambiguous_purpose_bin_minutes=(0.0, 0.0, 0.0, 0.0),
+    )
+    estimate = estimate_exposure(exposure, model, end=model.calibration_end)
+    split = estimate_gas_purpose_split(exposure, model, estimate)
+
+    assert split["scope"] == "modelled_boiler"
+    assert split["components"]["heating"]["volume_m3"] == pytest.approx(0.4, rel=1e-3)
+    assert split["components"]["dhw"]["volume_m3"] == pytest.approx(1.6, rel=1e-3)
+    assert split["allocated_observed_m3"] == pytest.approx(2.0, rel=1e-3)
+    assert split["unallocated_m3"] == pytest.approx(0.5, rel=1e-3)
+    assert split["allocated_observed_m3"] + split["unallocated_m3"] == pytest.approx(split["total_modelled_m3"])
+    assert "telemetry_gap_unallocated" in split["reasons"]
+
+
+def test_purpose_split_refuses_legacy_exposure_without_purpose_bins() -> None:
+    model = fit_intervals(rich_intervals(), has_gas_stove=False)
+    exposure = Exposure(60, (60.0, 0.0, 0.0, 0.0), 0, 60, flame_minutes=60)
+    estimate = estimate_exposure(exposure, model, end=model.calibration_end)
+
+    split = estimate_gas_purpose_split(exposure, model, estimate)
+
+    assert split["status"] == "unknown"
+    assert split["allocated_observed_m3"] is None
+    assert "invalid_purpose_exposure" in split["reasons"]
+
+
+def test_shared_meter_split_keeps_its_scope_and_limitation() -> None:
+    model = fit_intervals(rich_intervals(), has_gas_stove=True)
+    exposure = Exposure(
+        60, (60.0, 0.0, 0.0, 0.0), 0, 60, heating_minutes=60, flame_minutes=60,
+        heating_bin_minutes=(60.0, 0.0, 0.0, 0.0), dhw_bin_minutes=(0.0, 0.0, 0.0, 0.0),
+        ambiguous_purpose_bin_minutes=(0.0, 0.0, 0.0, 0.0),
+    )
+    split = estimate_gas_purpose_split(exposure, model, estimate_exposure(exposure, model, end=model.calibration_end))
+
+    assert split["scope"] == "shared_meter_model"
+    assert "shared_meter_gas_stove_unseparated" in split["reasons"]
 
 
 def test_long_gap_and_unknown_fl_are_unknown_not_idle() -> None:

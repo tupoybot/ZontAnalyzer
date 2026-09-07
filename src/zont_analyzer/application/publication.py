@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fcntl
+import html
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,6 +47,132 @@ def publish_reports(runtime: Runtime, *, now: datetime | None = None) -> dict[st
     with (output_dir / ".publication.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         return _publish_locked(runtime, output_dir, checked_at)
+
+
+def publish_report(runtime: Runtime, report_id: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """Refresh one already stored report without walking or recalculating the archive."""
+    checked_at = now or datetime.now(UTC)
+    output_dir = reports_directory(runtime)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with (output_dir / ".publication.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        # Read after acquiring the lock so a concurrent regeneration cannot leave
+        # an older DB snapshot queued behind its newer publication.
+        report = runtime.db.report(report_id)
+        if report is None:
+            return {"reports": 0, "manifest": str(output_dir / "reports.json"),
+                    "latest_report_id": None}
+        return _publish_report_locked(runtime, output_dir, report, checked_at)
+
+
+def _publish_report_locked(
+    runtime: Runtime, output_dir: Path, report: Report, now: datetime,
+) -> dict[str, Any]:
+    if report.kind not in KINDS:
+        return {"reports": 0, "manifest": str(output_dir / "reports.json"), "latest_report_id": None}
+    if report.period_end > now:
+        raise ValueError("Cannot publish a future observation interval")
+    if report.generated_at < report.period_end:
+        raise ValueError("Cannot publish an incomplete report")
+
+    from zont_analyzer.application.owner_context import OwnerContextStore
+
+    owner_store = OwnerContextStore(runtime.db)
+    owner_data: dict[str, Any] = {
+        "profiles": [owner_store.profile(str(device["id"])) for device in runtime.db.list_devices()]
+    }
+    if report.kind == "daily":
+        owner_data["gas"] = owner_store.gas(report.id)
+    has_other_exports = any(next((output_dir / kind).glob("*.html"), None) for kind in KINDS)
+    html_path, json_path = archive_paths(output_dir, report)
+    # A regeneration can publish a newer snapshot while this request is waiting
+    # for the lock. Preserve that snapshot, but render its current feedback state.
+    published_report = report
+    if json_path.is_file():
+        try:
+            candidate = Report.model_validate_json(json_path.read_text(encoding="utf-8"))
+            if candidate.generated_at >= report.generated_at and candidate.id != report.id:
+                return {"reports": 0, "manifest": str(output_dir / "reports.json"),
+                        "latest_report_id": None}
+            if candidate.id == report.id and candidate.generated_at > report.generated_at:
+                published_report = candidate
+        except (OSError, ValueError):
+            pass
+    rendered = render_html(
+        published_report,
+        runtime.db.recommendation_views_for_report(published_report.id),
+        chart_data=cached_chart_data(runtime.db, published_report),
+        feedback_api_base_url=runtime.config.feedback.public_api_base_url,
+        latest_report_href="../latest.html",
+        owner_data=owner_data,
+    )
+    _write_changed(html_path, rendered)
+    if published_report is report:
+        _write_changed(json_path, report.model_dump_json(indent=2) + "\n")
+
+    manifest_path = output_dir / "reports.json"
+    manifest_valid = True
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        entries = manifest["reports"]
+        if not isinstance(entries, list):
+            raise ValueError
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        manifest_valid = False
+        manifest = {"version": 1, "reports": []}
+        entries = manifest["reports"]
+    report = published_report
+    timezone = ZoneInfo(report.timezone)
+    entry = {
+        "kind": report.kind,
+        "start": report.period_start.astimezone(timezone).date().isoformat(),
+        "end": report.period_end.astimezone(timezone).date().isoformat(),
+        "href": html_path.relative_to(output_dir).as_posix(),
+        "published_at": datetime.fromtimestamp(html_path.stat().st_mtime, UTC).isoformat(),
+        "timezone": report.timezone,
+        "complete": report.context.get("period", {}).get("complete", True),
+        "nominal_end": report.context.get("period", {}).get("end", report.period_end.isoformat()),
+        "season": report.context.get("period", {}).get("season"),
+    }
+    # A missing manifest is valid only for a genuinely empty archive (the first
+    # report). Never rebuild a missing or malformed manifest over retained files.
+    if manifest_valid or not has_other_exports:
+        for index, existing in enumerate(entries):
+            if isinstance(existing, dict) and existing.get("href") == entry["href"]:
+                entries[index] = entry
+                break
+        else:
+            entries.append(entry)
+        manifest["updated_at"] = now.astimezone(UTC).isoformat()
+        atomic_write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", mode=0o644)
+
+    daily_starts: list[str] = []
+    latest_path = output_dir / "latest.html"
+    latest_matches_report = latest_path.is_file() and (
+        f'data-report-id="{html.escape(report.id, quote=True)}"' in latest_path.read_text(encoding="utf-8")
+    )
+    can_update_latest = manifest_valid or not has_other_exports or latest_matches_report
+    if report.kind == "daily" and can_update_latest:
+        daily_starts = [
+            str(item.get("start"))
+            for item in entries
+            if isinstance(item, dict) and item.get("kind") == "daily"
+        ]
+        if not daily_starts or entry["start"] >= max(daily_starts):
+            _write_changed(output_dir / "latest.html", render_html(
+                published_report,
+                runtime.db.recommendation_views_for_report(published_report.id),
+                chart_data=cached_chart_data(runtime.db, published_report),
+                feedback_api_base_url=runtime.config.feedback.public_api_base_url,
+                owner_data=owner_data,
+            ))
+    latest_id = (
+        published_report.id
+        if report.kind == "daily" and can_update_latest
+        and (not daily_starts or entry["start"] >= max(daily_starts))
+        else None
+    )
+    return {"reports": len(entries), "manifest": str(manifest_path), "latest_report_id": latest_id}
 
 
 def _publish_locked(

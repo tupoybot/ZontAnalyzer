@@ -15,10 +15,11 @@ from typing import Any
 
 from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.analytics.dhw import parse_opentherm_flags
+from zont_analyzer.analytics.series_semantics import is_setpoint_series
 from zont_analyzer.domain import Report
 
 MAX_POINTS_PER_SERIES = 480
-CHART_DATA_SCHEMA_VERSION = 1
+CHART_DATA_SCHEMA_VERSION = 2
 
 _GAS_CACHE_CONTEXT_KEYS = frozenset({
     "gas",
@@ -63,8 +64,12 @@ def build_chart_data(db: Database, report: Report) -> dict[str, Any] | None:
                 "unit": unit,
                 "points": points,
             }
+            if is_setpoint_series(str(row["source_type"]), str(row["metric_key"])):
+                series[role]["interpolation"] = "step"
     bands = _state_bands(db, selected.get("boiler_state"), report)
-    packet: dict[str, Any] = {"timezone": report.timezone, "series": series}
+    # New packets carry explicit gap markers.  The renderer must not infer
+    # gaps again from setpoint cadence (setpoints are held state, not sensors).
+    packet: dict[str, Any] = {"timezone": report.timezone, "gap_policy": "explicit", "series": series}
     if bands:
         packet["state_bands"] = bands
     return packet if series or bands else None
@@ -207,23 +212,56 @@ def _identity(row: Mapping[str, Any]) -> str:
 
 
 def _numeric_points(db: Database, row: Mapping[str, Any], report: Report) -> list[dict[str, Any]]:
-    samples = db.fetch_samples(int(row["id"]), report.period_start, report.period_end)
-    return _point_dicts(samples)
+    stateful = is_setpoint_series(str(row["source_type"]), str(row["metric_key"]))
+    observations = db.fetch_numeric_observations(
+        int(row["id"]), report.period_start, report.period_end, include_previous=stateful,
+    )
+    if stateful:
+        # Setpoints carry through time, including the report's boundaries. An
+        # explicit unknown ends the held segment at its actual timestamp.
+        clipped = {max(timestamp, report.period_start): value for timestamp, value in observations}
+        expanded: list[tuple[datetime, float | None]] = []
+        current: float | None = None
+        for timestamp, value in sorted(clipped.items()):
+            if value is None and current is not None:
+                expanded.append((timestamp, current))
+            expanded.append((timestamp, value))
+            current = value
+        if current is not None:
+            expanded.append((report.period_end, current))
+        observations = expanded
+    return _point_dicts(observations, stateful=stateful)
 
 
-def _point_dicts(samples: Iterable[tuple[datetime, float]]) -> list[dict[str, Any]]:
-    ordered: dict[datetime, float] = {}
+def _point_dicts(
+    samples: Iterable[tuple[datetime, float | None]], *, stateful: bool = False,
+) -> list[dict[str, Any]]:
+    ordered: dict[datetime, tuple[float, bool]] = {}
+    explicit_gap = False
     for timestamp, value in samples:
-        if math.isfinite(value):
-            ordered[timestamp] = float(value)
-    marked = _mark_gaps(sorted(ordered.items()))
+        if value is None or not math.isfinite(value):
+            explicit_gap = True
+            continue
+        ordered[timestamp] = (float(value), explicit_gap)
+        explicit_gap = False
+    valid = [(timestamp, value) for timestamp, (value, _gap) in sorted(ordered.items())]
+    marked = _mark_gaps(valid, stateful=stateful)
+    explicit = {timestamp: gap for timestamp, (value, gap) in ordered.items()}
+    marked = [
+        (timestamp, value, gap_before or explicit.get(timestamp, False))
+        for timestamp, value, gap_before in marked
+    ]
     return [
         {"timestamp": timestamp.isoformat(), "value": value, **({"gap_before": True} if gap_before else {})}
-        for timestamp, value, gap_before in _decimate(marked)
+        for timestamp, value, gap_before in _decimate(marked, preserve_changes=stateful)
     ]
 
 
-def _mark_gaps(points: list[tuple[datetime, float]]) -> list[tuple[datetime, float, bool]]:
+def _mark_gaps(
+    points: list[tuple[datetime, float]], *, stateful: bool = False,
+) -> list[tuple[datetime, float, bool]]:
+    if stateful:
+        return [(timestamp, value, False) for timestamp, value in points]
     gaps = [
         (right[0] - left[0]).total_seconds()
         for left, right in zip(points, points[1:], strict=False)
@@ -237,7 +275,7 @@ def _mark_gaps(points: list[tuple[datetime, float]]) -> list[tuple[datetime, flo
 
 
 def _decimate(
-    points: list[tuple[datetime, float, bool]], limit: int = MAX_POINTS_PER_SERIES,
+    points: list[tuple[datetime, float, bool]], limit: int = MAX_POINTS_PER_SERIES, *, preserve_changes: bool = False,
 ) -> list[tuple[datetime, float, bool]]:
     """Keep genuine extrema and boundaries, including every observed gap edge."""
     if len(points) <= limit:
@@ -245,6 +283,12 @@ def _decimate(
     mandatory = {0, len(points) - 1}
     for index, point in enumerate(points):
         if point[2]:
+            mandatory.update({candidate for candidate in (index - 1, index) if 0 <= candidate < len(points)})
+        # A step series needs both sides of every commanded change so the
+        # renderer can retain the horizontal and vertical edges after
+        # decimation. This is harmless for measured series and preserves the
+        # observed transition regardless of its value direction.
+        if preserve_changes and index and point[1] != points[index - 1][1]:
             mandatory.update({index - 1, index})
     # The number of source gaps is normally small.  If it exceeds the visual
     # budget, retaining all edges is more truthful than silently joining them.

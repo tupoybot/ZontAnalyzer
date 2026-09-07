@@ -13,6 +13,7 @@ from zont_analyzer.reports.presentation import (
     LEGACY_DUTY_METRICS,
     _gas_value,
     burner_usage_rows,
+    gas_purpose_text,
     gas_savings_text,
     number,
     period_target,
@@ -342,10 +343,14 @@ _ARCHIVE_NAVIGATION_SCRIPT = r"""
 
   navigation.querySelectorAll("[data-archive-kind]").forEach((button) => {
     button.addEventListener("click", () => {
-      activeKind = button.dataset.archiveKind || "daily";
-      const picker = navigation.querySelector(".archive-picker");
-      if (picker) picker.open = true;
-      render();
+      const kind = button.dataset.archiveKind || "daily";
+      if (kind === activeKind) return;
+      const newest = reports.filter((item) => item.kind === kind).sort(byStart).at(-1);
+      if (newest) {
+        window.location.assign(directUrl(newest));
+        return;
+      }
+      status.textContent = "Нет опубликованных отчётов для выбранного типа периода.";
     });
   });
   navigation.querySelector(".archive-period-tabs")?.addEventListener("keydown", (event) => {
@@ -896,6 +901,7 @@ def render_text(report: Report) -> str:
         lines.append(str(gas.get('source', '')))
         if gas.get('ai_stale'):
             lines.append("AI-интерпретация историческая и не учитывает текущую версию расчёта газа.")
+    lines.extend(gas_purpose_text(report))
     lines.extend(gas_savings_text(report))
     if report.context.get("counterfactual_question"):
         lines.append("Вопрос владельца: " + str(report.context["counterfactual_question"]))
@@ -1399,7 +1405,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"};
 {html.escape(report.algorithm_version)}</p></div>
 </header><main id="report" class="report-layout">
-<div class="overview">{ui.hero(report)}{ui.kpis(report)}{ui.gas_period_card(report)}
+<div class="overview">{ui.hero(report)}{ui.kpis(report)}
 {render_charts(report, chart_data, panel_ids=("climate",))}</div>
 <aside class="actions"><span class="eyebrow">СЛЕДУЮЩИЙ ШАГ</span><h2>Что делать</h2>
 {recommendations or '<p>Рекомендаций за этот период нет.</p>'}</aside>
