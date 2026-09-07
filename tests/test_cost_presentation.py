@@ -90,7 +90,7 @@ def test_mixed_currencies_stay_separate_and_month_slices_show_basis() -> None:
     assert "2026-09: 2,00 м³ · 2,00 USD; тариф 1,00 USD/м³" in page
 
 
-def test_distribution_omits_money_while_period_and_savings_keep_it() -> None:
+def test_detailed_gas_fields_include_money_but_dashboard_distribution_omits_it() -> None:
     report = _report("weekly")
     report.context["gas"].update({
         "average_daily_m3": .5, "average_daily_cost": _cost("4.01"),
@@ -126,20 +126,28 @@ def test_distribution_omits_money_while_period_and_savings_keep_it() -> None:
     purpose = " ".join(gas_purpose_text(report))
     dashboard = gas_distribution_card(report.context["gas"])
     distribution = dashboard[dashboard.index('<div class="gas-distribution">'):]
-    assert "руб." not in purpose
+    assert "Отопление: 0,75 м³ · 6,01 руб." in purpose
+    assert "ГВС: 0,25 м³ · 2,00 руб." in purpose
     assert "руб." not in distribution
     assert "1,00 м³ · 8,01 руб." in dashboard
 
     for rendered in (render_html(report), render_text(report)):
-        assert "Отопление: 0,75 м³" in rendered
-        assert "ГВС: 0,25 м³" in rendered
-        assert "Расход по модели за период: 1,00 м³" in rendered
+        assert "Отопление: 0,75 м³ · 6,01 руб." in rendered
+        assert "ГВС: 0,25 м³ · 2,00 руб." in rendered
+        assert "Расход по модели за период: 1,00 м³ · 8,01 руб." in rendered
         assert "0,50 м³/сутки · 4,01 руб." in rendered
         assert "3,50 м³/неделю · 28,04 руб." in rendered
         assert "2026-07-01" in rendered and "1,00 м³ · 8,01 руб." in rendered
         assert "Нормализованное изменение: 1,00 м³ · 8,01 руб." in rendered
         assert "Фактическая стоимость: до 80,10 руб.; после 72,09 руб." in rendered
         assert "в тарифах периода после изменения" in rendered
+
+    report.context["gas"]["purpose_split"]["components"]["heating"]["cost"] = {
+        "status": "unknown", "amounts": [],
+    }
+    purpose = " ".join(gas_purpose_text(report))
+    assert "Отопление: 0,75 м³ · 75,0%" in purpose
+    assert "Стоимость неизвестна" not in purpose
 
 
 def test_actual_period_cost_comparison_is_separate_from_gas_savings() -> None:

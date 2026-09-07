@@ -227,8 +227,8 @@ def gas_purpose_text(report: Report) -> list[str]:
     def valid(value: Any) -> TypeGuard[float]:
         return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
 
-    def volume(value: Any) -> str:
-        return f"{value:.2f}".replace(".", ",") + " м³" if valid(value) else "Нет данных"
+    def volume(value: Any, cost: Any = None) -> str:
+        return _volume_and_cost(value, cost) if valid(value) else "Нет данных"
 
     total = split.get("total_modelled_m3")
     lines = ["Распределение газа по назначению — оценка по работе горелки."]
@@ -239,7 +239,7 @@ def gas_purpose_text(report: Report) -> list[str]:
     if split.get("status") == "unknown":
         lines.append("Для распределения недостаточно данных.")
         return lines
-    lines.append("Расход по модели за период: " + volume(total))
+    lines.append("Расход по модели за период: " + volume(total, split.get("cost")))
     if not valid(total):
         lines.append("Известна только наблюдаемая часть; доли от всего периода не определены.")
     components = split.get("components")
@@ -251,10 +251,11 @@ def gas_purpose_text(report: Report) -> list[str]:
         value = item.get("volume_m3") if isinstance(item, dict) else None
         share = (f" · {value / total * 100:.1f}%".replace(".", ",")
                  if valid(value) and valid(total) and total > 0 else "")
-        lines.append(f"{label}: {volume(value)}{share}")
+        cost = item.get("cost") if isinstance(item, dict) else None
+        lines.append(f"{label}: {volume(value, cost)}{share}")
     gap = split.get("unallocated_m3")
     if valid(gap) and gap > 0:
-        lines.append("Не распределено из-за пропусков телеметрии: " + volume(gap))
+        lines.append("Не распределено из-за пропусков телеметрии: " + volume(gap, split.get("unallocated_cost")))
     if valid(total) and total > 0:
         lines.append("Проценты рассчитаны от расхода по модели, с учётом нераспределённой части.")
     return lines
