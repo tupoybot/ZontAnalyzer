@@ -314,7 +314,12 @@ class GasService:
             changed = session.execute(update(ReportRow).where(
                 ReportRow.id == original.id, ReportRow.canonical_json == old.canonical_json,
             ).values(canonical_json=refreshed.model_dump_json()))
-            return bool(getattr(changed, "rowcount", 0))
+            succeeded = bool(getattr(changed, "rowcount", 0))
+        if succeeded:
+            from zont_analyzer.reports.chart_data import rebind_chart_cache
+
+            rebind_chart_cache(self.db, original, refreshed)
+        return succeeded
 
     def savings(self, end: datetime) -> dict[str, Any]:
         """Evaluate whole independent meter intervals across recorded interventions."""

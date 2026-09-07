@@ -10,12 +10,12 @@ import pytest
 from zont_analyzer.runtime import build_runtime
 
 
-def importer():
+def importer(name="import_payload"):
     path = Path(__file__).parents[2]/'deploy/import_analysis.py'
     spec = importlib.util.spec_from_file_location('import_analysis', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.import_payload
+    return getattr(module, name)
 
 
 def test_derived_import_is_atomic_idempotent_and_preserves_owner_state(tmp_path):
@@ -46,3 +46,37 @@ def test_derived_import_is_atomic_idempotent_and_preserves_owner_state(tmp_path)
     payload['app_meta'] = {'owner-profile:forbidden': '{}'}
     with pytest.raises(ValueError, match='unsupported metadata'):
         apply(r.db.path, payload)
+
+
+def test_prebuilt_chart_cache_is_guarded_and_idempotent(tmp_path):
+    r = build_runtime(None, tmp_path/'data')
+    report = r.analysis(no_ai=True).analyze_daily(date(2026, 1, 1), use_ai=False)
+    with sqlite3.connect(r.db.path) as connection:
+        canonical = connection.execute('select canonical_json from reports where id=?', (report.id,)).fetchone()[0]
+    source = tmp_path/'prepared'
+    source.mkdir()
+    name = hashlib.sha256(report.id.encode()).hexdigest()+'.json'
+    packet = {'schema_version': 1, 'report_digest': hashlib.sha256(canonical.encode()).hexdigest(),
+              'data': {'series': {}, 'timezone': 'UTC'}}
+    path = source/name
+    path.write_text(json.dumps(packet))
+    install = importer('install_chart_cache')
+    assert install(r.db.path, source) == 1
+    assert install(r.db.path, source) == 0
+    destination = r.db.path.parent/'chart-data-cache'/name
+    assert destination.read_bytes() == path.read_bytes()
+    packet['report_digest'] = 'stale'
+    path.write_text(json.dumps(packet))
+    before = destination.read_bytes()
+    with pytest.raises(ValueError, match='does not match'):
+        install(r.db.path, source)
+    assert destination.read_bytes() == before
+
+
+def test_chart_cache_bundle_rejects_non_cache_paths(tmp_path):
+    r = build_runtime(None, tmp_path/'data')
+    source = tmp_path/'prepared'
+    source.mkdir()
+    (source/'unexpected.txt').write_text('{}')
+    with pytest.raises(ValueError, match='unexpected'):
+        importer('install_chart_cache')(r.db.path, source)

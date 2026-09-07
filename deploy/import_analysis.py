@@ -8,7 +8,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import re
 import sqlite3
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -70,9 +73,62 @@ def import_payload(database: Path, payload: dict[str, Any]) -> dict[str, int]:
         connection.close()
 
 
+def install_chart_cache(database: Path, source: Path) -> int:
+    """Install prebuilt chart packets only for exactly matching canonical reports.
+
+    Call after importing reports and before starting the worker. Validate the whole
+    bundle first; no telemetry is read and a stale bundle cannot replace the cache.
+    """
+    with sqlite3.connect(database) as connection:
+        expected = {
+            hashlib.sha256(identifier.encode()).hexdigest(): hashlib.sha256(canonical.encode()).hexdigest()
+            for identifier, canonical in connection.execute('select id,canonical_json from reports')
+        }
+    pending = []
+    for path in source.iterdir():
+        if path.is_symlink() or not path.is_file() or not re.fullmatch(r'[0-9a-f]{64}\.json', path.name):
+            raise ValueError('unexpected chart cache member')
+        content = path.read_bytes()
+        packet = json.loads(content)
+        if (not isinstance(packet, dict) or packet.get('schema_version') != 1
+                or not isinstance(packet.get('data'), dict)
+                or packet.get('report_digest') != expected.get(path.stem)):
+            raise ValueError('chart cache does not match accepted report: '+path.name)
+        pending.append((path.name, content))
+    target = database.parent / 'chart-data-cache'
+    target.mkdir(exist_ok=True)
+    owner = database.stat()
+    count = 0
+    for name, content in pending:
+        destination = target / name
+        if destination.exists() and destination.read_bytes() == content:
+            continue
+        descriptor, temporary = tempfile.mkstemp(prefix='.import-chart-', dir=target)
+        try:
+            with os.fdopen(descriptor, 'wb') as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                if os.geteuid() == 0:
+                    os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+            count += 1
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    if os.geteuid() == 0:
+        os.chown(target, owner.st_uid, owner.st_gid)
+    return count
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('database', type=Path)
     parser.add_argument('payload', type=Path)
+    parser.add_argument('--chart-cache', type=Path, help='Prebuilt cache directory for imported report digests')
     args = parser.parse_args()
-    print(json.dumps(import_payload(args.database, json.loads(args.payload.read_text()))))
+    result = import_payload(args.database, json.loads(args.payload.read_text()))
+    if args.chart_cache is not None:
+        result['chart_cache'] = install_chart_cache(args.database, args.chart_cache)
+    print(json.dumps(result))

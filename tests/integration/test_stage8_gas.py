@@ -182,3 +182,20 @@ def test_reused_ai_cannot_appear_current_after_deterministic_reanalysis(tmp_path
         candidate = report.model_copy(deep=True)
         candidate.context[key] = {'source_generated_at': report.generated_at.isoformat()}
         assert service.refresh(candidate).context['gas']['ai_stale'] is True
+
+
+def test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild(tmp_path: Path, monkeypatch):
+    from zont_analyzer.reports import chart_data
+    r, store, reports = history(tmp_path)
+    for report in reports:
+        path, digest = chart_data._cache_path(r.db, report)
+        chart_data._atomic_write_json(path, {'schema_version': 1, 'report_digest': digest, 'data': {'series': {}}})
+    store.update_gas(reports[0].id, {'value_m3': 100})
+    store.update_gas(reports[2].id, {'value_m3': 292})
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Gas-only publication must preserve observed chart packets')
+
+    monkeypatch.setattr(chart_data, 'build_chart_data', forbidden)
+    r.config.pilot.reports_dir = str(tmp_path/'publish')
+    assert publish_reports(r)['reports'] == len(reports)

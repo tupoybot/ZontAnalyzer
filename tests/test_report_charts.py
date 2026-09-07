@@ -1,6 +1,9 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from zont_analyzer.domain import QualityResult, Report
+from zont_analyzer.reports import chart_data
 from zont_analyzer.reports.charts import render_charts
 
 
@@ -95,3 +98,46 @@ def test_requested_panel_can_be_rendered_independently() -> None:
 
     assert 'data-chart="climate"' in rendered
     assert 'data-chart="thermal"' not in rendered
+
+
+def test_rebind_chart_cache_reuses_packet_for_gas_only_refresh(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = chart_data.Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    original = _report()
+    original.context.update({"gas": {"coefficient": 1}, "calculation_version": "v1"})
+    refreshed = original.model_copy(deep=True)
+    refreshed.context.update({"gas": {"coefficient": 2}, "gas_savings": {"value": 3},
+                             "gas_interpretation_stale": True, "calculation_version": "v2"})
+    packet = {"timezone": "UTC", "series": {}}
+    monkeypatch.setattr(chart_data, "build_chart_data", lambda *_args: packet)
+    assert chart_data.cached_chart_data(db, original) == packet
+
+    def no_build(*_args):
+        raise AssertionError("rebound cache must not build chart data")
+
+    monkeypatch.setattr(chart_data, "build_chart_data", no_build)
+    assert chart_data.rebind_chart_cache(db, original, refreshed) is True
+    assert chart_data.cached_chart_data(db, refreshed) == packet
+
+
+def test_rebind_chart_cache_refuses_non_gas_changes(tmp_path) -> None:
+    db = chart_data.Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    original = _report()
+    refreshed = original.model_copy(update={"summary": "changed"})
+
+    assert chart_data.rebind_chart_cache(db, original, refreshed) is False
+
+
+@pytest.mark.parametrize("cache_state", ["missing", "corrupt"])
+def test_rebind_chart_cache_handles_missing_or_corrupt_cache(tmp_path, cache_state) -> None:
+    db = chart_data.Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    original = _report()
+    refreshed = original.model_copy(update={"context": {"gas": {"value": 1}}})
+    if cache_state == "corrupt":
+        path, _digest = chart_data._cache_path(db, original)
+        path.parent.mkdir(parents=True)
+        path.write_text("not json", encoding="utf-8")
+
+    assert chart_data.rebind_chart_cache(db, original, refreshed) is False
