@@ -19,12 +19,19 @@ from sqlalchemy import select, update
 
 from zont_analyzer.adapters.sqlite.database import AppMetaRow, Database, ReportRow
 from zont_analyzer.analytics.dhw import parse_opentherm_flags
-from zont_analyzer.analytics.gas import ALGORITHM_VERSION, Exposure, GasInterval, StateSample, integrate_exposure
+from zont_analyzer.analytics.gas import (
+    ALGORITHM_VERSION,
+    Exposure,
+    GasInterval,
+    StateSample,
+    estimate_gas_purpose_split,
+    integrate_exposure,
+)
 from zont_analyzer.application.owner_context import GasReadingRow, OwnerContextStore
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import Report
 
-VERSION = "gas-context-v2"
+VERSION = "gas-context-v3"
 EDGES = (0.0, 25.0, 50.0, 75.0, 100.0)
 FRESHNESS = timedelta(minutes=15)
 
@@ -88,10 +95,14 @@ class GasService:
             cursor = after
         result: dict[str, Any] = {k: sum(p[k] for p in pieces) for k in (
             'minutes', 'flame_minutes', 'observed_minutes', 'unknown_modulation_minutes',
-            'heating_minutes', 'dhw_minutes', 'weather_hours', 'degree_hours',
+            'heating_minutes', 'dhw_minutes', 'ambiguous_purpose_minutes',
+            'heating_unknown_modulation_minutes', 'dhw_unknown_modulation_minutes',
+            'ambiguous_purpose_unknown_modulation_minutes', 'weather_hours', 'degree_hours',
             'temperature_hours', 'target_hours', 'target_degree_hours', 'room_hours', 'room_degree_hours',
         )}
         result['bin_minutes'] = [sum(p['bin_minutes'][i] for p in pieces) for i in range(4)]
+        for field in ('heating_bin_minutes', 'dhw_bin_minutes', 'ambiguous_purpose_bin_minutes'):
+            result[field] = [sum(p[field][i] for p in pieces) for i in range(4)]
         self._windows[key] = result
         return result
 
@@ -213,8 +224,15 @@ class GasService:
             unknown_modulation_minutes=w['unknown_modulation_minutes'],
             observed_minutes=w['observed_minutes'], heating_minutes=w['heating_minutes'],
             dhw_minutes=w['dhw_minutes'], flame_minutes=w['flame_minutes'],
+            ambiguous_purpose_minutes=w['ambiguous_purpose_minutes'],
+            heating_bin_minutes=tuple(w['heating_bin_minutes']), dhw_bin_minutes=tuple(w['dhw_bin_minutes']),
+            ambiguous_purpose_bin_minutes=tuple(w['ambiguous_purpose_bin_minutes']),
+            heating_unknown_modulation_minutes=w['heating_unknown_modulation_minutes'],
+            dhw_unknown_modulation_minutes=w['dhw_unknown_modulation_minutes'],
+            ambiguous_purpose_unknown_modulation_minutes=w['ambiguous_purpose_unknown_modulation_minutes'],
         )
         estimate = estimate_exposure(exposure, model, start=start, end=end)
+        purpose_split = estimate_gas_purpose_split(exposure, model, estimate)
         bounds = estimate.uncertainty_m3
         days = (end-start).total_seconds()/86400
         result = {
@@ -234,6 +252,7 @@ class GasService:
             'heating_flame_hours': w['heating_minutes']/60 if w['observed_minutes'] else None,
             'dhw_flame_hours': w['dhw_minutes']/60 if w['observed_minutes'] else None,
             'purpose_unknown_flame_hours': max(0, w['flame_minutes']-w['heating_minutes']-w['dhw_minutes'])/60,
+            'purpose_split': purpose_split,
             'complete': complete, 'model': asdict(model),
             'source': 'Активность fl и исходные показания общего счётчика; время снятия известно с точностью до дня.',
             'uncertainty_method': 'Диапазон чувствительности модели; не вероятностный доверительный интервал.',

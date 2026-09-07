@@ -13,6 +13,7 @@ from zont_analyzer.reports.presentation import (
     LEGACY_DUTY_METRICS,
     _gas_value,
     burner_usage_rows,
+    gas_purpose_text,
     gas_savings_text,
     number,
     period_target,
@@ -900,6 +901,7 @@ def render_text(report: Report) -> str:
         lines.append(str(gas.get('source', '')))
         if gas.get('ai_stale'):
             lines.append("AI-интерпретация историческая и не учитывает текущую версию расчёта газа.")
+    lines.extend(gas_purpose_text(report))
     lines.extend(gas_savings_text(report))
     if report.context.get("counterfactual_question"):
         lines.append("Вопрос владельца: " + str(report.context["counterfactual_question"]))

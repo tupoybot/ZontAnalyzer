@@ -120,6 +120,10 @@ def test_full_accounting_interval_is_measured_with_day_precision_not_daily_inter
     gas = service.context(reports[0].period_start, reports[2].period_start)
     assert gas['status'] == 'measured' and gas['volume_m3'] == 192
     assert gas['scope'] == 'whole_meter' and gas['measurement_time_precision'] == 'day'
+    split = gas['purpose_split']
+    assert split['scope'] == 'modelled_boiler'
+    assert split['total_modelled_m3'] is not None
+    assert split['components']['heating']['volume_m3'] is not None
     daily = service.context(reports[1].period_start, reports[1].period_end)
     assert daily['status'] != 'measured'
     assert len(service.readings) == 2

@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import json
 import math
-from typing import Any
+from typing import Any, TypeGuard
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.domain import Report
@@ -123,6 +123,51 @@ _GAS_REASONS = {
 }
 
 
+def gas_purpose_text(report: Report) -> list[str]:
+    """Keep modelled purpose volumes separate from whole-meter readings."""
+    gas = report.context.get("gas")
+    if not isinstance(gas, dict):
+        return []
+    split = gas.get("purpose_split")
+    if not isinstance(split, dict):
+        return []
+
+    def valid(value: Any) -> TypeGuard[float]:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+
+    def volume(value: Any) -> str:
+        return f"{value:.2f}".replace(".", ",") + " м³" if valid(value) else "Нет данных"
+
+    total = split.get("total_modelled_m3")
+    lines = ["Распределение газа по назначению — оценка по работе горелки."]
+    if gas.get("status") == "measured":
+        lines.append("Показание общего счётчика и оценка распределения рассчитаны отдельно; их итоги могут отличаться.")
+    if gas.get("scope") == "shared_meter" or split.get("scope") == "shared_meter_model":
+        lines.append("Модель опирается на общий счётчик; другие газовые потребители не отделены.")
+    if split.get("status") == "unknown":
+        lines.append("Для распределения недостаточно данных.")
+        return lines
+    lines.append("Расход по модели за период: " + volume(total))
+    if not valid(total):
+        lines.append("Известна только наблюдаемая часть; доли от всего периода не определены.")
+    components = split.get("components")
+    if not isinstance(components, dict):
+        return lines
+    for key, label in (("heating", "Отопление"), ("dhw", "ГВС"),
+                       ("purpose_unknown", "Назначение не определено")):
+        item = components.get(key)
+        value = item.get("volume_m3") if isinstance(item, dict) else None
+        share = (f" · {value / total * 100:.1f}%".replace(".", ",")
+                 if valid(value) and valid(total) and total > 0 else "")
+        lines.append(f"{label}: {volume(value)}{share}")
+    gap = split.get("unallocated_m3")
+    if valid(gap) and gap > 0:
+        lines.append("Не распределено из-за пропусков телеметрии: " + volume(gap))
+    if valid(total) and total > 0:
+        lines.append("Проценты рассчитаны от расхода по модели, с учётом нераспределённой части.")
+    return lines
+
+
 def gas_period_card(report: Report) -> str:
     """Render the local gas estimate contract without inventing unavailable values."""
     gas = report.context.get("gas")
@@ -203,11 +248,17 @@ def gas_period_card(report: Report) -> str:
         + "".join(interval_rows) + "</ul></details>"
         if interval_rows else ""
     )
+    purpose_lines = gas_purpose_text(report)
+    purpose_details = (
+        '<ul class="gas-purpose-split">' + "".join(f"<li>{esc(line)}</li>" for line in purpose_lines) + "</ul>"
+        if purpose_lines else ""
+    )
     return (
         '<details class="gas-period-card"><summary id="gas-period-title">'
         f'Расход газа за период: {esc(volume)} · подробнее</summary>'
         f'<p class="gas-period-details">{esc(" · ".join(details))}</p>'
         + stale
+        + purpose_details
         + interval_details
         + debug(gas, "Расход газа / происхождение")
         + "</details>"

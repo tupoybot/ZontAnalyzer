@@ -65,3 +65,41 @@ def test_gas_savings_shows_normalized_range_and_keeps_causality_qualified() -> N
     assert "Экономия газа" in page
     assert "Диапазон эффекта: -3,0 м³ — 1,0 м³" in page
     assert "Причинность по одному сравнению не доказана" in page
+
+
+def test_purpose_split_keeps_meter_total_separate_and_unknown_visible() -> None:
+    from zont_analyzer.reports.presentation import gas_purpose_text
+
+    report = _report({
+        "status": "measured", "scope": "whole_meter", "volume_m3": 5,
+        "purpose_split": {
+            "status": "estimated", "scope": "shared_meter_model", "total_modelled_m3": 1,
+            "unallocated_m3": .1,
+            "components": {"heating": {"volume_m3": .6}, "dhw": {"volume_m3": .25},
+                           "purpose_unknown": {"volume_m3": .05}},
+        },
+    })
+    lines = gas_purpose_text(report)
+    assert "Отопление: 0,60 м³ · 60,0%" in lines
+    assert "ГВС: 0,25 м³ · 25,0%" in lines
+    assert "Назначение не определено: 0,05 м³ · 5,0%" in lines
+    assert "Не распределено из-за пропусков телеметрии: 0,10 м³" in lines
+    assert any("их итоги могут отличаться" in line for line in lines)
+    assert any("другие газовые потребители не отделены" in line for line in lines)
+    assert "Отопление: 0,60 м³ · 60,0%" in render_html(report)
+    assert report.context["gas"]["volume_m3"] == 5
+
+
+def test_partial_purpose_split_does_not_invent_percentages_or_zero() -> None:
+    from zont_analyzer.reports.presentation import gas_purpose_text
+
+    report = _report({"purpose_split": {
+        "status": "partial", "total_modelled_m3": None, "unallocated_m3": None,
+        "components": {"heating": {"volume_m3": .2}, "dhw": {"volume_m3": 0},
+                       "purpose_unknown": {"volume_m3": None}},
+    }})
+    lines = gas_purpose_text(report)
+    assert "Отопление: 0,20 м³" in lines
+    assert "ГВС: 0,00 м³" in lines
+    assert "Назначение не определено: Нет данных" in lines
+    assert not any("%" in line for line in lines)
