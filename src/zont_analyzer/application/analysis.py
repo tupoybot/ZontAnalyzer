@@ -816,6 +816,8 @@ class AnalysisService:
                     summary = previous_report.summary
                     recommendations = previous_report.recommendations
                     ai_used = True
+                    control_context["gas"]["ai_stale"] = True
+                    control_context["gas_interpretation_stale"] = True
                     control_context["ai_interpretation_reuse"] = {
                         "source_generated_at": previous_report.generated_at.isoformat(),
                         "reason": "AI refresh failed validation; retained last valid interpretation",

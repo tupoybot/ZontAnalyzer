@@ -171,3 +171,14 @@ def test_persisted_gas_context_is_equal_after_json_roundtrip(tmp_path: Path):
     r.db.save_report(report, report.summary)
     stored = r.db.report(report.id)
     assert service.refresh(stored).context == stored.context
+
+
+def test_reused_ai_cannot_appear_current_after_deterministic_reanalysis(tmp_path: Path):
+    r, _store, reports = history(tmp_path)
+    service = GasService(r.db, r.config)
+    report = service.refresh(reports[-1])
+    report.ai_used = True
+    for key in ['pilot_ai_reuse', 'ai_interpretation_reuse']:
+        candidate = report.model_copy(deep=True)
+        candidate.context[key] = {'source_generated_at': report.generated_at.isoformat()}
+        assert service.refresh(candidate).context['gas']['ai_stale'] is True
