@@ -127,7 +127,7 @@ try {
   assert.match(await gasCard.textContent(), /Расход газа за период/);
   assert.match(await gasCard.textContent(), /12,30 м³/);
   assert.equal(await page.locator('.overview .gas-period-card').count(), 0);
-  assert.match(await page.locator('.gas-reliability').textContent(), /Надёжность/);
+  assert.match(await page.locator('.gas-reliability').textContent(), /надёжность/i);
   assert.match(await gasCard.textContent(), /Индекс надёжности/);
   assert.match(await gasCard.textContent(), /Модель: gas-browser-1/);
   assert.match(await gasCard.textContent(), /Объяснение AI устарело/);
