@@ -101,6 +101,7 @@ grid-template-columns:minmax(130px,180px) minmax(0,1fr);gap:18px;align-items:cen
 .gas-kpi-total span,.gas-distribution-label{display:block;font-size:12px;color:var(--secondary)}
 .gas-kpi-total strong{display:block;font-size:25px;letter-spacing:-.5px;margin-top:5px}
 .gas-kpi-total small{display:block;font-size:12px;color:var(--secondary);margin-top:7px}
+.gas-kpi-total .gas-reliability{display:inline}
 .gas-distribution-bar{display:flex;height:12px;overflow:hidden;border-radius:6px;
 background:var(--elevated);margin:8px 0}
 .gas-bar-heat{background:#b36332}.gas-bar-dhw{background:#227d8c}.gas-bar-unknown{background:#9aa8aa}
@@ -117,6 +118,7 @@ padding:13px 18px;background:var(--elevated);border-bottom:0;font-size:12px;colo
 .gas-period-card{display:block;
 gap:12px 24px;margin-top:18px;padding:22px;background:var(--surface);border:1px solid var(--border);border-radius:12px}
 .gas-period-card>summary{cursor:pointer;font-weight:650}.gas-period-card[open]>summary{margin-bottom:12px}
+#metrics .gas-period-card{margin:0 0 10px;padding:0;border:0;border-radius:0}
 .gas-period-card h2{margin:5px 0 0;font-size:19px}.gas-period-value{display:block;font-size:28px;
 letter-spacing:-.5px;margin-top:5px}.gas-period-details{flex:1 1 280px;margin:0;color:var(--secondary);
 font-size:14px;overflow-wrap:anywhere}

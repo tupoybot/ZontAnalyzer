@@ -22,7 +22,9 @@ def test_gas_card_renders_measurement_provenance_and_flame_denominator() -> None
         "scope": "boiler", "reasons": ["неполный интервал"], "complete": False,
     }))
     assert "Расход газа за период" in page
-    assert "12,3 м³" in page
+    assert "12,30 м³" in page
+    assert 'class="metric-group gas-period-card"' in page
+    assert page.index('id="metrics"') < page.index('id="gas-period-title"')
     assert "Индекс надёжности: 72,0 %" in page
     assert "Знаменатель: 1 календарных суток" in page
     assert "Время работы горелки" in page
@@ -63,7 +65,7 @@ def test_gas_savings_shows_normalized_range_and_keeps_causality_qualified() -> N
     }
     page = render_html(report)
     assert "Экономия газа" in page
-    assert "Диапазон эффекта: -3,0 м³ — 1,0 м³" in page
+    assert "Диапазон эффекта: -3,00 м³ — 1,00 м³" in page
     assert "Причинность по одному сравнению не доказана" in page
 
 
@@ -111,6 +113,7 @@ def test_dashboard_uses_short_burner_labels_and_modelled_gas_denominator() -> No
     report = _report({
         "status": "measured", "scope": "whole_meter", "volume_m3": 5,
         "flame_hours": 4, "heating_flame_hours": 3, "dhw_flame_hours": .5,
+        "reliability_index_pct": 72,
         "purpose_split": {
             "status": "estimated", "total_modelled_m3": 1, "unallocated_m3": .1,
             "components": {"heating": {"volume_m3": .6}, "dhw": {"volume_m3": .25},
@@ -124,14 +127,15 @@ def test_dashboard_uses_short_burner_labels_and_modelled_gas_denominator() -> No
         MetricValue(id="boiler", name="boiler_uptime_seconds", value=7200, unit="", context={"online": False}),
     ]
     dashboard = kpis(report)
-    assert "12 запусков · 75% горелки" in dashboard
-    assert "30 мин горелки" in dashboard
+    assert "12 запусков · 75%" in dashboard
+    assert "30 мин · 12,5%" in dashboard
+    assert "Надёжность: 72%" in dashboard
     assert "времени горения" not in dashboard
     assert dashboard.index("Качество данных") < dashboard.index("Отопление · горелка")
     assert dashboard.index("Отопление · горелка") < dashboard.index("ГВС · догревы")
     assert 'class="gas-distribution-bar"' in dashboard
-    assert "Распределение по модели: 1,00 м³" in dashboard
-    assert "Показание счётчика и распределение по модели считаются отдельно." in dashboard
+    assert "Распределение расхода</span>" in dashboard
+    assert "Распределение — оценка 1,00 м³; показание счётчика учитывается отдельно." in dashboard
     assert "Не определено <b>0,15 м³ · 15%" in dashboard
     assert 'class="kpi-uptime-row" aria-label="Статус и аптаймы"' in dashboard
     assert "ZONT · на связи · аптайм 1 дн." in dashboard

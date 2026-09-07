@@ -93,7 +93,11 @@ def period_target(report: Report) -> tuple[float | None, float | None]:
 
 
 def _gas_value(value: Any, unit: str = "") -> str:
-    return number(value, unit) if isinstance(value, (int, float)) and not isinstance(value, bool) else "Нет данных"
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+        return "Нет данных"
+    if unit.startswith("м³"):
+        return f"{value:.2f}".replace(".", ",") + f" {unit}"
+    return number(value, unit)
 
 
 def compact_percent(value: float) -> str:
@@ -190,7 +194,7 @@ def gas_period_card(report: Report) -> str:
         bounds.append(f"от {_gas_value(lower, 'м³')}")
     if isinstance(upper, (int, float)) and not isinstance(upper, bool):
         bounds.append(f"до {_gas_value(upper, 'м³')}")
-    details: list[str] = [f"Статус: {status_label}"]
+    details: list[str] = [f"Расход газа за период: {volume}", f"Статус: {status_label}"]
     if bounds:
         details.append("Диапазон: " + " — ".join(bounds))
     if status == "unknown" and isinstance(gas.get("observed_volume_m3"), (int, float)):
@@ -258,8 +262,7 @@ def gas_period_card(report: Report) -> str:
         if purpose_lines else ""
     )
     return (
-        '<details class="gas-period-card"><summary id="gas-period-title">'
-        f'Расход газа за период: {esc(volume)} · подробнее</summary>'
+        '<details class="metric-group gas-period-card"><summary id="gas-period-title">Газ</summary>'
         f'<p class="gas-period-details">{esc(" · ".join(details))}</p>'
         + stale
         + purpose_details
@@ -362,7 +365,7 @@ def kpis(report: Report) -> str:
             or not math.isfinite(flame_total) or flame_total <= 0
         ):
             return "Нет данных"
-        return f"{compact_percent(value / flame_total * 100)} горелки"
+        return compact_percent(value / flame_total * 100)
 
     starts = metric("burner_starts", "")
     starts_label = ""
@@ -377,7 +380,7 @@ def kpis(report: Report) -> str:
             burner_share(heating_total) if heating_total is not None else "",
         ) if text
     )
-    dhw_subtitle = f"{burner_time(dhw_total)} горелки" if dhw_total is not None else ""
+    dhw_subtitle = f"{burner_time(dhw_total)} · {burner_share(dhw_total)}" if dhw_total is not None else ""
 
     values = [
         ("Комната · средняя", metric("mean_temperature_c", "°C"), ""),
@@ -397,7 +400,8 @@ def kpis(report: Report) -> str:
             + (f'<small>По {target_coverage:g}% периода</small>'
                if index == 1 and is_period and target_value is not None
                and target_coverage is not None and target_coverage < 99 else "")
-            + (f'<small>{esc(subtitle)}</small>' if subtitle else "")
+            + (f'<small title="Доля от общего времени работы горелки">{esc(subtitle)}</small>'
+               if subtitle else "")
             + "</div>" for index, (label, value, subtitle) in enumerate(values)
         )
         + gas_distribution_card(gas)
@@ -409,19 +413,21 @@ def kpis(report: Report) -> str:
 def gas_distribution_card(gas: dict[str, Any]) -> str:
     """Show purpose allocation only when every part has a real model denominator."""
     status = str(gas.get("status") or "unknown")
-    amount = gas.get("volume_m3")
-    meter_volume = (
-        f"{amount:.2f}".replace(".", ",") + " м³"
-        if status != "unknown" and isinstance(amount, (int, float)) and not isinstance(amount, bool)
-        and math.isfinite(amount) and amount >= 0 else "Нет данных"
-    )
+    meter_volume = _gas_value(gas.get("volume_m3"), "м³") if status != "unknown" else "Нет данных"
     status_label = {"measured": "измерено", "estimated": "оценено", "extrapolated": "экстраполяция"}.get(
         status, "нет данных"
     )
     split = gas.get("purpose_split")
+    confidence = gas.get("reliability_index_pct")
+    confidence_label = (
+        compact_percent(confidence) if isinstance(confidence, (int, float))
+        and not isinstance(confidence, bool) and math.isfinite(confidence) else "Нет данных"
+    )
     heading = (
         '<div class="gas-kpi-total"><span>Расход газа</span>'
-        f'<strong>{esc(meter_volume)}</strong><small>{esc(status_label)}</small></div>'
+        f'<strong>{esc(meter_volume)}</strong><small>{esc(status_label)} · '
+        f'<span class="gas-reliability" title="Индекс надёжности оценки, не вероятность точности">'
+        f'Надёжность: {esc(confidence_label)}</span></small></div>'
     )
     if not isinstance(split, dict):
         return f'<section class="kpi gas-kpi kpi-gas-strip">{heading}</section>'
@@ -473,13 +479,13 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
         f'{compact_percent(value / denominator * 100)}</b></span>'
         for label, value, css in parts
     )
-    model_label = f"Распределение по модели: {model_volume(denominator)}"
+    model_label = "Распределение расхода"
     meter_note = (
-        "Показание счётчика и распределение по модели считаются отдельно."
+        f"Распределение — оценка {model_volume(denominator)}; показание счётчика учитывается отдельно."
         if status == "measured" and gas.get("scope") in {"whole_meter", "shared_meter"} else ""
     )
     if gas.get("scope") == "shared_meter" or split.get("scope") == "shared_meter_model":
-        meter_note = "Общий счётчик: другие потребители газа не отделены."
+        meter_note = (meter_note + " Общий счётчик: другие потребители газа не отделены.").strip()
     aria_label = f"{aria}. Знаменатель: {_gas_value(denominator, 'м³')} по модели."
     return (
         f'<section class="kpi gas-kpi kpi-gas-strip">{heading}<div class="gas-distribution">'
@@ -628,6 +634,7 @@ def metric_groups(report: Report, missing_mttr: str | None) -> str:
             for name, rows in groups.items()
             if rows
         )
+        + gas_period_card(report)
         + "</section>"
     )
 

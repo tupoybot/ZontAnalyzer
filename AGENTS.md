@@ -12,6 +12,14 @@ For substantial implementation tasks:
 
 # General approach
 
+## Local Python work runs in Docker
+
+- Build packages, run Python checks/tests and prepare data inside Docker containers.
+- Do not install Python dependencies into the host Python or use the host `.venv`
+  for this workflow. Use `deploy/check-local.sh`; see `docs/container-development.md`.
+- Keep source mounts read-only and temporary databases/caches in containers or
+  explicitly isolated artifact directories. Production-host load limits still apply.
+
 ## HK production host: keep load minimal
 
 - Never build images, packages, or application artifacts on `hk.tupoybot.ru`.

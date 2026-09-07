@@ -1405,7 +1405,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"};
 {html.escape(report.algorithm_version)}</p></div>
 </header><main id="report" class="report-layout">
-<div class="overview">{ui.hero(report)}{ui.kpis(report)}{ui.gas_period_card(report)}
+<div class="overview">{ui.hero(report)}{ui.kpis(report)}
 {render_charts(report, chart_data, panel_ids=("climate",))}</div>
 <aside class="actions"><span class="eyebrow">СЛЕДУЮЩИЙ ШАГ</span><h2>Что делать</h2>
 {recommendations or '<p>Рекомендаций за этот период нет.</p>'}</aside>
