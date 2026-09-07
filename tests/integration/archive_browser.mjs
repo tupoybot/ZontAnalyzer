@@ -179,6 +179,12 @@ try {
   const note = "Stage 1.8 browser feedback survives reload";
   await card.locator(".feedback-comment > summary").click();
   await card.locator(".feedback-note").fill(note);
+  await card.locator(".feedback-experiment > summary").click();
+  await card.locator('[data-experiment-field="category"]').selectOption("firmware_update");
+  await card.locator('[data-experiment-field="parameter"]').fill("Прошивка контроллера");
+  await card.locator('[data-experiment-field="before"]').fill("1.0");
+  await card.locator('[data-experiment-field="after"]').fill("1.1");
+  await card.locator('[data-experiment-field="performed_at"]').fill("2026-08-01T12:30");
   await card.locator('button[data-feedback-status="applied"]').click();
   await card.locator(".feedback-message").filter({ hasText: "сохранена" }).waitFor();
   await assert.match(await card.locator(".feedback-message").textContent(), /сохранена/i);
@@ -192,6 +198,10 @@ try {
   await page.locator(".recommendation .feedback-message").first().filter({hasText:"сохранена"}).waitFor();
   await page.reload({waitUntil: "networkidle"});
   assert.equal(await page.locator(".recommendation .feedback-note").first().inputValue(), note + " edited");
+  assert.equal(await page.locator('[data-experiment-field="category"]').first().inputValue(), "firmware_update");
+  assert.equal(await page.locator('[data-experiment-field="before"]').first().inputValue(), "1.0");
+  assert.equal(await page.locator('[data-experiment-field="after"]').first().inputValue(), "1.1");
+  assert.match(await page.locator('[data-experiment-field="performed_at"]').first().inputValue(), /^2026-08-01T12:30/);
   assert.match(await page.locator(".recommendation .feedback-status").first().textContent(), /Выполнено/);
   await page.goto(`${baseURL}/latest.html?debug=1`, {waitUntil: "networkidle"});
   assert.equal(await page.locator("#debug-toggle").isChecked(), true);

@@ -136,6 +136,10 @@ def test_next_openai_packet_includes_owner_recommendation_feedback(tmp_path: Pat
     assert recommendation.id is not None
     owner_note = "Датчик исправен; тему пока закрыть и наблюдать"
     db.reject(recommendation.id, owner_note)
+    with db.session() as session:
+        row = session.get(RecommendationRow, recommendation.id)
+        assert row is not None
+        row.updated_at = datetime(2026, 8, 2, 8, tzinfo=UTC)
 
     start = datetime(2026, 8, 1, 20, tzinfo=UTC)
     db.upsert_samples(_room_points(start), {"room": "indoor_temperature"})

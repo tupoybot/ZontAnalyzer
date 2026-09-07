@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from zont_analyzer.adapters.sqlite.database import RecommendationRow
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.feedback import build_feedback_server
 from zont_analyzer.application.pilot import PilotService, atomic_write_text, reports_directory
@@ -80,6 +81,24 @@ def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch
             saved = client.put(feedback_url, json=payload)
             repeated = client.put(feedback_url, json=payload)
             reopened = client.get(feedback_url)
+            experiment_payload = {
+                "status": "applied", "owner_note": "Обновил контроллер",
+                "experiment": {"category": "firmware_update", "parameter": "Прошивка",
+                               "before": "1.0", "after": "1.1", "performed_at": "2026-08-02T12:30"},
+            }
+            experiment_saved = client.put(feedback_url, json=experiment_payload)
+            assert experiment_saved.status_code == 200, experiment_saved.text
+            experiment_state = experiment_saved.json()
+            assert experiment_state["experiment"]["category"] == "firmware_update"
+            assert datetime.fromisoformat(experiment_state["experiment"]["performed_at"]).tzinfo is not None
+            assert client.put(feedback_url, json=experiment_payload).json() == experiment_state
+            edited = client.put(feedback_url, json={"status": "applied", "owner_note": "Уточнение"})
+            assert edited.json()["experiment"] == experiment_state["experiment"]
+            for invalid in ([], {"category": "unknown"}, {"performed_at": 123}, {"before": "x" * 501}):
+                response = client.put(feedback_url, json={"status": "applied", "experiment": invalid})
+                assert response.status_code == 422, response.text
+            assert client.get(feedback_url).json() == edited.json()
+            client.put(feedback_url, json=payload)
     finally:
         server.shutdown()
         server.server_close()
@@ -103,6 +122,10 @@ def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch
 
     config = AppConfig.model_validate({"analysis": {"daily_ai_when_normal": True}})
     runtime.db.upsert_samples(_room_points(datetime(2026, 8, 1, 20, tzinfo=UTC)), {"room": "indoor_temperature"})
+    with runtime.db.session() as session:
+        row = session.get(RecommendationRow, recommendation.id)
+        assert row is not None
+        row.updated_at = datetime(2026, 8, 2, 8, tzinfo=UTC)
     analyst = CapturingAnalyst()
     next_report = AnalysisService(runtime.db, config, analyst).analyze_daily(date(2026, 8, 2))
 

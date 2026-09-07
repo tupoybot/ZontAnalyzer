@@ -621,7 +621,12 @@ class AnalysisService:
         previous_report = self.db.report(report_id)
         ai_used = False
         reasoning = reasoning_payload(AnalysisResult(summary=""))
-        control_context.update(reasoning_context(events, self.db.prior_reports(start), self.config.home.timezone))
+        control_context.update(reasoning_context(
+            events,
+            self.db.prior_reports(start),
+            self.config.home.timezone,
+            self.db.intervention_history(before=end),
+        ))
         should_use_ai = (
             use_ai
             and self.analyst is not None
@@ -648,7 +653,7 @@ class AnalysisService:
                             "timezone": self.config.home.timezone,
                         },
                         context=control_context,
-                        recommendation_feedback=self.db.recommendation_feedback(),
+                        recommendation_feedback=self.db.recommendation_feedback(before=end),
                     )
                 )
                 reasoning = reasoning_payload(result)

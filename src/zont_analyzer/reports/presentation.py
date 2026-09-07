@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 from zont_analyzer.domain import Report
 
+from .wording import normalize_report_for_display
+
 
 def esc(value: Any) -> str:
     return html.escape(str(value))
@@ -31,6 +33,7 @@ def debug(value: Any, label: str = "Технические данные") -> str
 
 
 def hero(report: Report) -> str:
+    report = normalize_report_for_display(report)
     insufficient = report.quality.score < 0.6 or not report.quality.sample_count
     alerts = [e for e in report.events if e.severity in {"warning", "critical"}]
     urgent = [r for r in report.recommendations if r.priority in {"high", "critical"}]
@@ -57,13 +60,6 @@ def hero(report: Report) -> str:
         if any(phrase in report.summary.lower() for phrase in normal):
             title, state = "Система работает штатно", "success"
     summary = report.summary
-    for old in (
-        "Явной неисправности нет",
-        "Неисправность не обнаружена",
-        "Аномалий не выявлено",
-        "Критических проблем нет",
-    ):
-        summary = summary.replace(old, "Система работает штатно").replace(old.lower(), "система работает штатно")
     return (
         f'<section class="hero {state}"><span class="eyebrow">СОСТОЯНИЕ СИСТЕМЫ</span>'
         f'<h1>{esc(title)}</h1><p class="lead">{esc(summary)}</p></section>'

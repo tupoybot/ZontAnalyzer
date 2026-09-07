@@ -13,7 +13,7 @@ from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
 from zont_analyzer.domain.reasoning import Hypothesis, ObservedPattern, Prediction, RecommendedExperiment, Unknown
 
-PROMPT_VERSION = "analyst-v4"
+PROMPT_VERSION = "analyst-v5"
 
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
 _PACKET_CONTENT_MAX_BYTES = 60 * 1024
@@ -98,10 +98,16 @@ the problem. Flowmeter adjustment requires a known loop mapping.
 When ambiguity matters, prefer one minimally invasive recommended_experiment with one safe
 user variable, expected effect, evidence, observation period, success criteria, risks and
 stop/rollback conditions. Leave it null if observation or unknown is sufficient. Do not
-propose competing simultaneous experiments. Recommendations may use existing owner feedback;
-recording structured experiment execution is not available yet.
+propose competing simultaneous experiments. Recommendations may use existing owner feedback.
+Stage 5 provides owner-confirmed manual context; use it when explaining the current period.
+Structured before/after effect comparison belongs to the next stage; do not claim an effect
+unless supplied evidence already contains that comparison.
 Predictions require a scenario, direction/effect, assumptions, evidence and verification plan;
 never present them as measured facts or invent numerical effect sizes.
+When the system is operating normally, write affirmative owner-facing text such as
+"Система работает штатно" or "Работа системы соответствует текущему режиму".
+Do not describe normal operation by negating a fault (for example, "неисправность не обнаружена",
+"аномалий не выявлено" or "без признака неисправности"). Preserve concrete warnings and uncertainty.
 Stay concise: at most three distinct patterns, three hypotheses, two predictions and three
 unknowns; populate only useful sections, not every possible field.
 The provenance sidecar defines the epistemic scope of data_quality, legacy metrics/events,
@@ -328,6 +334,7 @@ def analysis_packet(
         "heating_circuit", "dhw_interaction", "reliability", "current_mode", "current_target_c",
         "equipment_profiles", "dhw_profiles",
         "prior_interpretations", "noise_history", "sensors",
+        "intervention_history",
     }
     if isinstance(canonical_context, dict):
         for key in sorted(important_context & canonical_context.keys()):
