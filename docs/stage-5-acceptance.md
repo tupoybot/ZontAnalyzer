@@ -63,4 +63,40 @@ llm_calls. Перерендерены 125 архивных отчётов. От�
 `/tmp/zont-stage5/analysis-data`; её результаты не предназначены для production.
 Локальные приёмочные контейнеры работают без сети. Новых OpenAI-запросов нет.
 
-Результаты сборок, registry-приёмки и deployment будут дополнены после завершения.
+Сборки sdist/wheel, production Docker и Docker HTTP target прошли; Compose валиден.
+Новый daily на второй копии: 44 метрики, 19 событий, `ai_used=false`.
+Реальная форма проверена на 1360/390 px, горизонтального overflow нет; снимки
+`/tmp/zont-stage5/{latest-desktop,experiment-desktop,experiment-mobile}.png`.
+
+[CI ветки](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34077888592) и
+[release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34077890292) — success.
+Коммит `bb7807dc73e906ea148790d1a4938bc95a40db75`, тег `release-5-20260907`.
+Принятый registry digest:
+`ghcr.io/tupoybot/zontanalyzer@sha256:23d87d20d508bd94d797553fcad21eb27915b0e8ff46e77ea0137ca143dab5cd`.
+Совпали хеши всех 47 Python-файлов; registry-контейнер без сети сохранил все
+проверяемые таблицы и перерендерил архив за 3,267 с локально. Это не замер HK.
+Готовые HTML и приватный кэш упакованы для доставки.
+
+## Развёртывание
+
+На HK `current` → `/opt/zont-analyzer/releases/20260907-stage5-bb7807d`.
+Перед переключением штатный backup:
+`/opt/zont-analyzer/data/backups/zont-analyzer-20260907T030143215439Z.sqlite3`.
+Миграция завершилась, ревизия `e5a1f0c4d920`. Worker healthy, OOM=false;
+первый успешный цикл `2026-09-07T03:06:31Z`, день `2026-09-06`.
+Установлены 252 готовых файла под publication lock, manifest последним,
+с предварительно подготовленным локально приватным кэшем.
+
+Root/дневной архив/health/equipment/gas/legacy вернули ожидаемые 200/401;
+Basic Auth файл после временной smoke-учётки восстановлен побайтно.
+Один read-only GET feedback подтвердил поле `experiment: null` у старой рекомендации.
+Профиль, газ/аудит/границы, 14 interventions и все 150 сохранённых состояний
+feedback имеют прежние хеши. `llm_calls` остались 26; ручных live AI-запросов
+в этом этапе не выполнялось. nginx, Xray, Postfix, OpenDKIM и Docker active.
+Синтетические изменения экспериментов выполнялись только локально.
+
+Доказательства: `/tmp/zont-stage5/{deploy.log,registry-accept.log,worker-smoke.json,
+routes-smoke.json,metadata-before.json,metadata-after.json,services-after.txt}`.
+Результат доступен на `https://za.tupoybot.ru/` и прежнем `/za/`.
+Этап реализован, проверен и развёрнут; ожидает приёмки владельца.
+Ветка `stage5` не слита, следующий этап не начат.
