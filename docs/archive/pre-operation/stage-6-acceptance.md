@@ -78,7 +78,7 @@ timeout ограничен; неизвестный usage резервирует�
 
 ## Доказательства
 
-Оценочные сценарии и границы проверки: [stage-6-evaluation.md](./stage-6-evaluation.md).
+Оценочные сценарии и границы проверки: [stage-6-evaluation.md](stage-6-evaluation.md).
 Локальная изолированная копия: `/tmp/zont-stage6/source/production.sqlite3`;
 исходный online backup на HK:
 `/opt/zont-analyzer/data/backups/zont-analyzer-20260907T033537088378Z.sqlite3`.

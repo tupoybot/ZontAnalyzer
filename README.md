@@ -8,42 +8,68 @@ ZontAnalyzer безопасно читает телеметрию ZONT, хран
 разрешены только read-only методы `devices` и `load_data`; модель не получает инструментов
 управления.
 
-Сейчас это рабочее автономное CLI-приложение и основа локального P2-пилота, проверенная на одной
-референсной установке BAXI Connect+. Эта проверка не задаёт аппаратный профиль продукта: при
+Сейчас это рабочее автономное CLI-приложение, проверенное на одной референсной установке BAXI
+Connect+. Эта проверка не задаёт аппаратный профиль продукта: при
 подключении нового дома приложение обнаруживает доступные ряды и конфигурацию. Оно анализирует
 отопление, режимы, автоматический летний
 переход, температуру и историческую цель ГВС, детерминированные эпизоды догрева и подтверждаемое
-влияние приоритета ГВС на возврат отопления. Основной путь просмотра пилота —
+влияние приоритета ГВС на возврат отопления. Основной путь просмотра результатов —
 **https://za.tupoybot.ru/** под существующим Basic Auth: готовый дневной HTML с календарём
-архива и переключателем «День / Неделя / Месяц». Telegram пока нет.
+архива и переключателем «День / Неделя / Месяц / Сезон». Telegram пока нет.
 
 Календарь показывает только опубликованные завершённые периоды. «Сегодня» открывает последний
 доступный завершённый день; соседние кнопки пропускают отсутствующие даты, а маленькие стрелки
-меняют месяц календаря. Каждый архив имеет прямой URL `daily|weekly|monthly/YYYY-MM-DD.html`;
+меняют месяц календаря. Каждый архив имеет прямой URL `daily|weekly|monthly|seasonal/YYYY-MM-DD.html`;
 `latest.html` остаётся стабильной ссылкой на последний дневной отчёт. Legacy
 `https://hk.tupoybot.ru/za/` продолжает работать.
 
-Worker публикует `reports.json` вместе с HTML/JSON-архивами. Недельные и месячные периоды
+Worker публикует `reports.json` вместе с HTML/JSON-архивами. Недельные, месячные и сезонные периоды
 появляются после их реального расчёта; просмотр страницы не запускает анализ. Для публикации
-уже сохранённых завершённых отчётов без ZONT/OpenAI запросов используйте `zont-analyzer report publish`.
+уже сохранённых завершённых отчётов без ZONT/OpenAI запросов используйте `zont report publish`.
+
+## Актуальный статус и документация
+
+Этапы до 8.5 приняты. Текущий рабочий цикл — этап 9: опытно-промышленная эксплуатация и
+доработки. Этап 10 (многокомнатность) и этап 11 (управление) запланированы как необязательные
+и отложенные; переход к ним возможен после накопления опыта эксплуатации.
+
+Навигация по актуальной документации начинается с [индекса документов](docs/README.md). Завершённые
+и исторические материалы находятся в [архиве](docs/archive/); обращаться к архиву следует только
+при острой необходимости восстановить контекст или проверить историческое решение.
 
 ## Первый отчёт
 
-Ниже рекомендуемый на сегодня путь: локальный запуск без AI. Нужны Python 3.11+,
+Ниже рекомендуемый на сегодня путь: локальный запуск без AI в Docker. Нужны Docker,
 действующий ZONT token и контактный e-mail для обязательного заголовка `X-ZONT-Client`.
 
 ### 1. Установить приложение
 
-Из корня репозитория:
+Из корня репозитория соберите локальный образ и создайте каталог состояния:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e .
-mkdir -p .access reports
+docker build -t zont-analyzer:local .
+mkdir -p .access .zont-analyzer reports
+
+zont() {
+  docker run --rm \
+    -w /workspace \
+    --user "$(id -u):$(id -g)" \
+    -e ZONT_TOKEN -e ZONT_CLIENT_EMAIL \
+    -e OPENAI_API_KEY \
+    -v "$PWD:/workspace:ro" \
+    -v "$PWD/.zont-analyzer:/data" \
+    -v "$PWD/reports:/reports" \
+    -v "$PWD/reports:/workspace/reports" \
+    zont-analyzer:local "$@"
+}
 ```
 
-После повторного входа в терминал сначала снова выполните `. .venv/bin/activate`.
+Функцию `zont` задавайте из корня репозитория; после нового входа в shell определите её
+повторно. Исходники и настройки доступны только для чтения, состояние и отчёты —
+в отдельных записываемых каталогах.
+
+Для локальных проверок Python используйте [Docker workflow](docs/container-development.md):
+`deploy/check-local.sh` запускает линтеры, типизацию, тесты и сборку пакета в контейнере.
 
 ### 2. Подключить read-only доступ к ZONT
 
@@ -74,9 +100,9 @@ export ZONT_CLIENT_EMAIL='<контактный e-mail>'
 ### 3. Проверить подключение
 
 ```bash
-zont-analyzer init
-zont-analyzer doctor --live
-zont-analyzer discover
+zont init
+zont doctor --live
+zont discover
 ```
 
 Ожидаемый результат:
@@ -93,9 +119,9 @@ zont-analyzer discover
 Первый `sync` получает всю историю, которую ZONT реально предоставляет аккаунту и устройствам:
 
 ```bash
-zont-analyzer sync
-zont-analyzer analyze initial --no-ai
-zont-analyzer report export --format html -o reports/latest.html
+zont sync
+zont analyze initial --no-ai
+zont report export --format html -o /reports/latest.html
 ```
 
 Откройте `reports/latest.html` браузером. `--no-ai` оставляет анализ полностью локальным.
@@ -165,13 +191,13 @@ ZONT у этого API нет. CLI-команды `mark-applied` и `reject` о�
 Посмотреть последний отчёт в терминале:
 
 ```bash
-zont-analyzer report latest
+zont report latest
 ```
 
 Проверить свежесть и целостность локального состояния:
 
 ```bash
-zont-analyzer status
+zont status
 ```
 
 ## Ежедневное использование
@@ -179,32 +205,32 @@ zont-analyzer status
 Ручной цикл за завершившиеся вчерашние сутки:
 
 ```bash
-zont-analyzer sync
-zont-analyzer analyze daily --no-ai
-zont-analyzer report export --format html -o reports/latest.html
+zont sync
+zont analyze daily --no-ai
+zont report export --format html -o /reports/latest.html
 ```
 
 Для конкретной локальной даты:
 
 ```bash
-zont-analyzer analyze daily --date 2026-08-01 --no-ai
+zont analyze daily --date 2026-08-01 --no-ai
 ```
 
 Проверить одну итерацию фонового процесса:
 
 ```bash
-zont-analyzer run --once
+zont run --once
 ```
 
 Оставить синхронизацию работать в foreground:
 
 ```bash
-zont-analyzer run
+zont run
 ```
 
 Остановка — `Ctrl+C`. Worker синхронизирует данные с интервалом из конфигурации, догоняет
 пропущенные завершённые локальные дни, пересчитывает вчера с учётом поздних данных и атомарно
-обновляет `reports/latest.html` вместе с архивом `reports/daily/YYYY-MM-DD.{html,json}` внутри
+обновляет `reports/latest.html` вместе с архивами `reports/daily|weekly|monthly|seasonal/YYYY-MM-DD.{html,json}` внутри
 каталога состояния. Неполный sync считается ошибкой, а `worker-status.json` и команда
 `healthcheck` позволяют отличить работающий процесс от зависшего. Перед постоянным запуском
 обязательно проверьте `run --once`.
@@ -223,7 +249,7 @@ openai:
 
 ```bash
 export OPENAI_API_KEY='<project API key>'
-zont-analyzer analyze initial --days 30
+zont analyze initial --days 30
 ```
 
 Для локальной разработки ключ также можно положить одной строкой в
@@ -244,13 +270,13 @@ quality/metric/event факты и контекст. Провайдер испо
 Показать effective config и наличие секретов без их значений:
 
 ```bash
-zont-analyzer config explain
+zont config explain
 ```
 
 Другой каталог постоянных данных:
 
 ```bash
-zont-analyzer --data-dir /srv/zont-analyzer status
+docker run --rm -v /srv/zont-analyzer:/data zont-analyzer:local status
 ```
 
 Или задайте `ZONT_ANALYZER_DATA_DIR`. Глобальные параметры `--data-dir`, `--config` и `--verbose`
@@ -272,7 +298,7 @@ zont-analyzer --data-dir /srv/zont-analyzer status
 Создать проверенную online-копию SQLite:
 
 ```bash
-zont-analyzer db backup
+zont db backup
 ```
 
 Эта копия остаётся на том же диске. Для production нужен отдельный off-host backup.
@@ -363,8 +389,8 @@ test override, а nginx проксирует same-origin путь к API по и
 | `db backup` | Создать и проверить online backup SQLite. |
 | `run [--once]` | Выполнить sync, catch-up daily-отчётов и атомарную публикацию `latest.html`. |
 
-Детальную справку даёт `zont-analyzer --help` или, например,
-`zont-analyzer analyze daily --help`.
+Детальную справку даёт `zont --help` или, например,
+`zont analyze daily --help`.
 
 ## Частые проблемы
 
@@ -381,12 +407,13 @@ test override, а nginx проксирует same-origin путь к API по и
 
 ## Разработка
 
+Локальные проверки и сборка выполняются в Docker:
+
 ```bash
-python -m pip install -e '.[dev]'
-pytest
-ruff check .
-mypy src/zont_analyzer
+deploy/check-local.sh
 ```
+
+Подробности, включая экспорт wheel/sdist, описаны в [инструкции контейнерной разработки](docs/container-development.md).
 
 SQLite использует WAL, foreign keys, busy timeout и канонические UPSERT-ключи. При переходе на
 новую Alembic revision приложение сначала делает и проверяет online backup. CI дополнительно
@@ -394,8 +421,7 @@ SQLite использует WAL, foreign keys, busy timeout и канониче�
 
 Документы проекта:
 
-- [план ближайшего цикла](docs/implementation_plan.md) — этапы и критерии приёмки;
-- [продуктовая дорожная карта](docs/roadmap.md) — приоритеты P0–P4;
+- [индекс актуальной документации](docs/README.md) — рабочие планы и правила навигации;
 - [краткий фактический статус](docs/status.md) — что реально проверено;
 - [архитектурная спецификация](docs/architecture.md) — принципы и долгосрочные границы;
 - [действия владельца](docs/for_human.md) — секреты и решения по рабочему развёртыванию.
