@@ -135,7 +135,7 @@ def test_dashboard_uses_short_burner_labels_and_modelled_gas_denominator() -> No
     assert dashboard.index("Отопление · горелка") < dashboard.index("ГВС · догревы")
     assert 'class="gas-distribution-bar"' in dashboard
     assert "Распределение расхода</span>" in dashboard
-    assert "Распределение — оценка 1,00 м³; показание счётчика учитывается отдельно." in dashboard
+    assert "показание счётчика учитывается отдельно" not in dashboard
     assert "Не определено <b>0,15 м³ · 15%" in dashboard
     assert 'class="kpi-uptime-row" aria-label="Статус и аптаймы"' in dashboard
     assert "ZONT · на связи · аптайм 1 дн." in dashboard

@@ -373,6 +373,26 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "/tmp/zont-stage18-archive-mobile.png", fullPage: true });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await page.goto(baseURL + '/gas-layout.html', {waitUntil:'networkidle'});
+  for (const width of [320, 390, 768, 916, 1280]) {
+    await page.setViewportSize({width, height:900});
+    const total = page.locator('.gas-kpi-total');
+    assert.equal(await total.locator('strong').first().textContent(), '9999,99 м³');
+    assert.equal(await total.locator('.gas-kpi-money').textContent(), '99 999,99 руб.');
+    const volume = await total.locator('strong').first().boundingBox();
+    const money = await total.locator('.gas-kpi-money').boundingBox();
+    assert(volume.y + volume.height <= money.y, 'money is below volume');
+    const rects = await total.locator('strong').evaluateAll(elements => elements.map(el => {
+      const range = document.createRange(); range.selectNodeContents(el);
+      return [...range.getClientRects()].map(r => ({x:r.x, y:r.y, right:r.right}));
+    }));
+    assert(rects.every(lines => lines.length === 1), 'numbers and units stay on one line');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    const notes = await page.locator('.gas-kpi-notes').boundingBox();
+    const distribution = await page.locator('.gas-distribution').boundingBox();
+    assert(notes.y >= Math.max(money.y + money.height, distribution.y + distribution.height));
+    assert.doesNotMatch(await page.locator('.gas-distribution-legend').textContent(), /руб/);
+  }
 } finally {
   await browser.close();
 }

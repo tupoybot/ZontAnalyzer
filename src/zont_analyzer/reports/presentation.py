@@ -561,27 +561,37 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
     """Show purpose allocation only when every part has a real model denominator."""
     status = str(gas.get("status") or "unknown")
     meter_volume = (
-        _volume_and_cost(gas.get("volume_m3"), gas.get("cost"))
+        _gas_value(gas.get("volume_m3"), "м³")
         if status != "unknown" else "Нет данных"
     )
-    status_label = {"measured": "измерено", "estimated": "оценено", "extrapolated": "экстраполяция"}.get(
-        status, "нет данных"
-    )
-    status_prefix = f"{esc(status_label)} · " if status != "estimated" else ""
     split = gas.get("purpose_split")
     confidence = gas.get("reliability_index_pct")
     confidence_label = (
         compact_percent(confidence) if isinstance(confidence, (int, float))
         and not isinstance(confidence, bool) and math.isfinite(confidence) else "Нет данных"
     )
+    money = _cost_value(gas.get("cost")) if status != "unknown" else None
+    money_html = (
+        f'<strong class="gas-kpi-money">{esc(money)}</strong>'
+        if money and money != "Стоимость неизвестна" else ""
+    )
     heading = (
         '<div class="gas-kpi-total"><span>Расход газа</span>'
-        f'<strong>{esc(meter_volume)}</strong><small>{status_prefix}'
-        f'<span class="gas-reliability" title="Индекс надёжности оценки, не вероятность точности">'
-        f'Надёжность: {esc(confidence_label)}</span></small></div>'
+        f'<strong>{esc(meter_volume)}</strong>{money_html}</div>'
     )
+    auxiliary = (
+        f'<span class="gas-reliability" title="Индекс надёжности оценки, не вероятность точности">'
+        f'Надёжность: {esc(confidence_label)}</span>'
+    )
+
+    def render(distribution: str = "") -> str:
+        return (
+            f'<section class="kpi gas-kpi kpi-gas-strip">{heading}{distribution}'
+            f'<div class="gas-kpi-notes">{auxiliary}</div></section>'
+        )
+
     if not isinstance(split, dict):
-        return f'<section class="kpi gas-kpi kpi-gas-strip">{heading}</section>'
+        return render()
 
     def valid(value: Any) -> TypeGuard[float]:
         return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
@@ -596,17 +606,15 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
         item = components.get(key) if isinstance(components, dict) else None
         values[key] = item.get("volume_m3") if isinstance(item, dict) else None
     if valid(total) and total == 0:
-        return (
-            f'<section class="kpi gas-kpi kpi-gas-strip">{heading}'
-            '<p class="gas-distribution-unavailable">Распределение по модели: 0,00 м³</p></section>'
+        return render(
+            '<p class="gas-distribution-unavailable">Распределение по модели: 0,00 м³</p>'
         )
     if not (
         split.get("status") in {"estimated", "measured", "extrapolated"}
         and valid(total) and total > 0 and valid(gap) and all(valid(value) for value in values.values())
     ):
-        return (
-            f'<section class="kpi gas-kpi kpi-gas-strip">{heading}'
-            '<p class="gas-distribution-unavailable">Распределение по модели: Нет данных</p></section>'
+        return render(
+            '<p class="gas-distribution-unavailable">Распределение по модели: Нет данных</p>'
         )
 
     heating, dhw, purpose_unknown = values["heating"], values["dhw"], values["purpose_unknown"]
@@ -614,9 +622,8 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
     denominator = total
     unknown = purpose_unknown + gap
     if not math.isclose(heating + dhw + unknown, denominator, rel_tol=1e-6, abs_tol=1e-9):
-        return (
-            f'<section class="kpi gas-kpi kpi-gas-strip">{heading}'
-            '<p class="gas-distribution-unavailable">Распределение по модели: Нет данных</p></section>'
+        return render(
+            '<p class="gas-distribution-unavailable">Распределение по модели: Нет данных</p>'
         )
     parts = (("Отопление", heating, "heat"), ("ГВС", dhw, "dhw"),
              ("Не определено", unknown, "unknown"))
@@ -631,19 +638,12 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
         for label, value, css in parts
     )
     model_label = "Распределение расхода"
-    meter_note = (
-        f"Распределение — оценка {model_volume(denominator)}; показание счётчика учитывается отдельно."
-        if status == "measured" and gas.get("scope") in {"whole_meter", "shared_meter"} else ""
-    )
-    if gas.get("scope") == "shared_meter" or split.get("scope") == "shared_meter_model":
-        meter_note = (meter_note + " Общий счётчик: другие потребители газа не отделены.").strip()
     aria_label = f"{aria}. Знаменатель: {_gas_value(denominator, 'м³')} по модели."
-    return (
-        f'<section class="kpi gas-kpi kpi-gas-strip">{heading}<div class="gas-distribution">'
+    return render(
+        '<div class="gas-distribution">'
         f'<span class="gas-distribution-label">{esc(model_label)}</span>'
         f'<div class="gas-distribution-bar" role="img" aria-label="{esc(aria_label)}">{bars}</div>'
-        f'<div class="gas-distribution-legend">{legend}</div>'
-        f'<small class="gas-distribution-note">{esc(meter_note)}</small></div></section>'
+        f'<div class="gas-distribution-legend">{legend}</div></div>'
     )
 
 

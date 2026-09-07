@@ -8,7 +8,7 @@ from unittest.mock import patch
 from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.application.publication import publish_reports
 from zont_analyzer.domain import Hypothesis, TimeInterval
-from zont_analyzer.reports import render_text
+from zont_analyzer.reports import render_html, render_text
 from zont_analyzer.runtime import build_runtime
 
 runtime = build_runtime(Path("/config/config.yaml"), Path("/data"))
@@ -71,3 +71,19 @@ for year, season in ((2025, "autumn"), (2026, "spring"), (2026, "autumn")):
 with patch("zont_analyzer.application.gas.GasService.refresh", lambda self, report: report):
     result = publish_reports(runtime)
 assert result["reports"] == 12
+
+# Render large values through the real template, without changing stored reports.
+layout_report = report.model_copy(deep=True)
+layout_report.context["gas"] = {
+    "status": "measured", "scope": "whole_meter", "volume_m3": 9999.99,
+    "reliability_index_pct": 35,
+    "cost": {"status": "available", "amounts": [{"currency": "RUB", "amount": "99999.99"}]},
+    "purpose_split": {
+        "status": "estimated", "total_modelled_m3": 9999.99, "unallocated_m3": 0,
+        "components": {
+            "heating": {"volume_m3": 9000}, "dhw": {"volume_m3": 900},
+            "purpose_unknown": {"volume_m3": 99.99},
+        },
+    },
+}
+Path("/publish/gas-layout.html").write_text(render_html(layout_report))
