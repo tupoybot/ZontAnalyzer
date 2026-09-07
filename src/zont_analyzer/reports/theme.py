@@ -97,10 +97,11 @@ letter-spacing:-.5px;
 margin-top:5px}
 .kpi small{display:block;font-size:12px;color:var(--secondary);margin-top:7px}
 .kpi-gas-strip{grid-column:1/-1;display:grid;
-grid-template-columns:minmax(200px,260px) minmax(0,1fr);gap:12px 18px;align-items:center}
+grid-template-columns:minmax(200px,320px) minmax(0,1fr);gap:12px 18px;align-items:center}
 .gas-kpi-total span,.gas-distribution-label{display:block;font-size:12px;color:var(--secondary)}
 .gas-kpi-total strong{display:block;font-size:clamp(18px,2vw,25px);letter-spacing:-.5px;margin-top:5px;
-overflow-wrap:anywhere;text-wrap:balance}
+overflow-wrap:normal}
+.gas-kpi-total strong .gas-kpi-value{display:inline-block;font:inherit;color:inherit;white-space:nowrap}
 .gas-kpi-total small{display:block;font-size:12px;color:var(--secondary);margin-top:7px}
 .gas-kpi-total .gas-reliability{display:inline}
 .gas-distribution-bar{display:flex;height:12px;overflow:hidden;border-radius:6px;

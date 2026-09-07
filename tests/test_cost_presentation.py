@@ -129,8 +129,8 @@ def test_detailed_gas_fields_include_money_but_dashboard_distribution_omits_it()
     assert "Отопление: 0,75 м³ · 6,01 руб." in purpose
     assert "ГВС: 0,25 м³ · 2,00 руб." in purpose
     assert "руб." not in distribution
-    assert "<strong>1,00 м³</strong>" in dashboard
-    assert '<strong class="gas-kpi-money">8,01 руб.</strong>' in dashboard
+    assert '<span class="gas-kpi-value">1,00 м³</span>' in dashboard
+    assert '<span class="gas-kpi-value gas-kpi-money">· 8,01 руб.</span>' in dashboard
 
     for rendered in (render_html(report), render_text(report)):
         assert "Отопление: 0,75 м³ · 6,01 руб." in rendered

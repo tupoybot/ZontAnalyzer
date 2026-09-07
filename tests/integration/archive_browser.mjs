@@ -377,12 +377,12 @@ try {
   for (const width of [320, 390, 768, 916, 1280]) {
     await page.setViewportSize({width, height:900});
     const total = page.locator('.gas-kpi-total');
-    assert.equal(await total.locator('strong').first().textContent(), '9999,99 м³');
-    assert.equal(await total.locator('.gas-kpi-money').textContent(), '99 999,99 руб.');
-    const volume = await total.locator('strong').first().boundingBox();
+    assert.equal(await total.locator('.gas-kpi-value').first().textContent(), '9999,99 м³');
+    assert.equal(await total.locator('.gas-kpi-money').textContent(), '· 99 999,99 руб.');
+    const volume = await total.locator('.gas-kpi-value').first().boundingBox();
     const money = await total.locator('.gas-kpi-money').boundingBox();
-    assert(volume.y + volume.height <= money.y, 'money is below volume');
-    const rects = await total.locator('strong').evaluateAll(elements => elements.map(el => {
+    assert(volume.x + volume.width <= money.x || volume.y + volume.height <= money.y, 'values do not overlap');
+    const rects = await total.locator('.gas-kpi-value').evaluateAll(elements => elements.map(el => {
       const range = document.createRange(); range.selectNodeContents(el);
       return [...range.getClientRects()].map(r => ({x:r.x, y:r.y, right:r.right}));
     }));

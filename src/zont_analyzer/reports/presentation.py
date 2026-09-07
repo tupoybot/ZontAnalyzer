@@ -572,14 +572,16 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
     )
     money = _cost_value(gas.get("cost")) if status != "unknown" else None
     money_html = (
-        f'<strong class="gas-kpi-money">{esc(money)}</strong>'
+        f'<span class="gas-kpi-value gas-kpi-money">· {esc(money)}</span>'
         if money and money != "Стоимость неизвестна" else ""
     )
     heading = (
         '<div class="gas-kpi-total"><span>Расход газа '
         '<span class="gas-reliability" title="Индекс надёжности оценки, не вероятность точности">'
         f'(надёжность {esc(confidence_label)})</span></span>'
-        f'<strong>{esc(meter_volume)}</strong>{money_html}</div>'
+        f'<strong><span class="gas-kpi-value">{esc(meter_volume)}</span>'
+        + (f' {money_html}' if money_html else '')
+        + '</strong></div>'
     )
 
     def render(distribution: str = "") -> str:
