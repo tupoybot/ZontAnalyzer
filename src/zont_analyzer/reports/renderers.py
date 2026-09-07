@@ -250,16 +250,13 @@ _ARCHIVE_NAVIGATION_SCRIPT = r"""
     return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   }
 
-  function currentDailyIndex(days) {
-    const selected = reportKind === "daily" ? reportStart : "";
-    return days.findIndex((item) => item.start === selected);
-  }
-
-  function setNavigation(days) {
-    const selected = currentDailyIndex(days);
-    const previousReport = selected > 0 ? days[selected - 1] : null;
-    const nextReport = selected >= 0 && selected < days.length - 1 ? days[selected + 1] : null;
-    const latestReport = days.at(-1) || null;
+  function setNavigation(items) {
+    const previousReport = items.filter((item) => item.start < reportStart).at(-1) || null;
+    const nextReport = items.find((item) => item.start > reportStart) || null;
+    const latestReport = items.at(-1) || null;
+    latest.textContent = activeKind === "daily" ? "Сегодня" : "Последний";
+    latest.title = activeKind === "daily" ? "Последний доступный дневной отчёт"
+      : "Последний доступный отчёт выбранного типа";
     for (const [button, item] of [[previous, previousReport], [latest, latestReport], [next, nextReport]]) {
       if (!button) continue;
       button.disabled = !item;
@@ -304,17 +301,15 @@ _ARCHIVE_NAVIGATION_SCRIPT = r"""
   }
 
   function renderPeriods() {
-    previous.disabled = true;
-    latest.disabled = true;
-    next.disabled = true;
     monthLabel.textContent = activeKind === "weekly" ? "Опубликованные недели"
       : activeKind === "seasonal" ? "Опубликованные сезоны" : "Опубликованные месяцы";
-    const periods = reports.filter((item) => item.kind === activeKind).sort(byStart).reverse();
+    const periods = reports.filter((item) => item.kind === activeKind).sort(byStart);
+    setNavigation(periods);
     if (!periods.length) {
       panel.innerHTML = '<p class="archive-empty-message">Нет опубликованных отчётов для этого периода.</p>';
       return;
     }
-    panel.innerHTML = `<ul class="archive-periods">${periods.map((item) => {
+    panel.innerHTML = `<ul class="archive-periods">${[...periods].reverse().map((item) => {
       const selected = item.start === reportStart && reportKind === activeKind ? " aria-current=\"page\"" : "";
       const boundaries = `${formatBoundary(item.start)} — ${formatBoundary(item.end)} (конец не включён)`;
       const partial = item.complete === false ? " · промежуточный" : "";
