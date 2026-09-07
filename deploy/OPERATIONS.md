@@ -276,3 +276,30 @@ To disable only test publication while preserving data, set
 
 Registry workflow references: [GitHub Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry),
 [Compose pull](https://docs.docker.com/reference/cli/docker/compose/pull/).
+
+## Импорт локально пересчитанных отчётов и графиков
+
+При переносе готовых canonical-отчётов переносите и `chart-data-cache`, построенный
+тем же проверенным образом на локальной online-копии. Кэш привязан к digest отчёта:
+одного переноса SQLite-контекста недостаточно, иначе первая публикация заново прочитает
+историю для графиков. Такое построение на HK не использовать как приёмку.
+
+До запуска нового worker выполните на остановленной рабочей БД ограниченный импорт:
+
+```sh
+python3 deploy/import_analysis.py /opt/zont-analyzer/data/zont-analyzer.sqlite3 \
+  derived-payload.json --chart-cache prepared-chart-data-cache
+```
+
+Payload содержит только подготовленные отчёты с optimistic guards, разрешённые
+газовые метаданные и новые записи учёта AI/рекомендаций. Импорт показаний, профиля и
+feedback этим инструментом не допускается. Предварительно сверяйте владельческие
+данные с принятой локальной копией; при конфликте повторяйте подготовку локально.
+`--chart-cache` проверяет имена файлов, схему и точное совпадение canonical digest
+всего пакета перед установкой. Владельцем кэша становится владелец БД, файлы имеют
+режим 0600. Повторный импорт идемпотентен. Миграция БД не требуется.
+
+При обычном вводе/исправлении газа приложение само сохраняет существующие графики,
+если изменился только газовый контекст. Изменение тепловых фактов или периода
+не разрешает такое переиспользование. Доказательства выпуска этапа 8:
+[stage-8-acceptance.md](../docs/stage-8-acceptance.md).

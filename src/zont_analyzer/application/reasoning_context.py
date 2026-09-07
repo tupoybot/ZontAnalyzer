@@ -117,7 +117,7 @@ def reasoning_context(
                 ),
                 "recommendation_titles": [item.title for item in report.recommendations],
             }
-            for report in prior[:3] if report.ai_used
+            for report in prior[:3] if report.ai_used and not report.context.get("gas_interpretation_stale")
         ],
         "intervention_history": bounded_interventions(intervention_history or []),
         "noise_history": [

@@ -1,4 +1,4 @@
-"""Publish existing reports; this module never runs analysis or calls an external API."""
+"""Publish reports with current local gas estimates; no AI or external API calls."""
 from __future__ import annotations
 
 import fcntl
@@ -88,6 +88,20 @@ def _publish_locked(
             raise ValueError("Cannot publish a future observation interval")
         html_path, _ = archive_paths(output_dir, report)
         reports[str(html_path)] = report
+
+    from zont_analyzer.application.gas import GasService
+
+    gas_service = GasService(runtime.db, runtime.config)
+    candidate_ids = {report.id for report in overrides or []}
+    for report_path, report in list(reports.items()):
+        refreshed = gas_service.refresh(report)
+        # Regeneration owns the candidate commit after publication succeeds.
+        if report.id in candidate_ids or gas_service.persist_refresh(report, refreshed):
+            reports[report_path] = refreshed
+        else:
+            # A concurrent regeneration won the optimistic guard. Never publish
+            # or store our older AI/context over that revision.
+            reports[report_path] = runtime.db.report(report.id) or report
 
     entries: list[dict[str, Any]] = []
     latest: Report | None = None

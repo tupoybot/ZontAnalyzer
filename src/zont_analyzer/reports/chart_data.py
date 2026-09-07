@@ -20,6 +20,13 @@ from zont_analyzer.domain import Report
 MAX_POINTS_PER_SERIES = 480
 CHART_DATA_SCHEMA_VERSION = 1
 
+_GAS_CACHE_CONTEXT_KEYS = frozenset({
+    "gas",
+    "gas_savings",
+    "gas_interpretation_stale",
+    "calculation_version",
+})
+
 _ROLE_LABELS = {
     "control_temperature": "Контрольная температура",
     "target_temperature": "Цель помещения",
@@ -93,6 +100,45 @@ def cached_chart_data(db: Database, report: Report) -> dict[str, Any] | None:
                 "data": data,
             })
     return data
+
+
+def rebind_chart_cache(db: Database, original: Report, refreshed: Report) -> bool:
+    """Reuse an original chart cache for a gas-only report refresh.
+
+    A refresh may change the gas interpretation while leaving the observed
+    telemetry evidence untouched.  In that case the packet is still valid,
+    so copy its validated cache entry to the refreshed report digest without
+    consulting the telemetry database.
+    """
+    if _report_json_without_gas_context(original) != _report_json_without_gas_context(refreshed):
+        return False
+
+    try:
+        source_path, original_digest = _cache_path(db, original)
+        target_path, refreshed_digest = _cache_path(db, refreshed)
+        cached = json.loads(source_path.read_text(encoding="utf-8"))
+        if not (
+            isinstance(cached, Mapping)
+            and cached.get("schema_version") == CHART_DATA_SCHEMA_VERSION
+            and cached.get("report_digest") == original_digest
+            and isinstance(cached.get("data"), Mapping)
+        ):
+            return False
+        _atomic_write_json(target_path, {
+            "schema_version": CHART_DATA_SCHEMA_VERSION,
+            "report_digest": refreshed_digest,
+            "data": dict(cached["data"]),
+        })
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _report_json_without_gas_context(report: Report) -> str:
+    context = dict(report.context)
+    for key in _GAS_CACHE_CONTEXT_KEYS:
+        context.pop(key, None)
+    return report.model_copy(update={"context": context}).model_dump_json()
 
 
 def _cache_path(db: Database, report: Report) -> tuple[Path, str]:

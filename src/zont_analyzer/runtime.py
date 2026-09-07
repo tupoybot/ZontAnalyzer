@@ -81,5 +81,7 @@ def build_runtime(config_path: Path | None, data_dir: Path | None) -> Runtime:
         backup_dir = loaded.data_dir / backup_dir
     migration = db.initialize(backup_dir)
     runtime = Runtime(loaded=loaded, db=db, migration=migration)
+    from zont_analyzer.application.timezone import apply_device_timezone
+    apply_device_timezone(db, loaded.config)
     runtime.maintain_recommendation_lifecycle()
     return runtime

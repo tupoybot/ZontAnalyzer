@@ -88,6 +88,179 @@ def period_target(report: Report) -> tuple[float | None, float | None]:
     return None, 0.0
 
 
+def _gas_value(value: Any, unit: str = "") -> str:
+    return number(value, unit) if isinstance(value, (int, float)) and not isinstance(value, bool) else "Нет данных"
+
+
+_GAS_REASONS = {
+    "invalid_exposure": "Некорректный интервал телеметрии",
+    "no_calibrated_rate": "Недостаточно данных для калибровки расхода",
+    "insufficient_observed_flame": "Наблюдений горения недостаточно для оценки пропусков",
+    "incomplete_passport_range": "Паспортный диапазон расхода указан не полностью",
+    "invalid_meter_interval": "Некорректный интервал показаний исключён",
+    "invalid_feature_shape": "Неполные признаки режима исключены",
+    "telemetry_gaps_excluded": "Интервалы с большими пропусками исключены из калибровки",
+    "positive_meter_volume_without_flame": "Расход счётчика не объясняется наблюдаемым горением",
+    "shared_meter_gas_stove_unseparated": "Расход плиты не отделён от общего счётчика",
+    "meter_scope_unconfirmed": "Другие потребители общего счётчика не подтверждены",
+    "passport_prior_without_meter_readings": "Предварительная оценка по паспорту без калибровки счётчиком",
+    "no_valid_meter_intervals": "Нет пригодных интервалов для калибровки",
+    "mean_model_selected": "Использован средний расход во время горения",
+    "insufficient_interval_diversity": "Разнообразия режимов недостаточно для таблицы модуляции",
+    "unobserved_modulation_bins_use_mean_or_prior": "Ненаблюдавшиеся режимы используют среднее или паспорт",
+    "low_support_modulation_bins": "Мало наблюдений в части диапазонов модуляции",
+    "no_heldout_validation": "Нет независимой отложенной проверки точности",
+    "extrapolated_unknown_modulation": "Модуляция части наблюдаемого горения неизвестна",
+    "extrapolated_modulation_range": "Есть режимы вне поддержанной калибровки",
+    "telemetry_gap_estimated_from_observed_mix": "Короткие пропуски оценены по наблюдаемым режимам",
+    "calibration_is_stale": "Калибровка устарела",
+    "observed_burner_off": "На наблюдаемом интервале горения не было",
+    "insufficient_telemetry_coverage": "Покрытия телеметрии недостаточно для итога периода",
+}
+
+
+def gas_period_card(report: Report) -> str:
+    """Render the local gas estimate contract without inventing unavailable values."""
+    gas = report.context.get("gas")
+    if not isinstance(gas, dict):
+        gas = {}
+    status = str(gas.get("status") or "unknown")
+    status_labels = {
+        "unknown": "нет данных", "measured": "измерено", "estimated": "оценено",
+        "extrapolated": "экстраполировано",
+    }
+    status_label = status_labels.get(status, "нет данных")
+    volume = _gas_value(gas.get("volume_m3"), "м³") if status != "unknown" else "Нет данных"
+    bounds = []
+    lower, upper = gas.get("lower_m3"), gas.get("upper_m3")
+    if isinstance(lower, (int, float)) and not isinstance(lower, bool):
+        bounds.append(f"от {_gas_value(lower, 'м³')}")
+    if isinstance(upper, (int, float)) and not isinstance(upper, bool):
+        bounds.append(f"до {_gas_value(upper, 'м³')}")
+    details: list[str] = [f"Статус: {status_label}"]
+    if bounds:
+        details.append("Диапазон: " + " — ".join(bounds))
+    if status == "unknown" and isinstance(gas.get("observed_volume_m3"), (int, float)):
+        details.append("Оценка только наблюдаемой части: " + _gas_value(gas["observed_volume_m3"], "м³"))
+    reliability_index = gas.get("reliability_index_pct")
+    if isinstance(reliability_index, (int, float)) and not isinstance(reliability_index, bool):
+        details.append(f"Индекс надёжности: {_gas_value(reliability_index, '%')}")
+    coverage = gas.get("coverage_pct")
+    if isinstance(coverage, (int, float)) and not isinstance(coverage, bool):
+        details.append(f"Покрытие: {_gas_value(coverage, '%')}")
+    observed_days = gas.get("observed_days")
+    if isinstance(observed_days, (int, float)) and not isinstance(observed_days, bool):
+        details.append(f"Знаменатель: {observed_days:g} календарных суток обработанной части периода")
+    for key, label, unit in (("average_daily_m3", "Среднее за сутки", "м³/сутки"),
+                             ("average_weekly_m3", "Среднее за 7 суток (не итог конкретной недели)", "м³/неделю")):
+        if isinstance(gas.get(key), (int, float)) and not isinstance(gas.get(key), bool):
+            details.append(f"{label}: {_gas_value(gas[key], unit)}")
+    if gas.get("complete") is False:
+        details.append("Период неполный; итог не представляет полный сезон")
+    for key in ("source", "uncertainty_method"):
+        if gas.get(key):
+            details.append(str(gas[key]))
+    details.append("Индекс надёжности не является вероятностью точности.")
+    version = gas.get("model_version")
+    if version:
+        details.append(f"Модель: {version}")
+    reasons = gas.get("reasons")
+    if isinstance(reasons, list) and reasons:
+        details.append("Ограничения: " + "; ".join(_GAS_REASONS.get(str(item), str(item)) for item in reasons))
+    scope = gas.get("scope")
+    if scope:
+        details.append("Охват: " + {
+            "boiler": "котёл", "shared_meter": "приближение по общему счётчику",
+            "whole_meter": "весь счётчик",
+        }.get(str(scope), str(scope)))
+    stale = (
+        '<p class="gas-period-stale" role="status"><strong>Объяснение AI устарело:</strong> '
+        'оно предшествует обновлённому расчёту расхода.</p>'
+        if gas.get("ai_stale") is True else ""
+    )
+    intervals = gas.get("measured_intervals")
+    interval_rows = []
+    if isinstance(intervals, list):
+        for item in intervals:
+            if not isinstance(item, dict):
+                continue
+            start = str(item.get("start", item.get("before_start", "неизвестно")))[:10]
+            end = str(item.get("end", item.get("after_end", "неизвестно")))[:10]
+            volume_text = _gas_value(item.get("volume_m3"), "м³")
+            residual = item.get("predicted_residual_m3", item.get("residual_m3"))
+            residual_text = (
+                f"; невязка модели {_gas_value(residual, 'м³')}"
+                if isinstance(residual, (int, float)) else ""
+            )
+            interval_rows.append(f"<li>{esc(start)} — {esc(end)}: {esc(volume_text)}{esc(residual_text)}</li>")
+    interval_details = (
+        '<details class="gas-measured-intervals"><summary>Измеренные интервалы</summary>'
+        "<p>Объём измерен за весь интервал между показаниями; даты имеют точность до дня.</p><ul>"
+        + "".join(interval_rows) + "</ul></details>"
+        if interval_rows else ""
+    )
+    return (
+        '<details class="gas-period-card"><summary id="gas-period-title">'
+        f'Расход газа за период: {esc(volume)} · подробнее</summary>'
+        f'<p class="gas-period-details">{esc(" · ".join(details))}</p>'
+        + stale
+        + interval_details
+        + debug(gas, "Расход газа / происхождение")
+        + "</details>"
+    )
+
+
+def gas_savings_text(report: Report) -> list[str]:
+    savings = report.context.get("gas_savings")
+    if not isinstance(savings, dict):
+        return []
+    if savings.get("status") != "available":
+        return ["Экономия газа: " + str(savings.get("reason") or "Недостаточно данных.")]
+    lines = ["Экономия газа"]
+    labels = {"effect_indistinguishable": "эффект неразличим на фоне неопределённости",
+              "estimated": "оценка", "confounded": "эффект смешан с другими изменениями",
+              "extrapolated": "экстраполяция", "model_only": "модельная оценка",
+              "measured": "проверено последующими показаниями"}
+    for item in savings.get("comparisons", []):
+        if not isinstance(item, dict):
+            continue
+        before = str(item.get("before_start", "неизвестно"))[:10]
+        after = str(item.get("after_start", "неизвестно"))[:10]
+        raw, normalized = item.get("raw_savings", {}), item.get("normalized_savings", {})
+        value, spread = normalized.get("m3"), item.get("uncertainty_m3")
+        lines.append(f"Сравнение: {before} и {after}")
+        lines.append(f"Исходная разница: {_gas_value(raw.get('m3'), 'м³')} "
+                     f"({_gas_value(raw.get('pct'), '%')})")
+        lines.append(f"Нормализованное изменение: {_gas_value(value, 'м³')} "
+                     f"({_gas_value(normalized.get('pct'), '%')})")
+        if isinstance(value, (int, float)) and isinstance(spread, (int, float)):
+            lines.append(f"Диапазон эффекта: {_gas_value(value-spread, 'м³')} — "
+                         f"{_gas_value(value+spread, 'м³')}; не вероятностный интервал.")
+        effect = str(item.get("effect_status", "unknown"))
+        lines.append("Статус эффекта: " + labels.get(effect, effect))
+        provenance = item.get("provenance", {})
+        lines.append("Расход после изменения: " + ("оценён замороженной моделью" if provenance.get('model_only')
+                     else "проверен независимым показанием счётчика"))
+        if provenance.get('extrapolated'):
+            lines.append("Условия вне диапазона обучения; экономия не подтверждена.")
+        if provenance.get('base_temperature_c') is not None:
+            lines.append(f"База градусо-часов: {_gas_value(provenance['base_temperature_c'], '°C')}")
+        for key, label in (("assumptions", "Допущения"), ("confounders", "Смешивающие факторы"),
+                           ("diagnostics", "Ограничения проверки")):
+            if item.get(key):
+                lines.append(label + ": " + "; ".join(str(v) for v in item[key]))
+        lines.append("Причинность по одному сравнению не доказана.")
+    return lines
+
+
+def gas_savings_section(report: Report) -> str:
+    lines = gas_savings_text(report)
+    if not lines:
+        return ""
+    return ('<section class="full-width gas-savings"><h2>Экономия газа</h2>'
+            + "".join(f"<p>{esc(line)}</p>" for line in lines if line != "Экономия газа") + "</section>")
+
+
 def kpis(report: Report) -> str:
     metrics = {m.name: m for m in report.metrics}
 
@@ -150,7 +323,64 @@ def reliability(report: Report) -> str:
             + debug(metric.model_dump(), "Основание аптайма")
             + "</div>"
         )
-    return '<div class="kpi-uptime-row" aria-label="Надёжность">' + "".join(cards) + "</div>"
+    gas = report.context.get("gas", {})
+    status = {"measured": "Измерено по датам показаний", "estimated": "Оценка",
+              "extrapolated": "Экстраполяция"}.get(gas.get("status"), "Нет данных")
+    volume = _gas_value(gas.get("volume_m3"), "м³") if gas.get("status") != "unknown" else "Нет данных"
+    cards.append('<div class="kpi gas-kpi"><span>Расход газа за период</span>'
+                 f'<strong>{esc(volume)}</strong><small>{esc(status)}</small></div>')
+    return '<div class="kpi-uptime-row" aria-label="Надёжность и газ">' + "".join(cards) + "</div>"
+
+
+def timezone_note(report: Report) -> str:
+    gas = report.context.get("gas", {})
+    provenance = report.context.get("timezone_provenance") or (
+        gas.get("timezone_provenance") if isinstance(gas, dict) else None
+    )
+    zone = ZoneInfo(report.timezone)
+    offset = report.period_start.astimezone(zone).strftime("%z")
+    label = f"UTC{offset[:3]}:{offset[3:]}"
+    if isinstance(provenance, dict) and provenance.get("timezone"):
+        current = ZoneInfo(provenance["timezone"])
+        same = all(moment.astimezone(zone).utcoffset() == moment.astimezone(current).utcoffset()
+                   for moment in (report.period_start, report.period_end))
+        if same and provenance.get("source") == "zont":
+            return f"Часовой пояс: {label} · настройки ZONT"
+        if same and provenance.get("source") == "configuration_fallback":
+            return f"Часовой пояс: {label} · резервная настройка ZontAnalyzer; пояс ZONT не определён"
+    return f"Часовой пояс: {label} · сохранён при расчёте отчёта ({report.timezone})"
+
+
+LEGACY_DUTY_METRICS = {"burner_duty_cycle_pct", "dhw_burner_duty_cycle_pct"}
+
+
+def burner_usage_rows(report: Report) -> list[tuple[str, str]]:
+    from zont_analyzer.analytics.burner_usage import burner_usage
+
+    gas = report.context.get("gas")
+    if not isinstance(gas, dict):
+        return []
+    usage = burner_usage(gas, (report.period_end - report.period_start).total_seconds() / 3600)
+    flame = gas.get("flame_hours")
+    value = (
+        f"{_gas_value(flame, 'ч')} за {number(usage['period_hours'], 'ч')} периода; "
+        f"{_gas_value(usage['flame_pct'], '%')} от всего периода"
+        if usage["flame_pct"] is not None else "Нет данных о горении"
+    )
+    rows = [("Время работы горелки", value)]
+    for key, label in (("heating", "Доля горения на отопление"),
+                       ("dhw", "Доля горения на ГВС"),
+                       ("purpose_unknown", "Доля горения с неопределённым назначением")):
+        percent = usage[f"{key}_flame_pct"]
+        share = (f"{_gas_value(percent, '%')} от времени горения"
+                 if percent is not None else "Не применимо: горения не было" if flame == 0 else "Нет данных")
+        rows.append((label, f"{share}; {_gas_value(gas.get(f'{key}_flame_hours'), 'ч')}"))
+    unknown = usage["unobserved_hours"]
+    if unknown is None or unknown > 1 / 3600:
+        rows.append(("Пробелы наблюдения за горелкой",
+                     f"{_gas_value(unknown, 'ч')}. Указано только наблюдавшееся горение; "
+                     "в пробелах работа горелки неизвестна. Доли по назначению относятся к наблюдавшемуся горению."))
+    return rows
 
 
 def metric_groups(report: Report, missing_mttr: str | None) -> str:
@@ -158,6 +388,8 @@ def metric_groups(report: Report, missing_mttr: str | None) -> str:
 
     groups: dict[str, list[str]] = {k: [] for k in ("Комфорт", "Отопление", "ГВС", "Надёжность", "Качество данных")}
     for m in report.metrics:
+        if m.name in LEGACY_DUTY_METRICS:
+            continue
         group = (
             "ГВС"
             if m.name.startswith("dhw_")
@@ -176,6 +408,10 @@ def metric_groups(report: Report, missing_mttr: str | None) -> str:
             f'<tr><th scope="row">{esc(_metric_label(m.name, m.context))}'
             + debug(m.model_dump(), "Метрика / evidence")
             + f"</th><td>{esc(value)} {esc(unit)}</td></tr>"
+        )
+    for label, value in burner_usage_rows(report):
+        groups["Отопление"].append(
+            f'<tr><th scope="row">{esc(label)}</th><td>{esc(value)}</td></tr>'
         )
     if missing_mttr:
         groups["Надёжность"].append(

@@ -49,7 +49,7 @@ from zont_analyzer.reports import render_text
 logger = logging.getLogger(__name__)
 
 
-CALCULATION_VERSION = "stage7-v1"
+CALCULATION_VERSION = "stage8-v1"
 
 
 def _select_control_temperature_series(
@@ -141,12 +141,16 @@ def _sensor_report_context(
 
 class AnalysisService:
     def __init__(self, db: Database, config: AppConfig, analyst: Analyst | None = None):
+        from zont_analyzer.application.timezone import apply_device_timezone
+
+        apply_device_timezone(db, config)
         self.db = db
         self.config = config
         self.analyst = analyst
+        self._gas_service: Any = None
 
     def local_day_window(self, selected: date) -> tuple[datetime, datetime]:
-        timezone = ZoneInfo(self.config.home.timezone)
+        timezone = ZoneInfo(self.config.home.effective_timezone)
         start = datetime.combine(selected, time.min, timezone).astimezone(UTC)
         end = (datetime.combine(selected, time.min, timezone) + timedelta(days=1)).astimezone(UTC)
         return start, end
@@ -171,7 +175,7 @@ class AnalysisService:
         return self._analyze(start, end, kind="initial", use_ai=use_ai)
 
     def local_today(self) -> date:
-        return datetime.now(ZoneInfo(self.config.home.timezone)).date()
+        return datetime.now(ZoneInfo(self.config.home.effective_timezone)).date()
 
     def analyze_week(self, year: int, week: int, *, use_ai: bool = True) -> Report:
         selected = date.fromisocalendar(year, week, 1)
@@ -198,8 +202,8 @@ class AnalysisService:
         if season not in {"winter", "spring", "summer", "autumn"}:
             raise ValueError("Season must be winter, spring, summer, or autumn")
         boundaries, source = self.season_boundaries()
-        cutoff = as_of or midnight(self.local_today(), self.config.home.timezone)
-        return season_period(year, season, self.config.home.timezone, boundaries,  # type: ignore[arg-type]
+        cutoff = as_of or midnight(self.local_today(), self.config.home.effective_timezone)
+        return season_period(year, season, self.config.home.effective_timezone, boundaries,  # type: ignore[arg-type]
                              as_of=cutoff, source=source)
 
     def analyze_season(self, year: int, season: str, *, use_ai: bool = True) -> Report:
@@ -409,7 +413,7 @@ class AnalysisService:
             target_samples=target_samples,
             mode_catalog=mode_catalog,
             period_id=period_id,
-            timezone=self.config.home.timezone,
+            timezone=self.config.home.effective_timezone,
         )
         status_series = next(
             (
@@ -702,15 +706,23 @@ class AnalysisService:
         control_context.update(reasoning_context(
             events,
             self.db.prior_reports(start),
-            self.config.home.timezone,
+            self.config.home.effective_timezone,
             self.db.intervention_history(before=end),
         ))
         if period is None:
             period = Period(kind=kind, start=start, end=end, observed_end=end,  # type: ignore[arg-type]
-                            timezone=self.config.home.timezone, complete=True)
+                            timezone=self.config.home.effective_timezone, complete=True)
         control_context["period"] = period.model_dump(mode="json")
+        from zont_analyzer.application.gas import GasService
+
+        if include_comparisons or self._gas_service is None:
+            self._gas_service = GasService(self.db, self.config)
+        control_context["gas"] = self._gas_service.context(start, end, complete=period.complete)
+        if include_comparisons:
+            control_context["gas_savings"] = self._gas_service.savings(end)
         control_context["season_boundaries"] = self.season_boundaries()[0].model_dump()
         control_context["calculation_version"] = CALCULATION_VERSION
+        control_context["timezone_provenance"] = self.config.home.timezone_provenance
         if question:
             control_context["counterfactual_question"] = question
         control_context["input_revision"] = {
@@ -734,7 +746,7 @@ class AnalysisService:
 
             facts_report = Report(id=report_id, kind=kind,  # type: ignore[arg-type]
                                   period_start=start, period_end=end,
-                                  generated_at=datetime.now(UTC), timezone=self.config.home.timezone,
+                                  generated_at=datetime.now(UTC), timezone=self.config.home.effective_timezone,
                                   quality=quality, metrics=metrics, events=events, context=control_context,
                                   summary=summary)
             control_context.update(build_comparison_context(
@@ -774,7 +786,7 @@ class AnalysisService:
                             "start": start.isoformat(),
                             "end": end.isoformat(),
                             "kind": kind,
-                            "timezone": self.config.home.timezone,
+                            "timezone": self.config.home.effective_timezone,
                             **({"request_nonce": request_nonce} if request_nonce else {}),
                         },
                         context=control_context,
@@ -808,6 +820,8 @@ class AnalysisService:
                     summary = previous_report.summary
                     recommendations = previous_report.recommendations
                     ai_used = True
+                    control_context["gas"]["ai_stale"] = True
+                    control_context["gas_interpretation_stale"] = True
                     control_context["ai_interpretation_reuse"] = {
                         "source_generated_at": previous_report.generated_at.isoformat(),
                         "reason": "AI refresh failed validation; retained last valid interpretation",
@@ -820,7 +834,7 @@ class AnalysisService:
             period_start=start,
             period_end=end,
             generated_at=datetime.now(UTC),
-            timezone=self.config.home.timezone,
+            timezone=self.config.home.effective_timezone,
             context=control_context,
             quality=quality,
             metrics=metrics,
@@ -919,7 +933,7 @@ class AnalysisService:
                   ] if selected_boiler else []
         heating_windows: list[EvidenceWindow] = []
         packet = build_evidence(
-            start=start, end=end, timezone=self.config.home.timezone, period_id=period_id,
+            start=start, end=end, timezone=self.config.home.effective_timezone, period_id=period_id,
             signals=signals, state_samples=states, exclusions=exclusions, window_sink=heating_windows,
             capability_profile=self.config.analysis.modulation_capability_profile,
             min_coverage_pct=self.config.analysis.minimum_quality_score * 100,

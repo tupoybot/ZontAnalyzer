@@ -127,6 +127,47 @@ try {
   await page.unroute("**/reports.json");
 
   await page.goto(`${baseURL}/daily/2026-08-05.html`, { waitUntil: "networkidle" });
+  const gasCard = page.locator(".gas-period-card");
+  await gasCard.waitFor();
+  assert.match(await gasCard.textContent(), /Расход газа за период/);
+  assert.match(await gasCard.textContent(), /12,3 м³/);
+  assert.match(await gasCard.textContent(), /Индекс надёжности/);
+  assert.match(await gasCard.textContent(), /Модель: gas-browser-1/);
+  assert.match(await gasCard.textContent(), /Объяснение AI устарело/);
+  for (const [kind, date, marker] of [["weekly", "2026-07-27", "измерено"],
+    ["monthly", "2026-07-01", "экстраполировано"], ["seasonal", "2026-09-01", "оценено"]]) {
+    await page.goto(`${baseURL}/${kind}/${date}.html`, {waitUntil: "networkidle"});
+    const periodGas = page.locator(".gas-period-card");
+    await periodGas.waitFor();
+    assert.match(await periodGas.textContent(), new RegExp(marker));
+    assert.match(await periodGas.textContent(), /Покрытие/);
+  }
+  await page.goto(`${baseURL}/daily/2026-08-05.html`, { waitUntil: "networkidle" });
+  const questionBox = page.locator(".counterfactual-question");
+  const buttonBox = page.locator(".regenerate-report");
+  const desktopGeometry = await page.evaluate(() => {
+    const question = document.querySelector(".counterfactual-question").getBoundingClientRect();
+    const button = document.querySelector(".regenerate-report").getBoundingClientRect();
+    return {questionWidth: question.width, questionHeight: question.height,
+      buttonTop: button.top, questionTop: question.top, buttonLeft: button.left,
+      questionRight: question.right};
+  });
+  assert.ok(desktopGeometry.questionWidth >= 300, "desktop question field remains readable");
+  assert.ok(desktopGeometry.questionHeight >= 60, "question field has a usable height");
+  assert.ok(desktopGeometry.buttonTop >= desktopGeometry.questionTop, "button aligns with question row");
+  assert.ok(desktopGeometry.buttonLeft >= desktopGeometry.questionRight - 1, "button does not overlap field");
+  await page.setViewportSize({width: 390, height: 844});
+  const mobileGeometry = await page.evaluate(() => {
+    const question = document.querySelector(".counterfactual-question").getBoundingClientRect();
+    const button = document.querySelector(".regenerate-report").getBoundingClientRect();
+    const root = document.querySelector(".report-regeneration").getBoundingClientRect();
+    return {questionWidth: question.width, rootWidth: root.width, questionBottom: question.bottom,
+      buttonTop: button.top, buttonWidth: button.width};
+  });
+  assert.ok(mobileGeometry.questionWidth >= mobileGeometry.rootWidth - 2, "mobile question uses full width");
+  assert.ok(mobileGeometry.buttonTop >= mobileGeometry.questionBottom, "mobile button follows field");
+  assert.ok(mobileGeometry.buttonWidth >= mobileGeometry.rootWidth - 2, "mobile button uses full width");
+  await page.setViewportSize({width: 1280, height: 900});
   assert.match(await page.locator(".reasoning-item.hypothesis").textContent(), /Синтетическая гипотеза <unsafe>/);
   assert.match(await page.locator(".reasoning-item.hypothesis").textContent(), /неподтверждённая ссылка/);
   assert.equal(await page.locator(".reasoning-item unsafe").count(), 0);
@@ -146,7 +187,7 @@ try {
   const hoverColors = await editGas.evaluate(n => ({color:getComputedStyle(n).color, background:getComputedStyle(n).backgroundColor}));
   assert.equal(hoverColors.color, 'rgb(255, 255, 255)');
   assert.equal(hoverColors.background, 'rgb(57, 75, 96)');
-  assert.equal(await page.locator('.kpi-grid .kpi-uptime-row .kpi').count(), 2);
+  assert.equal(await page.locator('.kpi-grid .kpi-uptime-row .kpi').count(), 3);
   const kpiColumns = await page.locator('.kpi-grid').evaluate(grid => {
     const cells = [...grid.querySelectorAll(':scope > .kpi')].map(n => n.getBoundingClientRect());
     const uptime = [...grid.querySelectorAll('.kpi-uptime-row .kpi')].map(n => n.getBoundingClientRect());

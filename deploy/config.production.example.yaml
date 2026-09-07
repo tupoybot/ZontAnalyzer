@@ -1,4 +1,5 @@
 home:
+  # Резерв: основной часовой пояс берётся из настроек устройства ZONT.
   timezone: Europe/Samara
 
 preferences:

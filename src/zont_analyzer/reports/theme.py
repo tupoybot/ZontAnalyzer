@@ -96,6 +96,16 @@ font-size:25px;
 letter-spacing:-.5px;
 margin-top:5px}
 .kpi-uptime-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-column:1/-1}
+.gas-period-card{display:block;
+gap:12px 24px;margin-top:18px;padding:22px;background:var(--surface);border:1px solid var(--border);border-radius:12px}
+.gas-period-card>summary{cursor:pointer;font-weight:650}.gas-period-card[open]>summary{margin-bottom:12px}
+.gas-period-card h2{margin:5px 0 0;font-size:19px}.gas-period-value{display:block;font-size:28px;
+letter-spacing:-.5px;margin-top:5px}.gas-period-details{flex:1 1 280px;margin:0;color:var(--secondary);
+font-size:14px;overflow-wrap:anywhere}
+.gas-period-stale{flex-basis:100%;margin:0;color:var(--warning);font-size:14px}
+.gas-savings{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:26px}
+.gas-savings article{padding:12px 0;border-top:1px solid var(--border)}.gas-savings h3{margin-bottom:8px}
+.gas-savings p{font-size:14px}
 .chart-section,.thermal-system,.details-area{background:var(--surface);
 border:1px solid var(--border);
 border-radius:12px;
@@ -202,6 +212,11 @@ border-radius:6px}
 .feedback-message{font-size:13px;
 margin:8px 0}
 .feedback-message:empty{display:none}
+.report-regeneration{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px 14px;align-items:end}
+.report-regeneration label{grid-column:1/-1;font-weight:650}.counterfactual-question{display:block;width:100%;
+min-height:76px;resize:vertical;padding:10px;border:1px solid var(--border);
+border-radius:7px;background:var(--surface);color:var(--text);overflow-wrap:anywhere}
+.regenerate-report{align-self:end;white-space:normal}.regeneration-status{grid-column:1/-1;color:var(--secondary);font-size:13px;overflow-wrap:anywhere}
 .feedback-comment summary,.feedback-experiment summary{font-size:13px}
 .feedback-experiment label{display:block;margin:10px 0;font-size:13px}
 .feedback-experiment input,.feedback-experiment select{display:block;width:100%;min-width:0;
@@ -292,6 +307,7 @@ padding:8px}
 body.debug-mode .engineering-chart{display:block}
 th{width:60%}
 .owner-form-grid{grid-template-columns:1fr!important}
+.report-regeneration{grid-template-columns:1fr}.report-regeneration .regenerate-report{width:100%}
 }
 
 @media print{button,.header-tools,.feedback-controls,.archive-navigation{display:none}

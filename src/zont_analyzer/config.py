@@ -7,7 +7,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, field_validator
 
 from zont_analyzer.domain.periods import SeasonBoundaries
 
@@ -24,6 +24,27 @@ class QuietHours(StrictModel):
 class HomeConfig(StrictModel):
     timezone: str = "Europe/Samara"
     seasons: SeasonBoundaries = Field(default_factory=SeasonBoundaries)
+    _zont_timezone: str | None = PrivateAttr(default=None)
+    _timezone_provenance: dict[str, Any] = PrivateAttr(default_factory=dict)
+
+    @property
+    def effective_timezone(self) -> str:
+        return self._zont_timezone or self.timezone
+
+    @property
+    def timezone_provenance(self) -> dict[str, Any]:
+        if self._timezone_provenance:
+            provenance = dict(self._timezone_provenance)
+            if provenance.get("source") == "configuration_fallback":
+                # Tests and runtime policy may change the configured fallback
+                # after discovery; provenance must describe the live value.
+                provenance["timezone"] = self.timezone
+            return provenance
+        return {
+            "source": "configuration_fallback",
+            "timezone": self.timezone,
+            "reason": "zont_timezone_not_resolved",
+        }
 
     @field_validator("timezone")
     @classmethod

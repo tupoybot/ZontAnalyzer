@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 def scheduled_periods(analysis: AnalysisService, first: date, today: date) -> list[Period]:
-    timezone = analysis.config.home.timezone
+    timezone = analysis.config.home.effective_timezone
     cutoff = midnight(today, timezone)
     weekly_cutoff = midnight(today - timedelta(days=today.weekday()), timezone)
     periods: dict[tuple[str, str], Period] = {}
@@ -62,9 +62,23 @@ def scheduled_periods(analysis: AnalysisService, first: date, today: date) -> li
 
 
 def schedule_signature(analysis: AnalysisService, period: Period) -> str:
+    period_payload = period.model_dump(mode="json")
+    previous = analysis.db.report(analysis.report_id_for(period.kind, period.start))
+    old_period = previous.context.get("period", {}) if previous else {}
+    # A switch from an IANA name to ZONT's equivalent fixed offset changes
+    # provenance, not the already analysed calendar interval. Preserve its key.
+    if (isinstance(old_period, dict) and old_period.get("timezone") and
+            {k: v for k, v in old_period.items() if k != "timezone"} ==
+            {k: v for k, v in period_payload.items() if k != "timezone"}):
+        old_zone, new_zone = ZoneInfo(old_period["timezone"]), ZoneInfo(period.timezone)
+        days = (period.end - period.start).days
+        if all((period.start + timedelta(days=day)).astimezone(old_zone).utcoffset() ==
+               (period.start + timedelta(days=day)).astimezone(new_zone).utcoffset()
+               for day in range(days + 1)):
+            period_payload["timezone"] = old_period["timezone"]
     payload = {
         "version": "stage6-v1",
-        "period": period.model_dump(mode="json"),
+        "period": period_payload,
         "config": analysis.config.model_dump(mode="json", include={"home", "preferences", "analysis", "dhw", "openai"}),
         "boundaries": analysis.season_boundaries()[0].model_dump(),
         "data_revision": analysis.db.period_data_revision(period.start, period.observed_end),
@@ -89,7 +103,7 @@ def run_period_schedule(
     from zont_analyzer.application.regeneration import _lock_path
 
     first_sample = runtime.db.earliest_sample_time()
-    timezone = ZoneInfo(runtime.config.home.timezone)
+    timezone = ZoneInfo(runtime.config.home.effective_timezone)
     first = first_sample.astimezone(timezone).date() if first_sample else today - timedelta(days=1)
     first = max(first, today - timedelta(days=runtime.config.pilot.max_catchup_days))
     results: list[dict[str, Any]] = []

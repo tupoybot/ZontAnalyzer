@@ -1229,6 +1229,8 @@ class Database:
                         "captured_at": utcnow().isoformat(), "predictions": original.get("predictions", []),
                         "hypothesis": json.loads(row.payload_json).get("hypothesis"),
                         "expected_effect": json.loads(row.payload_json).get("expected_effect"),
+                        "gas": original.get("context", {}).get("gas"),
+                        "gas_savings": original.get("context", {}).get("gas_savings"),
                         "epistemic_level": "previous_ai_interpretation",
                     }, ensure_ascii=False)))
             else:
