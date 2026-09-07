@@ -62,17 +62,69 @@ try {
 
   await page.locator('[data-archive-kind="weekly"]').click();
   const weekly = page.locator(".archive-periods a");
-  await assert.equal(await weekly.count(), 1);
+  await assert.equal(await weekly.count(), 3);
   await assert.match(await weekly.first().textContent(), /27 июля 2026.*3 августа 2026/s);
   await weekly.first().click();
   await page.waitForURL("**/weekly/2026-07-27.html");
 
   await page.locator('[data-archive-kind="monthly"]').click();
   const monthly = page.locator(".archive-periods a");
-  await assert.equal(await monthly.count(), 1);
+  await assert.equal(await monthly.count(), 3);
   await assert.match(await monthly.first().textContent(), /1 июля 2026.*1 августа 2026/s);
   await monthly.first().click();
   await page.waitForURL("**/monthly/2026-07-01.html");
+
+  await page.locator('[data-archive-kind="seasonal"]').click();
+  const seasonal = page.locator(".archive-periods a");
+  await assert.equal(await seasonal.count(), 3);
+  await assert.match(await seasonal.first().textContent(), /осень/i);
+  await seasonal.first().click();
+  await page.waitForURL("**/seasonal/2026-09-01.html");
+
+  // Long-period arrows must follow published neighbours, skipping missing periods.
+  for (const prefix of ["/", "/za/"]) {
+    await page.setViewportSize({width: prefix === "/" ? 1280 : 390, height: 900});
+    for (const [kind, dates] of [
+      ["weekly", ["2026-06-29", "2026-07-13", "2026-07-27"]],
+      ["monthly", ["2026-04-01", "2026-06-01", "2026-07-01"]],
+      ["seasonal", ["2025-09-01", "2026-03-01", "2026-09-01"]],
+    ]) {
+      const before = page.locator('[data-archive-action="previous"]');
+      const after = page.locator('[data-archive-action="next"]');
+      const newest = page.locator('[data-archive-action="latest"]');
+      const url = date => `${baseURL}${prefix}${kind}/${date}.html`;
+      await page.goto(url(dates[2]), {waitUntil: "networkidle"});
+      assert.equal(await after.isDisabled(), true, `${kind}: newest has no next report`);
+      assert.equal(await newest.textContent(), "Последний");
+      for (const index of [1, 0]) {
+        await before.click();
+        await page.waitForURL(url(dates[index]), {waitUntil: "networkidle"});
+      }
+      assert.equal(await before.isDisabled(), true, `${kind}: oldest has no previous report`);
+      for (const index of [1, 2]) {
+        await after.click();
+        await page.waitForURL(url(dates[index]), {waitUntil: "networkidle"});
+      }
+      await before.click();
+      await page.waitForURL(url(dates[1]), {waitUntil: "networkidle"});
+      await newest.click();
+      await page.waitForURL(url(dates[2]), {waitUntil: "networkidle"});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
+  }
+  await page.setViewportSize({width: 1280, height: 900});
+  await page.route("**/reports.json", async route => {
+    const response = await route.fetch();
+    const manifest = await response.json();
+    manifest.reports = manifest.reports.filter(item => item.kind !== "seasonal");
+    await route.fulfill({response, json: manifest});
+  });
+  await page.goto(`${baseURL}/weekly/2026-07-27.html`, {waitUntil: "networkidle"});
+  await page.locator('[data-archive-kind="seasonal"]').click();
+  for (const action of ["previous", "latest", "next"]) {
+    assert.equal(await page.locator(`[data-archive-action="${action}"]`).isDisabled(), true);
+  }
+  await page.unroute("**/reports.json");
 
   await page.goto(`${baseURL}/daily/2026-08-05.html`, { waitUntil: "networkidle" });
   assert.match(await page.locator(".reasoning-item.hypothesis").textContent(), /Синтетическая гипотеза <unsafe>/);
@@ -203,6 +255,29 @@ try {
   assert.equal(await page.locator('[data-experiment-field="after"]').first().inputValue(), "1.1");
   assert.match(await page.locator('[data-experiment-field="performed_at"]').first().inputValue(), /^2026-08-01T12:30/);
   assert.match(await page.locator(".recommendation .feedback-status").first().textContent(), /Выполнено/);
+
+  await page.goto(`${baseURL}/latest.html`, { waitUntil: "networkidle" });
+  const regenerate = page.locator(".regenerate-report");
+  await regenerate.waitFor();
+  await regenerate.click();
+  await assert.equal(await regenerate.isDisabled(), true, "duplicate regeneration click is disabled while active");
+  await page.waitForLoadState("networkidle");
+  await page.waitForURL("**/latest.html");
+  await page.locator(".regenerate-report").waitFor();
+  await page.locator("[data-owner-forms]").waitFor();
+  assert.equal(await page.locator("[data-owner-gas] [name=gas-value]").inputValue(), "10", "gas survives regeneration");
+  assert.equal(await page.locator(".recommendation .feedback-note").first().inputValue(), note + " edited", "feedback survives regeneration");
+
+  await page.locator("#system-profile > summary").click();
+  const seasons = page.locator('[data-field="season_boundaries"]');
+  await seasons.waitFor({ state: "visible" });
+  const seasonValues = {spring: "02-15", summer: "05-20", autumn: "08-25", winter: "11-30"};
+  for (const [key, value] of Object.entries(seasonValues)) await seasons.locator(`[data-season="${key}"]`).fill(value);
+  await page.locator("[data-profile-save]").click();
+  await page.locator("[data-profile-message]").filter({hasText: "сохранён"}).waitFor();
+  await page.reload({waitUntil: "networkidle"});
+  for (const [key, value] of Object.entries(seasonValues)) assert.equal(await page.locator(`[data-season="${key}"]`).inputValue(), value);
+
   await page.goto(`${baseURL}/latest.html?debug=1`, {waitUntil: "networkidle"});
   assert.equal(await page.locator("#debug-toggle").isChecked(), true);
   await page.locator("#debug-toggle").uncheck();

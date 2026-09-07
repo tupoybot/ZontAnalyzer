@@ -16,12 +16,12 @@ from zont_analyzer.reports.chart_data import cached_chart_data
 if TYPE_CHECKING:
     from zont_analyzer.runtime import Runtime
 
-KINDS = ("daily", "weekly", "monthly")
+KINDS = ("daily", "weekly", "monthly", "seasonal")
 
 
 def archive_paths(output_dir: Path, report: Report) -> tuple[Path, Path]:
     if report.kind not in KINDS:
-        raise ValueError("Only daily, weekly and monthly reports have calendar archives")
+        raise ValueError("Only daily, weekly, monthly and seasonal reports have calendar archives")
     local_start = report.period_start.astimezone(ZoneInfo(report.timezone)).date()
     stem = output_dir / report.kind / local_start.isoformat()
     return stem.with_suffix(".html"), stem.with_suffix(".json")
@@ -48,7 +48,9 @@ def publish_reports(runtime: Runtime, *, now: datetime | None = None) -> dict[st
         return _publish_locked(runtime, output_dir, checked_at)
 
 
-def _publish_locked(runtime: Runtime, output_dir: Path, now: datetime) -> dict[str, Any]:
+def _publish_locked(
+    runtime: Runtime, output_dir: Path, now: datetime, *, overrides: list[Report] | None = None,
+) -> dict[str, Any]:
     from zont_analyzer.application.owner_context import OwnerContextStore
 
     owner_store = OwnerContextStore(runtime.db)
@@ -81,8 +83,13 @@ def _publish_locked(runtime: Runtime, output_dir: Path, now: datetime) -> dict[s
         previous = reports.get(str(html_path))
         if previous is None or report.generated_at >= previous.generated_at:
             reports[str(html_path)] = report
+    for report in overrides or []:
+        if report.period_end > now:
+            raise ValueError("Cannot publish a future observation interval")
+        html_path, _ = archive_paths(output_dir, report)
+        reports[str(html_path)] = report
 
-    entries: list[dict[str, str]] = []
+    entries: list[dict[str, Any]] = []
     latest: Report | None = None
     for report in sorted(reports.values(), key=lambda item: (item.kind, item.period_start)):
         html_path, json_path = archive_paths(output_dir, report)
@@ -103,6 +110,10 @@ def _publish_locked(runtime: Runtime, output_dir: Path, now: datetime) -> dict[s
             "end": report.period_end.astimezone(timezone).date().isoformat(),
             "href": html_path.relative_to(output_dir).as_posix(),
             "published_at": datetime.fromtimestamp(html_path.stat().st_mtime, UTC).isoformat(),
+            "timezone": report.timezone,
+            "complete": report.context.get("period", {}).get("complete", True),
+            "nominal_end": report.context.get("period", {}).get("end", report.period_end.isoformat()),
+            "season": report.context.get("period", {}).get("season"),
         })
         if report.kind == "daily" and (latest is None or report.period_start > latest.period_start):
             latest = report

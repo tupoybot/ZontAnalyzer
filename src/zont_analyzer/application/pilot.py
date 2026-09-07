@@ -217,7 +217,17 @@ class PilotService:
                 report = self.runtime.db.report(report_id)
                 previous_report = report
                 html_path, json_path = self._archive_paths(selected)
-                must_analyze = selected == yesterday or report is None
+                data_revision = self.runtime.db.period_data_revision(start, _end)
+                # Legacy reports have no revision; unchanged imported history stays intact.
+                import hashlib
+
+                empty_revision = hashlib.sha256(b"[]").hexdigest()
+                must_analyze = report is None or (
+                    selected == yesterday and report.context.get("calculation_version") != "stage6-v1"
+                ) or (
+                    data_revision != empty_revision and report is not None
+                    and report.context.get("input_revision", {}).get("telemetry") != data_revision
+                )
                 if must_analyze:
                     # Historic catch-up is deterministic. The existing OpenAI policy is
                     # evaluated only on the first report for yesterday, never on every poll.
@@ -254,6 +264,9 @@ class PilotService:
 
             if latest_report is None:
                 raise WorkerCycleError("no report was produced for the latest completed local day")
+            from zont_analyzer.application.period_schedule import run_period_schedule
+
+            period_results = run_period_schedule(self.runtime, analysis, today)
             latest_path = self.output_dir / "latest.html"
             self._write_status(
                 "publishing",
@@ -281,6 +294,7 @@ class PilotService:
                 "delivered_log_notifications": len(delivered),
                 "recommendation_maintenance": recommendation_maintenance,
                 "publication": publication,
+                "long_periods": period_results,
             }
             self._write_status("ok", **result)
             return result

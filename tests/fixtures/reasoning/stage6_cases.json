@@ -1,0 +1,86 @@
+[
+  {
+    "id": "experiment_success_before_after",
+    "packet": {
+      "period": {"kind": "weekly", "start": "2026-01-05T00:00:00+04:00", "end": "2026-01-12T00:00:00+04:00", "timezone": "Europe/Samara"},
+      "data_quality": {"score": 0.96, "coverage_pct": 98, "max_gap_seconds": 180, "stuck_pct": 0, "implausible_jumps": 0, "sample_count": 1176},
+      "metrics": [{"id": "m:comfort-before", "name": "comfort_error_before", "value": 1.8, "unit": "C"}, {"id": "m:comfort-after", "name": "comfort_error_after", "value": 0.5, "unit": "C"}],
+      "events": [{"id": "e:experiment", "kind": "manual_intervention", "started_at": "2026-01-08T08:00:00+04:00", "details": {"variable": "weekday_start", "before": "07:00", "after": "06:30"}}],
+      "control_context": {"intervention_outcomes": [{"id": "outcome:success", "intervention_id": "e:experiment", "status": "improved", "before": {"quality": 0.95, "comfort_error": 1.8}, "after": {"quality": 0.96, "comfort_error": 0.5}, "confounders": [], "timing": "3 complete weekdays"}], "period_comparisons": [{"id": "comparison:before-after", "before_period": "2026-01-05/2026-01-08", "after_period": "2026-01-09/2026-01-12", "quality": {"before": 0.95, "after": 0.96}}], "house_context": {"owner_note": "График меняли только один раз."}}
+    },
+    "expected_response": {"summary": "Сравнение до и после поддерживает улучшение комфорта после переноса начала графика.", "hypotheses": [{"id": "h:effect-supported", "statement": "Эффект изменения графика поддержан сравнением до и после.", "confidence": 0.8, "confidence_basis": "Сопоставимое качество и три полных будних дня после изменения.", "rationale": "Ошибка комфорта уменьшилась при отсутствии указанных смешивающих факторов.", "evidence_for": [{"id": "comparison:before-after"}, {"id": "outcome:success"}], "evidence_against": [], "alternatives": []}]},
+    "assertions": {"required_context": ["period_comparisons", "intervention_outcomes", "house_context"], "must_reference": ["comparison:before-after", "outcome:success"], "requires_unknown": false}
+  },
+  {
+    "id": "experiment_failed_and_rollback",
+    "packet": {
+      "period": {"kind": "weekly", "start": "2026-02-02T00:00:00+04:00", "end": "2026-02-09T00:00:00+04:00", "timezone": "Europe/Samara"},
+      "data_quality": {"score": 0.94, "coverage_pct": 95, "max_gap_seconds": 900, "stuck_pct": 1, "implausible_jumps": 0, "sample_count": 1140},
+      "metrics": [{"id": "m:comfort-before", "name": "comfort_error_before", "value": 0.6, "unit": "C"}, {"id": "m:comfort-test", "name": "comfort_error_test", "value": 2.4, "unit": "C"}],
+      "events": [{"id": "e:rollback", "kind": "manual_intervention_rollback", "started_at": "2026-02-07T09:00:00+04:00", "details": {"variable": "night_setpoint", "reason": "owner discomfort"}}],
+      "control_context": {"intervention_outcomes": [{"id": "outcome:failed", "intervention_id": "e:night-change", "status": "worse", "before": {"quality": 0.98, "comfort_error": 0.6}, "after": {"quality": 0.88, "comfort_error": 2.4}, "confounders": ["two long data gaps"], "timing": "one partial night"}], "period_comparisons": [{"id": "comparison:failed", "before_period": "2026-02-02/2026-02-04", "after_period": "2026-02-05/2026-02-07", "quality": {"before": 0.98, "after": 0.88}}], "house_context": {"owner_note": "Изменение отменено после дискомфорта."}}
+    },
+    "expected_response": {"summary": "Пробное изменение не показало улучшения; его отменили после ухудшения, а качество данных ограничивает вывод.", "unknowns": [{"id": "u:failed-causality", "statement": "Нельзя отделить эффект изменения от двух пропусков и короткого периода наблюдения.", "evidence": [{"id": "comparison:failed"}, {"id": "outcome:failed"}]}]},
+    "assertions": {"required_context": ["period_comparisons", "intervention_outcomes", "house_context"], "must_reference": ["comparison:failed", "outcome:failed"], "requires_unknown": true}
+  },
+  {
+    "id": "firmware_update_rollback_unknown_history",
+    "packet": {
+      "period": {"kind": "monthly", "start": "2026-03-01T00:00:00+04:00", "end": "2026-04-01T00:00:00+04:00", "timezone": "Europe/Samara"},
+      "data_quality": {"score": 0.91, "coverage_pct": 93, "max_gap_seconds": 3600, "stuck_pct": 2, "implausible_jumps": 1, "sample_count": 2678},
+      "metrics": [{"id": "m:losses", "name": "connection_losses", "value": 7, "unit": "count"}],
+      "events": [{"id": "e:firmware", "kind": "firmware_update", "started_at": "2026-03-14T10:00:00+04:00", "details": {"from": "3.1", "to": "3.2"}}, {"id": "e:rollback", "kind": "firmware_rollback", "started_at": "2026-03-18T10:00:00+04:00", "details": {"to": "3.1"}}],
+      "control_context": {"house_context": {"firmware_history": [{"version": "3.1", "interval": "before"}, {"version": "3.2", "interval": "test"}, {"version": "3.1", "interval": "after"}], "owner_note": "После отката стало спокойнее, но журнал старых версий неполный."}, "period_comparisons": [{"id": "comparison:firmware", "before_period": "2026-03-01/2026-03-14", "after_period": "2026-03-18/2026-04-01", "quality": {"before": 0.96, "after": 0.91}}], "intervention_outcomes": [{"id": "outcome:firmware", "intervention_id": "e:firmware", "status": "indeterminate", "before": {"losses": 2}, "after": {"losses": 5}, "confounders": ["coverage fell", "rollback"], "timing": "partial month"}]}
+    },
+    "expected_response": {"summary": "История обновления и отката сохранена, но данных недостаточно, чтобы приписать изменения прошивке.", "unknowns": [{"id": "u:firmware-history", "statement": "Историческое сравнение версий неполно и смешано с откатом и изменением качества наблюдений.", "evidence": [{"id": "e:firmware"}, {"id": "e:rollback"}, {"id": "outcome:firmware"}]}]},
+    "assertions": {"required_context": ["period_comparisons", "intervention_outcomes", "house_context"], "must_reference": ["outcome:firmware", "e:firmware", "e:rollback"], "requires_unknown": true}
+  },
+  {
+    "id": "false_ab_improvement_weather_mode_dhw_coverage",
+    "packet": {
+      "period": {"kind": "weekly", "start": "2026-04-06T00:00:00+04:00", "end": "2026-04-13T00:00:00+04:00", "timezone": "Europe/Samara"},
+      "data_quality": {"score": 0.72, "coverage_pct": 76, "max_gap_seconds": 14400, "stuck_pct": 4, "implausible_jumps": 0, "sample_count": 875},
+      "metrics": [{"id": "m:error-a", "name": "comfort_error", "value": 1.9, "unit": "C"}, {"id": "m:error-b", "name": "comfort_error", "value": 1.1, "unit": "C"}],
+      "events": [{"id": "e:dhw", "kind": "dhw_reheat_episode", "started_at": "2026-04-10T07:00:00+04:00", "details": {"duration_minutes": 40}}],
+      "control_context": {"period_comparisons": [{"id": "comparison:ab", "before_period": "2026-04-06/2026-04-09", "after_period": "2026-04-10/2026-04-13", "quality": {"before": 0.91, "after": 0.72}, "confounders": ["warmer weather", "economy mode", "DHW episode"]}], "intervention_outcomes": [{"id": "outcome:ab", "intervention_id": "unknown", "status": "indeterminate", "before": {"comfort_error": 1.9}, "after": {"comfort_error": 1.1}, "confounders": ["weather", "mode", "DHW", "coverage"]}], "house_context": {"owner_note": "Параллельно меняли режим дома."}}
+    },
+    "expected_response": {"summary": "Меньшая ошибка в последнем интервале не доказывает улучшение: сравнение смешано с погодой, режимом, ГВС и потерей покрытия.", "unknowns": [{"id": "u:ab-confounded", "statement": "Эффект вмешательства неотделим от погодного режима, ГВС и разного покрытия.", "evidence": [{"id": "comparison:ab"}, {"id": "outcome:ab"}]}]},
+    "assertions": {"required_context": ["period_comparisons", "intervention_outcomes", "house_context"], "must_reference": ["comparison:ab", "outcome:ab"], "requires_unknown": true}
+  },
+  {
+    "id": "season_autumn_vs_spring",
+    "packet": {"period": {"kind": "seasonal", "start": "2026-09-01T00:00:00+04:00", "end": "2026-12-01T00:00:00+04:00", "timezone": "Europe/Samara"}, "data_quality": {"score": 0.9, "coverage_pct": 92, "max_gap_seconds": 7200, "stuck_pct": 2, "implausible_jumps": 0, "sample_count": 8000}, "metrics": [{"id": "m:autumn", "name": "heating_degree_days", "value": 420, "unit": "C-day"}], "events": [], "control_context": {"period_comparisons": [{"id": "comparison:autumn-spring", "before_period": "2026-03-01/2026-06-01", "after_period": "2026-09-01/2026-12-01", "quality": {"before": 0.88, "after": 0.9}, "confounders": ["different daylight", "different occupancy"]}], "house_context": {"season_labels": {"before": "spring", "after": "autumn"}}}},
+    "expected_response": {"summary": "Осень и весна сопоставлены с оговоркой о различиях погоды, света и проживания.", "unknowns": [{"id": "u:season-context", "statement": "Сезонное сравнение не отделяет погоду и режим проживания от работы системы.", "evidence": [{"id": "comparison:autumn-spring"}]}]},
+    "assertions": {"required_context": ["period_comparisons", "house_context"], "must_reference": ["comparison:autumn-spring"], "requires_unknown": true}
+  },
+  {
+    "id": "season_autumn_vs_last_autumn",
+    "packet": {"period": {"kind": "seasonal", "start": "2026-09-01T00:00:00+04:00", "end": "2026-12-01T00:00:00+04:00", "timezone": "Europe/Samara"}, "data_quality": {"score": 0.95, "coverage_pct": 97, "max_gap_seconds": 1800, "stuck_pct": 0, "implausible_jumps": 0, "sample_count": 9000}, "metrics": [{"id": "m:autumn-current", "name": "comfort_error", "value": 0.7, "unit": "C"}, {"id": "m:autumn-prior", "name": "comfort_error", "value": 1.2, "unit": "C"}], "events": [], "control_context": {"period_comparisons": [{"id": "comparison:autumn-year", "before_period": "2025-09-01/2025-12-01", "after_period": "2026-09-01/2026-12-01", "quality": {"before": 0.94, "after": 0.95}, "confounders": ["owner schedule changed"]}], "house_context": {"season_labels": {"before": "last_autumn", "after": "autumn"}}}},
+    "expected_response": {"summary": "Текущая осень имеет меньшую ошибку комфорта при сопоставимом качестве, но изменившийся график ограничивает причинный вывод.", "hypotheses": [{"id": "h:autumn-year", "statement": "Различие между осенними периодами наблюдается, но его причина не установлена.", "confidence": 0.55, "confidence_basis": "Сопоставимое качество и известное изменение графика.", "rationale": "Сравнение показывает эффект, но не изолирует расписание.", "evidence_for": [{"id": "comparison:autumn-year"}], "evidence_against": [], "alternatives": ["Изменение расписания"]}]},
+    "assertions": {"required_context": ["period_comparisons", "house_context"], "must_reference": ["comparison:autumn-year"], "requires_unknown": false}
+  },
+  {
+    "id": "season_winter_vs_shoulder",
+    "packet": {"period": {"kind": "seasonal", "start": "2026-12-01T00:00:00+04:00", "end": "2027-03-01T00:00:00+04:00", "timezone": "Europe/Samara"}, "data_quality": {"score": 0.93, "coverage_pct": 95, "max_gap_seconds": 3600, "stuck_pct": 1, "implausible_jumps": 0, "sample_count": 8200}, "metrics": [{"id": "m:winter", "name": "heating_runtime", "value": 410, "unit": "h"}, {"id": "m:shoulder", "name": "heating_runtime", "value": 160, "unit": "h"}], "events": [], "control_context": {"period_comparisons": [{"id": "comparison:winter-shoulder", "before_period": "2026-10-01/2026-12-01", "after_period": "2026-12-01/2027-03-01", "quality": {"before": 0.9, "after": 0.93}, "confounders": ["outdoor temperature range"]}], "house_context": {"season_labels": {"before": "shoulder", "after": "winter"}}}},
+    "expected_response": {"summary": "Большая наработка зимой ожидаемо отличается от межсезонья; само различие не является признаком неисправности.", "observed_patterns": [{"id": "pattern:season-load", "statement": "Нагрузка отопления зимой выше, чем в межсезонье.", "evidence": [{"id": "comparison:winter-shoulder"}], "epistemic_level": "derived"}]},
+    "assertions": {"required_context": ["period_comparisons", "house_context"], "must_reference": ["comparison:winter-shoulder"], "requires_unknown": false}
+  },
+  {
+    "id": "season_missing_prior",
+    "packet": {"period": {"kind": "seasonal", "start": "2026-09-01T00:00:00+04:00", "end": "2026-12-01T00:00:00+04:00", "timezone": "Europe/Samara"}, "data_quality": {"score": 0.97, "coverage_pct": 99, "max_gap_seconds": 600, "stuck_pct": 0, "implausible_jumps": 0, "sample_count": 9100}, "metrics": [{"id": "m:season", "name": "comfort_error", "value": 0.8, "unit": "C"}], "events": [], "control_context": {"period_comparisons": [{"id": "comparison:none", "before_period": null, "after_period": "2026-09-01/2026-12-01", "quality": {"after": 0.97}, "confounders": ["no prior season"]}], "house_context": {"season_labels": {"after": "autumn"}, "history": "first complete season"}}},
+    "expected_response": {"summary": "Текущий сезон описан отдельно; сравнение с прошлым сезоном невозможно из-за отсутствия исторического ряда.", "unknowns": [{"id": "u:no-prior-season", "statement": "Нет сопоставимого предыдущего сезона для проверки изменения.", "evidence": [{"id": "comparison:none"}]}]},
+    "assertions": {"required_context": ["period_comparisons", "house_context"], "must_reference": ["comparison:none"], "requires_unknown": true}
+  },
+  {
+    "id": "occupancy_with_hypothesis",
+    "packet": {"period": {"kind": "daily", "start": "2026-05-11T00:00:00+04:00", "end": "2026-05-12T00:00:00+04:00", "timezone": "Europe/Samara"}, "data_quality": {"score": 0.95, "coverage_pct": 98, "max_gap_seconds": 900, "stuck_pct": 0, "implausible_jumps": 0, "sample_count": 282}, "metrics": [{"id": "m:room-drop", "name": "room_cooling_rate", "value": -0.2, "unit": "C/h"}, {"id": "m:dhw", "name": "dhw_reheat_count", "value": 2, "unit": "count"}], "events": [{"id": "e:dhw", "kind": "dhw_reheat_episode", "started_at": "2026-05-11T19:00:00+04:00", "details": {"draw_meter": false}}], "control_context": {"house_context": {"owner_note": "Вечером были дома, днём неизвестно.", "occupancy_sensor": false}, "period_comparisons": [{"id": "comparison:occupancy", "before_period": "2026-05-10", "after_period": "2026-05-11", "quality": {"before": 0.95, "after": 0.95}}]}},
+    "expected_response": {"summary": "Вечернее присутствие согласуется с контекстом владельца и несколькими косвенными сигналами; дневное присутствие не установлено.", "hypotheses": [{"id": "h:occupancy-with", "statement": "Гипотеза присутствия вечером поддерживается, но не является прямым измерением.", "confidence": 0.65, "confidence_basis": "Owner context, two indirect signals and no occupancy sensor.", "rationale": "Сигналы согласуются только с частью интервала.", "evidence_for": [{"id": "e:dhw"}, {"id": "m:dhw"}], "evidence_against": [], "alternatives": ["Расписание автоматики"]}], "unknowns": [{"id": "u:occupancy-day", "statement": "Дневная занятость дома неизвестна.", "evidence": [{"id": "comparison:occupancy"}]}]},
+    "assertions": {"required_context": ["period_comparisons", "house_context"], "must_reference": ["e:dhw", "m:dhw"], "requires_unknown": true}
+  },
+  {
+    "id": "occupancy_without_hypothesis_owner_context",
+    "packet": {"period": {"kind": "daily", "start": "2026-06-02T00:00:00+04:00", "end": "2026-06-03T00:00:00+04:00", "timezone": "Europe/Samara"}, "data_quality": {"score": 0.93, "coverage_pct": 94, "max_gap_seconds": 1800, "stuck_pct": 1, "implausible_jumps": 0, "sample_count": 270}, "metrics": [{"id": "m:quiet", "name": "dhw_reheat_count", "value": 0, "unit": "count"}, {"id": "m:stable", "name": "room_temperature_change", "value": 0.1, "unit": "C"}], "events": [], "control_context": {"house_context": {"owner_note": "Дом пустовал весь день; это ручной контекст, не датчик.", "occupancy_sensor": false}, "period_comparisons": [{"id": "comparison:empty", "before_period": "2026-06-01", "after_period": "2026-06-02", "quality": {"before": 0.94, "after": 0.93}}]}},
+    "expected_response": {"summary": "Контекст владельца сообщает об отсутствии людей за день, а телеметрия сама по себе не доказывает занятость или пустой дом.", "unknowns": [{"id": "u:occupancy-sensor", "statement": "Прямого датчика присутствия нет; нулевой ГВС не доказывает отсутствие людей.", "evidence": [{"id": "m:quiet"}, {"id": "comparison:empty"}]}]},
+    "assertions": {"required_context": ["period_comparisons", "house_context"], "must_reference": ["m:quiet", "comparison:empty"], "requires_unknown": true}
+  }
+]

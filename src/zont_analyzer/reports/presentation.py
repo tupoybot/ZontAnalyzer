@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -66,8 +67,32 @@ def hero(report: Report) -> str:
     )
 
 
+def period_target(report: Report) -> tuple[float | None, float | None]:
+    """Use historical means for period cards, retaining old canonical evidence."""
+    if report.kind not in {"weekly", "monthly", "seasonal"}:
+        value = report.context.get("current_target_c")
+        return (float(value), None) if isinstance(value, (int, float)) else (None, None)
+    value = report.context.get("period_target_mean_c")
+    coverage = report.context.get("period_target_coverage_pct")
+    if value is None:
+        temporal = report.context.get("temporal_evidence", {})
+        quality = temporal.get("quality", {}) if isinstance(temporal, dict) else {}
+        signal = quality.get("target_temperature", {}) if isinstance(quality, dict) else {}
+        value = signal.get("mean") if isinstance(signal, dict) else None
+        coverage = signal.get("coverage_pct") if isinstance(signal, dict) else None
+    if (
+        isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        and isinstance(coverage, (int, float)) and math.isfinite(coverage) and 0 < coverage <= 100
+    ):
+        return float(value), float(coverage)
+    return None, 0.0
+
+
 def kpis(report: Report) -> str:
     metrics = {m.name: m for m in report.metrics}
+
+    target_value, target_coverage = period_target(report)
+    is_period = report.kind in {"weekly", "monthly", "seasonal"}
 
     def metric(name: str, unit: str) -> str:
         if name not in metrics:
@@ -77,7 +102,10 @@ def kpis(report: Report) -> str:
 
     values = [
         ("Комната · средняя", metric("mean_temperature_c", "°C")),
-        ("Цель · на конец периода", number(report.context.get("current_target_c"), "°C")),
+        (
+            "Цель · средняя за период" if is_period else "Цель · на конец периода",
+            number(target_value, "°C"),
+        ),
         ("Улица · средняя", metric("outdoor_mean_temperature_c", "°C")),
         ("Качество данных", number(report.quality.score * 100, "%")),
         ("Отопление · запуски", metric("burner_starts", "")),
@@ -86,7 +114,11 @@ def kpis(report: Report) -> str:
     return (
         '<section class="kpi-grid" aria-label="Ключевые показатели">'
         + "".join(
-            f'<div class="kpi"><span>{esc(label)}</span><strong>{esc(value)}</strong></div>' for label, value in values
+            f'<div class="kpi"><span>{esc(label)}</span><strong>{esc(value)}</strong>'
+            + (f'<small>По {target_coverage:g}% периода</small>'
+               if index == 1 and is_period and target_value is not None
+               and target_coverage is not None and target_coverage < 99 else "")
+            + "</div>" for index, (label, value) in enumerate(values)
         )
         + reliability(report)
         + "</section>"

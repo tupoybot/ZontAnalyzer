@@ -3,6 +3,7 @@
 # Локальный резервный путь для ключа OpenAI:
 # .access/.openai_access_token.txt
 home:
+  seasons: {spring: "03-01", summer: "06-01", autumn: "09-01", winter: "12-01"}
   timezone: Europe/Samara
 
 preferences:

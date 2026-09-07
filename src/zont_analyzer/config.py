@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
+from zont_analyzer.domain.periods import SeasonBoundaries
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -21,6 +23,7 @@ class QuietHours(StrictModel):
 
 class HomeConfig(StrictModel):
     timezone: str = "Europe/Samara"
+    seasons: SeasonBoundaries = Field(default_factory=SeasonBoundaries)
 
     @field_validator("timezone")
     @classmethod
@@ -99,7 +102,7 @@ class OpenAIConfig(StrictModel):
     daily_model: str = "gpt-5.6-luna"
     review_model: str = "gpt-5.6-terra"
     reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "medium"
-    prompt_version: str = "analyst-v5"
+    prompt_version: str = "analyst-v6"
     monthly_token_budget: int = Field(default=100_000, ge=0)
 
 

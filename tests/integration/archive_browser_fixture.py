@@ -36,8 +36,12 @@ for selected in (date(2026, 8, 1), date(2026, 8, 3), date(2026, 8, 5)):
         alternatives=["Автоматика"], evidence_for=[{"id": "unconfirmed:browser"}],
     )]
     runtime.db.save_report(report, render_text(report))
-analysis.analyze_week(2026, 31, use_ai=False)
-analysis.analyze_month(2026, 7, use_ai=False)
+for week in (27, 29, 31):
+    analysis.analyze_week(2026, week, use_ai=False)
+for month in (4, 6, 7):
+    analysis.analyze_month(2026, month, use_ai=False)
+for year, season in ((2025, "autumn"), (2026, "spring"), (2026, "autumn")):
+    analysis.analyze_season(year, season, use_ai=False)
 
 result = publish_reports(runtime)
-assert result["reports"] == 5
+assert result["reports"] == 12
