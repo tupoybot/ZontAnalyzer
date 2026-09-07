@@ -167,7 +167,7 @@ EVIDENCE_EXCLUSION_LABELS = {
 }
 
 
-_ARCHIVE_KINDS = frozenset({"daily", "weekly", "monthly"})
+_ARCHIVE_KINDS = frozenset({"daily", "weekly", "monthly", "seasonal"})
 
 # This deliberately stays in the generated document instead of a separately
 # published bundle.  Archives are standalone exports and must not depend on a
@@ -177,7 +177,7 @@ _ARCHIVE_NAVIGATION_SCRIPT = r"""
   const navigation = document.querySelector("[data-archive-navigation]");
   if (!navigation) return;
 
-  const supportedKinds = new Set(["daily", "weekly", "monthly"]);
+  const supportedKinds = new Set(["daily", "weekly", "monthly", "seasonal"]);
   const datePattern = /^\d{4}-\d{2}-\d{2}$/;
   const reportKind = supportedKinds.has(navigation.dataset.reportKind) ? navigation.dataset.reportKind : "daily";
   const reportStart = navigation.dataset.reportStart || "";
@@ -186,7 +186,7 @@ _ARCHIVE_NAVIGATION_SCRIPT = r"""
   let reports = [];
 
   function archiveRoot(pathname) {
-    const archived = pathname.match(/^(.*\/)(?:daily|weekly|monthly)\/[^/]+$/);
+    const archived = pathname.match(/^(.*\/)(?:daily|weekly|monthly|seasonal)\/[^/]+$/);
     if (archived) return archived[1] || "/";
     if (pathname.endsWith("/latest.html")) return pathname.slice(0, -"latest.html".length) || "/";
     if (pathname.endsWith("/")) return pathname;
@@ -307,7 +307,8 @@ _ARCHIVE_NAVIGATION_SCRIPT = r"""
     previous.disabled = true;
     latest.disabled = true;
     next.disabled = true;
-    monthLabel.textContent = activeKind === "weekly" ? "Опубликованные недели" : "Опубликованные месяцы";
+    monthLabel.textContent = activeKind === "weekly" ? "Опубликованные недели"
+      : activeKind === "seasonal" ? "Опубликованные сезоны" : "Опубликованные месяцы";
     const periods = reports.filter((item) => item.kind === activeKind).sort(byStart).reverse();
     if (!periods.length) {
       panel.innerHTML = '<p class="archive-empty-message">Нет опубликованных отчётов для этого периода.</p>';
@@ -316,7 +317,10 @@ _ARCHIVE_NAVIGATION_SCRIPT = r"""
     panel.innerHTML = `<ul class="archive-periods">${periods.map((item) => {
       const selected = item.start === reportStart && reportKind === activeKind ? " aria-current=\"page\"" : "";
       const boundaries = `${formatBoundary(item.start)} — ${formatBoundary(item.end)} (конец не включён)`;
-      return `<li><a href="${directUrl(item)}"${selected}>${boundaries}</a></li>`;
+      const partial = item.complete === false ? " · промежуточный" : "";
+      const season = {spring: "Весна", summer: "Лето", autumn: "Осень", winter: "Зима"}[item.season];
+      const label = `${season ? season + ": " : ""}${boundaries}${partial}`;
+      return `<li><a href="${directUrl(item)}"${selected}>${label}</a></li>`;
     }).join("")}</ul>`;
   }
 
@@ -864,6 +868,9 @@ def render_text(report: Report) -> str:
     )
     lines.extend(_temporal_evidence_text(report.context.get("temporal_evidence")))
     lines.extend(_historical_evidence_text(report.context))
+    from zont_analyzer.reports.period_context import period_text
+
+    lines.extend(period_text(report))
     current_mode = report.context.get("current_mode")
     if isinstance(current_mode, dict):
         lines.append(
@@ -1056,6 +1063,11 @@ def render_html(
     from zont_analyzer.reports.owner_forms import render_owner_forms
 
     owner_forms = render_owner_forms(report, owner_data)
+    from zont_analyzer.reports.period_context import render_period_context
+    from zont_analyzer.reports.regeneration import render_regeneration
+
+    regeneration = render_regeneration(report, feedback_api_base_url)
+    period_context = render_period_context(report)
     period = html.escape(
         f"{_local(report.period_start, report.timezone)} — {_local(report.period_end, report.timezone)}"
     )
@@ -1320,7 +1332,8 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="archive-period-tabs" role="tablist" aria-label="Период отчёта">
 <button type="button" role="tab" data-archive-kind="daily">День</button>
 <button type="button" role="tab" data-archive-kind="weekly">Неделя</button>
-<button type="button" role="tab" data-archive-kind="monthly">Месяц</button></div>
+<button type="button" role="tab" data-archive-kind="monthly">Месяц</button>
+<button type="button" role="tab" data-archive-kind="seasonal">Сезон</button></div>
 <div class="archive-day-actions"><button type="button" data-archive-action="previous">← Предыдущий</button>
 <button type="button" data-archive-action="latest" title="Последний доступный дневной отчёт">Сегодня</button>
 <button type="button" data-archive-action="next">Следующий →</button></div>
@@ -1355,6 +1368,8 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="details-area full-width">{ui.metric_groups(report, mttr_reason)}{ui.sensors(report)}{sensor_context}
 <div class="debug-only">{temporal_evidence}{historical_evidence}</div>
 <details class="debug-only"><summary>Канонический JSON</summary><pre>{canonical}</pre></details></div>
+{period_context}
+{regeneration}
 <section class="full-width owner-settings" aria-label="Профиль и показания">{owner_forms}</section>
 </main><footer>Период: {period} · ZontAnalyzer</footer>
 <script>{SCRIPT}</script>

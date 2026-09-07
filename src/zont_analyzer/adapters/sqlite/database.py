@@ -30,6 +30,7 @@ from sqlalchemy import (
     event,
     func,
     inspect,
+    or_,
     select,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -540,7 +541,7 @@ class Database:
     @staticmethod
     def _write_samples(session: Session, rows: list[dict[str, Any]]) -> None:
         statement = sqlite_insert(TelemetrySampleRow).values(rows)
-        session.execute(
+        changed = session.execute(
             statement.on_conflict_do_update(
                 index_elements=["series_id", "timestamp_utc"],
                 set_={
@@ -549,8 +550,29 @@ class Database:
                     "quality": statement.excluded.quality,
                     "ingested_at": statement.excluded.ingested_at,
                 },
-            )
+                where=or_(TelemetrySampleRow.value_num.is_distinct_from(statement.excluded.value_num),
+                          TelemetrySampleRow.value_text.is_distinct_from(statement.excluded.value_text),
+                          TelemetrySampleRow.quality.is_distinct_from(statement.excluded.quality)),
+            ).returning(TelemetrySampleRow.timestamp_utc)
         )
+        Database._mark_data_days(session, [int(row[0]) for row in changed])
+
+    @staticmethod
+    def _mark_data_days(session: Session, timestamps: list[int]) -> None:
+        for day in {datetime.fromtimestamp(value, UTC).date().isoformat() for value in timestamps}:
+            statement = sqlite_insert(AppMetaRow).values(key=f"telemetry-day:{day}", value=str(uuid.uuid4()))
+            session.execute(statement.on_conflict_do_update(
+                index_elements=["key"], set_={"value": statement.excluded.value},
+            ))
+
+    def period_data_revision(self, start: datetime, end: datetime) -> str:
+        first = f"telemetry-day:{start.astimezone(UTC).date().isoformat()}"
+        last = f"telemetry-day:{(end - timedelta(microseconds=1)).astimezone(UTC).date().isoformat()}"
+        with self.session() as session:
+            rows = list(session.execute(select(AppMetaRow.key, AppMetaRow.value).where(
+                AppMetaRow.key >= first, AppMetaRow.key <= last,
+            ).order_by(AppMetaRow.key)))
+        return hashlib.sha256(json.dumps([list(row) for row in rows]).encode()).hexdigest()
 
     def list_series(self) -> list[dict[str, Any]]:
         with self.session() as session:
@@ -657,7 +679,7 @@ class Database:
             return 0
         with self.session() as session:
             statement = sqlite_insert(SourceEventRow).values(rows)
-            session.execute(
+            changed = session.execute(
                 statement.on_conflict_do_update(
                     index_elements=["id"],
                     set_={
@@ -666,8 +688,12 @@ class Database:
                         "important": statement.excluded.important,
                         "ingested_at": statement.excluded.ingested_at,
                     },
-                )
+                    where=or_(SourceEventRow.duration_seconds.is_distinct_from(statement.excluded.duration_seconds),
+                              SourceEventRow.details_json.is_distinct_from(statement.excluded.details_json),
+                              SourceEventRow.important.is_distinct_from(statement.excluded.important)),
+                ).returning(SourceEventRow.timestamp_utc)
             )
+            self._mark_data_days(session, [int(row[0]) for row in changed])
         return len(rows)
 
     def list_source_events(self, start: datetime, end: datetime) -> list[SourceEvent]:
@@ -849,7 +875,7 @@ class Database:
             rows = session.scalars(
                 select(ReportRow)
                 .where(
-                    ReportRow.kind.in_(("daily", "weekly", "monthly")),
+                    ReportRow.kind.in_(("daily", "weekly", "monthly", "seasonal")),
                     ReportRow.period_end <= int(now.timestamp()),
                 )
                 .order_by(ReportRow.generated_at, ReportRow.id)
@@ -1188,6 +1214,22 @@ class Database:
                 if supplied_experiment is None and current_experiment is not None:
                     snapshot = current_experiment.get("control_snapshot")
                 self._store_experiment(session, intervention.id, recorded_experiment, snapshot)
+                prediction_key = f"intervention-prediction:{intervention.id}"
+                previous_prediction = session.get(
+                    AppMetaRow, f"intervention-prediction:{latest_intervention.id}",
+                ) if latest_intervention else None
+                source_report = session.get(ReportRow, row.report_id)
+                if previous_prediction is not None:
+                    session.add(AppMetaRow(key=prediction_key, value=previous_prediction.value))
+                elif source_report is not None:
+                    original = json.loads(source_report.canonical_json)
+                    session.add(AppMetaRow(key=prediction_key, value=json.dumps({
+                        "report_id": row.report_id, "generated_at": original["generated_at"],
+                        "captured_at": utcnow().isoformat(), "predictions": original.get("predictions", []),
+                        "hypothesis": json.loads(row.payload_json).get("hypothesis"),
+                        "expected_effect": json.loads(row.payload_json).get("expected_effect"),
+                        "epistemic_level": "previous_ai_interpretation",
+                    }, ensure_ascii=False)))
             else:
                 row.rejection_reason = note
             session.flush()

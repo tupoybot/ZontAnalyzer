@@ -42,6 +42,12 @@ def _report(selected: date) -> Report:
 
 
 class FakeDatabase:
+    @staticmethod
+    def period_data_revision(_start: datetime, _end: datetime) -> str:
+        import hashlib
+
+        return hashlib.sha256(b"[]").hexdigest()
+
     def __init__(self) -> None:
         self.reports: dict[str, Report] = {}
         self.path = Path("/tmp/zont-analyzer-fake.sqlite3")
@@ -75,6 +81,8 @@ class FakeDatabase:
 def fake_owner_store(monkeypatch):
     from zont_analyzer.application.owner_context import OwnerContextStore
 
+    # Calendar scheduling has separate real-DB integration coverage.
+    monkeypatch.setattr("zont_analyzer.application.period_schedule.run_period_schedule", lambda *args: [])
     original = OwnerContextStore.gas
 
     def gas(store, report_id):

@@ -44,7 +44,7 @@ def test_owner_progressive_disclosures_keep_edit_and_history_hooks() -> None:
 
     profile_start = rendered.index('<details id="system-profile"')
     assert ' open' not in rendered[profile_start:rendered.index('>', profile_start)]
-    assert rendered.count('class="owner-field-group"') == 4
+    assert rendered.count('class="owner-field-group"') == 5
     assert '<div class="owner-gas-summary"><p data-gas-current>Текущее показание: 12.50 м³' in rendered
     assert 'data-gas-edit' in rendered and 'aria-expanded="false"' in rendered
     assert '<details id="gas-editor"' in rendered

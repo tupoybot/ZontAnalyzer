@@ -1,8 +1,9 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
-from zont_analyzer.analytics.evidence import NumericSample, SignalMetadata, SignalSeries, StateSample
+from zont_analyzer.analytics.evidence import EvidenceMetric, NumericSample, SignalMetadata, SignalSeries, StateSample
 from zont_analyzer.application.period_comparison import (
     ComparisonWindow,
     build_period_context,
@@ -138,3 +139,74 @@ def test_overlapping_windows_are_rejected() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     with pytest.raises(ValueError, match="overlap"):
         compare_periods(_window("a", start), _window("b", start + timedelta(minutes=20)))
+
+
+def test_missing_context_is_unknown_and_never_claimed_comparable() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    before = ComparisonWindow(label="before", start=start, end=start + timedelta(hours=1))
+    after = ComparisonWindow(label="after", start=start + timedelta(days=1), end=start + timedelta(days=1, hours=1))
+    result = compare_periods(before, after)
+    assert result.status == "limited"
+    assert {
+        "weather_context_unavailable",
+        "dhw_context_unavailable",
+        "mode_context_unavailable",
+    } <= set(result.unknowns)
+
+
+def test_relative_change_is_only_published_for_ratio_scale_metrics() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    metric = EvidenceMetric(id="m", name="mean_temperature_c", value=20, unit="°C", source="observed")
+    other = EvidenceMetric(id="m2", name="mean_temperature_c", value=22, unit="°C", source="observed")
+    before = ComparisonWindow(
+        label="before", start=start, end=start + timedelta(hours=1), mode="auto",
+        context_values={"outdoor_mean_c": 0, "dhw_share_pct": 0}, precomputed_metrics=(metric,),
+    )
+    after = ComparisonWindow(
+        label="after", start=start + timedelta(days=1), end=start + timedelta(days=1, hours=1), mode="auto",
+        context_values={"outdoor_mean_c": 0, "dhw_share_pct": 0}, precomputed_metrics=(other,),
+    )
+    result = compare_periods(before, after)
+    changed = result.metrics[0]
+    assert changed.absolute_change == 2
+    assert changed.relative_change_pct is None
+    assert changed.unavailable_reason == "relative_change_not_defined_for_absolute_unit"
+
+
+def test_report_adapter_prefers_temporal_operational_metrics_and_coverage() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    temporal_metric = {
+        "id": "e", "name": "burner_runtime_request_ratio", "value": 0.5,
+        "unit": "ratio", "source": "derived", "coverage_pct": 91,
+    }
+    report = SimpleNamespace(
+        quality=SimpleNamespace(score=0.8, coverage_pct=88),
+        metrics=[SimpleNamespace(id="legacy", name="burner_runtime_request_ratio", value=0.1, unit="ratio")],
+        context={
+            "temporal_evidence": {
+                "period_start": start.isoformat(), "period_end": (start + timedelta(hours=1)).isoformat(),
+                "metrics": [temporal_metric], "signals": {}, "windows": [], "exclusions": {"dhw": 0},
+            }
+        },
+    )
+
+    class Period:
+        kind = "weekly"
+        label = "p"
+
+        def __init__(self, offset: timedelta = timedelta()) -> None:
+            self.start = start + offset
+            self.end = self.start + timedelta(hours=1)
+            self.observed_end = self.end
+
+    def analyze(*_args: object) -> object:
+        return report
+
+    baseline = Period(timedelta(days=-1))
+    baseline.label = "baseline"
+    context = build_period_context(period=Period(), baseline_periods=[baseline], analyze_window=analyze)
+    assert context["baseline_count"] == 1
+    comparison = context["period_comparisons"][0]
+    runtime = next(item for item in comparison["metrics"] if item["name"] == "burner_runtime_request_ratio")
+    assert runtime["before"] == pytest.approx(0.5)
+    assert comparison["quality"]["before_coverage_pct"] == 88

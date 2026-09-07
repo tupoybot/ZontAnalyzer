@@ -35,6 +35,9 @@ OWNER_SCRIPT = r"""
     for (const node of fieldNodes) {
       const item = profile?.fields?.[node.dataset.field];
       const value = item?.value;
+      node.querySelectorAll('[data-season]').forEach(input => {
+        input.value = value?.[input.dataset.season] ?? input.dataset.default;
+      });
       node.querySelectorAll('[data-coordinate]').forEach(input => {
         input.value = value?.[input.dataset.coordinate] ?? '';
       });
@@ -130,14 +133,17 @@ OWNER_SCRIPT = r"""
       const fields = {};
       for (const node of fieldNodes) {
         const name = node.dataset.field;
-        const defaultInput = node.querySelector('[data-default]');
+        const defaultInput = node.querySelector('.owner-value[data-default]');
         const current = profiles.find(p => p.device_id === deviceId)?.fields?.[name]?.value;
         if (!changed.has(name) && !(defaultInput && current == null)) continue;
         const coordinates = [...node.querySelectorAll('[data-coordinate]')];
         const state = node.querySelector('.owner-unknown');
         const input = node.querySelector('.owner-value');
         let value;
-        if (coordinates.length) {
+        const seasons = [...node.querySelectorAll('[data-season]')];
+        if (seasons.length) {
+          value = Object.fromEntries(seasons.map(i => [i.dataset.season, i.value]));
+        } else if (coordinates.length) {
           if (coordinates.every(i => !i.value)) value = null;
           else {
             if (coordinates.some(i => !i.value)) throw new Error('Укажите обе координаты или очистите обе.');

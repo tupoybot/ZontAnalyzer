@@ -3,17 +3,19 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from zont_analyzer.adapters.sqlite import Database
+from zont_analyzer.application.ai_ledger import AILedger
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
 from zont_analyzer.domain.reasoning import Hypothesis, ObservedPattern, Prediction, RecommendedExperiment, Unknown
 
-PROMPT_VERSION = "analyst-v5"
+PROMPT_VERSION = "analyst-v6"
 
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
 _PACKET_CONTENT_MAX_BYTES = 60 * 1024
@@ -100,8 +102,14 @@ user variable, expected effect, evidence, observation period, success criteria, 
 stop/rollback conditions. Leave it null if observation or unknown is sufficient. Do not
 propose competing simultaneous experiments. Recommendations may use existing owner feedback.
 Stage 5 provides owner-confirmed manual context; use it when explaining the current period.
-Structured before/after effect comparison belongs to the next stage; do not claim an effect
-unless supplied evidence already contains that comparison.
+Evaluate supplied period_comparisons and intervention_outcomes before making an effect claim:
+state whether the evidence supports, contradicts, or is indeterminate for the hypothesis,
+and name the before/after quality, confounders, timing, and missing measurements. Treat
+house_context as derived telemetry/history context (including medians and inferred summaries),
+not as an owner statement. Only an explicit owner_note or owner-confirmed intervention/experiment
+outcome is manual context. Distinguish occupancy with the hypothesis from occupancy without it;
+occupancy remains indeterminate when the supplied signals do not decide.
+Never claim an intervention caused an outcome from timing alone.
 Predictions require a scenario, direction/effect, assumptions, evidence and verification plan;
 never present them as measured facts or invent numerical effect sizes.
 When the system is operating normally, write affirmative owner-facing text such as
@@ -171,48 +179,120 @@ def _validate_structured_result(result: _StructuredAnalysisResult) -> AnalysisRe
 
 class OpenAIAnalyst:
     def __init__(self, *, api_key: str, config: AppConfig, db: Database):
-        self.client = OpenAI(api_key=api_key)
+        # Keep construction lazy: importing the provider must remain usable in
+        # offline workers and tests even when an ambient proxy is unavailable.
+        self.client: Any | None = None
+        self._api_key = api_key
         self.config = config
         self.db = db
+        self.ledger = AILedger(db.path)
 
     def analyze(self, packet: dict[str, Any]) -> AnalysisResult:
         encoded = json.dumps(packet, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(encoded.encode()).hexdigest()
-        if self.db.token_usage_this_month() >= self.config.openai.monthly_token_budget:
-            raise RuntimeError("Monthly OpenAI token budget is exhausted")
         kind = str(packet.get("period", {}).get("kind", "daily"))
         model = self.config.openai.daily_model if kind == "daily" else self.config.openai.review_model
-        response = self.client.responses.parse(
-            model=model,
-            reasoning={"effort": self.config.openai.reasoning_effort},
-            input=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": encoded},
-            ],
-            text_format=_StructuredAnalysisResult,
-            store=False,
-            max_output_tokens=6000,
+        config_fingerprint = {
+            "model": model,
+            "prompt_version": PROMPT_VERSION,
+            "reasoning_effort": self.config.openai.reasoning_effort,
+            "max_output_tokens": 6000,
+        }
+        request_key = hashlib.sha256(
+            json.dumps({"config": config_fingerprint, "input": encoded}, ensure_ascii=False, sort_keys=True).encode()
+        ).hexdigest()
+        if self.db.token_usage_this_month() >= self.config.openai.monthly_token_budget:
+            raise RuntimeError("Monthly OpenAI token budget is exhausted")
+        schema_encoded = json.dumps(_StructuredAnalysisResult.model_json_schema(), ensure_ascii=False, sort_keys=True)
+        # One token per UTF-8 byte is deliberately conservative. The schema is
+        # sent by the structured-output request and therefore consumes input
+        # budget even though it is not in the visible prompt.
+        estimated_input = max(
+            1,
+            len(SYSTEM_PROMPT.encode("utf-8"))
+            + len(encoded.encode("utf-8"))
+            + len(schema_encoded.encode("utf-8")),
         )
-        parsed = response.output_parsed
-        if parsed is None:
-            raise RuntimeError("OpenAI response did not contain parsed output")
-        result = _validate_structured_result(parsed)
+        reservation = self.ledger.reserve(
+            request_key,
+            budget=self.config.openai.monthly_token_budget,
+            used=self.db.token_usage_this_month,
+            estimate=estimated_input + 6000,
+            billing_month=datetime.now(UTC).strftime("%Y-%m"),
+        )
+        if reservation is not None:
+            if reservation.get("status") == "success" and isinstance(reservation.get("result"), dict):
+                return _validate_structured_result(_StructuredAnalysisResult.model_validate(reservation["result"]))
+            if reservation.get("status") == "failure":
+                detail = str(reservation.get("error") or "unknown failure")
+                raise RuntimeError(f"The same OpenAI request previously failed: {detail}")
+            raise RuntimeError("The same OpenAI request is already in progress")
+
+        response: Any = None
+        try:
+            if self.client is None:
+                self.client = OpenAI(api_key=self._api_key, max_retries=0, timeout=120.0)
+            response = self.client.responses.parse(
+                model=model,
+                reasoning={"effort": self.config.openai.reasoning_effort},
+                input=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": encoded},
+                ],
+                text_format=_StructuredAnalysisResult,
+                store=False,
+                max_output_tokens=6000,
+            )
+            parsed = response.output_parsed
+            if parsed is None:
+                raise RuntimeError("OpenAI response did not contain parsed output")
+            result = _validate_structured_result(parsed)
+            status = "success"
+        except Exception as exc:
+            usage = getattr(response, "usage", None)
+            input_tokens, cached_tokens, output_tokens = _usage_values(usage)
+            self.db.save_llm_call(
+                id=f"llm:{uuid.uuid4()}", report_id=None, input_hash=digest, prompt_version=PROMPT_VERSION,
+                model=model, reasoning_effort=self.config.openai.reasoning_effort,
+                input_tokens=input_tokens, cached_tokens=cached_tokens, output_tokens=output_tokens,
+                status="failure", request_id=getattr(response, "id", None),
+            )
+            self.ledger.finish(
+                request_key,
+                status="failure",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                error=str(exc),
+                charge_reserved=usage is None,
+            )
+            raise
+
         usage = getattr(response, "usage", None)
-        input_details = getattr(usage, "input_tokens_details", None)
+        input_tokens, cached_tokens, output_tokens = _usage_values(usage)
         self.db.save_llm_call(
-            id=f"llm:{uuid.uuid4()}",
-            report_id=None,
-            input_hash=digest,
-            prompt_version=PROMPT_VERSION,
-            model=model,
-            reasoning_effort=self.config.openai.reasoning_effort,
-            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-            cached_tokens=int(getattr(input_details, "cached_tokens", 0) or 0),
-            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+            id=f"llm:{uuid.uuid4()}", report_id=None, input_hash=digest, prompt_version=PROMPT_VERSION,
+            model=model, reasoning_effort=self.config.openai.reasoning_effort,
+            input_tokens=input_tokens, cached_tokens=cached_tokens, output_tokens=output_tokens,
+            status=status, request_id=getattr(response, "id", None),
+        )
+        self.ledger.finish(
+            request_key,
             status="success",
-            request_id=getattr(response, "id", None),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            result=result.model_dump(mode="json"),
+            charge_reserved=usage is None,
         )
         return result
+
+
+def _usage_values(usage: Any) -> tuple[int, int, int]:
+    input_details = getattr(usage, "input_tokens_details", None)
+    return (
+        int(getattr(usage, "input_tokens", 0) or 0),
+        int(getattr(input_details, "cached_tokens", 0) or 0),
+        int(getattr(usage, "output_tokens", 0) or 0),
+    )
 
 
 def analysis_packet(
@@ -258,6 +338,13 @@ def analysis_packet(
             "control_context": {
                 "epistemic_level": "context",
                 "note": "Settings and prior interpretations are not measured telemetry unless explicitly labelled.",
+            },
+            "house_context": {
+                "epistemic_level": "derived",
+                "note": (
+                    "Derived telemetry/history context; explicit owner_note and owner-confirmed outcomes "
+                    "retain their own provenance."
+                ),
             },
             "recommendation_feedback": {"epistemic_level": "owner_confirmed"},
             "temporal_evidence": {
@@ -308,8 +395,9 @@ def analysis_packet(
             lambda item: (
                 (str(item.get("started_at", "")), str(item.get("id", ""))) if isinstance(item, dict) else ("", "")
             ),
+            byte_limit=6 * 1024,
         )
-        _add_windows(packet, evidence_target, evidence.get("windows", []), record_omitted)
+        _add_windows(packet, evidence_target, evidence.get("windows", []), record_omitted, window_budget=8 * 1024)
         for key in sorted(set(evidence) - set(metadata_keys) - {"metrics", "exclusion_windows", "windows"}):
             _add_mapping_item(packet, evidence_target, key, evidence[key], "temporal_evidence.extra", record_omitted)
     elif temporal_evidence is not None:
@@ -326,6 +414,7 @@ def analysis_packet(
             if isinstance(item, dict)
             else ("", "")
         ),
+        byte_limit=4 * 1024,
     )
     # Preserve context that changes the meaning of facts before filling the
     # remaining budget with individual events or redundant sensor catalogues.
@@ -334,11 +423,31 @@ def analysis_packet(
         "heating_circuit", "dhw_interaction", "reliability", "current_mode", "current_target_c",
         "equipment_profiles", "dhw_profiles",
         "prior_interpretations", "noise_history", "sensors",
-        "intervention_history",
+        "intervention_history", "period_comparisons", "intervention_outcomes", "house_context",
     }
+    context_priority = (
+        ("house_context", 10 * 1024),
+        ("period_comparisons", 8 * 1024),
+        ("intervention_outcomes", 8 * 1024),
+        ("reliability", 8 * 1024),
+        ("sensors", 6 * 1024),
+        ("heating_circuit", 4 * 1024),
+        ("dhw_interaction", 8 * 1024),
+        ("equipment_profiles", 4 * 1024),
+        ("dhw_profiles", 5 * 1024),
+        ("current_mode", 2 * 1024),
+        ("current_target_c", 2 * 1024),
+        ("prior_interpretations", 3 * 1024),
+        ("intervention_history", 3 * 1024),
+        ("noise_history", 3 * 1024),
+    )
     if isinstance(canonical_context, dict):
-        for key in sorted(important_context & canonical_context.keys()):
-            _add_mapping_item(packet, context_target, key, canonical_context[key], "control_context", record_omitted)
+        for key, byte_limit in context_priority:
+            if key in canonical_context:
+                bounded = _bounded_context_value(
+                    canonical_context[key], byte_limit, f"control_context.{key}", record_omitted
+                )
+                _add_mapping_item(packet, context_target, key, bounded, "control_context", record_omitted)
     representatives: list[Any] = []
     remaining_events: list[Any] = []
     seen_families: set[str] = set()
@@ -457,9 +566,10 @@ def _prioritized_windows(values: Any) -> Any:
     return representatives + selected
 
 
-def _add_windows(packet: dict[str, Any], target: dict[str, Any], values: Any, record_omitted: Any) -> None:
+def _add_windows(
+    packet: dict[str, Any], target: dict[str, Any], values: Any, record_omitted: Any, *, window_budget: int = 16 * 1024
+) -> None:
     """Reserve space for context and facts, spreading retained windows across the period."""
-    window_budget = 16 * 1024
     if isinstance(values, list):
         target["windows"] = list(values)
         if _encoded_size(values) <= window_budget and _fits(packet):
@@ -491,6 +601,7 @@ def _add_sorted_list(
     omission_name: str,
     record_omitted: Any,
     sort_key: Any | None,
+    byte_limit: int | None = None,
 ) -> None:
     if not isinstance(values, list):
         if values:
@@ -499,6 +610,31 @@ def _add_sorted_list(
     selected: list[Any] = target.setdefault(key, [])
     for value in values if sort_key is None else sorted(values, key=sort_key):
         selected.append(value)
-        if not _fits(packet):
+        if (byte_limit is not None and _encoded_size(selected) > byte_limit) or not _fits(packet):
             selected.pop()
             record_omitted(omission_name, value)
+
+
+def _bounded_context_value(value: Any, byte_limit: int, omission_name: str, record_omitted: Any) -> Any:
+    """Keep a useful deterministic slice of a context history, never a huge all-or-nothing mapping."""
+    if isinstance(value, dict):
+        mapping_result: dict[str, Any] = {}
+        for key in sorted(value):
+            candidate = {key: value[key]}
+            if _encoded_size(mapping_result) + _encoded_size(candidate) <= byte_limit:
+                mapping_result[key] = value[key]
+            else:
+                record_omitted(omission_name, candidate)
+        return mapping_result
+    if isinstance(value, list):
+        list_result: list[Any] = []
+        for item in _prioritized_windows(value):
+            if _encoded_size(list_result + [item]) <= byte_limit:
+                list_result.append(item)
+            else:
+                record_omitted(omission_name, item)
+        return list_result
+    if _encoded_size(value) <= byte_limit:
+        return value
+    record_omitted(omission_name, value)
+    return None

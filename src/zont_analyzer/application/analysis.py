@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 import calendar
+import hashlib
+import json
 import logging
 from collections.abc import Collection
 from datetime import UTC, date, datetime, time, timedelta
@@ -40,6 +42,7 @@ from zont_analyzer.application.ingestion import _object_names, heating_circuit_s
 from zont_analyzer.application.reasoning_context import reasoning_context, reasoning_payload
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue, QualityResult, Recommendation, Report
+from zont_analyzer.domain.periods import Period, SeasonBoundaries, midnight, season_period
 from zont_analyzer.reports import render_text
 
 logger = logging.getLogger(__name__)
@@ -178,21 +181,65 @@ class AnalysisService:
         _, end = self.local_day_window(date(year, month, last_day))
         return self._analyze(start, end, kind="monthly", use_ai=use_ai)
 
-    def analyze_season(self, year: int, season: str, *, use_ai: bool = True) -> Report:
-        ranges = {
-            "winter": (date(year - 1, 12, 1), date(year, 3, 1)),
-            "spring": (date(year, 3, 1), date(year, 6, 1)),
-            "summer": (date(year, 6, 1), date(year, 9, 1)),
-            "autumn": (date(year, 9, 1), date(year, 12, 1)),
-        }
-        if season not in ranges:
-            raise ValueError("Season must be winter, spring, summer, or autumn")
-        first, after = ranges[season]
-        start, _ = self.local_day_window(first)
-        end, _ = self.local_day_window(after)
-        return self._analyze(start, end, kind="seasonal", use_ai=use_ai)
+    def season_boundaries(self) -> tuple[SeasonBoundaries, str]:
+        from zont_analyzer.application.owner_context import OwnerContextStore
 
-    def _analyze(self, start: datetime, end: datetime, *, kind: str, use_ai: bool) -> Report:
+        for device in self.db.list_devices():
+            field = OwnerContextStore(self.db).profile(str(device["id"]))["fields"].get("season_boundaries")
+            if field and field.get("value"):
+                return SeasonBoundaries.model_validate(field["value"]), f"owner_profile:{device['id']}"
+        return self.config.home.seasons, "home_config"
+
+    def seasonal_period(self, year: int, season: str, *, as_of: datetime | None = None) -> Period:
+        if season not in {"winter", "spring", "summer", "autumn"}:
+            raise ValueError("Season must be winter, spring, summer, or autumn")
+        boundaries, source = self.season_boundaries()
+        cutoff = as_of or midnight(self.local_today(), self.config.home.timezone)
+        return season_period(year, season, self.config.home.timezone, boundaries,  # type: ignore[arg-type]
+                             as_of=cutoff, source=source)
+
+    def analyze_season(self, year: int, season: str, *, use_ai: bool = True) -> Report:
+        return self.analyze_period(self.seasonal_period(year, season), use_ai=use_ai)
+
+    def analyze_period(self, period: Period, *, use_ai: bool = True) -> Report:
+        return self._analyze(period.start, period.observed_end, kind=period.kind, use_ai=use_ai, period=period)
+
+    def regenerate(self, report: Report, *, request_nonce: str | None = None) -> Report:
+        if self.config.openai.enabled and self.analyst is None:
+            raise RuntimeError("AI включён, но ключ недоступен. Прежний отчёт сохранён.")
+        raw_period = report.context.get("period")
+        period = Period.model_validate(raw_period) if raw_period else None
+        if period and period.kind == "seasonal" and period.season and period.year:
+            period = self.seasonal_period(period.year, period.season)
+        start, end = (period.start, period.observed_end) if period else (report.period_start, report.period_end)
+        candidate = self._analyze(start, end, kind=report.kind, use_ai=self.config.openai.enabled,
+                                 force_ai=self.config.openai.enabled, persist=False, period=period,
+                                 request_nonce=request_nonce or datetime.now(UTC).isoformat())
+        previous = {item.model_dump_json(exclude={"id"}): item.id for item in report.recommendations}
+        for recommendation in candidate.recommendations:
+            payload = recommendation.model_dump_json(exclude={"id"})
+            recommendation.id = previous.get(payload) or (
+                f"rec:{report.id}:" + hashlib.sha256(payload.encode()).hexdigest()[:16]
+            )
+        # A changed calendar still replaces the selected report. Daily IDs (and gas/feedback links) stay stable.
+        return candidate.model_copy(update={"id": report.id})
+
+    def _analyze(
+        self, start: datetime, end: datetime, *, kind: str, use_ai: bool,
+        persist: bool = True, include_comparisons: bool = True, force_ai: bool = False,
+        period: Period | None = None, request_nonce: str | None = None,
+    ) -> Report:
+        if kind == "seasonal" and end - start > timedelta(days=31):
+            from zont_analyzer.application.long_periods import aggregate_long_period
+
+            assert period is not None
+            aggregated = aggregate_long_period(self.db, period)
+            return self._finish_analysis(
+                start, end, kind=kind, use_ai=use_ai, persist=persist, include_comparisons=include_comparisons,
+                force_ai=force_ai, period=period, request_nonce=request_nonce, quality=aggregated.quality,
+                metrics=aggregated.metrics, events=aggregated.events, control_context=aggregated.context,
+                summary=aggregated.summary, recommendations=aggregated.recommendations,
+            )
         period_id = f"{kind}:{int(start.timestamp())}"
         context_start = start - timedelta(days=7)
         series = self.db.list_series()
@@ -617,6 +664,19 @@ class AnalysisService:
             )
         if temperature_series is None:
             summary = f"{summary} Комнатный температурный ряд не определён; метрики комфорта не рассчитаны."
+        return self._finish_analysis(
+            start, end, kind=kind, use_ai=use_ai, persist=persist, include_comparisons=include_comparisons,
+            force_ai=force_ai, period=period, request_nonce=request_nonce, quality=quality, metrics=metrics,
+            events=events, control_context=control_context, summary=summary, recommendations=recommendations,
+        )
+
+    def _finish_analysis(
+        self, start: datetime, end: datetime, *, kind: str, use_ai: bool,
+        persist: bool, include_comparisons: bool, force_ai: bool,
+        period: Period | None, request_nonce: str | None,
+        quality: QualityResult, metrics: list[MetricValue], events: list[DetectedEvent],
+        control_context: dict[str, Any], summary: str, recommendations: list[Recommendation],
+    ) -> Report:
         report_id = self.report_id_for(kind, start)
         previous_report = self.db.report(report_id)
         ai_used = False
@@ -627,12 +687,43 @@ class AnalysisService:
             self.config.home.timezone,
             self.db.intervention_history(before=end),
         ))
+        if period is None:
+            period = Period(kind=kind, start=start, end=end, observed_end=end,  # type: ignore[arg-type]
+                            timezone=self.config.home.timezone, complete=True)
+        control_context["period"] = period.model_dump(mode="json")
+        control_context["season_boundaries"] = self.season_boundaries()[0].model_dump()
+        control_context["calculation_version"] = "stage6-v1"
+        control_context["input_revision"] = {
+            "settings_hash": hashlib.sha256(json.dumps(self.config.model_dump(mode="json"),
+                                                       sort_keys=True).encode()).hexdigest(),
+            "observed_end": end.isoformat(),
+            "telemetry": self.db.period_data_revision(start, end),
+            "prompt_version": self.config.openai.prompt_version,
+            "refresh": ("Automatic once per completed period; current season daily; "
+                        "explicit regeneration for corrections"),
+        }
+        if include_comparisons:
+            from zont_analyzer.application.comparison_context import build_comparison_context
+
+            facts_report = Report(id=report_id, kind=kind,  # type: ignore[arg-type]
+                                  period_start=start, period_end=end,
+                                  generated_at=datetime.now(UTC), timezone=self.config.home.timezone,
+                                  quality=quality, metrics=metrics, events=events, context=control_context,
+                                  summary=summary)
+            control_context.update(build_comparison_context(
+                self.db, facts_report, period, boundaries=self.season_boundaries()[0],
+                analyze_window=lambda left, right: self._analyze(
+                    left, right, kind="initial", use_ai=False, persist=False, include_comparisons=False,
+                ),
+            ))
         should_use_ai = (
             use_ai
             and self.analyst is not None
-            and quality.score >= self.config.analysis.minimum_quality_score
+            and (force_ai or quality.score >= self.config.analysis.minimum_quality_score)
             and (
-                kind == "initial"
+                force_ai
+                or kind in {"weekly", "monthly", "seasonal"}
+                or kind == "initial"
                 or self.config.analysis.daily_ai_when_normal
                 or bool(recommendations)
                 or any(event.severity != "info" for event in events)
@@ -651,6 +742,7 @@ class AnalysisService:
                             "end": end.isoformat(),
                             "kind": kind,
                             "timezone": self.config.home.timezone,
+                            **({"request_nonce": request_nonce} if request_nonce else {}),
                         },
                         context=control_context,
                         recommendation_feedback=self.db.recommendation_feedback(before=end),
@@ -659,8 +751,20 @@ class AnalysisService:
                 reasoning = reasoning_payload(result)
                 summary = result.summary
                 recommendations = result.recommendations[: self.config.analysis.max_recommendations_per_report]
+                # Model-supplied IDs cannot collide with recommendations from other periods.
+                previous_ids = {
+                    item.model_dump_json(exclude={"id"}): item.id
+                    for item in previous_report.recommendations
+                } if previous_report else {}
+                for recommendation in recommendations:
+                    payload = recommendation.model_dump_json(exclude={"id"})
+                    recommendation.id = previous_ids.get(payload) or (
+                        f"rec:{report_id}:" + hashlib.sha256(payload.encode()).hexdigest()[:16]
+                    )
                 ai_used = True
             except Exception as exc:
+                if force_ai:
+                    raise
                 logger.warning("OpenAI analysis failed; keeping deterministic report: %s", type(exc).__name__)
                 if (
                     previous_report is not None
@@ -693,7 +797,8 @@ class AnalysisService:
             ai_used=ai_used,
             **reasoning,
         )
-        self.db.save_report(report, render_text(report))
+        if persist:
+            self.db.save_report(report, render_text(report))
         return report
 
     def _temporal_evidence(

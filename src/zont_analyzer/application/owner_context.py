@@ -93,6 +93,7 @@ _PROFILE_FIELDS = frozenset(
         "boiler_model",
         "coordinates",
         "installation_notes",
+        "season_boundaries",
     }
 )
 _TRISTATE_FIELDS = frozenset({"auto_adapt", "hydraulic_separator", "has_gas_stove"})
@@ -265,6 +266,10 @@ class OwnerContextStore:
         # revision; reset is the separate operation that resumes auto values.
         if value is None:
             return None
+        if field == "season_boundaries":
+            from zont_analyzer.domain.periods import SeasonBoundaries
+
+            return SeasonBoundaries.model_validate(value).model_dump()
         if field in _TRISTATE_FIELDS:
             if not isinstance(value, bool):
                 raise ValueError(f"{field} must be true, false, or null")

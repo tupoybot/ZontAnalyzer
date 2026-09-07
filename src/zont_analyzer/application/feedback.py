@@ -11,6 +11,8 @@ from urllib.parse import unquote, urlsplit
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.application.publication import publish_reports
+from zont_analyzer.application.regeneration import start as start_regeneration
+from zont_analyzer.application.regeneration import status as regeneration_status
 from zont_analyzer.runtime import Runtime
 
 logger = logging.getLogger(__name__)
@@ -141,11 +143,37 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                 return None
             return unquote(encoded_id)
 
+        def _regeneration_id(self) -> str | None:
+            path = urlsplit(self.path).path
+            prefix = f"{api_path}/reports/"
+            suffix = "/regenerate"
+            if not path.startswith(prefix) or not path.endswith(suffix):
+                return None
+            encoded_id = path[len(prefix):-len(suffix)]
+            if not encoded_id or "/" in encoded_id:
+                return None
+            return unquote(encoded_id)
+
+        def _same_origin_write(self) -> bool:
+            origin = self.headers.get("Origin")
+            host = urlsplit("http://" + self.headers.get("Host", "")).hostname
+            return not (
+                self.headers.get("Sec-Fetch-Site") == "cross-site"
+                or origin is not None and urlsplit(origin).hostname != host
+            )
+
         def do_GET(self) -> None:  # noqa: N802
             if urlsplit(self.path).path == f"{api_path}/health":
                 self._send_json(HTTPStatus.OK, {"ok": True})
                 return
             if self._owner_request():
+                return
+            regeneration_id = self._regeneration_id()
+            if regeneration_id is not None:
+                if runtime.db.report(regeneration_id) is None:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "Отчёт не найден."})
+                else:
+                    self._send_json(HTTPStatus.OK, regeneration_status(runtime, regeneration_id))
                 return
             recommendation_id = self._recommendation_id()
             if recommendation_id is None:
@@ -216,7 +244,32 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
             self._send_json(HTTPStatus.OK, response)
 
         def do_POST(self) -> None:  # noqa: N802
-            self._send_json(HTTPStatus.METHOD_NOT_ALLOWED, {"error": "Используйте PUT."})
+            regeneration_id = self._regeneration_id()
+            if regeneration_id is None:
+                self._send_json(HTTPStatus.METHOD_NOT_ALLOWED, {"error": "Используйте PUT."})
+                return
+            if not self._same_origin_write():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "Откройте отчёт на сайте приложения."})
+                return
+            if self.headers.get_content_type() != "application/json":
+                self._send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "Тело запроса должно быть JSON."})
+                return
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if size > MAX_REQUEST_BYTES:
+                    raise ValueError("Некорректный размер запроса.")
+                if size:
+                    payload = json.loads(self.rfile.read(size))
+                    if not isinstance(payload, dict) or payload:
+                        raise ValueError("Ожидается пустой JSON-объект.")
+                value = start_regeneration(runtime, regeneration_id)
+            except KeyError:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Отчёт не найден."})
+                return
+            except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                return
+            self._send_json(HTTPStatus.ACCEPTED, value)
 
         def log_message(self, format_: str, *args: Any) -> None:
             logger.info("feedback http: " + format_, *args)

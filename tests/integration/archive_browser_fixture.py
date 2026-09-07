@@ -38,6 +38,7 @@ for selected in (date(2026, 8, 1), date(2026, 8, 3), date(2026, 8, 5)):
     runtime.db.save_report(report, render_text(report))
 analysis.analyze_week(2026, 31, use_ai=False)
 analysis.analyze_month(2026, 7, use_ai=False)
+analysis.analyze_season(2026, "autumn", use_ai=False)
 
 result = publish_reports(runtime)
-assert result["reports"] == 5
+assert result["reports"] == 6

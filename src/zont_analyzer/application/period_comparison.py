@@ -37,7 +37,9 @@ class ComparisonWindow(BaseModel):
     states: tuple[StateSample, ...] = ()
     exclusions: tuple[ExclusionWindow, ...] = ()
     quality_score: float | None = Field(default=None, ge=0, le=1)
+    coverage_pct: float | None = Field(default=None, ge=0, le=100)
     mode: str | None = None
+    context_values: dict[str, float | str | None] = Field(default_factory=dict)
     # Callers that already have a deterministic report may pass its evidence
     # metrics.  Raw telemetry remains the preferred source.
     precomputed_metrics: tuple[EvidenceMetric, ...] = ()
@@ -93,6 +95,13 @@ class PeriodComparison(BaseModel):
     quality: PeriodQuality
     confounders: list[str] = Field(default_factory=list)
     unknowns: list[str] = Field(default_factory=list)
+    before_start: datetime
+    before_end: datetime
+    after_start: datetime
+    after_end: datetime
+    timezone: str = "UTC"
+    intervention_outcomes: list[dict[str, Any]] = Field(default_factory=list)
+    house_context: dict[str, Any] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -120,8 +129,8 @@ def _metric_map(window: ComparisonWindow) -> dict[str, EvidenceMetric]:
 
 
 def _coverage(window: ComparisonWindow) -> float:
-    if window.quality_score is not None:
-        return window.quality_score * 100
+    if window.coverage_pct is not None:
+        return window.coverage_pct
     if not window.signals:
         return 0.0
     values: list[float] = []
@@ -140,7 +149,8 @@ def _coverage(window: ComparisonWindow) -> float:
 
 
 def _context(window: ComparisonWindow) -> dict[str, float | str | None]:
-    result: dict[str, float | str | None] = {"mode": window.mode}
+    result: dict[str, float | str | None] = dict(window.context_values)
+    result.setdefault("mode", window.mode)
     for role, name in (
         ("outdoor_temperature", "outdoor_mean_c"),
         ("room", "room_mean_c"),
@@ -152,18 +162,22 @@ def _context(window: ComparisonWindow) -> dict[str, float | str | None]:
             if series.metadata.role == role
             for sample in series.samples
         ]
-        result[name] = round(sum(values) / len(values), 3) if values else None
+        if name not in result:
+            result[name] = round(sum(values) / len(values), 3) if values else None
     total = (window.end - window.start).total_seconds()
     dhw = 0.0
     heating = 0.0
-    for left, right, flags in _state_intervals(window):
+    intervals = _state_intervals(window)
+    for left, right, flags in intervals:
         seconds = (right - left).total_seconds()
         if "dhw" in flags:
             dhw += seconds
         if "ch" in flags and "dhw" not in flags:
             heating += seconds
-    result["dhw_share_pct"] = round(dhw / total * 100, 3) if total else None
-    result["heating_share_pct"] = round(heating / total * 100, 3) if total else None
+    if "dhw_share_pct" not in result:
+        result["dhw_share_pct"] = round(dhw / total * 100, 3) if intervals and total else None
+    if "heating_share_pct" not in result:
+        result["heating_share_pct"] = round(heating / total * 100, 3) if intervals and total else None
     return result
 
 
@@ -187,8 +201,11 @@ def _compare_metric(before: EvidenceMetric | None, after: EvidenceMetric | None)
         after.unavailable_reason if after and after.value is None else None
     )
     if left is not None and right is not None:
-        if left != 0 and isfinite(left):
+        ratio_units = {"ratio", "%", "count/hour", "1/h", "count"}
+        if left != 0 and isfinite(left) and metric.unit in ratio_units:
             relative = absolute / abs(left) * 100 if absolute is not None else None
+        elif metric.unit not in ratio_units:
+            reason = reason or "relative_change_not_defined_for_absolute_unit"
         else:
             reason = reason or "relative_change_invalid_zero_denominator"
     return ComparedMetric(
@@ -220,12 +237,25 @@ def select_baseline(
     """Choose the nearest sufficiently covered weather/mode comparable window."""
     target_context = _context(target)
     target_weather = target_context.get("outdoor_mean_c")
+    if not isinstance(target_weather, (float, int)) or target.mode is None:
+        return None
+    if target.quality_score is not None and target.quality_score < 0.7:
+        return None
     options: list[tuple[float, ComparisonWindow]] = []
     for candidate in candidates:
         if candidate.end > target.start or _coverage(candidate) < min_coverage_pct:
             continue
+        if candidate.quality_score is not None and candidate.quality_score < 0.7:
+            continue
         context = _context(candidate)
         weather = context.get("outdoor_mean_c")
+        if not isinstance(weather, (float, int)):
+            continue
+        target_dhw, candidate_dhw = target_context.get("dhw_share_pct"), context.get("dhw_share_pct")
+        if not isinstance(target_dhw, (float, int)) or not isinstance(candidate_dhw, (float, int)):
+            continue
+        if abs(target_dhw - candidate_dhw) > 15:
+            continue
         if isinstance(target_weather, float) and isinstance(weather, float):
             if abs(weather - target_weather) > max_weather_delta_c:
                 continue
@@ -247,29 +277,40 @@ def compare_periods(
     min_coverage_pct: float = 70.0,
     weather_tolerance_c: float = 3.0,
     dhw_tolerance_pct: float = 15.0,
+    timezone: str = "UTC",
 ) -> PeriodComparison:
     """Compare two windows and explicitly block confounded before/after pairs."""
     if after.start < before.end:
         raise ValueError("comparison windows must not overlap")
     confounders: list[str] = []
     unknowns: list[str] = []
-    intervention_list = sorted(item for item in interventions if before.end <= item < after.start)
-    if intervention_at is not None:
-        intervention_list = [item for item in intervention_list if item > intervention_at]
+    intervention_list = sorted(
+        item for item in interventions
+        if before.start <= item <= after.end and (intervention_at is None or item != intervention_at)
+    )
     if intervention_list:
         confounders.append("second_intervention_between_windows")
     left_context, right_context = _context(before), _context(after)
     weather_left, weather_right = left_context["outdoor_mean_c"], right_context["outdoor_mean_c"]
-    if isinstance(weather_left, float) and isinstance(weather_right, float):
+    if isinstance(weather_left, (int, float)) and isinstance(weather_right, (int, float)):
         if abs(weather_right - weather_left) > weather_tolerance_c:
             confounders.append("weather_not_comparable")
     else:
         unknowns.append("weather_context_unavailable")
     dhw_left, dhw_right = left_context["dhw_share_pct"], right_context["dhw_share_pct"]
-    if isinstance(dhw_left, float) and isinstance(dhw_right, float) and abs(dhw_right - dhw_left) > dhw_tolerance_pct:
+    if (
+        isinstance(dhw_left, (int, float))
+        and isinstance(dhw_right, (int, float))
+        and abs(dhw_right - dhw_left) > dhw_tolerance_pct
+    ):
         confounders.append("dhw_influence_not_comparable")
     elif dhw_left is None or dhw_right is None:
         unknowns.append("dhw_context_unavailable")
+    mode_left, mode_right = left_context.get("mode"), right_context.get("mode")
+    if mode_left is None or mode_right is None:
+        unknowns.append("mode_context_unavailable")
+    elif mode_left != mode_right:
+        confounders.append("operating_mode_not_comparable")
     left_metrics, right_metrics = _metric_map(before), _metric_map(after)
     metrics = [_compare_metric(left_metrics[name], right_metrics.get(name)) for name in sorted(left_metrics)]
     metrics.extend(
@@ -281,7 +322,11 @@ def compare_periods(
         flags.append("before_low_coverage")
     if right_coverage < min_coverage_pct:
         flags.append("after_low_coverage")
-    comparable = not confounders and not flags
+    if before.quality_score is not None and before.quality_score < 0.7:
+        flags.append("before_low_quality")
+    if after.quality_score is not None and after.quality_score < 0.7:
+        flags.append("after_low_quality")
+    comparable = not confounders and not flags and not unknowns
     if not comparable:
         unknowns.append("comparison_not_isolated")
     return PeriodComparison(
@@ -308,6 +353,11 @@ def compare_periods(
         ),
         confounders=confounders,
         unknowns=unknowns,
+        before_start=before.start,
+        before_end=before.end,
+        after_start=after.start,
+        after_end=after.end,
+        timezone=timezone,
     )
 
 
@@ -328,7 +378,13 @@ def _as_window(value: Any, *, label: str, analyze_window: Callable[..., Any]) ->
     # application.  It cannot provide raw signal context, so quality is kept
     # explicit and missing weather/DHW context remains unknown.
     quality = getattr(result, "quality", None)
-    metrics = tuple(
+    temporal = getattr(result, "context", {}).get("temporal_evidence", {})
+    temporal_metrics = tuple(
+        EvidenceMetric.model_validate(item)
+        for item in temporal.get("metrics", ())
+        if isinstance(item, dict) and item.get("name")
+    )
+    legacy_metrics = tuple(
         EvidenceMetric(
             id=item.id,
             name=item.name,
@@ -339,11 +395,43 @@ def _as_window(value: Any, *, label: str, analyze_window: Callable[..., Any]) ->
         )
         for item in getattr(result, "metrics", ())
     )
+    known = {item.name for item in temporal_metrics}
+    metrics = temporal_metrics + tuple(item for item in legacy_metrics if item.name not in known)
+    context_values: dict[str, float | str | None] = {}
+    packet_signals = temporal.get("signals", {}) if isinstance(temporal, dict) else {}
+    packet_windows = temporal.get("windows", ()) if isinstance(temporal, dict) else ()
+    for key, metadata in packet_signals.items():
+        role = metadata.get("role") if isinstance(metadata, dict) else None
+        if not isinstance(role, str):
+            continue
+        target = {
+            "outdoor_temperature": "outdoor_mean_c",
+            "return_temperature": "return_mean_c",
+            "room": "room_mean_c",
+        }.get(role)
+        if target is None:
+            continue
+        means: list[float] = []
+        for packet_window in packet_windows:
+            item = packet_window.get("signals", {}).get(key, {})
+            if isinstance(item, dict) and isinstance(item.get("mean"), (int, float)):
+                means.append(float(item["mean"]))
+        if means:
+            context_values[target] = round(sum(means) / len(means), 3)
+    exclusions = temporal.get("exclusions", {}) if isinstance(temporal, dict) else {}
+    if isinstance(exclusions, dict) and temporal.get("period_start") and temporal.get("period_end"):
+        seconds = (
+            datetime.fromisoformat(temporal["period_end"]) - datetime.fromisoformat(temporal["period_start"])
+        ).total_seconds()
+        if seconds > 0 and isinstance(exclusions.get("dhw"), (int, float)):
+            context_values["dhw_share_pct"] = round(exclusions["dhw"] / seconds * 100, 3)
     return ComparisonWindow(
         label=label,
         start=value.start,
         end=observed_end,
         quality_score=(float(quality.score) if quality else None),
+        coverage_pct=(float(quality.coverage_pct) if quality else None),
+        context_values=context_values,
         precomputed_metrics=metrics,
     )
 
@@ -355,6 +443,7 @@ def build_period_context(
     analyze_window: Callable[..., Any],
     intervention_at: datetime | None = None,
     interventions: Iterable[datetime] = (),
+    timezone: str = "UTC",
     max_analyses: int = 12,
 ) -> dict[str, Any]:
     """Build bounded comparison context for a long-period report.
@@ -381,6 +470,7 @@ def build_period_context(
                 current,
                 intervention_at=intervention_at,
                 interventions=interventions,
+                timezone=timezone,
             ).model_dump(mode="json")
         )
     return {

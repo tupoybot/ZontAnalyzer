@@ -23,6 +23,7 @@ _FIELDS: tuple[tuple[str, str, str], ...] = (
     ("gas_max_m3h", "Максимальный расход газа, м³/ч", "number"),
     ("gas_type", "Вид газа", "text"),
     ("coordinates", "Координаты (переопределение)", "coordinates"),
+    ("season_boundaries", "Начало сезонов, ММ-ДД", "seasons"),
 )
 
 
@@ -78,6 +79,23 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
                 f'неизвестно</option><option value="no"{" selected" if unknown == "no" else ""}>нет</option><option value="yes"{" selected" if unknown == "yes" else ""}>да</option></select>'
                 f'<small class="owner-source">Источник: {source_text or "нет"}</small>'
                 '<button type="button" class="owner-reset">Сбросить к авто</button></div>'
+            )
+        elif kind == "seasons":
+            from zont_analyzer.domain.periods import SeasonBoundaries
+
+            defaults = report.context.get("season_boundaries", SeasonBoundaries().model_dump())
+            boundaries = value if isinstance(value, dict) else defaults
+            inputs = "".join(
+                f'<label>{title}<input data-season="{key}" type="text" pattern="[0-9]{{2}}-[0-9]{{2}}" '
+                f'data-default="{html.escape(str(defaults[key]), quote=True)}" '
+                f'value="{html.escape(str(boundaries[key]), quote=True)}" placeholder="ММ-ДД"></label>'
+                for key, title in (("spring", "Весна"), ("summer", "Лето"), ("autumn", "Осень"), ("winter", "Зима"))
+            )
+            fields.append(
+                f'<div class="owner-field" data-field="{name}"><p>{label}</p>{inputs}'
+                '<small>Границы календарных отчётов. После изменения можно перегенерировать отчёт.</small>'
+                f'<small class="owner-source">Источник: {source_text or "настройки дома"}</small>'
+                '<button type="button" class="owner-reset">Вернуть границы из настроек</button></div>'
             )
         elif kind == "coordinates":
             coordinates = value if isinstance(value, dict) else {}
@@ -155,6 +173,7 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
         "Тепловая система": {"auto_adapt", "auto_adapt_node", "auto_adapt_pump_model", "dhw_type", "hydraulic_separator"},
         "Расход газа": {"gas_min_m3h", "gas_max_m3h"},
         "Расположение": {"coordinates"},
+        "Сезоны дома": {"season_boundaries"},
     }
     grouped_fields = []
     for title, names in field_groups.items():

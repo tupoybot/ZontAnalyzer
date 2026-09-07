@@ -74,6 +74,13 @@ try {
   await monthly.first().click();
   await page.waitForURL("**/monthly/2026-07-01.html");
 
+  await page.locator('[data-archive-kind="seasonal"]').click();
+  const seasonal = page.locator(".archive-periods a");
+  await assert.equal(await seasonal.count(), 1);
+  await assert.match(await seasonal.first().textContent(), /осень/i);
+  await seasonal.first().click();
+  await page.waitForURL("**/seasonal/2026-09-01.html");
+
   await page.goto(`${baseURL}/daily/2026-08-05.html`, { waitUntil: "networkidle" });
   assert.match(await page.locator(".reasoning-item.hypothesis").textContent(), /Синтетическая гипотеза <unsafe>/);
   assert.match(await page.locator(".reasoning-item.hypothesis").textContent(), /неподтверждённая ссылка/);
@@ -203,6 +210,29 @@ try {
   assert.equal(await page.locator('[data-experiment-field="after"]').first().inputValue(), "1.1");
   assert.match(await page.locator('[data-experiment-field="performed_at"]').first().inputValue(), /^2026-08-01T12:30/);
   assert.match(await page.locator(".recommendation .feedback-status").first().textContent(), /Выполнено/);
+
+  await page.goto(`${baseURL}/latest.html`, { waitUntil: "networkidle" });
+  const regenerate = page.locator(".regenerate-report");
+  await regenerate.waitFor();
+  await regenerate.click();
+  await assert.equal(await regenerate.isDisabled(), true, "duplicate regeneration click is disabled while active");
+  await page.waitForLoadState("networkidle");
+  await page.waitForURL("**/latest.html");
+  await page.locator(".regenerate-report").waitFor();
+  await page.locator("[data-owner-forms]").waitFor();
+  assert.equal(await page.locator("[data-owner-gas] [name=gas-value]").inputValue(), "10", "gas survives regeneration");
+  assert.equal(await page.locator(".recommendation .feedback-note").first().inputValue(), note + " edited", "feedback survives regeneration");
+
+  await page.locator("#system-profile > summary").click();
+  const seasons = page.locator('[data-field="season_boundaries"]');
+  await seasons.waitFor({ state: "visible" });
+  const seasonValues = {spring: "02-15", summer: "05-20", autumn: "08-25", winter: "11-30"};
+  for (const [key, value] of Object.entries(seasonValues)) await seasons.locator(`[data-season="${key}"]`).fill(value);
+  await page.locator("[data-profile-save]").click();
+  await page.locator("[data-profile-message]").filter({hasText: "сохранён"}).waitFor();
+  await page.reload({waitUntil: "networkidle"});
+  for (const [key, value] of Object.entries(seasonValues)) assert.equal(await page.locator(`[data-season="${key}"]`).inputValue(), value);
+
   await page.goto(`${baseURL}/latest.html?debug=1`, {waitUntil: "networkidle"});
   assert.equal(await page.locator("#debug-toggle").isChecked(), true);
   await page.locator("#debug-toggle").uncheck();
