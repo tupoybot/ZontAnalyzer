@@ -235,5 +235,25 @@ context-only patch 54 отчётов с optimistic guard; транзакцион
 Тесты покрывают недельные checkpoint, отсутствие ежедневных AI при новой telemetry,
 закрытие сезона посреди недели, ручной результат на/после checkpoint, смену
 уставок, snapshot следующего периода, текущий override, неизвестное покрытие,
-legacy-rendering и взвешивание сезонных дневных средних. Release evidence ниже
-будет дополнено после проверки окончательного image и deployment.
+legacy-rendering и взвешивание сезонных дневных средних. Локально и в CI прошли
+298 тестов, Ruff/mypy, сборка wheel/sdist, Docker HTTP/nginx и Chromium regression.
+Коммит `32157dd`, тег `release-6-20260907-periods`; branch CI `34092653506` и
+release CI `34092653702` зелёные. Проверен именно registry image
+`ghcr.io/tupoybot/zontanalyzer@sha256:877828cb66b33c95a15834cb8a75e07f6615e7cf48e523696f0647d7bb4c624a`.
+Он локально опубликовал 143 реальных отчёта за 3.3 секунды без AI; на сегодня нет
+ожидающих длинных периодов, на следующий понедельник ожидаются weekly и seasonal.
+Данные владельца и прежние feedback сохранены. Тест конфликта context-patch
+подтвердил откат всей транзакции, включая уже обработанные элементы.
+На HK сделана только SQLite online-копия, затем импортированы 54 готовые context-
+поправки; анализа исторической telemetry и сборок на HK нет. Backup:
+`/data/backups/zont-analyzer-periods-20260907T065645Z.sqlite3`.
+`current` → `20260907-stage6-periods-32157dd`, worker healthy; первый цикл новой
+версии завершён `2026-09-07T06:58:32Z`, опубликовано 143 отчёта, `long_periods=[]`.
+Сохранён owner/feedback hash `9cac23bb89d06b48eec63062af3cfb4524cfe09f414b8cd80e3f10aa27684972`,
+все 166 feedback-состояний, LLM calls=27. Новых реальных AI-запросов нет.
+Браузер devbox проверил 5 live-страниц: чистые подписи архива weekly/monthly/seasonal,
+новую семантику карточки цели и значения августа/лета с покрытием. Basic Auth
+восстановлен побайтно, временные credentials удалены. Артефакты devbox:
+`/tmp/zont-stage6/periods-{registry-accept,deploy,live-smoke}.log`,
+`periods-metadata-{before,after}.json`, `periods-registry-owner.json`.
+Этап остаётся в `stage6` до явной приёмки владельцем; merge не выполнялся.
