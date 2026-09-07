@@ -269,7 +269,9 @@ class GasService:
                                    if item['predicted_m3'] is not None else None)
         result['observed_volume_m3'] = getattr(estimate, 'observed_volume_m3', None)
         result['unknown_minutes'] = w['minutes']-w['observed_minutes']
-        return result
+        # Canonical context must survive a JSON round trip without tuple/list or
+        # datetime/string differences triggering writes on every publication.
+        return dict(json.loads(_json(result)))
 
     def refresh(self, report: Report) -> Report:
         gas = self.context(report.period_start, report.period_end,

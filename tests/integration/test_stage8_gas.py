@@ -160,3 +160,14 @@ def test_new_regeneration_candidate_is_published_before_database_commit(tmp_path
     assert 'Новый ответ о газе' in html.read_text()
     assert 'Новый ответ о газе' in canonical.read_text()
     assert r.db.report(old.id).summary == old.summary
+
+
+def test_persisted_gas_context_is_equal_after_json_roundtrip(tmp_path: Path):
+    r, store, reports = history(tmp_path)
+    store.update_gas(reports[0].id, {'value_m3': 100})
+    store.update_gas(reports[2].id, {'value_m3': 292})
+    service = GasService(r.db, r.config)
+    report = service.refresh(reports[-1])
+    r.db.save_report(report, report.summary)
+    stored = r.db.report(report.id)
+    assert service.refresh(stored).context == stored.context

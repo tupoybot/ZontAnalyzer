@@ -46,8 +46,8 @@ Online backup HK: `/opt/zont-analyzer/data/backups/zont-analyzer-20260907T092657
 
 ## Технические проверки перед выпуском
 
-- Полный `pytest`: 371 passed; после защиты от округления погодного покрытия
-  дополнительно 9 интеграционных проверок газового цикла — passed.
+- Полный `pytest`: 373 passed; 10 интеграционных проверок газового цикла — passed.
+  Проверены округление погодного покрытия и точная идемпотентность контекста после JSON round trip.
 - Ruff и strict mypy: passed (63 файла приложения).
 - `python -m build`, сборка production/test Docker, Compose validation: passed.
 - Контейнерный feedback HTTP, nginx Basic Auth и Chromium archive browser: passed.
