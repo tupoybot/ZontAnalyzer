@@ -33,6 +33,7 @@ def _public_feedback(value: dict[str, Any]) -> dict[str, Any]:
         "status": value["status"],
         "owner_note": value.get("owner_note") or "",
         "updated_at": value["updated_at"],
+        "experiment": value.get("experiment"),
     }
 
 
@@ -176,8 +177,8 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Тело запроса должно быть JSON."})
                 return
-            if not isinstance(payload, dict) or set(payload) - {"status", "owner_note"}:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Допустимы только status и owner_note."})
+            if not isinstance(payload, dict) or set(payload) - {"status", "owner_note", "experiment"}:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Допустимы только status, owner_note и experiment."})
                 return
             status = payload.get("status")
             owner_note = payload.get("owner_note", "")
@@ -191,9 +192,20 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                 self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": "Комментарий слишком длинный."})
                 return
             try:
-                value = runtime.db.set_recommendation_feedback(recommendation_id, status, owner_note)
+                experiment = payload.get("experiment")
+                if isinstance(experiment, dict) and experiment.get("performed_at"):
+                    when = datetime.fromisoformat(experiment["performed_at"])
+                    if when.tzinfo is None:
+                        when = when.replace(tzinfo=ZoneInfo(runtime.config.home.timezone))
+                    experiment = {**experiment, "performed_at": when.astimezone(UTC).isoformat()}
+                value = runtime.db.set_recommendation_feedback(
+                    recommendation_id, status, owner_note, experiment=experiment,
+                )
             except KeyError:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "Рекомендация не найдена."})
+                return
+            except (ValueError, TypeError) as exc:
+                self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
                 return
             response = _public_feedback(value)
             try:

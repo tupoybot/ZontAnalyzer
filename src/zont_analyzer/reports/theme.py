@@ -202,7 +202,11 @@ border-radius:6px}
 .feedback-message{font-size:13px;
 margin:8px 0}
 .feedback-message:empty{display:none}
-.feedback-comment summary{font-size:13px}
+.feedback-comment summary,.feedback-experiment summary{font-size:13px}
+.feedback-experiment label{display:block;margin:10px 0;font-size:13px}
+.feedback-experiment input,.feedback-experiment select{display:block;width:100%;min-width:0;
+box-sizing:border-box;padding:8px;border:1px solid var(--border);border-radius:6px;
+background:var(--surface);color:var(--text)}
 .archive-navigation{margin-top:18px}
 .archive-controls{display:flex;
 flex-wrap:wrap;

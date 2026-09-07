@@ -1,3 +1,4 @@
+from .experiments import Experiment
 from .models import (
     AnalysisResult,
     DetectedEvent,
@@ -22,6 +23,7 @@ __all__ = [
     "AnalysisResult",
     "DetectedEvent",
     "EvidenceReference",
+    "Experiment",
     "Hypothesis",
     "MetricValue",
     "ObservedPattern",

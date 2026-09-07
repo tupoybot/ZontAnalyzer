@@ -36,7 +36,8 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-from zont_analyzer.domain import Report, SourceEvent, TelemetryPoint
+from zont_analyzer.domain import Experiment, Report, SourceEvent, TelemetryPoint
+from zont_analyzer.domain.experiments import control_snapshot, snapshot_fingerprint
 
 
 def utcnow() -> datetime:
@@ -208,6 +209,22 @@ class InterventionRow(Base):
     recommendation_id: Mapped[str] = mapped_column(ForeignKey("recommendations.id"))
     applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     note: Mapped[str] = mapped_column(Text)
+
+
+class InterventionExperimentRow(Base):
+    __tablename__ = "intervention_experiments"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    intervention_id: Mapped[str] = mapped_column(ForeignKey("interventions.id", ondelete="CASCADE"), unique=True)
+    category: Mapped[str | None] = mapped_column(String, nullable=True)
+    parameter: Mapped[str | None] = mapped_column(Text, nullable=True)
+    before_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    performed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snapshot_fingerprint: Mapped[str | None] = mapped_column(String, nullable=True)
+    snapshot_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    snapshot_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    historical_context: Mapped[str] = mapped_column(String, default="unknown")
 
 
 class JobRow(Base):
@@ -871,6 +888,113 @@ class Database:
             .limit(1)
         )
 
+    @staticmethod
+    def _experiment_view(session: Session, intervention_id: str | None) -> dict[str, Any] | None:
+        if intervention_id is None:
+            return None
+        row = session.scalar(
+            select(InterventionExperimentRow).where(InterventionExperimentRow.intervention_id == intervention_id)
+        )
+        if row is None:
+            return None
+        performed_at = row.performed_at
+        if performed_at is not None and performed_at.tzinfo is None:
+            performed_at = performed_at.replace(tzinfo=UTC)
+        captured_at = row.snapshot_captured_at
+        if captured_at is not None and captured_at.tzinfo is None:
+            captured_at = captured_at.replace(tzinfo=UTC)
+        result: dict[str, Any] = {
+            "category": row.category,
+            "parameter": row.parameter,
+            "before": json.loads(row.before_json) if row.before_json is not None else None,
+            "after": json.loads(row.after_json) if row.after_json is not None else None,
+            "performed_at": performed_at.isoformat() if performed_at is not None else None,
+        }
+        snapshot: dict[str, Any] | None = None
+        if row.snapshot_json is not None:
+            snapshot = {
+                "value": json.loads(row.snapshot_json),
+                "fingerprint": row.snapshot_fingerprint,
+                "captured_at": captured_at.isoformat() if captured_at else None,
+                "source": row.snapshot_source,
+                "historical_context": row.historical_context,
+            }
+        result["control_snapshot"] = snapshot
+        return result
+
+    @classmethod
+    def _latest_experiment(cls, session: Session, recommendation_id: str) -> dict[str, Any] | None:
+        intervention = cls._latest_intervention(session, recommendation_id)
+        return cls._experiment_view(session, intervention.id if intervention else None)
+
+    @staticmethod
+    def _snapshot_for_recommendation(
+        session: Session, row: RecommendationRow, performed_at: datetime | None,
+    ) -> dict[str, Any] | None:
+        report = session.get(ReportRow, row.report_id)
+        if report is None:
+            return None
+        try:
+            payload = json.loads(report.canonical_json)
+            context = payload.get("context", {})
+            device_id = context.get("device_id") if isinstance(context, dict) else None
+        except json.JSONDecodeError:
+            device_id = None
+        device: DeviceRow | None = session.get(DeviceRow, str(device_id)) if device_id else None
+        if device is None:
+            devices = session.scalars(select(DeviceRow).order_by(DeviceRow.id)).all()
+            device = devices[0] if len(devices) == 1 else None
+        if device is None:
+            return None
+        snapshot = control_snapshot(json.loads(device.raw_json))
+        if snapshot is None:
+            return None
+        captured_at = device.discovered_at
+        if captured_at.tzinfo is None:
+            captured_at = captured_at.replace(tzinfo=UTC)
+        historical_context = "latest_discovery_before_recording; configuration_at_intervention_not_verified"
+        if performed_at is not None and captured_at > performed_at:
+            historical_context = "captured_after_reported_intervention; historical_configuration_unknown"
+        return {
+            "value": snapshot,
+            "fingerprint": snapshot_fingerprint(snapshot),
+            "captured_at": captured_at,
+            "source": "zont:discover.read_only.z3k_config",
+            "historical_context": historical_context,
+        }
+
+    @staticmethod
+    def _store_experiment(
+        session: Session,
+        intervention_id: str,
+        experiment: Experiment | None,
+        snapshot: dict[str, Any] | None,
+    ) -> None:
+        if experiment is None:
+            return
+        data = experiment.storage_value()
+        session.add(
+            InterventionExperimentRow(
+                id=f"experiment:{uuid.uuid4()}", intervention_id=intervention_id,
+                category=data.get("category"), parameter=data.get("parameter"),
+                before_json=(
+                    json.dumps(data["before"], ensure_ascii=False, sort_keys=True)
+                    if "before" in data else None
+                ),
+                after_json=json.dumps(data["after"], ensure_ascii=False, sort_keys=True) if "after" in data else None,
+                performed_at=experiment.performed_at,
+                snapshot_json=json.dumps(snapshot["value"], ensure_ascii=False, sort_keys=True) if snapshot else None,
+                snapshot_fingerprint=str(snapshot["fingerprint"]) if snapshot else None,
+                snapshot_captured_at=(
+                    datetime.fromisoformat(str(snapshot["captured_at"]))
+                    if snapshot and isinstance(snapshot["captured_at"], str)
+                    else snapshot["captured_at"] if snapshot else None
+                ),
+                snapshot_source=str(snapshot["source"]) if snapshot else None,
+                historical_context=str(snapshot["historical_context"]) if snapshot else "unknown",
+            )
+        )
+
     @classmethod
     def _recommendation_view(cls, session: Session, row: RecommendationRow) -> dict[str, Any]:
         owner_note = row.rejection_reason
@@ -887,9 +1011,12 @@ class Database:
             "owner_note": owner_note,
             "updated_at": updated_at.isoformat(),
             "intervention_id": intervention.id if intervention else None,
+            "experiment": cls._experiment_view(session, intervention.id if intervention else None),
         }
 
-    def recommendation_feedback(self, limit: int = 10) -> list[dict[str, Any]]:
+    def recommendation_feedback(
+        self, limit: int = 10, *, before: datetime | None = None,
+    ) -> list[dict[str, Any]]:
         """Return compact owner-confirmed outcomes for future analysis packets."""
         if limit < 1:
             return []
@@ -898,17 +1025,17 @@ class Database:
                 select(RecommendationRow)
                 .where(RecommendationRow.status.in_(("applied", "rejected")))
                 .order_by(RecommendationRow.updated_at.desc())
-                .limit(limit)
+                .limit(max(limit * 10, 100) if before is not None else limit)
             ).all()
             feedback: list[dict[str, Any]] = []
             for row in rows:
                 payload = json.loads(row.payload_json)
                 owner_note = row.rejection_reason
+                intervention: InterventionRow | None = None
                 if row.status == "applied":
                     intervention = self._latest_intervention(session, row.id)
                     owner_note = intervention.note if intervention else None
-                feedback.append(
-                    {
+                item = {
                         "recommendation_id": row.id,
                         "report_id": row.report_id,
                         "status": row.status,
@@ -918,7 +1045,21 @@ class Database:
                         "owner_note": owner_note,
                         "updated_at": row.updated_at.isoformat(),
                     }
+                experiment = self._experiment_view(session, intervention.id if intervention else None)
+                temporal_boundary = (
+                    experiment.get("performed_at") if experiment and experiment.get("performed_at")
+                    else row.updated_at.isoformat()
                 )
+                boundary = datetime.fromisoformat(str(temporal_boundary))
+                if boundary.tzinfo is None:
+                    boundary = boundary.replace(tzinfo=UTC)
+                if before is not None and boundary >= before.astimezone(UTC):
+                    continue
+                if experiment is not None:
+                    item["experiment"] = experiment
+                feedback.append(item)
+                if len(feedback) == limit:
+                    break
             return feedback
 
     def recommendation_status_counts(self) -> dict[str, int]:
@@ -987,11 +1128,18 @@ class Database:
         recommendation_id: str,
         status: str,
         owner_note: str | None = None,
+        experiment: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Idempotently store owner feedback using the existing lifecycle tables."""
         if status not in {"applied", "rejected"}:
             raise ValueError("status must be applied or rejected")
+        if status == "rejected" and experiment is not None:
+            raise ValueError("experiment can only be recorded with applied feedback")
         note = (owner_note or "").strip()
+        try:
+            supplied_experiment = Experiment.model_validate(experiment) if experiment is not None else None
+        except Exception as exc:
+            raise ValueError(str(exc)) from exc
         with self.session() as session:
             row = session.get(RecommendationRow, recommendation_id)
             if not row:
@@ -1002,7 +1150,19 @@ class Database:
             if row.status == "applied":
                 latest_intervention = self._latest_intervention(session, recommendation_id)
                 current_note = latest_intervention.note if latest_intervention else ""
-            if row.status == status and current_note == note:
+            current_experiment = self._experiment_view(session, latest_intervention.id if latest_intervention else None)
+            supplied_value = supplied_experiment.storage_value() if supplied_experiment is not None else None
+            current_value = (
+                Experiment.model_validate({
+                    key: value for key, value in current_experiment.items()
+                    if key != "control_snapshot" and value is not None
+                }).storage_value()
+                if current_experiment else None
+            )
+            if (
+                row.status == status and current_note == note
+                and (experiment is None or current_value == supplied_value)
+            ):
                 return self._recommendation_view(session, row)
 
             row.status = status
@@ -1016,10 +1176,66 @@ class Database:
                 )
                 session.add(intervention)
                 session.flush()
+                recorded_experiment = supplied_experiment
+                if recorded_experiment is None and current_experiment is not None:
+                    recorded_experiment = Experiment.model_validate({
+                        key: value for key, value in current_experiment.items()
+                        if key in {"category", "parameter", "before", "after", "performed_at"}
+                    })
+                snapshot = self._snapshot_for_recommendation(
+                    session, row, recorded_experiment.performed_at if recorded_experiment else None,
+                ) if supplied_experiment is not None else None
+                if supplied_experiment is None and current_experiment is not None:
+                    snapshot = current_experiment.get("control_snapshot")
+                self._store_experiment(session, intervention.id, recorded_experiment, snapshot)
             else:
                 row.rejection_reason = note
             session.flush()
             return self._recommendation_view(session, row)
+
+    def intervention_history(self, limit: int = 10, *, before: datetime | None = None) -> list[dict[str, Any]]:
+        """Return a bounded owner-recorded intervention history for AI context."""
+        if limit < 1:
+            return []
+        with self.session() as session:
+            rows = session.scalars(
+                select(InterventionRow)
+                .order_by(InterventionRow.applied_at.desc(), InterventionRow.id.desc())
+                .limit(max(limit * 10, 100))
+            ).all()
+            history: list[dict[str, Any]] = []
+            seen_experiments: set[tuple[str, str]] = set()
+            for row in rows:
+                experiment = self._experiment_view(session, row.id)
+                temporal_boundary = (
+                    experiment.get("performed_at") if experiment and experiment.get("performed_at")
+                    else row.applied_at.isoformat()
+                )
+                boundary = datetime.fromisoformat(str(temporal_boundary))
+                if boundary.tzinfo is None:
+                    boundary = boundary.replace(tzinfo=UTC)
+                if before is not None and boundary >= before.astimezone(UTC):
+                    continue
+                if experiment is not None:
+                    identity = json.dumps(
+                        {key: value for key, value in experiment.items() if key != "control_snapshot"},
+                        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                    )
+                    key = (row.recommendation_id, identity)
+                    if key in seen_experiments:
+                        continue
+                    seen_experiments.add(key)
+                history.append({
+                    "intervention_id": row.id,
+                    "recommendation_id": row.recommendation_id,
+                    "recorded_at": row.applied_at.isoformat(),
+                    "owner_note": row.note,
+                    "experiment": experiment,
+                    "temporal_boundary": temporal_boundary,
+                })
+                if len(history) == limit:
+                    break
+            return history
 
     def mark_applied(self, recommendation_id: str, note: str) -> str:
         feedback = self.set_recommendation_feedback(recommendation_id, "applied", note)

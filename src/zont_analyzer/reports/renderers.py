@@ -8,6 +8,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.domain import Report
+from zont_analyzer.reports.experiment_forms import experiment_form
+from zont_analyzer.reports.wording import normalize_report_for_display
 
 METRIC_LABELS = {
     "mean_temperature_c": "Средняя температура помещения",
@@ -843,6 +845,7 @@ def _historical_evidence_html(context: Mapping[str, Any]) -> str:
 
 
 def render_text(report: Report) -> str:
+    report = normalize_report_for_display(report)
     lines = [
         f"ZontAnalyzer — {report.kind}",
         f"ID отчёта: {report.id}",
@@ -1047,6 +1050,8 @@ def render_html(
     from .charts import render_charts
     from .theme import SCRIPT, STYLE
 
+    canonical_report = report
+    report = normalize_report_for_display(report)
     title = html.escape(f"ZontAnalyzer — {report.kind}")
     from zont_analyzer.reports.owner_forms import render_owner_forms
 
@@ -1257,6 +1262,7 @@ def render_html(
             f"<p><strong>Когда остановиться:</strong></p>"
             f"{html_list(recommendation.stop_conditions, '<p>Не указано.</p>')}</details>"
             '<div class="feedback-controls">'
+            f'{experiment_form(state.get("experiment"), disabled, report.timezone)}'
             '<details class="feedback-comment"><summary>Комментарий… / Изменить</summary><label>Комментарий владельца'
             f'<textarea class="feedback-note" rows="3" maxlength="2000"{disabled}>'
             f"{html.escape(owner_note)}</textarea></label>"
@@ -1292,7 +1298,7 @@ def render_html(
         f'<div class="lower-grid">{other_recommendations}</div></section>'
         if other_recommendations else ''
     )
-    canonical = html.escape(json.dumps(report.model_dump(mode="json"), ensure_ascii=False))
+    canonical = html.escape(json.dumps(canonical_report.model_dump(mode="json"), ensure_ascii=False))
     api_base = html.escape(feedback_api_base_url.rstrip("/"), quote=True)
     latest_href = html.escape(latest_report_href, quote=True)
     period_date = report.period_start.astimezone(ZoneInfo(report.timezone)).strftime('%d.%m.%Y')
@@ -1362,6 +1368,19 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
     : configuredApiBase;
   const labels = {{applied: "Выполнено", rejected: "Отклонено", ignored: "Без реакции", new: "Новая"}};
 
+  function localExperimentTime(value, timezone) {{
+    const parts = new Intl.DateTimeFormat("sv-SE", {{
+      timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+    }}).formatToParts(new Date(value));
+    const at = (kind) => parts.find((part) => part.type === kind).value;
+    return `${{at("year")}}-${{at("month")}}-${{at("day")}}T${{at("hour")}}:${{at("minute")}}:${{at("second")}}`;
+  }}
+
+  function experimentDisplay(value) {{
+    return value == null ? "" : typeof value === "object" ? JSON.stringify(value) : String(value);
+  }}
+
   function applyState(card, payload) {{
     const status = payload.status || "new";
     const note = payload.owner_note || "";
@@ -1370,6 +1389,14 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
     statusNode.dataset.status = status;
     statusNode.className = `feedback-status status-${{status}}`;
     card.querySelector(".feedback-note").value = note;
+    card.experimentState = payload.experiment || {{}};
+    card.querySelectorAll("[data-experiment-field]").forEach((input) => {{
+      const value = payload.experiment?.[input.dataset.experimentField];
+      input.value = input.dataset.experimentField === "performed_at" && value
+        ? localExperimentTime(value, card.querySelector(".feedback-experiment").dataset.timezone)
+        : experimentDisplay(value);
+      input.dataset.savedValue = input.value;
+    }});
     card.querySelector(".saved-note span").textContent = note || "нет";
     card.querySelector("[data-feedback-save-note]").hidden = !["applied", "rejected"].includes(status);
   }}
@@ -1399,11 +1426,23 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
         message.className = "feedback-message";
         message.textContent = "Сохраняю…";
         try {{
+          const status = button.dataset.feedbackStatus || card.querySelector(".feedback-status").dataset.status;
+          const experiment = {{}};
+          let experimentChanged = false;
+          card.querySelectorAll("[data-experiment-field]").forEach((input) => {{
+            const field = input.dataset.experimentField;
+            const value = input.value.trim();
+            const changed = input.value !== (input.dataset.savedValue || "");
+            experimentChanged ||= changed;
+            if (value) experiment[field] = !changed && card.experimentState?.[field] != null
+              ? card.experimentState[field] : value;
+          }});
           await request(card, {{
             method: "PUT",
             headers: {{"Content-Type": "application/json"}},
             body: JSON.stringify({{
-              status: button.dataset.feedbackStatus || card.querySelector(".feedback-status").dataset.status,
+              status,
+              ...(status === "applied" && experimentChanged ? {{experiment}} : {{}}),
               owner_note: card.querySelector(".feedback-note").value,
             }}),
           }});
