@@ -850,6 +850,8 @@ class AnalysisService:
             ai_used=ai_used,
             **reasoning,
         )
+        priced_report: Report = self._gas_service.refresh_cost(report)
+        report = priced_report
         if persist:
             self.db.save_report(report, render_text(report))
         return report

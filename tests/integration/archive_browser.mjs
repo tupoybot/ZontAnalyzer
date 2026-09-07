@@ -225,7 +225,19 @@ try {
   await ownerForm.locator("[data-profile-save]").click();
   await ownerForm.locator("[data-profile-message]").filter({ hasText: "сохранён" }).waitFor();
   assert.equal(profileRequests.at(-1).fields.gas_type.value, "Природный газ (метан)");
+  const maximumGas = ownerForm.locator('[data-field=gas_max_m3h] input.owner-value');
+  await maximumGas.fill('2,69');
+  await ownerForm.locator('[data-profile-save]').click();
+  await ownerForm.locator('[data-profile-message]').filter({hasText:'сохранён'}).waitFor();
+  assert.equal(profileRequests.at(-1).fields.gas_max_m3h.value, 2.69);
+  await page.waitForFunction(() => !document.querySelector('[data-gas-plausibility]').textContent.includes('ещё не указан'));
+  const savedRequestCount = profileRequests.length;
+  await maximumGas.fill('2,6.9');
+  await ownerForm.locator('[data-profile-save]').click();
+  await ownerForm.locator('[data-profile-message]').filter({hasText:'введите число'}).waitFor();
+  assert.equal(profileRequests.length, savedRequestCount, 'invalid numeric input never clears saved value');
   await page.reload({ waitUntil: "networkidle" });
+  assert.equal(await maximumGas.inputValue(), '2.69');
   assert.equal(await gasType.inputValue(), "Природный газ (метан)");
   await context.request.put(`${baseURL}/api/equipment/browser-synthetic-device`, {
     data: {fields: {gas_type: {value: "Исторический газ <custom>"}}},
@@ -334,6 +346,26 @@ try {
   const legacyHealth = await context.request.get(`${baseURL}/za/api/health`);
   assert.equal(rootHealth.status(), 200);
   assert.equal(legacyHealth.status(), 200);
+
+  const tariffEditor = page.locator('[data-owner-gas] #tariff-editor');
+  assert.equal(await page.locator('#system-profile [data-tariff-edit]').count(), 0);
+  await page.locator('[data-tariff-edit]').click();
+  assert.equal(await tariffEditor.locator('[data-tariff-currency]').inputValue(), 'RUB');
+  const plannedMonth = await tariffEditor.locator('[data-tariff-month]').inputValue();
+  for (const price of ['8,01', '9']) {
+    await tariffEditor.locator('[data-tariff-price]').fill(price);
+    await tariffEditor.locator('[data-tariff-save]').click();
+    await tariffEditor.locator('[data-tariff-message]').filter({hasText:'Тариф сохранён'}).waitFor();
+  }
+  const tariffs = (await (await context.request.get(`${baseURL}/api/gas-tariffs`)).json()).history;
+  const planned = tariffs.find(item => item.effective_month === plannedMonth);
+  assert.equal(planned.price, '9', 'last monthly price wins');
+  assert.equal(planned.corrections.length, 1, 'previous price remains audited');
+  await page.reload({waitUntil:'networkidle'});
+  assert.match(await page.locator('[data-tariff-planned]').textContent(), /9 RUB/);
+  await page.setViewportSize({width:390,height:844});
+  await page.locator('[data-tariff-edit]').click();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 
   await page.goto(`${baseURL}/za/daily/2026-08-05.html`, { waitUntil: "networkidle" });
   await page.locator('[data-archive-action="previous"]').click();

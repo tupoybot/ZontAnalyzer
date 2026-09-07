@@ -68,6 +68,8 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
             identifier = ""
             if path == f"{api_path}/equipment":
                 kind = "profiles"
+            elif path == f"{api_path}/gas-tariffs":
+                kind, identifier = "tariffs", "installation"
             elif path.startswith(equipment_prefix):
                 kind, identifier = "profile", unquote(path[len(equipment_prefix):])
             elif path.startswith(gas_prefix) and path.endswith("/gas"):
@@ -102,14 +104,31 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                         payload["effective_from"] = datetime.fromisoformat(effective).replace(
                             tzinfo=ZoneInfo(runtime.config.home.effective_timezone)
                         ).astimezone(UTC).isoformat()
-                    value = (store.update_profile(identifier, payload) if kind == "profile"
-                             else store.update_gas(identifier, payload))
+                    if kind == "tariffs":
+                        from zont_analyzer.application.gas_tariffs import GasTariffStore
+
+                        tariffs = GasTariffStore(runtime.db, timezone=runtime.config.home.effective_timezone)
+                        value = tariffs.save(payload)
+                        value["history"] = tariffs.history()
+                    else:
+                        value = (store.update_profile(identifier, payload) if kind == "profile"
+                                 else store.update_gas(identifier, payload))
                     try:
-                        publish_reports(runtime)
+                        if kind == "tariffs":
+                            from zont_analyzer.application.publication import publish_tariff_change
+
+                            if not value.get("idempotent"):
+                                publish_tariff_change(runtime, value["affected_start"], value["affected_end"])
+                        else:
+                            publish_reports(runtime)
                     except (OSError, ValueError):
                         value["publish_warning"] = "Сохранено; HTML обновится в следующем цикле."
                 elif kind == "profiles":
                     value = {"profiles": [store.profile(str(d["id"])) for d in runtime.db.list_devices()]}
+                elif kind == "tariffs":
+                    from zont_analyzer.application.gas_tariffs import GasTariffStore
+
+                    value = {"history": GasTariffStore(runtime.db).history()}
                 else:
                     value = store.profile(identifier) if kind == "profile" else store.gas(identifier)
             except KeyError:

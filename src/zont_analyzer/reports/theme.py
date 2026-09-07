@@ -97,9 +97,10 @@ letter-spacing:-.5px;
 margin-top:5px}
 .kpi small{display:block;font-size:12px;color:var(--secondary);margin-top:7px}
 .kpi-gas-strip{grid-column:1/-1;display:grid;
-grid-template-columns:minmax(130px,180px) minmax(0,1fr);gap:18px;align-items:center}
+grid-template-columns:minmax(200px,260px) minmax(0,1fr);gap:18px;align-items:center}
 .gas-kpi-total span,.gas-distribution-label{display:block;font-size:12px;color:var(--secondary)}
-.gas-kpi-total strong{display:block;font-size:25px;letter-spacing:-.5px;margin-top:5px}
+.gas-kpi-total strong{display:block;font-size:clamp(18px,2vw,25px);letter-spacing:-.5px;margin-top:5px;
+overflow-wrap:anywhere}
 .gas-kpi-total small{display:block;font-size:12px;color:var(--secondary);margin-top:7px}
 .gas-kpi-total .gas-reliability{display:inline}
 .gas-distribution-bar{display:flex;height:12px;overflow:hidden;border-radius:6px;
@@ -123,9 +124,12 @@ gap:12px 24px;margin-top:18px;padding:22px;background:var(--surface);border:1px 
 letter-spacing:-.5px;margin-top:5px}.gas-period-details{flex:1 1 280px;margin:0;color:var(--secondary);
 font-size:14px;overflow-wrap:anywhere}
 .gas-period-stale{flex-basis:100%;margin:0;color:var(--warning);font-size:14px}
+.gas-cost-note{margin:8px 0;color:var(--secondary);font-size:14px;overflow-wrap:anywhere}
 .gas-savings{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:26px}
 .gas-savings article{padding:12px 0;border-top:1px solid var(--border)}.gas-savings h3{margin-bottom:8px}
 .gas-savings p{font-size:14px}
+.gas-cost-comparisons{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:26px}
+.gas-cost-comparisons p{font-size:14px;overflow-wrap:anywhere}
 .chart-section,.thermal-system,.details-area{background:var(--surface);
 border:1px solid var(--border);
 border-radius:12px;
@@ -314,7 +318,8 @@ gap:18px}
 .hero{padding:22px}
 h1{font-size:28px}
 .kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
-.kpi-gas-strip{grid-template-columns:1fr;gap:10px}.kpi-uptime-row{gap:8px 18px}
+.kpi-gas-strip{grid-template-columns:1fr;gap:10px}.gas-kpi-total strong{font-size:20px}
+.kpi-uptime-row{gap:8px 18px}
 .chart-section,.thermal-system,.details-area{padding:18px}
 .reliability{flex-wrap:wrap;
 gap:12px;

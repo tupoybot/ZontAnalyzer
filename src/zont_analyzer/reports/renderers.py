@@ -12,7 +12,10 @@ from zont_analyzer.reports.experiment_forms import experiment_form
 from zont_analyzer.reports.presentation import (
     LEGACY_DUTY_METRICS,
     _gas_value,
+    _volume_and_cost,
     burner_usage_rows,
+    gas_cost_comparisons_text,
+    gas_cost_lines,
     gas_purpose_text,
     gas_savings_text,
     number,
@@ -886,13 +889,16 @@ def render_text(report: Report) -> str:
         labels = {"unknown": "нет данных", "measured": "измерено", "estimated": "оценено",
                   "extrapolated": "экстраполировано"}
         lines.append(
-            f"Расход газа за период: {_gas_value(gas.get('volume_m3'), 'м³')} "
+            f"Расход газа за период: "
+            f"{_volume_and_cost(gas.get('volume_m3'), gas.get('cost')) if status != 'unknown' else 'Нет данных'} "
             f"({labels.get(status, 'нет данных')})"
         )
-        for key, label, unit in (("average_daily_m3", "Среднее за наблюдаемый день", "м³/сутки"),
-                                 ("average_weekly_m3", "Среднее за наблюдаемую неделю", "м³/неделю")):
+        for key, cost_key, label, unit in (
+            ("average_daily_m3", "average_daily_cost", "Среднее за наблюдаемый день", "м³/сутки"),
+            ("average_weekly_m3", "average_weekly_cost", "Среднее за наблюдаемую неделю", "м³/неделю"),
+        ):
             if isinstance(gas.get(key), (int, float)):
-                lines.append(f"{label}: {_gas_value(gas[key], unit)}")
+                lines.append(f"{label}: {_volume_and_cost(gas[key], gas.get(cost_key), unit)}")
         lines.extend(f"{label}: {value}" for label, value in burner_usage_rows(report))
         lines.append(f"Индекс надёжности: {_gas_value(gas.get('reliability_index_pct'), '%')}; не вероятность.")
         lines.append(f"Диапазон: {_gas_value(gas.get('lower_m3'), 'м³')} — "
@@ -901,8 +907,20 @@ def render_text(report: Report) -> str:
         lines.append(str(gas.get('source', '')))
         if gas.get('ai_stale'):
             lines.append("AI-интерпретация историческая и не учитывает текущую версию расчёта газа.")
+        lines.extend(gas_cost_lines(gas.get("cost")))
+        intervals = gas.get("measured_intervals")
+        if isinstance(intervals, list):
+            for item in intervals:
+                if isinstance(item, dict):
+                    start = str(item.get("start", item.get("before_start", "неизвестно")))[:10]
+                    end = str(item.get("end", item.get("after_end", "неизвестно")))[:10]
+                    lines.append(
+                        f"Измеренный интервал {start} — {end}: "
+                        f"{_volume_and_cost(item.get('volume_m3'), item.get('cost'))}"
+                    )
     lines.extend(gas_purpose_text(report))
     lines.extend(gas_savings_text(report))
+    lines.extend(gas_cost_comparisons_text(report))
     if report.context.get("counterfactual_question"):
         lines.append("Вопрос владельца: " + str(report.context["counterfactual_question"]))
     lines.extend(_temporal_evidence_text(report.context.get("temporal_evidence")))
@@ -1426,6 +1444,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="debug-only">{temporal_evidence}{historical_evidence}</div>
 <details class="debug-only"><summary>Канонический JSON</summary><pre>{canonical}</pre></details></div>
 {ui.gas_savings_section(report)}
+{ui.gas_cost_comparisons_section(report)}
 {period_context}
 {regeneration}
 <section class="full-width owner-settings" aria-label="Профиль и показания">{owner_forms}</section>

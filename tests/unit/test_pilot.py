@@ -79,6 +79,7 @@ class FakeDatabase:
 
 @pytest.fixture(autouse=True)
 def fake_owner_store(monkeypatch):
+    from zont_analyzer.application.gas_tariffs import GasTariffStore
     from zont_analyzer.application.owner_context import OwnerContextStore
 
     # Calendar scheduling has separate real-DB integration coverage.
@@ -102,6 +103,15 @@ def fake_owner_store(monkeypatch):
         return original(store, report_id)
 
     monkeypatch.setattr(OwnerContextStore, "gas", gas)
+
+    original_tariff_history = GasTariffStore.history
+
+    def tariff_history(store, scope="installation"):
+        if isinstance(store.db, FakeDatabase):
+            return []
+        return original_tariff_history(store, scope)
+
+    monkeypatch.setattr(GasTariffStore, "history", tariff_history)
 
 
 class FakeAnalysis:

@@ -5,9 +5,12 @@ from __future__ import annotations
 import html
 import json
 import math
+from collections.abc import Mapping
+from datetime import datetime
 from typing import Any, TypeGuard
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from zont_analyzer.application.gas_cost import format_cost
 from zont_analyzer.domain import Report
 
 from .wording import normalize_report_for_display
@@ -100,6 +103,87 @@ def _gas_value(value: Any, unit: str = "") -> str:
     return number(value, unit)
 
 
+def _cost_value(cost: Any) -> str | None:
+    """Format a present cost contract, while preserving old reports without one."""
+    if not isinstance(cost, Mapping):
+        return None
+    return format_cost(cost)
+
+
+def _volume_and_cost(value: Any, cost: Any, unit: str = "м³") -> str:
+    volume = _gas_value(value, unit)
+    money = _cost_value(cost)
+    return f"{volume} · {money}" if money is not None else volume
+
+
+def gas_cost_lines(cost: Any) -> list[str]:
+    """Explain incomplete and multi-month pricing without inventing missing money."""
+    if not isinstance(cost, Mapping):
+        return []
+    lines: list[str] = []
+    status = str(cost.get("status") or "unknown")
+    if status == "partial":
+        priced = cost.get("priced_volume_m3")
+        unpriced = cost.get("unpriced_volume_m3")
+        raw_limitations = cost.get("limitations")
+        limitations = {str(value) for value in raw_limitations} if isinstance(raw_limitations, list) else set()
+        parts = ["Стоимость рассчитана частично"]
+        if isinstance(priced, (int, float)) and not isinstance(priced, bool):
+            parts.append(f"с тарифом {_gas_value(priced, 'м³')}")
+        if isinstance(unpriced, (int, float)) and not isinstance(unpriced, bool):
+            parts.append(f"без тарифа {_gas_value(unpriced, 'м³')}")
+        lines.append("; ".join(parts) + ".")
+        if limitations & {"gas_volume_unavailable_for_tariff_month", "volume_distribution_unavailable"}:
+            lines.append("Для части периода расход по календарным месяцам неизвестен.")
+        elif limitations & {"tariff_unavailable", "tariff_unavailable_for_part_of_period"}:
+            lines.append("Для части расхода тариф не задан.")
+    elif status == "unknown":
+        raw_limitations = cost.get("limitations")
+        limitations = {str(value) for value in raw_limitations} if isinstance(raw_limitations, list) else set()
+        if limitations & {"tariff_unavailable", "tariff_unavailable_for_part_of_period"}:
+            reason = "для расхода нет действующего тарифа"
+        elif limitations & {
+            "volume_distribution_unavailable", "gas_volume_unavailable_for_tariff_month",
+            "evaluated_period_tariff_weights_unavailable",
+        }:
+            reason = "недостаточно данных для распределения расхода по календарным месяцам"
+        elif "gas_volume_unavailable" in limitations:
+            reason = "недостаточно данных о расходе"
+        elif "currencies_not_comparable" in limitations:
+            reason = "валюты сравниваемых периодов различаются"
+        else:
+            reason = "недостаточно данных для расчёта"
+        lines.append(f"Стоимость неизвестна: {reason}.")
+
+    slices = cost.get("slices")
+    if isinstance(slices, list) and len(slices) > 1:
+        lines.append("Стоимость по календарным месяцам:")
+        for item in slices:
+            if not isinstance(item, dict):
+                continue
+            slice_cost = {
+                "status": "available",
+                "amounts": [{"currency": item.get("currency"), "amount": item.get("amount")}],
+            }
+            try:
+                start = datetime.fromisoformat(str(item.get("start"))).astimezone(
+                    ZoneInfo(str(cost.get("timezone") or "UTC"))
+                ).strftime("%Y-%m")
+            except (TypeError, ValueError, ZoneInfoNotFoundError):
+                start = "месяц не указан"
+            price = item.get("price_per_m3")
+            currency = item.get("currency")
+            rate = (
+                format_cost({"status": "available", "amounts": [{"currency": currency, "amount": price}]})
+                if price is not None and currency else None
+            )
+            suffix = f"; тариф {rate}/м³" if rate else "; тариф не указан"
+            lines.append(f"{start}: {_volume_and_cost(item.get('volume_m3'), slice_cost)}{suffix}")
+    elif cost.get("basis") == "calendar_month_tariffs" and status in {"available", "partial"}:
+        lines.append("Стоимость рассчитана по тарифу календарного месяца.")
+    return lines
+
+
 def compact_percent(value: float) -> str:
     return f"{value:.1f}".replace(".", ",").rstrip("0").rstrip(",") + "%"
 
@@ -187,7 +271,10 @@ def gas_period_card(report: Report) -> str:
         "extrapolated": "экстраполировано",
     }
     status_label = status_labels.get(status, "нет данных")
-    volume = _gas_value(gas.get("volume_m3"), "м³") if status != "unknown" else "Нет данных"
+    volume = (
+        _volume_and_cost(gas.get("volume_m3"), gas.get("cost"))
+        if status != "unknown" else "Нет данных"
+    )
     bounds = []
     lower, upper = gas.get("lower_m3"), gas.get("upper_m3")
     if isinstance(lower, (int, float)) and not isinstance(lower, bool):
@@ -208,10 +295,15 @@ def gas_period_card(report: Report) -> str:
     observed_days = gas.get("observed_days")
     if isinstance(observed_days, (int, float)) and not isinstance(observed_days, bool):
         details.append(f"Знаменатель: {observed_days:g} календарных суток обработанной части периода")
-    for key, label, unit in (("average_daily_m3", "Среднее за сутки", "м³/сутки"),
-                             ("average_weekly_m3", "Среднее за 7 суток (не итог конкретной недели)", "м³/неделю")):
+    for key, cost_key, label, unit in (
+        ("average_daily_m3", "average_daily_cost", "Среднее за сутки", "м³/сутки"),
+        (
+            "average_weekly_m3", "average_weekly_cost",
+            "Среднее за 7 суток (не итог конкретной недели)", "м³/неделю",
+        ),
+    ):
         if isinstance(gas.get(key), (int, float)) and not isinstance(gas.get(key), bool):
-            details.append(f"{label}: {_gas_value(gas[key], unit)}")
+            details.append(f"{label}: {_volume_and_cost(gas[key], gas.get(cost_key), unit)}")
     if gas.get("complete") is False:
         details.append("Период неполный; итог не представляет полный сезон")
     for key in ("source", "uncertainty_method"):
@@ -243,7 +335,7 @@ def gas_period_card(report: Report) -> str:
                 continue
             start = str(item.get("start", item.get("before_start", "неизвестно")))[:10]
             end = str(item.get("end", item.get("after_end", "неизвестно")))[:10]
-            volume_text = _gas_value(item.get("volume_m3"), "м³")
+            volume_text = _volume_and_cost(item.get("volume_m3"), item.get("cost"))
             residual = item.get("predicted_residual_m3", item.get("residual_m3"))
             residual_text = (
                 f"; невязка модели {_gas_value(residual, 'м³')}"
@@ -266,6 +358,7 @@ def gas_period_card(report: Report) -> str:
         f'<p class="gas-period-details">{esc(" · ".join(details))}</p>'
         + stale
         + purpose_details
+        + "".join(f'<p class="gas-cost-note">{esc(line)}</p>' for line in gas_cost_lines(gas.get("cost")))
         + interval_details
         + debug(gas, "Расход газа / происхождение")
         + "</details>"
@@ -290,11 +383,19 @@ def gas_savings_text(report: Report) -> list[str]:
         after = str(item.get("after_start", "неизвестно"))[:10]
         raw, normalized = item.get("raw_savings", {}), item.get("normalized_savings", {})
         value, spread = normalized.get("m3"), item.get("uncertainty_m3")
+        normalized_cost = item.get("normalized_savings_cost")
         lines.append(f"Сравнение: {before} и {after}")
         lines.append(f"Исходная разница: {_gas_value(raw.get('m3'), 'м³')} "
                      f"({_gas_value(raw.get('pct'), '%')})")
-        lines.append(f"Нормализованное изменение: {_gas_value(value, 'м³')} "
+        lines.append(f"Нормализованное изменение: {_volume_and_cost(value, normalized_cost)} "
                      f"({_gas_value(normalized.get('pct'), '%')})")
+        actual_costs = item.get("actual_costs")
+        if isinstance(actual_costs, dict):
+            before_cost = _cost_value(actual_costs.get("before")) or "Стоимость неизвестна"
+            after_cost = _cost_value(actual_costs.get("after")) or "Стоимость неизвестна"
+            lines.append(f"Фактическая стоимость: до {before_cost}; после {after_cost}.")
+        if isinstance(normalized_cost, dict):
+            lines.append("Денежный эквивалент изменения рассчитан в тарифах периода после изменения.")
         if isinstance(value, (int, float)) and isinstance(spread, (int, float)):
             lines.append(f"Диапазон эффекта: {_gas_value(value-spread, 'м³')} — "
                          f"{_gas_value(value+spread, 'м³')}; не вероятностный интервал.")
@@ -321,6 +422,51 @@ def gas_savings_section(report: Report) -> str:
         return ""
     return ('<section class="full-width gas-savings"><h2>Экономия газа</h2>'
             + "".join(f"<p>{esc(line)}</p>" for line in lines if line != "Экономия газа") + "</section>")
+
+
+def gas_cost_comparisons_text(report: Report) -> list[str]:
+    """Expose actual historical costs separately from normalized gas effects."""
+    lines: list[str] = []
+    interventions = report.context.get("intervention_outcomes")
+    periods = report.context.get("period_comparisons")
+    items = [
+        *(interventions if isinstance(interventions, list) else []),
+        *(periods if isinstance(periods, list) else []),
+    ]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        comparison = item.get("gas_cost_comparison")
+        if not isinstance(comparison, dict):
+            continue
+        before = _cost_value(comparison.get("before")) or "Стоимость неизвестна"
+        after = _cost_value(comparison.get("after")) or "Стоимость неизвестна"
+        change = _cost_value(comparison.get("actual_change")) or "Стоимость неизвестна"
+        lines.append(f"{item.get('label', 'Сравнение')}: до {before}; после {after}; изменение {change}.")
+        for matched in item.get("matched_windows", []):
+            if not isinstance(matched, dict):
+                continue
+            matched_cost = matched.get("gas_cost_comparison")
+            if not isinstance(matched_cost, dict):
+                continue
+            effect = matched_cost.get("volume_effect_cost")
+            if not isinstance(effect, dict) or effect.get("status") != "available":
+                continue
+            lines.append(
+                "Разница расхода сопоставимых суток: "
+                + _volume_and_cost(effect.get("volume_m3"), effect)
+                + "; денежный эквивалент в тарифах оцениваемых суток."
+            )
+    return lines
+
+
+def gas_cost_comparisons_section(report: Report) -> str:
+    lines = gas_cost_comparisons_text(report)
+    if not lines:
+        return ""
+    return ('<section class="full-width gas-cost-comparisons"><h2>Стоимость в сравниваемых периодах</h2>'
+            '<p>Фактические суммы рассчитаны по тарифам каждого периода.</p>'
+            + "".join(f"<p>{esc(line)}</p>" for line in lines) + "</section>")
 
 
 def kpis(report: Report) -> str:
@@ -413,7 +559,10 @@ def kpis(report: Report) -> str:
 def gas_distribution_card(gas: dict[str, Any]) -> str:
     """Show purpose allocation only when every part has a real model denominator."""
     status = str(gas.get("status") or "unknown")
-    meter_volume = _gas_value(gas.get("volume_m3"), "м³") if status != "unknown" else "Нет данных"
+    meter_volume = (
+        _volume_and_cost(gas.get("volume_m3"), gas.get("cost"))
+        if status != "unknown" else "Нет данных"
+    )
     status_label = {"measured": "измерено", "estimated": "оценено", "extrapolated": "экстраполяция"}.get(
         status, "нет данных"
     )

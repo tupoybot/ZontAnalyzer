@@ -65,6 +65,69 @@ def publish_report(runtime: Runtime, report_id: str, *, now: datetime | None = N
         return _publish_report_locked(runtime, output_dir, report, checked_at)
 
 
+def publish_tariff_change(runtime: Runtime, start: str, end: str | None) -> dict[str, Any]:
+    """Update money only in affected observation/comparison windows, under the publication lock."""
+    from zont_analyzer.application.gas import GasService
+
+    left = datetime.fromisoformat(start)
+    right = datetime.fromisoformat(end) if end else datetime.max.replace(tzinfo=UTC)
+
+    def overlaps(first: datetime, last: datetime) -> bool:
+        return first < right and last > left
+
+    def affected(report: Report) -> bool:
+        if overlaps(report.period_start, report.period_end):
+            return True
+        # Comparisons can refer to older windows outside this report's own period.
+        def inspect(value: Any) -> bool:
+            if isinstance(value, list):
+                return any(inspect(item) for item in value)
+            if not isinstance(value, dict):
+                return False
+            for key, first in value.items():
+                if key.endswith("start") and isinstance(first, str):
+                    last = value.get(key[:-5] + "end")
+                    if isinstance(last, str):
+                        try:
+                            a, b = datetime.fromisoformat(first), datetime.fromisoformat(last)
+                            if a.tzinfo and b.tzinfo and overlaps(a, b):
+                                return True
+                        except ValueError:
+                            pass
+            return any(inspect(item) for item in value.values() if isinstance(item, (dict, list)))
+
+        return inspect(report.context)
+
+    now = datetime.now(UTC)
+    output_dir = reports_directory(runtime)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with (output_dir / ".publication.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        service = GasService(runtime.db, runtime.config)
+        reports = {report.id: report for report in runtime.db.completed_reports(now)}
+        for kind in KINDS:
+            for path in (output_dir / kind).glob("*.json"):
+                try:
+                    report = Report.model_validate_json(path.read_text(encoding="utf-8"))
+                    html_path, json_path = archive_paths(output_dir, report)
+                    if (json_path == path and html_path.is_file() and report.period_end <= now
+                            and report.generated_at >= report.period_end):
+                        previous = reports.get(report.id)
+                        if previous is None or report.generated_at > previous.generated_at:
+                            reports[report.id] = report
+                except (OSError, ValueError):
+                    continue
+        for report in reports.values():
+            if not affected(report):
+                continue
+            refreshed = service.refresh_cost(report)
+            if service.persist_refresh(report, refreshed):
+                _publish_report_locked(runtime, output_dir, refreshed, now)
+                count += 1
+    return {"reports": count}
+
+
 def _publish_report_locked(
     runtime: Runtime, output_dir: Path, report: Report, now: datetime,
 ) -> dict[str, Any]:
@@ -78,10 +141,13 @@ def _publish_report_locked(
     from zont_analyzer.application.owner_context import OwnerContextStore
 
     owner_store = OwnerContextStore(runtime.db)
+    from zont_analyzer.application.gas_tariffs import GasTariffStore
+
     owner_data: dict[str, Any] = {
-        "profiles": [owner_store.profile(str(device["id"])) for device in runtime.db.list_devices()]
+        "profiles": [owner_store.profile(str(device["id"])) for device in runtime.db.list_devices()],
+        "tariffs": GasTariffStore(runtime.db).history(),
     }
-    if report.kind == "daily":
+    if report.kind == "daily" and runtime.db.report(report.id) is not None:
         owner_data["gas"] = owner_store.gas(report.id)
     has_other_exports = any(next((output_dir / kind).glob("*.html"), None) for kind in KINDS)
     html_path, json_path = archive_paths(output_dir, report)
@@ -181,14 +247,17 @@ def _publish_locked(
     from zont_analyzer.application.owner_context import OwnerContextStore
 
     owner_store = OwnerContextStore(runtime.db)
+    from zont_analyzer.application.gas_tariffs import GasTariffStore
+
     profiles = [owner_store.profile(str(device["id"])) for device in runtime.db.list_devices()]
+    tariffs = GasTariffStore(runtime.db).history()
 
     def owner_data(report: Report) -> dict[str, Any]:
         # An old retained export may have no matching DB report; it remains readable.
         gas = None
         if report.kind == "daily" and runtime.db.report(report.id) is not None:
             gas = owner_store.gas(report.id)
-        return {"profiles": profiles, "gas": gas}
+        return {"profiles": profiles, "gas": gas, "tariffs": tariffs}
 
     # Retain valid existing exports, including dates outside worker catch-up.
     reports: dict[str, Report] = {}

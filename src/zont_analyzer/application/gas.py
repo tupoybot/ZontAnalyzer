@@ -23,6 +23,7 @@ from zont_analyzer.analytics.gas import (
     ALGORITHM_VERSION,
     Exposure,
     GasInterval,
+    GasModel,
     StateSample,
     estimate_gas_purpose_split,
     integrate_exposure,
@@ -76,11 +77,134 @@ class GasService:
                                  GasReadingRow.device_id == 'installation').order_by(GasReadingRow.reading_day))]
         self._windows: dict[tuple[datetime, datetime], dict[str, Any]] = {}
         self._models: dict[str, Any] = {}
+        self._cost_slices: dict[
+            tuple[datetime, datetime, str],
+            tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]],
+        ] = {}
+        from zont_analyzer.application.gas_tariffs import GasTariffStore
+
+        self.tariffs = GasTariffStore(db, self.timezone).history(scope='installation')
 
     def _unique(self, role: str) -> dict[str, Any] | None:
         rows = [s for s in self.series if s['role'] == role and
                 (self.device_id is None or str(s['device_id']) == self.device_id)]
         return rows[0] if len(rows) == 1 else None
+
+    @staticmethod
+    def _exposure(window: dict[str, Any]) -> Exposure:
+        return Exposure(
+            minutes=window['minutes'], bin_minutes=tuple(window['bin_minutes']),
+            unknown_modulation_minutes=window['unknown_modulation_minutes'],
+            observed_minutes=window['observed_minutes'], heating_minutes=window['heating_minutes'],
+            dhw_minutes=window['dhw_minutes'], flame_minutes=window['flame_minutes'],
+            ambiguous_purpose_minutes=window['ambiguous_purpose_minutes'],
+            heating_bin_minutes=tuple(window['heating_bin_minutes']),
+            dhw_bin_minutes=tuple(window['dhw_bin_minutes']),
+            ambiguous_purpose_bin_minutes=tuple(window['ambiguous_purpose_bin_minutes']),
+            heating_unknown_modulation_minutes=window['heating_unknown_modulation_minutes'],
+            dhw_unknown_modulation_minutes=window['dhw_unknown_modulation_minutes'],
+            ambiguous_purpose_unknown_modulation_minutes=window['ambiguous_purpose_unknown_modulation_minutes'],
+        )
+
+    def _month_ranges(self, start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+        zone = ZoneInfo(self.timezone)
+        cursor = start
+        result: list[tuple[datetime, datetime]] = []
+        while cursor < end:
+            local = cursor.astimezone(zone)
+            if local.month == 12:
+                boundary = datetime(local.year + 1, 1, 1, tzinfo=zone)
+            else:
+                boundary = datetime(local.year, local.month + 1, 1, tzinfo=zone)
+            after = min(end, boundary.astimezone(UTC))
+            result.append((cursor, after))
+            cursor = after
+        return result
+
+    def _monthly_cost_slices(
+        self, start: datetime, end: datetime, model: GasModel,
+    ) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+        from zont_analyzer.analytics.gas import estimate_exposure
+
+        model_key = _hash(asdict(model))
+        key = (start, end, model_key)
+        if key in self._cost_slices:
+            return self._cost_slices[key]
+        total: list[dict[str, Any]] = []
+        components: dict[str, list[dict[str, Any]]] = {
+            'heating': [], 'dhw': [], 'purpose_unknown': [],
+            'total_modelled': [], 'unallocated': [],
+        }
+        for left, right in self._month_ranges(start, end):
+            exposure = self._exposure(self.window(left, right))
+            estimate = estimate_exposure(exposure, model, start=left, end=right)
+            allocation = estimate_gas_purpose_split(exposure, model, estimate)
+            total.append({
+                'start': left, 'end': right, 'volume_m3': estimate.volume_m3,
+                'allocation': 'existing_gas_model_calendar_month',
+            })
+            split = allocation.get('components', {})
+            for name in components:
+                if name == 'total_modelled':
+                    component_volume = allocation.get('total_modelled_m3')
+                elif name == 'unallocated':
+                    component_volume = allocation.get('unallocated_m3')
+                else:
+                    component = split.get(name, {}) if isinstance(split, dict) else {}
+                    component_volume = component.get('volume_m3') if isinstance(component, dict) else None
+                components[name].append({
+                    'start': left, 'end': right,
+                    'volume_m3': component_volume,
+                    'allocation': 'existing_gas_purpose_model_calendar_month',
+                })
+        self._cost_slices[key] = (total, components)
+        return total, components
+
+    def _cost_for_volume(
+        self,
+        start: datetime,
+        end: datetime,
+        volume_m3: Any,
+        model: GasModel | None,
+        *,
+        purpose: str | None = None,
+        can_allocate: bool = True,
+    ) -> dict[str, Any]:
+        from zont_analyzer.application.gas_cost import calculate_gas_cost
+
+        initial = calculate_gas_cost(start, end, volume_m3, self.tariffs, timezone=self.timezone)
+        if (
+            'volume_distribution_unavailable' not in initial.get('limitations', ())
+            or model is None
+            or not can_allocate
+        ):
+            return initial
+        total, components = self._monthly_cost_slices(start, end, model)
+        raw_slices = components.get(purpose, []) if purpose else total
+        expected = float(volume_m3) if isinstance(volume_m3, (int, float)) else None
+        numeric_volumes: list[float] = []
+        for item in raw_slices:
+            value = item.get('volume_m3')
+            if not isinstance(value, (int, float)) or value < 0:
+                return initial
+            numeric_volumes.append(float(value))
+        if expected is None:
+            return initial
+        model_total = sum(numeric_volumes)
+        if model_total <= 0:
+            if expected != 0:
+                return initial
+            factor = 0.0
+        else:
+            factor = expected / model_total
+        slices = [
+            {**item, 'volume_m3': float(item['volume_m3']) * factor,
+             'allocation': item['allocation'] + '_weight_reconciled_to_period_volume'}
+            for item in raw_slices
+        ]
+        return calculate_gas_cost(
+            start, end, volume_m3, self.tariffs, timezone=self.timezone, volume_slices=slices,
+        )
 
     def window(self, start: datetime, end: datetime) -> dict[str, Any]:
         """Return additive statistics, splitting on local day boundaries for reuse."""
@@ -229,18 +353,7 @@ class GasService:
 
         version, model, intervals = self.model()
         w = self.window(start, end)
-        exposure = Exposure(
-            minutes=w['minutes'], bin_minutes=tuple(w['bin_minutes']),
-            unknown_modulation_minutes=w['unknown_modulation_minutes'],
-            observed_minutes=w['observed_minutes'], heating_minutes=w['heating_minutes'],
-            dhw_minutes=w['dhw_minutes'], flame_minutes=w['flame_minutes'],
-            ambiguous_purpose_minutes=w['ambiguous_purpose_minutes'],
-            heating_bin_minutes=tuple(w['heating_bin_minutes']), dhw_bin_minutes=tuple(w['dhw_bin_minutes']),
-            ambiguous_purpose_bin_minutes=tuple(w['ambiguous_purpose_bin_minutes']),
-            heating_unknown_modulation_minutes=w['heating_unknown_modulation_minutes'],
-            dhw_unknown_modulation_minutes=w['dhw_unknown_modulation_minutes'],
-            ambiguous_purpose_unknown_modulation_minutes=w['ambiguous_purpose_unknown_modulation_minutes'],
-        )
+        exposure = self._exposure(w)
         estimate = estimate_exposure(exposure, model, start=start, end=end)
         purpose_split = estimate_gas_purpose_split(exposure, model, estimate)
         bounds = estimate.uncertainty_m3
@@ -305,9 +418,289 @@ class GasService:
                                    if item['predicted_m3'] is not None else None)
         result['observed_volume_m3'] = getattr(estimate, 'observed_volume_m3', None)
         result['unknown_minutes'] = w['minutes']-w['observed_minutes']
+        whole_meter_allocation = not (
+            result.get('scope') == 'whole_meter'
+            and self.fields.get('has_gas_stove', {}).get('value') is not False
+        )
+        result['cost'] = self._cost_for_volume(
+            start, end, result.get('volume_m3'), model, can_allocate=whole_meter_allocation,
+        )
+        from zont_analyzer.application.gas_cost import scale_cost
+
+        result['average_daily_cost'] = scale_cost(
+            result['cost'], 1 / days, basis='average_daily_from_period_cost',
+        )
+        result['average_weekly_cost'] = scale_cost(
+            result['cost'], 7 / days, basis='average_weekly_from_period_cost',
+        )
+        purpose = result.get('purpose_split', {})
+        components = purpose.get('components', {}) if isinstance(purpose, dict) else {}
+        if isinstance(components, dict):
+            for name, component in components.items():
+                if isinstance(component, dict):
+                    component['cost'] = self._cost_for_volume(
+                        start, end, component.get('volume_m3'), model, purpose=name,
+                    )
+        if isinstance(purpose, dict):
+            purpose['cost'] = self._cost_for_volume(
+                start, end, purpose.get('total_modelled_m3'), model, purpose='total_modelled',
+            )
+            purpose['unallocated_cost'] = self._cost_for_volume(
+                start, end, purpose.get('unallocated_m3'), model, purpose='unallocated',
+            )
+        for interval in result.get('measured_intervals', []):
+            if isinstance(interval, dict):
+                interval['cost'] = self._cost_for_volume(
+                    datetime.fromisoformat(interval['start']), datetime.fromisoformat(interval['end']),
+                    interval.get('volume_m3'), model, can_allocate=whole_meter_allocation,
+                )
         # Canonical context must survive a JSON round trip without tuple/list or
         # datetime/string differences triggering writes on every publication.
         return dict(json.loads(_json(result)))
+
+    @staticmethod
+    def _model_from_context(gas: dict[str, Any]) -> GasModel | None:
+        payload = gas.get('model')
+        if not isinstance(payload, dict):
+            return None
+        values = dict(payload)
+        calibration_end = values.get('calibration_end')
+        if isinstance(calibration_end, str):
+            values['calibration_end'] = datetime.fromisoformat(calibration_end)
+        try:
+            return GasModel(**values)
+        except (TypeError, ValueError):
+            return None
+
+    def _refresh_gas_costs(self, gas: dict[str, Any], start: datetime, end: datetime) -> None:
+        model = self._model_from_context(gas)
+        can_allocate = not (
+            gas.get('scope') == 'whole_meter'
+            and self.fields.get('has_gas_stove', {}).get('value') is not False
+        )
+        gas['cost'] = self._cost_for_volume(
+            start, end, gas.get('volume_m3'), model, can_allocate=can_allocate,
+        )
+        days = (end - start).total_seconds() / 86400
+        from zont_analyzer.application.gas_cost import scale_cost
+
+        gas['average_daily_cost'] = scale_cost(
+            gas['cost'], 1 / days, basis='average_daily_from_period_cost',
+        )
+        gas['average_weekly_cost'] = scale_cost(
+            gas['cost'], 7 / days, basis='average_weekly_from_period_cost',
+        )
+        purpose = gas.get('purpose_split')
+        if isinstance(purpose, dict):
+            components = purpose.get('components')
+            if isinstance(components, dict):
+                for name, component in components.items():
+                    if isinstance(component, dict):
+                        component['cost'] = self._cost_for_volume(
+                            start, end, component.get('volume_m3'), model, purpose=name,
+                        )
+            purpose['cost'] = self._cost_for_volume(
+                start, end, purpose.get('total_modelled_m3'), model, purpose='total_modelled',
+            )
+            purpose['unallocated_cost'] = self._cost_for_volume(
+                start, end, purpose.get('unallocated_m3'), model, purpose='unallocated',
+            )
+        measured = gas.get('measured_intervals')
+        if isinstance(measured, list):
+            for interval in measured:
+                if not isinstance(interval, dict):
+                    continue
+                try:
+                    left = datetime.fromisoformat(str(interval['start']))
+                    right = datetime.fromisoformat(str(interval['end']))
+                except (KeyError, ValueError):
+                    continue
+                interval['cost'] = self._cost_for_volume(
+                    left, right, interval.get('volume_m3'), model, can_allocate=can_allocate,
+                )
+
+    def _stored_gas(self, start: datetime, end: datetime) -> dict[str, Any] | None:
+        with self.db.session() as session:
+            canonical = session.scalar(
+                select(ReportRow.canonical_json)
+                .where(
+                    ReportRow.period_start == int(start.timestamp()),
+                    ReportRow.period_end == int(end.timestamp()),
+                )
+                .order_by(ReportRow.generated_at.desc())
+                .limit(1)
+            )
+        if canonical is None:
+            return None
+        gas = Report.model_validate_json(canonical).context.get('gas')
+        return dict(gas) if isinstance(gas, dict) else None
+
+    @staticmethod
+    def _period_bounds(value: Any) -> tuple[datetime, datetime] | None:
+        if not isinstance(value, dict):
+            return None
+        try:
+            start = datetime.fromisoformat(str(value['start']))
+            end = datetime.fromisoformat(str(value.get('observed_end') or value['end']))
+        except (KeyError, ValueError):
+            return None
+        return start, end
+
+    def _period_gas(
+        self, start: datetime, end: datetime, *, current: Report,
+    ) -> dict[str, Any] | None:
+        if not self.tariffs:
+            return None
+        gas = current.context.get('gas') if start == current.period_start and end == current.period_end else None
+        if not isinstance(gas, dict):
+            gas = self._stored_gas(start, end)
+        return gas if isinstance(gas, dict) else None
+
+    def _period_cost(
+        self, start: datetime, end: datetime, *, current: Report,
+    ) -> dict[str, Any]:
+        gas = self._period_gas(start, end, current=current)
+        if not isinstance(gas, dict):
+            return self._cost_for_volume(start, end, None, None)
+        self._refresh_gas_costs(gas, start, end)
+        cost = gas.get('cost')
+        return cost if isinstance(cost, dict) else self._cost_for_volume(start, end, None, None)
+
+    def _cost_comparison(
+        self,
+        before_start: datetime,
+        before_end: datetime,
+        after_start: datetime,
+        after_end: datetime,
+        *,
+        current: Report,
+        comparable: bool,
+    ) -> dict[str, Any]:
+        from zont_analyzer.application.gas_cost import subtract_costs, value_volume_by_period_tariffs
+
+        before_gas = self._period_gas(before_start, before_end, current=current)
+        after_gas = self._period_gas(after_start, after_end, current=current)
+        before = self._period_cost(before_start, before_end, current=current)
+        after = self._period_cost(after_start, after_end, current=current)
+        change = subtract_costs(after, before)
+        effect = self._cost_for_volume(after_start, after_end, None, None)
+        if (
+            comparable
+            and change.get('status') == 'available'
+            and isinstance(before_gas, dict)
+            and isinstance(after_gas, dict)
+        ):
+            before_volume, after_volume = before_gas.get('volume_m3'), after_gas.get('volume_m3')
+            if isinstance(before_volume, (int, float)) and isinstance(after_volume, (int, float)):
+                effect = value_volume_by_period_tariffs(before_volume - after_volume, after)
+                effect.update(
+                    volume_m3=before_volume - after_volume,
+                    comparison_status='comparable',
+                    evaluated_period='after',
+                    provenance='Разность расхода сопоставимых окон в тарифных весах оцениваемого периода.',
+                )
+        if not comparable:
+            effect['limitations'] = ['periods_not_comparable']
+        return {
+            'before': before,
+            'after': after,
+            'actual_change': change,
+            'volume_effect_cost': effect,
+        }
+
+    def _refresh_period_comparison_costs(self, report: Report) -> None:
+        comparisons = report.context.get('period_comparisons')
+        if not isinstance(comparisons, list):
+            return
+        for item in comparisons:
+            if not isinstance(item, dict):
+                continue
+            baseline = self._period_bounds(item.get('baseline_period'))
+            current = self._period_bounds(item.get('current_period'))
+            if baseline and current:
+                item['gas_cost_comparison'] = self._cost_comparison(
+                    *baseline, *current, current=report, comparable=False,
+                )
+            matched = item.get('matched_windows')
+            if not isinstance(matched, list):
+                continue
+            for pair in matched:
+                if not isinstance(pair, dict):
+                    continue
+                try:
+                    pair['gas_cost_comparison'] = self._cost_comparison(
+                        datetime.fromisoformat(str(pair['before_start'])),
+                        datetime.fromisoformat(str(pair['before_end'])),
+                        datetime.fromisoformat(str(pair['after_start'])),
+                        datetime.fromisoformat(str(pair['after_end'])),
+                        current=report,
+                        comparable=pair.get('status') == 'comparable',
+                    )
+                except (KeyError, ValueError):
+                    continue
+
+    def _refresh_savings_costs(self, savings: Any) -> None:
+        if not isinstance(savings, dict) or not isinstance(savings.get('comparisons'), list):
+            return
+        from zont_analyzer.application.gas_cost import subtract_costs, value_volume_by_period_tariffs
+
+        for item in savings['comparisons']:
+            if not isinstance(item, dict):
+                continue
+            try:
+                before_start = datetime.fromisoformat(str(item['before_start']))
+                before_end = datetime.fromisoformat(str(item['before_end']))
+                after_start = datetime.fromisoformat(str(item['after_start']))
+                after_end = datetime.fromisoformat(str(item['after_end']))
+                observed = float(item['observed_m3'])
+                before_volume = observed + float(item['raw_savings']['m3'])
+                normalized = item['normalized_savings']['m3']
+            except (KeyError, TypeError, ValueError):
+                continue
+            existing = item.get('actual_costs')
+            if isinstance(existing, dict):
+                # New reports retain month-bounded source volumes in these slices;
+                # tariff-only refreshes can reprice them without telemetry/model work.
+                before_slices = existing.get('before', {}).get('slices', [])
+                after_slices = existing.get('after', {}).get('slices', [])
+            else:
+                before_slices, after_slices = [], []
+            from zont_analyzer.application.gas_cost import calculate_gas_cost
+
+            before_cost = calculate_gas_cost(
+                before_start, before_end, before_volume, self.tariffs, timezone=self.timezone,
+                volume_slices=before_slices or None,
+            )
+            after_cost = calculate_gas_cost(
+                after_start, after_end, observed, self.tariffs, timezone=self.timezone,
+                volume_slices=after_slices or None,
+            )
+            item['actual_costs'] = {'before': before_cost, 'after': after_cost}
+            currencies_comparable = subtract_costs(after_cost, before_cost).get('status') == 'available'
+            valued = (
+                value_volume_by_period_tariffs(normalized, after_cost)
+                if currencies_comparable
+                else self._cost_for_volume(after_start, after_end, None, None)
+            )
+            if not currencies_comparable:
+                valued['limitations'] = ['currencies_not_comparable']
+            valued.update(
+                effect_status=item.get('effect_status'), evaluated_period='after',
+                provenance=(
+                    'Денежный эквивалент нормализованного объёма в тарифных весах оцениваемого периода.'
+                ),
+            )
+            item['normalized_savings_cost'] = valued
+
+    def refresh_cost(self, report: Report) -> Report:
+        """Reprice canonical money only, preserving gas volume, models and AI."""
+        result = report.model_copy(deep=True)
+        gas = result.context.get('gas')
+        if isinstance(gas, dict):
+            self._refresh_gas_costs(gas, result.period_start, result.period_end)
+        self._refresh_savings_costs(result.context.get('gas_savings'))
+        self._refresh_period_comparison_costs(result)
+        return result
 
     def refresh(self, report: Report) -> Report:
         gas = self.context(report.period_start, report.period_end,
@@ -333,7 +726,7 @@ class GasService:
         result.context['gas_savings'] = self.savings(report.period_end)
         if stale:
             result.context['gas_interpretation_stale'] = True
-        return result
+        return self.refresh_cost(result)
 
     def persist_refresh(self, original: Report, refreshed: Report) -> bool:
         with self.db.session() as session:
@@ -423,6 +816,29 @@ class GasService:
                 from dataclasses import replace
                 after_weather = replace(weather_interval(after[0]), independent_measurement=measured_after)
                 item = gas_comparison_context(baseline, training[-1], after_weather)
+                before_cost = self._cost_for_volume(
+                    prior[-1].start, prior[-1].end, training[-1].volume_m3, frozen_model,
+                )
+                after_cost = self._cost_for_volume(
+                    after[0].start, after[0].end, after_weather.volume_m3, frozen_model,
+                )
+                from zont_analyzer.application.gas_cost import subtract_costs, value_volume_by_period_tariffs
+
+                currencies_comparable = subtract_costs(after_cost, before_cost).get('status') == 'available'
+                normalized_cost = (
+                    value_volume_by_period_tariffs(item['normalized_savings']['m3'], after_cost)
+                    if currencies_comparable
+                    else self._cost_for_volume(after[0].start, after[0].end, None, None)
+                )
+                if not currencies_comparable:
+                    normalized_cost['limitations'] = ['currencies_not_comparable']
+                normalized_cost['effect_status'] = item['effect_status']
+                normalized_cost['evaluated_period'] = 'after'
+                normalized_cost['provenance'] = (
+                    'Денежный эквивалент нормализованного объёма в тарифных весах оцениваемого периода.'
+                )
+                item['actual_costs'] = {'before': before_cost, 'after': after_cost}
+                item['normalized_savings_cost'] = normalized_cost
             except ValueError as error:
                 result['reason'] = 'Недостаточно независимых сопоставимых интервалов для погодной модели.'
                 result['diagnostic'] = str(error)
@@ -448,6 +864,8 @@ class GasService:
             if other_actions:
                 item['confounders'].append('Между окнами есть другое ручное вмешательство.')
                 item['effect_status'] = 'confounded'
+            if isinstance(item.get('normalized_savings_cost'), dict):
+                item['normalized_savings_cost']['effect_status'] = item['effect_status']
             result['comparisons'].append(item)
         if result['comparisons']:
             result['status'] = 'available'

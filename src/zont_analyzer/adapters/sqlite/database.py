@@ -291,7 +291,10 @@ class Database:
 
     def initialize(self, backup_dir: Path | None = None) -> MigrationResult:
         # Register the additive owner-input tables before schema inspection.
-        from zont_analyzer.application import owner_context  # noqa: F401
+        from zont_analyzer.application import (  # noqa: F401
+            gas_tariffs,
+            owner_context,
+        )
 
         result = self._migrate(backup_dir or self.path.parent / "backups")
         with self.session() as session:

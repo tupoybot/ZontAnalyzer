@@ -31,6 +31,23 @@ OWNER_SCRIPT = r"""
     if (!response.ok) throw new Error(value.error || `Ошибка HTTP ${response.status}`);
     return value;
   }
+  function decimalInput(input, label, minimum = null, maximum = null, strictlyPositive = false) {
+    const raw = input.value.trim();
+    const normalized = raw.replace(',', '.');
+    const number = Number(normalized);
+    let error = '';
+    if (!/^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)$/.test(raw) || !Number.isFinite(number)) {
+      error = `${label}: введите число; десятичный разделитель — точка или запятая.`;
+    } else if (strictlyPositive && number <= 0) {
+      error = `${label}: значение должно быть больше нуля.`;
+    } else if ((minimum !== null && number < minimum) || (maximum !== null && number > maximum)) {
+      error = `${label}: значение вне допустимого диапазона${maximum === null ? ' (не меньше ' + minimum + ')' : ' (' + minimum + '…' + maximum + ')'}.`;
+    }
+    input.setCustomValidity(error);
+    if (error) { input.reportValidity(); input.focus(); throw new Error(error); }
+    return normalized;
+  }
+  form.querySelectorAll('input').forEach(input => input.addEventListener('input', () => input.setCustomValidity('')));
   function applyProfile(profile) {
     for (const node of fieldNodes) {
       const item = profile?.fields?.[node.dataset.field];
@@ -123,10 +140,13 @@ OWNER_SCRIPT = r"""
     return day ? {effective_from: day} : {};
   }
   async function saveProfile(fields, node) {
+    message(profileMessage, 'Сохраняем профиль…');
     const updated = await request('/equipment/' + encodeURIComponent(deviceId), {fields, ...effectivePayload()});
     profiles = profiles.map(p => p.device_id === deviceId ? updated : p);
     applyProfile(updated); changed.clear();
     message(profileMessage, node || 'Профиль сохранён.');
+    if (initial.daily) request('/reports/' + encodeURIComponent(reportId) + '/gas').then(applyGas)
+      .catch(error => message(gasMessage, error.message, true));
   }
   form.querySelector('[data-profile-save]').addEventListener('click', async () => {
     try {
@@ -147,12 +167,20 @@ OWNER_SCRIPT = r"""
           if (coordinates.every(i => !i.value)) value = null;
           else {
             if (coordinates.some(i => !i.value)) throw new Error('Укажите обе координаты или очистите обе.');
-            value = Object.fromEntries(coordinates.map(i => [i.dataset.coordinate, Number(i.value)]));
+            value = Object.fromEntries(coordinates.map(i => [i.dataset.coordinate, Number(decimalInput(
+              i, i.dataset.coordinate === 'latitude' ? 'Широта' : 'Долгота',
+              i.dataset.coordinate === 'latitude' ? -90 : -180, i.dataset.coordinate === 'latitude' ? 90 : 180
+            ))]));
           }
         } else if (state) value = state.value === 'unknown' ? null : state.value === 'yes';
-        else value = !input.value.trim() ? null : input.type === 'number' ? Number(input.value) : input.value.trim();
+        else value = !input.value.trim() ? null : input.dataset.ownerNumber === 'true'
+          ? Number(decimalInput(input, initial.field_labels[name] || name, null, null, true)) : input.value.trim();
         fields[name] = {value};
       }
+      const existing = profiles.find(p => p.device_id === deviceId)?.fields || {};
+      const gasMin = fields.gas_min_m3h?.value ?? (fields.gas_min_m3h ? null : existing.gas_min_m3h?.value);
+      const gasMax = fields.gas_max_m3h?.value ?? (fields.gas_max_m3h ? null : existing.gas_max_m3h?.value);
+      if (gasMin != null && gasMax != null && gasMin > gasMax) throw new Error('Минимальный расход газа не должен превышать максимальный.');
       await saveProfile(fields);
     } catch (error) { message(profileMessage, error.message, true); }
   });
@@ -162,10 +190,9 @@ OWNER_SCRIPT = r"""
   }));
   form.querySelector('[data-gas-save]')?.addEventListener('click', async () => {
     const input = form.querySelector('[name=gas-value]');
-    if (!input.value || !input.checkValidity()) { message(gasMessage, 'Введите неотрицательное показание.', true); return; }
     try {
       const saved = await request('/reports/' + encodeURIComponent(reportId) + '/gas', {
-        value_m3: input.value, reset: form.querySelector('[name=gas-reset]').checked,
+        value_m3: decimalInput(input, 'Показание газа', 0), reset: form.querySelector('[name=gas-reset]').checked,
       });
       applyGas(saved);
       form.querySelector('#gas-editor')?.removeAttribute('open');
@@ -191,7 +218,90 @@ OWNER_SCRIPT = r"""
     if (editor.open) form.querySelector('[name=gas-value]')?.focus();
   });
   selectProfiles(profiles); applyGas(initial.gas);
+  const tariffMessage = form.querySelector('[data-tariff-message]');
+  let tariffItems = [];
+  const tariffMonth = form.querySelector('[data-tariff-month]');
+  if (tariffMonth) {
+    const parts = new Intl.DateTimeFormat('en', {timeZone:initial.timezone || 'UTC', year:'numeric',month:'numeric'}).formatToParts(new Date());
+    const year = Number(parts.find(p => p.type === 'year').value);
+    const month = Number(parts.find(p => p.type === 'month').value);
+    tariffMonth.value = `${year + (month === 12 ? 1 : 0)}-${String(month % 12 + 1).padStart(2, '0')}`;
+  }
+  const monthLabel = item => item.effective_month || new Intl.DateTimeFormat('sv-SE', {
+    timeZone: initial.timezone || 'UTC', year:'numeric', month:'2-digit'
+  }).format(new Date(item.effective_from));
+  function applyTariffs(items) {
+    const history = form.querySelector('[data-tariff-history]');
+    const selector = form.querySelector('[data-tariff-correction]');
+    if (!history || !selector) return;
+    tariffItems = items;
+    history.replaceChildren(); selector.replaceChildren(new Option('Выберите тариф', ''));
+    const now = Date.now();
+    const current = items.filter(item => Date.parse(item.effective_from) <= now).at(-1);
+    const planned = items.filter(item => Date.parse(item.effective_from) > now);
+    const label = item => `${monthLabel(item)}: ${item.price.replace('.', ',')} ${item.currency}/м³`;
+    form.querySelector('[data-tariff-current]').textContent = current ? `Цена за м³ — ${current.price.replace('.', ',')} ${current.currency} (с ${monthLabel(current)})` : 'Цена за м³ не задана';
+    form.querySelector('[data-tariff-planned]').textContent = planned.map(item => `С ${label(item)}`).join('; ');
+    const selected = planned.find(item => monthLabel(item) === form.querySelector('[data-tariff-month]').value) || current;
+    if (selected) {
+      form.querySelector('[data-tariff-price]').value = selected.price.replace('.', ',');
+      form.querySelector('[data-tariff-currency]').value = selected.currency;
+    }
+    for (const item of items) {
+      const row = document.createElement('p'); row.textContent = label(item); history.append(row);
+      selector.append(new Option(label(item), item.id));
+      for (const correction of item.corrections || []) {
+        const audit = document.createElement('p');
+        audit.className = 'owner-help';
+        const before = correction.before;
+        const after = correction.after;
+        audit.textContent = `${before?.price ?? '—'} ${before?.currency ?? ''} → ${after?.price ?? '—'} ${after?.currency ?? ''}; ${correction.correction_reason || correction.reason || 'Изменение цены'}; ${correction.recorded_at || correction.created_at || ''}`;
+        history.append(audit);
+      }
+    }
+    if (!items.length) history.textContent = 'История пуста.';
+  }
+  async function saveTariff(correct) {
+    const buttons = [...form.querySelectorAll('[data-tariff-save],[data-tariff-correct]')];
+    buttons.forEach(button => button.disabled = true);
+    try {
+      const payload = {action: correct ? 'correct' : 'create',
+        price: decimalInput(form.querySelector('[data-tariff-price]'), 'Цена за м³', 0),
+        currency: form.querySelector('[data-tariff-currency]').value};
+      if (correct) {
+        payload.id = form.querySelector('[data-tariff-correction]').value;
+        payload.correction_reason = form.querySelector('[data-tariff-reason]').value;
+        if (!payload.id) throw new Error('Выберите тариф для исправления.');
+      } else {
+        payload.effective_month = form.querySelector('[data-tariff-month]').value;
+        if (!payload.effective_month) throw new Error('Укажите месяц начала действия.');
+      }
+      message(tariffMessage, 'Сохраняем тариф и обновляем стоимость…');
+      const saved = await request('/gas-tariffs', payload);
+      applyTariffs(saved.history || []);
+      message(tariffMessage, ['Тариф сохранён.', saved.publish_warning || 'Обновите страницу, чтобы увидеть стоимость.'].join(' '));
+    } catch (error) { message(tariffMessage, error.message, true); }
+    finally { buttons.forEach(button => button.disabled = false); }
+  }
+  form.querySelector('[data-tariff-save]')?.addEventListener('click', () => saveTariff(false));
+  form.querySelector('[data-tariff-correct]')?.addEventListener('click', () => saveTariff(true));
+  form.querySelector('[data-tariff-correction]')?.addEventListener('change', event => {
+    const item = tariffItems.find(item => item.id === event.target.value);
+    if (item) {
+      form.querySelector('[data-tariff-price]').value = item.price.replace('.', ',');
+      form.querySelector('[data-tariff-currency]').value = item.currency;
+    }
+  });
+  form.querySelector('[data-tariff-edit]')?.addEventListener('click', () => {
+    const editor = form.querySelector('#tariff-editor');
+    editor.open = !editor.open;
+    form.querySelector('[data-tariff-edit]').setAttribute('aria-expanded', String(editor.open));
+    if (editor.open) form.querySelector('[data-tariff-price]').focus();
+  });
+  applyTariffs(initial.tariffs || []);
   if (window.location.protocol === "file:") return;
+  if (initial.daily) request('/gas-tariffs').then(data => applyTariffs(data.history || []))
+    .catch(error => message(tariffMessage, error.message, true));
   request('/equipment').then(data => selectProfiles(data.profiles || []))
     .catch(error => message(profileMessage, error.message, true));
   if (initial.daily) request('/reports/' + encodeURIComponent(reportId) + '/gas').then(applyGas)
