@@ -205,3 +205,19 @@ def test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild(tm
     monkeypatch.setattr(chart_data, 'build_chart_data', forbidden)
     r.config.pilot.reports_dir = str(tmp_path/'publish')
     assert publish_reports(r)['reports'] == len(reports)
+
+
+def test_gas_context_holds_old_setpoint_until_explicit_unknown(tmp_path: Path):
+    import pytest
+
+    r = build_runtime(None, tmp_path)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    points = [TelemetryPoint(device_id='1', entity_id='circuit', source_type='z3k_heating_circuit',
+                             metric_key='target_temp', timestamp_utc=stamp, value_num=value)
+              for stamp, value in [(start-timedelta(days=3), 22.0),
+                                   (start+timedelta(hours=1), None),
+                                   (start+timedelta(hours=2), 24.0)]]
+    r.db.upsert_samples(points, roles={'circuit': 'target_temperature'})
+    window = GasService(r.db, r.config).window(start, start+timedelta(hours=3))
+    assert window['target_hours'] == pytest.approx(2)
+    assert window['target_degree_hours'] == pytest.approx(46)

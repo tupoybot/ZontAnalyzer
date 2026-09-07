@@ -27,6 +27,7 @@ from zont_analyzer.analytics.gas import (
     estimate_gas_purpose_split,
     integrate_exposure,
 )
+from zont_analyzer.analytics.series_semantics import is_setpoint_series
 from zont_analyzer.application.owner_context import GasReadingRow, OwnerContextStore
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import Report
@@ -153,9 +154,18 @@ class GasService:
                                                ('target_temperature', 'target_hours', 'target_degree_hours'),
                                                ('control_indoor_temperature', 'room_hours', 'room_degree_hours')]:
             source = self._unique(role)
-            samples = self.db.fetch_samples(int(source['id']), start - FRESHNESS, end + FRESHNESS) if source else []
+            held = bool(source and is_setpoint_series(source['source_type'], source['metric_key']))
+            samples: list[tuple[datetime, float | None]] = []
+            if source:
+                samples = self.db.fetch_numeric_observations(
+                    int(source['id']), start if held else start - FRESHNESS, end + FRESHNESS,
+                    include_previous=held,
+                )
             for index, (moment, value) in enumerate(samples):
-                right = min(end, moment + FRESHNESS, samples[index+1][0] if index+1 < len(samples) else end)
+                if value is None:
+                    continue
+                limit = end if held else moment + FRESHNESS
+                right = min(end, limit, samples[index+1][0] if index+1 < len(samples) else end)
                 left = max(start, moment)
                 if right <= left:
                     continue

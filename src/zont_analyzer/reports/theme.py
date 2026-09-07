@@ -95,7 +95,25 @@ color:var(--secondary)}
 font-size:25px;
 letter-spacing:-.5px;
 margin-top:5px}
-.kpi-uptime-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-column:1/-1}
+.kpi small{display:block;font-size:12px;color:var(--secondary);margin-top:7px}
+.kpi-gas-strip{grid-column:1/-1;display:grid;
+grid-template-columns:minmax(130px,180px) minmax(0,1fr);gap:18px;align-items:center}
+.gas-kpi-total span,.gas-distribution-label{display:block;font-size:12px;color:var(--secondary)}
+.gas-kpi-total strong{display:block;font-size:25px;letter-spacing:-.5px;margin-top:5px}
+.gas-kpi-total small{display:block;font-size:12px;color:var(--secondary);margin-top:7px}
+.gas-distribution-bar{display:flex;height:12px;overflow:hidden;border-radius:6px;
+background:var(--elevated);margin:8px 0}
+.gas-bar-heat{background:#b36332}.gas-bar-dhw{background:#227d8c}.gas-bar-unknown{background:#9aa8aa}
+.gas-distribution-legend{display:flex;gap:8px 20px;flex-wrap:wrap;font-size:12px;color:var(--secondary)}
+.gas-distribution-legend span{display:flex;align-items:center;gap:5px;min-width:0}
+.gas-distribution-legend b{color:var(--text);font-weight:600;white-space:nowrap}
+.gas-swatch{display:inline-block;width:8px;height:8px;border-radius:3px;flex:none}.gas-swatch-heat{background:#b36332}.gas-swatch-dhw{background:#227d8c}.gas-swatch-unknown{background:#9aa8aa}
+.gas-distribution-note:empty{display:none}.gas-distribution-unavailable{margin:0;color:var(--secondary);font-size:12px}
+.kpi-uptime-row{grid-column:1/-1;display:flex;gap:10px 24px;flex-wrap:wrap;
+padding:13px 18px;background:var(--elevated);border-bottom:0;font-size:12px;color:var(--secondary)}
+.kpi-uptime-row>span{display:flex;align-items:center;gap:5px}.kpi-uptime-row .debug-only{display:none}
+.uptime-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block}
+.uptime-offline .uptime-dot{background:var(--danger)}.uptime-unknown .uptime-dot{background:var(--muted)}
 .gas-period-card{display:block;
 gap:12px 24px;margin-top:18px;padding:22px;background:var(--surface);border:1px solid var(--border);border-radius:12px}
 .gas-period-card>summary{cursor:pointer;font-weight:650}.gas-period-card[open]>summary{margin-bottom:12px}
@@ -293,7 +311,8 @@ gap:18px}
 .actions{width:100%}
 .hero{padding:22px}
 h1{font-size:28px}
-.kpi-grid,.kpi-uptime-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.kpi-gas-strip{grid-template-columns:1fr;gap:10px}.kpi-uptime-row{gap:8px 18px}
 .chart-section,.thermal-system,.details-area{padding:18px}
 .reliability{flex-wrap:wrap;
 gap:12px;
