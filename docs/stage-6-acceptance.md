@@ -167,4 +167,25 @@ deployed-state.txt}`. Пакет переноса `release-artifacts.tar.gz`, SH
 Fixture содержит три разнесённых периода каждого типа. Chromium проверяет
 переходы в обе стороны, крайние даты, «Последний», пустую вкладку, desktop/mobile
 и root/legacy. 286 Python-тестов, Ruff/mypy, wheel/sdist и browser E2E прошли.
-Доказательства обновлённого release/deployment дополняются после публикации.
+Исправление: коммит `4265f41`, тег `release-6-20260907-nav`,
+[release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34089030885)
+и [branch CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34089028796) — success.
+Registry image `ghcr.io/tupoybot/zontanalyzer@sha256:755096f482c6df0b9e8f9b5fd972aa69d448952a0bb1473166a7275ec8529927`
+проверен локально: 143 публикации за 3.11 с, данные владельца сохранены,
+OCI revision совпал. HK `current` → `20260907-stage6-nav-4265f41`, worker healthy.
+Online backup перед обновлением:
+`/opt/zont-analyzer/data/backups/zont-analyzer-nav-20260907T060651Z.sqlite3`.
+На HK выполнялась только SQLite online-копия, без полного integrity scan.
+Первый цикл нового worker завершён `2026-09-07T06:08:15Z`, 143 публикации,
+`long_periods=[]`, LLM calls = 27. Хеш профиля, газа, экспериментов и всех 166
+feedback-решений до/после одинаков:
+`9cac23bb89d06b48eec63062af3cfb4524cfe09f414b8cd80e3f10aa27684972`.
+
+Отдельный Chromium smoke с devbox по живому сайту (мобильный viewport, только GET)
+проверил 9 страниц: неделя 24 ↔ 31 августа, месяц июль ↔ август, сезон лето ↔ осень.
+Стрелки выполняют реальные переходы, на последней публикации «Следующий» отключён.
+Временная Basic Auth учётка удалена, файл восстановлен побайтно.
+Логи: `/tmp/zont-stage6/nav-{browser,tests,registry-accept,deployment,live-smoke}.log`,
+`nav-metadata-{before,after}.json`, `nav-worker-after.json`, `nav-live-mobile.png`.
+Пользователь сказал «А так вроде норм», но сообщил дефект; явная окончательная
+приёмка этапа/разрешение merge ещё не получены.
