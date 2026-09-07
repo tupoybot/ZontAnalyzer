@@ -1,7 +1,7 @@
 # Этап 7 — ПЗА, PID и сезонные настройки
 
-Ветка `stage7` от принятого `main` (`89fe9c8`). Реализация проходит техническую
-приёмку; слияние и закрытие этапа ожидают явной приёмки владельца.
+Ветка `stage7` от принятого `main` (`89fe9c8`). Реализация и техническая
+приёмка завершены, результат развёрнут; слияние и закрытие этапа ожидают явной приёмки владельца.
 
 ## Контракты
 
@@ -50,8 +50,7 @@ Online backup HK: `/opt/zont-analyzer/data/backups/zont-stage7-20260907.sqlite3`
 Данные профиля, газа, экспериментов и все 166 прежних feedback-состояний сохранены.
 До реальной AI-проверки LLM calls = 27, новых запросов нет.
 
-Подробные результаты сборки образа, единственного реального AI-вызова и
-развёртывания будут дополнены после завершения проверок.
+Итоги единственного реального AI-вызова, сборки и развёртывания приведены ниже.
 
 ## Реальный AI и ручная проверка
 
@@ -100,3 +99,47 @@ Importer недельного отчёта, дневного context и одно
 Параллельный branch CI выявил гонку самого browser E2E: ожидание того же URL
 не ожидало перезагрузку после regeneration, и следующая запись профиля могла
 прерываться навигацией. Тест теперь явно ждёт событие загрузки; локально прошёл.
+
+## Финальный release и развёртывание
+
+Коммит приложения `c2b3d43ac813e1330b319075c0e867fd97bb9f91`, тег
+`release-7-20260907-r2`. [Release CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34099093831)
+и [branch CI с исправленным browser ожиданием](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34099808193)
+успешны. Позднейший коммит `17eb72f` меняет тест и документацию, код образа тот же.
+Проверен именно registry image:
+`ghcr.io/tupoybot/zontanalyzer@sha256:68581198fd2fbde8ce3aa246a2b9338aa7cadf2b51c8fe73f927d8419a532ddf`.
+Все 59 Python-файлов совпали побайтно с локально проверенными; OCI revision совпал.
+Registry-контейнер проверил integrity и опубликовал 143 отчёта за 7.23 с без сети.
+Данные владельца и прежние feedback сохранились. Артефакты:
+`/tmp/zont-stage7/{registry-accept.log,registry-owner-check.json,run-once.log}`.
+
+Перед переключением создан online backup
+`/opt/zont-analyzer/data/backups/zont-stage7-predeploy-20260907.sqlite3`.
+Он скачан в `/home/botkin/artifacts/zont-stage7-predeploy.sqlite3`, integrity
+проверен локально. Миграции не требуются (`e5a1f0c4d920`); при переключении
+переиспользован этот свежий проверенный backup, чтобы не повторять работу на HK.
+Importer двух готовых отчётов и одной AI-записи транзакционный: повторный импорт
+безопасен; конфликт второго отчёта откатывает первый и AI usage. На свежем backup
+optimistic guards совпали с рабочими canonical строками.
+
+HK `current` → `/opt/zont-analyzer/releases/20260907-stage7-c2b3d43`.
+Worker healthy, OOM=false; первый цикл завершён `2026-09-07T08:20:28Z`:
+`analyzed_dates=[]`, `published_dates=[]`, `long_periods=[]`, 143 публикации.
+Образ не собирался на HK, исторического анализа/backfill/тестовых наборов там нет.
+Сохранён owner/feedback hash
+`9cac23bb89d06b48eec63062af3cfb4524cfe09f414b8cd80e3f10aa27684972`;
+все 166 feedback-состояний, профиль, газ и эксперименты совпали до/после.
+LLM calls 27 → 28; импортирована единственная локальная запись, новых вызовов на HK нет.
+
+Chromium на devbox проверил 4 живые страницы (root, weekly, monthly, seasonal),
+форму вопроса, ограничение 500 символов, отсутствие горизонтального overflow на
+mobile и проверенный недельный текст. Дополнительно 200 у health/manifest/equipment,
+401 у анонимного root. Мутаций через UI не было; временная smoke-учётка удалена,
+Basic Auth восстановлен побайтно. nginx/Xray/Postfix/OpenDKIM/Docker — active.
+Артефакты: `deployment.log`, `metadata-{before,after}.json`, `deployed-state.log`,
+`live-smoke.log`, `live-weekly-mobile.png` в `/tmp/zont-stage7/`.
+
+Для личной приёмки: [недельный прогноз](https://za.tupoybot.ru/weekly/2026-08-31.html),
+[дневной отчёт и форма вопроса](https://za.tupoybot.ru/).
+Этап ожидает явной приёмки владельца. `stage7` остаётся открытым, merge и этап 8
+не выполнялись.
