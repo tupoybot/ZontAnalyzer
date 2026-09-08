@@ -187,6 +187,12 @@ class PilotService:
         self._cycle_started_at = datetime.now(UTC).replace(microsecond=0)
         self._write_status("starting")
         try:
+            from zont_analyzer.application.ai_maintenance import start_review
+
+            try:
+                start_review(self.runtime)
+            except Exception:
+                logger.exception("Could not start model maintenance; telemetry worker continues")
             recommendation_maintenance = self.runtime.maintain_recommendation_lifecycle(
                 now=self._cycle_started_at
             )
@@ -253,7 +259,7 @@ class PilotService:
                     # Historic catch-up is deterministic. The existing OpenAI policy is
                     # evaluated only on the first report for yesterday, never on every poll.
                     first_completed_day_report = selected == yesterday and previous_report is None
-                    report = analysis.analyze_daily(selected, use_ai=first_completed_day_report)
+                    report = self.runtime.analysis().analyze_daily(selected, use_ai=first_completed_day_report)
                     if (
                         previous_report is not None
                         and previous_report.ai_used
@@ -274,7 +280,7 @@ class PilotService:
                 raise WorkerCycleError("no report was produced for the latest completed local day")
             from zont_analyzer.application.period_schedule import run_period_schedule
 
-            period_results = run_period_schedule(self.runtime, analysis, today)
+            period_results = run_period_schedule(self.runtime, analysis, today, self.runtime.analysis)
             latest_path = self.output_dir / "latest.html"
             self._write_status(
                 "publishing",

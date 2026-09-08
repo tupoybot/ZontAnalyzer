@@ -42,6 +42,10 @@ def reuse_ai_interpretation(previous: Report, current: Report) -> Report:
         "reason": "daily facts recomputed without a duplicate OpenAI call",
         "facts_changed": changed,
     }
+    # A deterministic refresh reuses the same successful AI response.  Keep its
+    # original model and generation record instead of deriving today's setting.
+    if previous.context.get("ai_provenance") is not None:
+        context["ai_provenance"] = previous.context["ai_provenance"]
     if isinstance(context.get("gas"), dict):
         context["gas"] = {**context["gas"], "ai_stale": changed is not False}
     if changed is not False:

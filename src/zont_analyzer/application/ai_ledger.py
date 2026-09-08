@@ -104,6 +104,12 @@ class AILedger:
             }
         return None
 
+    def cached(self, key: str) -> dict[str, Any] | None:
+        """Return an existing reservation/result without creating a new one."""
+        with self._locked() as state:
+            entry = state["entries"].get(key)
+            return dict(entry) if isinstance(entry, dict) else None
+
     def finish(
         self,
         key: str,

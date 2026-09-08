@@ -294,7 +294,9 @@ class Database:
     def initialize(self, backup_dir: Path | None = None) -> MigrationResult:
         # Register the additive owner-input tables before schema inspection.
         from zont_analyzer.application import (  # noqa: F401
+            ai_settings,
             gas_tariffs,
+            model_review,
             owner_context,
         )
 
@@ -963,7 +965,17 @@ class Database:
     def report(self, report_id: str) -> Report | None:
         with self.session() as session:
             row = session.get(ReportRow, report_id)
-            return Report.model_validate_json(row.canonical_json) if row else None
+            return self._loaded_report(session, row) if row else None
+
+    @staticmethod
+    def _loaded_report(session: Session, row: ReportRow) -> Report:
+        from zont_analyzer.application.ai_provenance import recover_historical_provenance, report_provenance
+
+        report = Report.model_validate_json(row.canonical_json)
+        if report.ai_used and report_provenance(report) is None:
+            calls = session.scalars(select(LlmCallRow).where(LlmCallRow.report_id == report.id)).all()
+            return recover_historical_provenance(report, calls)
+        return report
 
     def upgrade_report_telemetry_revision(self, report_id: str, old_revision: str, new_revision: str) -> bool:
         """Atomically replace a report's legacy telemetry revision metadata.
@@ -1007,7 +1019,7 @@ class Database:
     def latest_report(self) -> Report | None:
         with self.session() as session:
             row = session.scalar(select(ReportRow).order_by(ReportRow.generated_at.desc()).limit(1))
-            return Report.model_validate_json(row.canonical_json) if row else None
+            return self._loaded_report(session, row) if row else None
 
     def prior_reports(self, before: datetime, *, limit: int = 7) -> list[Report]:
         """Bounded, non-overlapping daily history; never import a future period."""
@@ -1018,7 +1030,7 @@ class Database:
                 .order_by(ReportRow.period_end.desc(), ReportRow.id)
                 .limit(max(0, min(limit, 7)))
             )
-            return [Report.model_validate_json(row.canonical_json) for row in rows]
+            return [self._loaded_report(session, row) for row in rows]
 
     def completed_reports(self, now: datetime) -> list[Report]:
         """Existing calendar reports calculated after their entire period ended."""
@@ -1031,7 +1043,7 @@ class Database:
                 )
                 .order_by(ReportRow.generated_at, ReportRow.id)
             )
-            reports = [Report.model_validate_json(row.canonical_json) for row in rows]
+            reports = [self._loaded_report(session, row) for row in rows]
             return [report for report in reports if report.generated_at >= report.period_end]
 
     def recommendations(self) -> list[dict[str, Any]]:

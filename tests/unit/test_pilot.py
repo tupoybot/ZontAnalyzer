@@ -79,6 +79,10 @@ class FakeDatabase:
 
 @pytest.fixture(autouse=True)
 def fake_owner_store(monkeypatch):
+    # Model maintenance has real-DB HTTP/scheduling coverage in test_ai_http and
+    # test_model_review. This fixture isolates the telemetry scheduling fake.
+    monkeypatch.setattr("zont_analyzer.application.ai_maintenance.start_review", lambda *args: False)
+    monkeypatch.setattr("zont_analyzer.application.ai_maintenance.review_state", lambda *args: {})
     from zont_analyzer.application.gas_tariffs import GasTariffStore
     from zont_analyzer.application.owner_context import OwnerContextStore
 

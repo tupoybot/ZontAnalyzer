@@ -97,6 +97,9 @@ class AnalysisResult(DomainModel):
     predictions: list[Prediction] = Field(default_factory=list)
     unknowns: list[Unknown] = Field(default_factory=list)
     recommended_experiment: RecommendedExperiment | None = None
+    # Provider metadata belongs to the successful response, rather than to the
+    # active configuration.  The analysis service persists it with the report.
+    provenance: dict[str, Any] | None = None
 
 
 class Report(DomainModel):

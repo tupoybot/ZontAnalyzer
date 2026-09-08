@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
@@ -61,7 +62,9 @@ def scheduled_periods(analysis: AnalysisService, first: date, today: date) -> li
     return priorities + [item for item in ordered if item not in priorities]
 
 
-def schedule_signature(analysis: AnalysisService, period: Period, *, legacy_revision: bool = False) -> str:
+def schedule_signature(
+    analysis: AnalysisService, period: Period, *, legacy_revision: bool = False, legacy_ai_config: bool = False,
+) -> str:
     period_payload = period.model_dump(mode="json")
     previous = analysis.db.report(analysis.report_id_for(period.kind, period.start))
     old_period = previous.context.get("period", {}) if previous else {}
@@ -76,10 +79,17 @@ def schedule_signature(analysis: AnalysisService, period: Period, *, legacy_revi
                (period.start + timedelta(days=day)).astimezone(new_zone).utcoffset()
                for day in range(days + 1)):
             period_payload["timezone"] = old_period["timezone"]
+    config = analysis.config.model_dump(mode="json", include={"home", "preferences", "analysis", "dhw"})
+    if legacy_ai_config:
+        # The pre-9.2 scheduler included AI configuration. It is not an input to
+        # deterministic facts, and changing models must never regenerate history.
+        config["openai"] = analysis.config.openai.model_dump(mode="json", include={
+            "enabled", "daily_model", "review_model", "reasoning_effort", "prompt_version", "monthly_token_budget",
+        })
     payload = {
         "version": "stage6-v1",
         "period": period_payload,
-        "config": analysis.config.model_dump(mode="json", include={"home", "preferences", "analysis", "dhw", "openai"}),
+        "config": config,
         "boundaries": analysis.season_boundaries()[0].model_dump(),
         "data_revision": (
             analysis.db.legacy_period_data_revision(period.start, period.observed_end) if legacy_revision
@@ -101,7 +111,8 @@ def _already_current(previous: Report | None, period: Period, signature: str) ->
 
 
 def run_period_schedule(
-    runtime: Runtime, analysis: AnalysisService, today: date, *, limit: int = 1
+    runtime: Runtime, analysis: AnalysisService, today: date,
+    analysis_factory: Callable[[], AnalysisService] | None = None, *, limit: int = 1,
 ) -> list[dict[str, Any]]:
     from zont_analyzer.application.regeneration import _lock_path
 
@@ -116,7 +127,11 @@ def run_period_schedule(
         previous = runtime.db.report(identifier)
         if (
             previous is not None and not _already_current(previous, period, signature)
-            and previous.context.get("schedule_signature") == schedule_signature(analysis, period, legacy_revision=True)
+            and previous.context.get("schedule_signature") in {
+                schedule_signature(analysis, period, legacy_revision=True),
+                schedule_signature(analysis, period, legacy_ai_config=True),
+                schedule_signature(analysis, period, legacy_revision=True, legacy_ai_config=True),
+            }
         ):
             # Changing revision format must not purchase another AI interpretation.
             old_signature = previous.context["schedule_signature"]
@@ -136,7 +151,7 @@ def run_period_schedule(
             previous = runtime.db.report(identifier)
             if _already_current(previous, period, signature):
                 continue
-            report = analysis.analyze_period(period)
+            report = (analysis_factory() if analysis_factory else analysis).analyze_period(period)
             report.context["schedule_signature"] = signature
             from zont_analyzer.reports import render_text
 

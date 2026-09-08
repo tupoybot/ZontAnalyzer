@@ -43,11 +43,14 @@ class Runtime:
         return IngestionService(self.db, client, self.config)
 
     def analysis(self, *, no_ai: bool = False) -> AnalysisService:
+        from zont_analyzer.application.ai_settings import AISettingsStore
+
+        config = AISettingsStore(self.db, self.config).effective_config()
         analyst = None
         api_key = self.loaded.secrets.openai_api_key
-        if self.config.openai.enabled and not no_ai and api_key:
-            analyst = OpenAIAnalyst(api_key=api_key.get_secret_value(), config=self.config, db=self.db)
-        return AnalysisService(self.db, self.config, analyst)
+        if config.openai.enabled and not no_ai and api_key:
+            analyst = OpenAIAnalyst(api_key=api_key.get_secret_value(), config=config, db=self.db)
+        return AnalysisService(self.db, config, analyst)
 
     def maintain_recommendation_lifecycle(self, *, now: datetime | None = None) -> dict[str, Any]:
         """Expire unanswered recommendations and retain an auditable pre-change count."""

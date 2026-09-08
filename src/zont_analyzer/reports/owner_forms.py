@@ -9,6 +9,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.domain import Report
+from zont_analyzer.reports.ai_forms import render_ai_forms
 from zont_analyzer.reports.owner_script import OWNER_SCRIPT
 
 _FIELDS: tuple[tuple[str, str, str], ...] = (
@@ -229,6 +230,7 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
 <p class="owner-message" data-tariff-message role="status" aria-live="polite"></p></details></div>"""
     if gas_form:
         gas_form = gas_form.replace('  <details id="gas-editor"', tariff_form + '\n  <details id="gas-editor"', 1)
+    ai_forms = render_ai_forms(owner_data)
     return f"""<style>
 .owner-forms{{margin:1.2rem 0;font:inherit}}.owner-form{{padding:1rem;margin:.8rem 0;background:#f6f8fa;border-radius:.6rem}}
 .owner-form summary{{cursor:pointer;font-weight:700;font-size:1.1rem}}.owner-fields{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:1rem;margin-top:1rem}}
@@ -256,6 +258,6 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
 <details class="debug-only"><summary>Технические данные профиля</summary><pre data-profile-debug></pre></details>
 <label class="owner-effective">Дата применимости (необязательно, только профиль) <input type="date" data-effective-from></label>
 <div class="owner-actions"><button type="button" data-profile-save>Сохранить изменения</button></div><p class="owner-message" data-profile-message role="status" aria-live="polite"></p>
-</details>{gas_form}</section>
+</details>{gas_form}{ai_forms}</section>
 <script id="owner-initial" type="application/json">{initial_json}</script>
 <script>{OWNER_SCRIPT}</script>"""

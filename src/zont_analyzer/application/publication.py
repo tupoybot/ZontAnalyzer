@@ -147,6 +147,9 @@ def _publish_report_locked(
         "profiles": [owner_store.profile(str(device["id"])) for device in runtime.db.list_devices()],
         "tariffs": GasTariffStore(runtime.db).history(),
     }
+    from zont_analyzer.application.ai_maintenance import review_state
+
+    owner_data["ai_review"] = review_state(runtime)
     if report.kind == "daily" and runtime.db.report(report.id) is not None:
         owner_data["gas"] = owner_store.gas(report.id)
     has_other_exports = any(next((output_dir / kind).glob("*.html"), None) for kind in KINDS)
@@ -251,13 +254,16 @@ def _publish_locked(
 
     profiles = [owner_store.profile(str(device["id"])) for device in runtime.db.list_devices()]
     tariffs = GasTariffStore(runtime.db).history()
+    from zont_analyzer.application.ai_maintenance import review_state
+
+    ai_review = review_state(runtime)
 
     def owner_data(report: Report) -> dict[str, Any]:
         # An old retained export may have no matching DB report; it remains readable.
         gas = None
         if report.kind == "daily" and runtime.db.report(report.id) is not None:
             gas = owner_store.gas(report.id)
-        return {"profiles": profiles, "gas": gas, "tariffs": tariffs}
+        return {"profiles": profiles, "gas": gas, "tariffs": tariffs, "ai_review": ai_review}
 
     # Retain valid existing exports, including dates outside worker catch-up.
     reports: dict[str, Report] = {}
