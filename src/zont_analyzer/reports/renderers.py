@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from zont_analyzer.application.ai_provenance import details as ai_provenance_details
+from zont_analyzer.application.ai_provenance import label as ai_provenance_label
 from zont_analyzer.domain import Report
 from zont_analyzer.reports.experiment_forms import experiment_form
 from zont_analyzer.reports.presentation import (
@@ -872,8 +874,9 @@ def render_text(report: Report) -> str:
         f"ID отчёта: {report.id}",
         f"Период: {_local(report.period_start, report.timezone)} — {_local(report.period_end, report.timezone)}",
         timezone_note(report),
-        f"AI-интерпретация: {'да' if report.ai_used else 'нет'}",
+        ai_provenance_label(report),
     ]
+    lines.extend(ai_provenance_details(report))
     for metric in report.metrics:
         if metric.name in {"boiler_uptime_seconds", "zont_uptime_seconds"}:
             value, unit = _metric_display(metric)
@@ -1127,6 +1130,16 @@ def render_html(
     from zont_analyzer.reports.owner_forms import render_owner_forms
 
     owner_forms = render_owner_forms(report, owner_data)
+    review = (owner_data or {}).get("ai_review", {})
+    proposals = review.get("proposals", []) if isinstance(review, dict) else []
+    runs = review.get("runs", []) if isinstance(review, dict) else []
+    deprecations = (runs[0].get("result", {}).get("deprecations", [])
+                    if runs and not review.get("settings_changed") else [])
+    review_notice = (
+        '<p class="muted"><a href="#ai-settings">Текущая модель AI снимается с поддержки</a></p>'
+        if deprecations else '<p class="muted"><a href="#ai-settings">Есть предложение по моделям AI</a></p>'
+        if any(item.get("status") == "open" for item in proposals) else ""
+    )
     from zont_analyzer.reports.period_context import render_period_context
     from zont_analyzer.reports.regeneration import render_regeneration
 
@@ -1391,12 +1404,20 @@ def render_html(
     period_dates = period_date if report.kind == 'daily' else f'{period_date} - {period_end_date}'
     kind_label = {'daily': 'День', 'weekly': 'Неделя', 'monthly': 'Месяц',
                   'initial': 'Обзор', 'seasonal': 'Сезон'}[report.kind]
+    provenance_label = html.escape(ai_provenance_label(report))
+    provenance_details = ai_provenance_details(report)
+    provenance_html = (
+        f'<details class="ai-provenance"><summary>{provenance_label}</summary>'
+        + "".join(f"<p>{html.escape(item)}</p>" for item in provenance_details)
+        + "</details>"
+        if provenance_details else f'<span class="ai-provenance">{provenance_label}</span>'
+    )
     return f"""<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>{title}</title><style>{STYLE}</style></head><body data-feedback-api-base="{api_base}">
 <a class="skip-link" href="#report">К отчёту</a>
 <header><div class="header-line"><span class="brand">ZontAnalyzer<span class="secondary"> / отчёт</span></span>
-<span class="period-label">{period_dates} · {kind_label}</span>
+<div class="period-label">{period_dates} · {kind_label}</div>
 <div class="header-tools"><label>Debug <input id="debug-toggle" type="checkbox"></label>
 <button type="button" data-open-profile aria-label="Открыть профиль системы">⚙ Профиль системы</button></div></div>
 <nav class="archive-navigation" data-archive-navigation data-report-kind="{archive_kind}"
@@ -1419,6 +1440,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <p class="archive-status" role="status" aria-live="polite"></p><div class="archive-panel"></div></details>
 </div></nav>
 <p class="timezone-note">{html.escape(timezone_note(report))}</p>
+<div class="ai-report-note">{provenance_html}{review_notice}</div>
 <div class="debug-only"><p><strong>ID:</strong> <code>{html.escape(report.id)}</code></p>
 <p><strong>Период:</strong> {period}</p>
 <p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"};

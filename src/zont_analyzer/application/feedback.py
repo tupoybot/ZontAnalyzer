@@ -57,6 +57,61 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
     class Handler(BaseHTTPRequestHandler):
         server_version = "ZontAnalyzerFeedback/1"
 
+        def _ai_request(self, *, write: bool = False) -> bool:
+            from zont_analyzer.adapters.openai.model_catalog import OpenAIModelCatalog
+            from zont_analyzer.application.ai_maintenance import local_assessments, review_state, start_review
+            from zont_analyzer.application.ai_settings import AISettingsStore
+            from zont_analyzer.application.model_review import ModelReviewStore
+
+            path = urlsplit(self.path).path
+            if path not in {f"{api_path}/ai", f"{api_path}/ai/review"}:
+                return False
+            settings = AISettingsStore(runtime.db, runtime.config)
+            status = HTTPStatus.OK
+            try:
+                if write:
+                    if not self._same_origin_write():
+                        self._send_json(HTTPStatus.FORBIDDEN, {"error": "Откройте форму на сайте приложения."})
+                        return True
+                    if self.headers.get_content_type() != "application/json":
+                        raise ValueError("Тело запроса должно быть JSON.")
+                    size = int(self.headers.get("Content-Length", "0"))
+                    if not 1 <= size <= MAX_REQUEST_BYTES:
+                        raise ValueError("Некорректный размер запроса.")
+                    payload = json.loads(self.rfile.read(size))
+                    if not isinstance(payload, dict):
+                        raise ValueError("Ожидается JSON-объект.")
+                    if path.endswith("/review"):
+                        if set(payload) - {"action", "proposal_id", "expected_version"}:
+                            raise ValueError("Неизвестные поля действия.")
+                        if payload.get("action") == "check":
+                            start_review(runtime, manual=True)
+                            status = HTTPStatus.ACCEPTED
+                        else:
+                            if (not isinstance(payload.get("proposal_id"), str)
+                                    or type(payload.get("expected_version")) is not int
+                                    or payload.get("action") not in {"accept", "reject", "defer"}):
+                                raise ValueError("Укажите предложение, его версию и действие.")
+                            catalog = OpenAIModelCatalog()
+                            try:
+                                ModelReviewStore(runtime.db, catalog, assessments=local_assessments(runtime)).decide(
+                                    payload["proposal_id"], payload["action"], payload["expected_version"], settings,
+                                )
+                            finally:
+                                catalog.close()
+                    else:
+                        settings.save(payload)
+                value = settings.view()
+                value["review"] = review_state(runtime)
+            except KeyError:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Предложение не найдено."})
+                return True
+            except (ValueError, UnicodeDecodeError) as exc:
+                self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                return True
+            self._send_json(status, value)
+            return True
+
         def _owner_request(self, *, write: bool = False) -> bool:
             """Equipment and meter writes share the existing loopback/Basic Auth perimeter."""
             from zont_analyzer.application.owner_context import OwnerContextStore
@@ -180,6 +235,8 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
             )
 
         def do_GET(self) -> None:  # noqa: N802
+            if self._ai_request():
+                return
             if urlsplit(self.path).path == f"{api_path}/health":
                 self._send_json(HTTPStatus.OK, {"ok": True})
                 return
@@ -203,6 +260,8 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
             self._send_json(HTTPStatus.OK, _public_feedback(value))
 
         def do_PUT(self) -> None:  # noqa: N802
+            if self._ai_request(write=True):
+                return
             if self._owner_request(write=True):
                 return
             recommendation_id = self._recommendation_id()

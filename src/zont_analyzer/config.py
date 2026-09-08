@@ -123,6 +123,12 @@ class OpenAIConfig(StrictModel):
     daily_model: str = "gpt-5.6-luna"
     review_model: str = "gpt-5.6-terra"
     reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "medium"
+    daily_reasoning_effort: str | None = None
+    review_reasoning_effort: str | None = None
+    settings_version: str = "configuration"
+    review_enabled: bool = True
+    review_interval_days: int = Field(default=60, ge=1, le=365)
+    evaluation_results_file: str | None = None
     prompt_version: str = "analyst-v6"
     monthly_token_budget: int = Field(default=100_000, ge=0)
 

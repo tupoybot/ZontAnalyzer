@@ -12,11 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.application.ai_ledger import AILedger
+from zont_analyzer.application.ai_settings import MODEL_EFFORTS, validate_profile
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
 from zont_analyzer.domain.reasoning import Hypothesis, ObservedPattern, Prediction, RecommendedExperiment, Unknown
 
 PROMPT_VERSION = "analyst-v8.2"
+SCHEMA_VERSION = "analysis-result-v1"
 
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
 _PACKET_CONTENT_MAX_BYTES = 60 * 1024
@@ -263,10 +265,21 @@ class OpenAIAnalyst:
         digest = hashlib.sha256(encoded.encode()).hexdigest()
         kind = str(packet.get("period", {}).get("kind", "daily"))
         model = self.config.openai.daily_model if kind == "daily" else self.config.openai.review_model
+        reasoning_effort = (
+            getattr(self.config.openai, "daily_reasoning_effort", None)
+            if kind == "daily"
+            else getattr(self.config.openai, "review_reasoning_effort", None)
+        ) or self.config.openai.reasoning_effort
+        settings_version = str(getattr(self.config.openai, "settings_version", "config"))
+        # YAML can name a model added after this release.  Validate the published
+        # local compatibility table only when it knows that model.
+        if model in MODEL_EFFORTS:
+            validate_profile(model, reasoning_effort)
         config_fingerprint = {
             "model": model,
             "prompt_version": PROMPT_VERSION,
-            "reasoning_effort": self.config.openai.reasoning_effort,
+            "schema_version": SCHEMA_VERSION,
+            "reasoning_effort": reasoning_effort,
             "max_output_tokens": 6000,
         }
         request_key = hashlib.sha256(
@@ -284,16 +297,28 @@ class OpenAIAnalyst:
             + len(encoded.encode("utf-8"))
             + len(schema_encoded.encode("utf-8")),
         )
-        reservation = self.ledger.reserve(
-            request_key,
-            budget=self.config.openai.monthly_token_budget,
-            used=self.db.token_usage_this_month,
-            estimate=estimated_input + 6000,
-            billing_month=datetime.now(UTC).strftime("%Y-%m"),
-        )
+        # Pre-9.2 entries used this exact key shape.  Reuse them without
+        # inventing provenance; their report remains explicitly unknown.
+        legacy_request_key = hashlib.sha256(
+            json.dumps({"config": {
+                "model": model, "prompt_version": PROMPT_VERSION,
+                "reasoning_effort": reasoning_effort, "max_output_tokens": 6000,
+            }, "input": encoded}, ensure_ascii=False, sort_keys=True).encode()
+        ).hexdigest()
+        reservation = self.ledger.cached(request_key)
+        if reservation is None and legacy_request_key != request_key:
+            reservation = self.ledger.cached(legacy_request_key)
+        if reservation is None:
+            reservation = self.ledger.reserve(
+                request_key,
+                budget=self.config.openai.monthly_token_budget,
+                used=self.db.token_usage_this_month,
+                estimate=estimated_input + 6000,
+                billing_month=datetime.now(UTC).strftime("%Y-%m"),
+            )
         if reservation is not None:
             if reservation.get("status") == "success" and isinstance(reservation.get("result"), dict):
-                return _validate_structured_result(_StructuredAnalysisResult.model_validate(reservation["result"]))
+                return AnalysisResult.model_validate(reservation["result"])
             if reservation.get("status") == "failure":
                 detail = str(reservation.get("error") or "unknown failure")
                 raise RuntimeError(f"The same OpenAI request previously failed: {detail}")
@@ -305,7 +330,7 @@ class OpenAIAnalyst:
                 self.client = OpenAI(api_key=self._api_key, max_retries=0, timeout=120.0)
             response = self.client.responses.parse(
                 model=model,
-                reasoning={"effort": self.config.openai.reasoning_effort},
+                reasoning={"effort": reasoning_effort},
                 input=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": encoded},
@@ -323,8 +348,9 @@ class OpenAIAnalyst:
             usage = getattr(response, "usage", None)
             input_tokens, cached_tokens, output_tokens = _usage_values(usage)
             self.db.save_llm_call(
-                id=f"llm:{uuid.uuid4()}", report_id=None, input_hash=digest, prompt_version=PROMPT_VERSION,
-                model=model, reasoning_effort=self.config.openai.reasoning_effort,
+                id=f"llm:{uuid.uuid4()}", report_id=_report_id_from_packet(packet), input_hash=digest,
+                prompt_version=PROMPT_VERSION,
+                model=model, reasoning_effort=reasoning_effort,
                 input_tokens=input_tokens, cached_tokens=cached_tokens, output_tokens=output_tokens,
                 status="failure", request_id=getattr(response, "id", None),
             )
@@ -336,13 +362,24 @@ class OpenAIAnalyst:
                 error=str(exc),
                 charge_reserved=usage is None,
             )
-            raise
+            raise RuntimeError(_provider_error_message(exc)) from exc
 
         usage = getattr(response, "usage", None)
         input_tokens, cached_tokens, output_tokens = _usage_values(usage)
+        log_id = f"llm:{uuid.uuid4()}"
+        result = result.model_copy(update={"provenance": {
+            "requested_model": model,
+            "response_model": getattr(response, "model", None),
+            "parameters": {"reasoning_effort": reasoning_effort, "max_output_tokens": 6000},
+            "generated_at": datetime.now(UTC).isoformat(),
+            "prompt_version": PROMPT_VERSION,
+            "schema_version": SCHEMA_VERSION,
+            "settings_version": settings_version,
+            "ai_log_id": log_id,
+        }})
         self.db.save_llm_call(
-            id=f"llm:{uuid.uuid4()}", report_id=None, input_hash=digest, prompt_version=PROMPT_VERSION,
-            model=model, reasoning_effort=self.config.openai.reasoning_effort,
+            id=log_id, report_id=_report_id_from_packet(packet), input_hash=digest, prompt_version=PROMPT_VERSION,
+            model=model, reasoning_effort=reasoning_effort,
             input_tokens=input_tokens, cached_tokens=cached_tokens, output_tokens=output_tokens,
             status=status, request_id=getattr(response, "id", None),
         )
@@ -364,6 +401,37 @@ def _usage_values(usage: Any) -> tuple[int, int, int]:
         int(getattr(input_details, "cached_tokens", 0) or 0),
         int(getattr(usage, "output_tokens", 0) or 0),
     )
+
+
+def _report_id_from_packet(packet: dict[str, Any]) -> str | None:
+    period = packet.get("period")
+    if not isinstance(period, dict):
+        return None
+    start, kind = period.get("start"), period.get("kind")
+    if not isinstance(start, str) or not isinstance(kind, str):
+        return None
+    try:
+        value = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        if value.tzinfo is None:
+            return None
+        return f"report:{kind}:{int(value.timestamp())}:report-v2"
+    except ValueError:
+        return None
+
+
+def _provider_error_message(exc: Exception) -> str:
+    """Give the owner an actionable error without selecting another model."""
+    status = getattr(exc, "status_code", None)
+    name = type(exc).__name__
+    if status in {401, 403} or name in {"AuthenticationError", "PermissionDeniedError"}:
+        return "OpenAI отклонил доступ к выбранной модели или ключу. Прежний отчёт сохранён."
+    if status == 404 or name == "NotFoundError":
+        return "Выбранная модель недоступна в Responses API. Прежний отчёт сохранён."
+    if status == 400 or name == "BadRequestError":
+        return "Выбранная модель или глубина рассуждения несовместимы с форматом AI-анализа. Прежний отчёт сохранён."
+    # Preserve validation/transport detail for diagnostics; access and contract
+    # failures above are the cases requiring owner-facing translation.
+    return str(exc)
 
 
 def analysis_packet(

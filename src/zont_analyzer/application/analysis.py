@@ -805,6 +805,8 @@ class AnalysisService:
                     )
                 )
                 reasoning = reasoning_payload(result)
+                if result.provenance is not None:
+                    control_context["ai_provenance"] = result.provenance
                 summary = result.summary
                 recommendations = result.recommendations[: self.config.analysis.max_recommendations_per_report]
                 # Model-supplied IDs cannot collide with recommendations from other periods.
@@ -837,6 +839,8 @@ class AnalysisService:
                         "source_generated_at": original_ai_generated_at(previous_report),
                         "reason": "AI refresh failed validation; retained last valid interpretation",
                     }
+                    if previous_report.context.get("ai_provenance") is not None:
+                        control_context["ai_provenance"] = previous_report.context["ai_provenance"]
                 else:
                     summary = f"{summary} AI-интерпретация недоступна; сохранён локальный детерминированный отчёт."
         report = Report(
