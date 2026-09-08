@@ -1,17 +1,17 @@
 # ZontAnalyzer — веха Cloud-first
 
-Статус: параллельный трек разработки  
-Ветка: `architecture/cloud-first-serverless`  
-База: `fix/dhw-analysis-feedback`  
+Статус: архитектурный backlog и план ограниченных cloud-first работ<br>
+Ветка: `architecture/cloud-first-serverless`<br>
+База: `main`<br>
 Архитектура: [`cloud_first_architecture.md`](./cloud_first_architecture.md)
 
-Эта веха намеренно отделена от основного product implementation plan. Работа над семантикой датчиков, reasoning ПЗА и AI может идти параллельно. Cloud-track сначала строит инфраструктурные границы и развёртываемый скелет, а миграция выполняется только когда оба трека готовы.
+Основной product/analytics функционал уже реализован в `main`. Этот документ не предполагает отдельной параллельной разработки датчиков, ПЗА или AI: M0–M8 описывают возможные будущие cloud-first работы, небольшие исправления и критерии их проверки. Наличие пункта в плане не означает, что соответствующая реализация уже начата или обязательна.
 
-## M0 — Зафиксировать архитектурные контракты, но не замораживать продуктовую разработку
+## M0 — Зафиксировать архитектурные контракты без изменения product baseline
 
 ### Цель
 
-Определить границы, на которые может опираться cloud-track, не заставляя аналитическую ветку прекращать развитие.
+Определить границы, на которые могут опираться небольшие cloud-first изменения, не меняя стабильный product baseline в `main`.
 
 ### Работа
 
@@ -25,7 +25,7 @@
 ### Критерии приёмки
 
 - Cloud-код можно разрабатывать без импорта Yandex-specific SDK в domain/analytics modules.
-- Не появляется требований, блокирующих текущую feature-разработку sensors/PZA/AI.
+- Не появляется требований, блокирующих текущий runtime и последующие небольшие исправления в `main`.
 - Существующий SQLite/local runtime остаётся рабочим и зелёным.
 - Архитектурное изменение, описанное в `cloud_first_architecture.md`, просмотрено и считается целевым для этой ветки.
 
@@ -228,16 +228,16 @@ Cloud Functions разрешены для изолированных мален�
 
 ---
 
-## M8 — Параллельный запуск и миграция
+## M8 — Контролируемая миграция и интеграция (опционально)
 
 ### Цель
 
-Переносить production/pilot state только после того, как cloud path достаточно убедительно доказал эквивалентность.
+Рассматривать перенос production/pilot state только как отдельное решение после того, как cloud path достаточно убедительно доказал эквивалентность. Если миграция не нужна, результатом cloud-first трека остаётся проверенный архитектурный backlog и набор совместимых изменений для `main`.
 
 ### Работа
 
 - Export/import или backfill канонической telemetry/state в YDB.
-- Где возможно, параллельно запускать legacy SQLite/VPS и cloud path.
+- Где необходимо, временно сравнивать legacy SQLite/VPS и cloud path.
 - Сравнивать sync coverage, факты отчётов, DHW/reliability outputs и содержимое AI packet.
 - Проверить failure/recovery behavior: network loss, ошибки ZONT API, перекрывающиеся timer invocations, OpenAI failure, transient storage errors.
 - Определить процедуры rollback и финального cutover.
@@ -252,27 +252,23 @@ Cloud Functions разрешены для изолированных мален�
 
 ---
 
-## Интеграция с основным треком разработки
+## Интеграция и GitHub Issues
 
-Cloud-track не должен держать product intelligence в заложниках.
+Cloud-first не должен создавать второй постоянно живущий product-трек.
 
-Рекомендуемая модель работы:
+Текущий статус ведётся в [GitHub Issue #1](https://github.com/tupoybot/ZontAnalyzer/issues/1). Issue #1 — родительский tracker для cloud-first направления; в нём хранятся активная веха, блокеры, ссылки на PR/коммиты и evidence. Для отдельной вехи можно открыть дочерний Issue, когда работа действительно начинается. Архитектура, устойчивые контракты и критерии приёмки остаются в этих versioned-документах.
 
 ```text
-fix/dhw-analysis-feedback (или преемник)
-  -> sensors / humidity / return / AI evidence / PZA reasoning
-
 architecture/cloud-first-serverless
-  -> IaC / runtime / YDB adapter / publishers / observability
-
-периодическая интеграция
-  -> merge/rebase текущего product baseline в cloud-ветку
-  -> поддерживать совместимость storage/runtime seams
-  -> мигрировать только когда обе стороны готовы
+  -> небольшие cloud fixes / spikes / документация
+  -> проверка и фиксация evidence
+  -> PR/merge в main или точечный cherry-pick
 ```
 
-Cloud-ветка должна периодически подтягивать product changes. Product feature branches не должны забирать наполовину готовый YDB/Terraform-код, кроме случаев, когда intentionally shared interface change действительно нужен обоим трекам.
+Регулярный rebase выполняется только при необходимости обновить базу от `main`. Product feature branches не обязаны ждать cloud-first работ, а cloud-first ветка не обязана содержать отдельную реализацию всей продуктовой функциональности.
 
 ## Definition of milestone complete
 
-Веха считается завершённой, когда ZontAnalyzer способен работать без постоянного VPS как scheduled Serverless Container, сохранять каноническое состояние в выбранном managed backend, публиковать отчёты в Object Storage, иметь достаточную observability, сохранять read-only/safety/AI epistemic contracts и пройти контролируемую миграцию с существующего deployment.
+Полная cloud-first веха считается завершённой только после отдельного решения о переходе на managed/serverless deployment и выполнения всех обязательных для этого решения критериев: scheduled Serverless Container без постоянного VPS, каноническое состояние в выбранном managed backend, публикация отчётов в Object Storage, достаточная observability, сохранение read-only/safety/AI epistemic contracts и контролируемая миграция с существующего deployment.
+
+Если такой переход не выбран, отдельные документы, spikes и небольшие исправления считаются завершёнными по своим критериям и могут быть слиты в `main` или перенесены через `git cherry-pick`; это не означает завершения всей cloud-first вехи.
