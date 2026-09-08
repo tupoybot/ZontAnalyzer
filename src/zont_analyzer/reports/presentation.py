@@ -13,11 +13,45 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from zont_analyzer.application.gas_cost import format_cost
 from zont_analyzer.domain import Report
 
+from .timezone_labels import timezone_label
 from .wording import normalize_report_for_display
 
 
 def esc(value: Any) -> str:
     return html.escape(str(value))
+
+
+def ai_freshness_notice(report: Report) -> str:
+    """Explain automatic reuse separately from a changed gas calculation."""
+    gas = report.context.get("gas")
+    pilot_reuse = report.context.get("pilot_ai_reuse")
+    failed_reuse = report.context.get("ai_interpretation_reuse")
+    reuse = pilot_reuse or failed_reuse
+    if not (reuse or isinstance(gas, dict) and gas.get("ai_stale")):
+        return ""
+    source = reuse.get("source_generated_at") if isinstance(reuse, dict) else None
+    stamp = ""
+    if isinstance(source, str):
+        try:
+            moment = datetime.fromisoformat(source)
+            if moment.tzinfo is not None:
+                stamp = " от " + moment.astimezone(ZoneInfo(report.timezone)).strftime("%d.%m.%Y %H:%M")
+        except (ValueError, ZoneInfoNotFoundError):
+            pass
+    if pilot_reuse:
+        return (
+            "Показатели автоматически пересчитаны после обновления данных. "
+            f"Пояснение AI{stamp} сохранено без повторного запроса и может не учитывать эти изменения."
+        )
+    if failed_reuse:
+        return (
+            "Обновить пояснение AI не удалось. "
+            f"Сохранён предыдущий ответ{stamp}; он может не учитывать текущие показатели."
+        )
+    return (
+        "Расчёт расхода газа обновлён после AI-ответа. "
+        "Пояснение AI может не учитывать текущие значения расхода."
+    )
 
 
 def number(value: Any, unit: str = "") -> str:
@@ -323,11 +357,8 @@ def gas_period_card(report: Report) -> str:
             "boiler": "котёл", "shared_meter": "приближение по общему счётчику",
             "whole_meter": "весь счётчик",
         }.get(str(scope), str(scope)))
-    stale = (
-        '<p class="gas-period-stale" role="status"><strong>Объяснение AI устарело:</strong> '
-        'оно предшествует обновлённому расчёту расхода.</p>'
-        if gas.get("ai_stale") is True else ""
-    )
+    notice = ai_freshness_notice(report)
+    stale = f'<p class="gas-period-stale" role="status">{esc(notice)}</p>' if notice else ""
     intervals = gas.get("measured_intervals")
     interval_rows = []
     if isinstance(intervals, list):
@@ -686,7 +717,9 @@ def timezone_note(report: Report) -> str:
     )
     zone = ZoneInfo(report.timezone)
     offset = report.period_start.astimezone(zone).strftime("%z")
-    label = f"UTC{offset[:3]}:{offset[3:]}"
+    label = timezone_label(report.timezone)
+    if label == report.timezone:
+        label = f"{label} · UTC{offset[:3]}:{offset[3:]}"
     if isinstance(provenance, dict) and provenance.get("timezone"):
         current = ZoneInfo(provenance["timezone"])
         same = all(moment.astimezone(zone).utcoffset() == moment.astimezone(current).utcoffset()
@@ -695,7 +728,7 @@ def timezone_note(report: Report) -> str:
             return f"Часовой пояс: {label} · настройки ZONT"
         if same and provenance.get("source") == "configuration_fallback":
             return f"Часовой пояс: {label} · резервная настройка ZontAnalyzer; пояс ZONT не определён"
-    return f"Часовой пояс: {label} · сохранён при расчёте отчёта ({report.timezone})"
+    return f"Часовой пояс: {label} · сохранён при расчёте отчёта"
 
 
 LEGACY_DUTY_METRICS = {"burner_duty_cycle_pct", "dhw_burner_duty_cycle_pct"}

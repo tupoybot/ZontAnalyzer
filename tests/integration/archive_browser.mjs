@@ -130,7 +130,7 @@ try {
   assert.match(await page.locator('.gas-reliability').textContent(), /надёжность/i);
   assert.match(await gasCard.textContent(), /Индекс надёжности/);
   assert.match(await gasCard.textContent(), /Модель: gas-browser-1/);
-  assert.match(await gasCard.textContent(), /Объяснение AI устарело/);
+  assert.match(await gasCard.textContent(), /Расчёт расхода газа обновлён после AI-ответа/);
   for (const [kind, date, marker] of [["weekly", "2026-07-27", "измерено"],
     ["monthly", "2026-07-01", "экстраполировано"], ["seasonal", "2026-09-01", "оценено"]]) {
     await page.goto(`${baseURL}/${kind}/${date}.html`, {waitUntil: "networkidle"});

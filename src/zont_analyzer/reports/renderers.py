@@ -13,6 +13,7 @@ from zont_analyzer.reports.presentation import (
     LEGACY_DUTY_METRICS,
     _gas_value,
     _volume_and_cost,
+    ai_freshness_notice,
     burner_usage_rows,
     gas_cost_comparisons_text,
     gas_cost_lines,
@@ -905,8 +906,8 @@ def render_text(report: Report) -> str:
                      f"{_gas_value(gas.get('upper_m3'), 'м³')}; покрытие {_gas_value(gas.get('coverage_pct'), '%')}")
         lines.append(f"Версия расчёта: {gas.get('model_version', 'неизвестна')}")
         lines.append(str(gas.get('source', '')))
-        if gas.get('ai_stale'):
-            lines.append("AI-интерпретация историческая и не учитывает текущую версию расчёта газа.")
+        if notice := ai_freshness_notice(report):
+            lines.append(notice)
         lines.extend(gas_cost_lines(gas.get("cost")))
         intervals = gas.get("measured_intervals")
         if isinstance(intervals, list):
@@ -1215,10 +1216,8 @@ def render_html(
     question_html = (
         "<p><strong>Вопрос владельца:</strong> " + html.escape(str(question)) + "</p>" if question else ""
     )
-    gas_context = report.context.get("gas")
-    if isinstance(gas_context, dict) and gas_context.get("ai_stale") is True:
-        question_html = ('<p class="gas-period-stale" role="status"><strong>AI-интерпретация историческая:</strong> '
-                         'расчёт расхода газа обновлён после этого AI-ответа.</p>' + question_html)
+    if notice := ai_freshness_notice(report):
+        question_html = f'<p class="gas-period-stale" role="status">{html.escape(notice)}</p>' + question_html
 
     def html_list(values: list[str], empty: str) -> str:
         return "<ul>" + "".join(f"<li>{html.escape(value)}</li>" for value in values) + "</ul>" if values else empty

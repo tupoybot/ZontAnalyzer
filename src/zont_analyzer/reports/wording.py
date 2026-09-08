@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from zont_analyzer.domain import Report
+from zont_analyzer.reports.language import normalize_user_text
 
 _REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^явная неисправность регулирования не подтверждена$", re.I),
@@ -25,6 +26,7 @@ _REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
 
 def normalize_text(value: str) -> str:
     """Rewrite only complete known assertions; retain warnings and uncertainty."""
+    value = normalize_user_text(value)
     # A legacy summary joins a positive observation to an unsupported diagnostic
     # negative. Keep the observation verbatim and remove only that redundant clause.
     value = re.sub(

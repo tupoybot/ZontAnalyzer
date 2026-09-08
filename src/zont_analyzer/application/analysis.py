@@ -40,7 +40,7 @@ from zont_analyzer.analytics.evidence import (
 )
 from zont_analyzer.analytics.series_semantics import is_setpoint_series
 from zont_analyzer.application.ingestion import _object_names, heating_circuit_sensor_links
-from zont_analyzer.application.reasoning_context import reasoning_context, reasoning_payload
+from zont_analyzer.application.reasoning_context import original_ai_generated_at, reasoning_context, reasoning_payload
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue, QualityResult, Recommendation, Report
 from zont_analyzer.domain.periods import Period, SeasonBoundaries, midnight, season_period
@@ -829,7 +829,7 @@ class AnalysisService:
                     control_context["gas"]["ai_stale"] = True
                     control_context["gas_interpretation_stale"] = True
                     control_context["ai_interpretation_reuse"] = {
-                        "source_generated_at": previous_report.generated_at.isoformat(),
+                        "source_generated_at": original_ai_generated_at(previous_report),
                         "reason": "AI refresh failed validation; retained last valid interpretation",
                     }
                 else:

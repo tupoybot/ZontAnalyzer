@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.application.analysis import CALCULATION_VERSION
-from zont_analyzer.application.reasoning_context import reasoning_payload
+from zont_analyzer.application.reasoning_context import original_ai_generated_at, reasoning_payload
 from zont_analyzer.domain import Report
 from zont_analyzer.reports import render_html, render_text
 from zont_analyzer.reports.chart_data import cached_chart_data
@@ -245,7 +245,7 @@ class PilotService:
                             context["gas"] = {**context["gas"], "ai_stale": True}
                             context["gas_interpretation_stale"] = True
                         context["pilot_ai_reuse"] = {
-                            "source_generated_at": previous_report.generated_at.isoformat(),
+                            "source_generated_at": original_ai_generated_at(previous_report),
                             "reason": "daily facts recomputed without a duplicate OpenAI call",
                         }
                         report = report.model_copy(

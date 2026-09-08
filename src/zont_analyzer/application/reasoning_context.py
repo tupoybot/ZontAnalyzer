@@ -8,6 +8,15 @@ from zont_analyzer.domain import DetectedEvent, Report
 REASONING_FIELDS = ("observed_patterns", "hypotheses", "predictions", "unknowns", "recommended_experiment")
 
 
+def original_ai_generated_at(report: Report) -> str:
+    """Keep the original AI timestamp across repeated deterministic refreshes."""
+    for key in ("pilot_ai_reuse", "ai_interpretation_reuse"):
+        reuse = report.context.get(key)
+        if isinstance(reuse, dict) and isinstance(reuse.get("source_generated_at"), str):
+            return str(reuse["source_generated_at"])
+    return report.generated_at.isoformat()
+
+
 def reasoning_payload(value: Any) -> dict[str, Any]:
     return {name: getattr(value, name) for name in REASONING_FIELDS}
 

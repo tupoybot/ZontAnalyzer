@@ -39,7 +39,7 @@ def test_unknown_gas_does_not_look_like_zero_and_stale_ai_is_visible() -> None:
     page = render_html(_report({"status": "unknown", "volume_m3": 0, "ai_stale": True, "flame_hours": 0}))
     assert "Расход газа за период" in page
     assert "Нет данных" in page
-    assert "Объяснение AI устарело" in page
+    assert "Расчёт расхода газа обновлён после AI-ответа" in page
     assert "0,0 ч" in page
 
 
