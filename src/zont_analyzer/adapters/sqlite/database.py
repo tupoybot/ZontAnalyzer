@@ -972,6 +972,13 @@ class Database:
         pilot adopt an equivalent precise revision without regenerating report
         metrics, recommendations, publication state, or AI output.
         """
+        return self._upgrade_report_marker(report_id, ("input_revision", "telemetry"), old_revision, new_revision)
+
+    def upgrade_report_schedule_signature(self, report_id: str, old_signature: str, new_signature: str) -> bool:
+        """Adopt an equivalent calendar signature without re-running its AI."""
+        return self._upgrade_report_marker(report_id, ("schedule_signature",), old_signature, new_signature)
+
+    def _upgrade_report_marker(self, report_id: str, path: tuple[str, ...], old_value: str, new_value: str) -> bool:
         with self.session() as session:
             row = session.get(ReportRow, report_id)
             if row is None:
@@ -981,10 +988,13 @@ class Database:
             context = payload.get("context")
             if not isinstance(context, dict):
                 return False
-            input_revision = context.get("input_revision")
-            if not isinstance(input_revision, dict) or input_revision.get("telemetry") != old_revision:
+            for key in path[:-1]:
+                context = context.get(key)
+                if not isinstance(context, dict):
+                    return False
+            if context.get(path[-1]) != old_value:
                 return False
-            input_revision["telemetry"] = new_revision
+            context[path[-1]] = new_value
             replacement_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
             result = session.execute(
                 update(ReportRow)
