@@ -1,17 +1,17 @@
 # ZontAnalyzer — веха Cloud-first
 
-Статус: архитектурный backlog и план ограниченных cloud-first работ<br>
+Статус: план полной cloud-first переработки инфраструктуры<br>
 Ветка: `architecture/cloud-first-serverless`<br>
 База: `main`<br>
 Архитектура: [`cloud_first_architecture.md`](./cloud_first_architecture.md)
 
-Основной product/analytics функционал уже реализован в `main`. Этот документ не предполагает отдельной параллельной разработки датчиков, ПЗА или AI: M0–M8 описывают возможные будущие cloud-first работы, небольшие исправления и критерии их проверки. Наличие пункта в плане не означает, что соответствующая реализация уже начата или обязательна.
+Основной product/analytics функционал уже реализован в `main`. M0–M8 описывают отдельный инфраструктурный трек: IaC, cloud runtime, managed storage, публикацию, observability и cutover. Старая VPS/SQLite-инфраструктура сохраняется рабочей до завершения и приёмки миграции; функциональные изменения продукта в этот трек не входят и переносятся в `main` merge-ом или точечным `git cherry-pick`.
 
 ## M0 — Зафиксировать архитектурные контракты без изменения product baseline
 
 ### Цель
 
-Определить границы, на которые могут опираться небольшие cloud-first изменения, не меняя стабильный product baseline в `main`.
+Определить границы, на которые будет опираться полная cloud-инфраструктура, не меняя стабильный product baseline в `main`.
 
 ### Работа
 
@@ -25,7 +25,7 @@
 ### Критерии приёмки
 
 - Cloud-код можно разрабатывать без импорта Yandex-specific SDK в domain/analytics modules.
-- Не появляется требований, блокирующих текущий runtime и последующие небольшие исправления в `main`.
+- Не появляется требований, блокирующих текущий runtime и отдельную разработку функциональных исправлений в `main`.
 - Существующий SQLite/local runtime остаётся рабочим и зелёным.
 - Архитектурное изменение, описанное в `cloud_first_architecture.md`, просмотрено и считается целевым для этой ветки.
 
@@ -228,16 +228,16 @@ Cloud Functions разрешены для изолированных мален�
 
 ---
 
-## M8 — Контролируемая миграция и интеграция (опционально)
+## M8 — Контролируемый cutover и интеграция в `main`
 
 ### Цель
 
-Рассматривать перенос production/pilot state только как отдельное решение после того, как cloud path достаточно убедительно доказал эквивалентность. Если миграция не нужна, результатом cloud-first трека остаётся проверенный архитектурный backlog и набор совместимых изменений для `main`.
+Перенести production/pilot state после того, как cloud path достаточно убедительно доказал эквивалентность. До завершения этой вехи legacy VPS/SQLite deployment остаётся рабочим rollback path; после успешного cutover инфраструктурный результат вливается в `main` через принятый PR.
 
 ### Работа
 
 - Export/import или backfill канонической telemetry/state в YDB.
-- Где необходимо, временно сравнивать legacy SQLite/VPS и cloud path.
+- Параллельно, но временно сравнивать legacy SQLite/VPS и cloud path до cutover.
 - Сравнивать sync coverage, факты отчётов, DHW/reliability outputs и содержимое AI packet.
 - Проверить failure/recovery behavior: network loss, ошибки ZONT API, перекрывающиеся timer invocations, OpenAI failure, transient storage errors.
 - Определить процедуры rollback и финального cutover.
@@ -252,23 +252,27 @@ Cloud Functions разрешены для изолированных мален�
 
 ---
 
-## Интеграция и GitHub Issues
+## Интеграция и приёмка через GitHub Issues/PR
 
-Cloud-first не должен создавать второй постоянно живущий product-трек.
+Cloud-first является отдельным инфраструктурным треком и не должен дублировать product/analytics разработку.
 
 Текущий статус ведётся в [GitHub Issue #1](https://github.com/tupoybot/ZontAnalyzer/issues/1). Issue #1 — родительский tracker для cloud-first направления; в нём хранятся активная веха, блокеры, ссылки на PR/коммиты и evidence. Для отдельной вехи можно открыть дочерний Issue, когда работа действительно начинается. Архитектура, устойчивые контракты и критерии приёмки остаются в этих versioned-документах.
 
+Каждая веха оформляется отдельным GitHub Pull Request. В PR фиксируются scope, проверки, evidence, совместимость с legacy deployment и rollback/cutover impact. Веха считается принятой только после явного нажатия владельцем **Merge pull request** в интерфейсе GitHub. Текстовое подтверждение в чате, комментарий в Issue, зелёный CI, deployment или smoke не заменяют это действие.
+
 ```text
 architecture/cloud-first-serverless
-  -> небольшие cloud fixes / spikes / документация
+  -> полная cloud infrastructure: IaC / runtime / storage / publisher / observability
+  -> legacy VPS/SQLite остаётся до cutover
   -> проверка и фиксация evidence
-  -> PR/merge в main или точечный cherry-pick
+  -> PR и явный Merge pull request владельцем
+
+product fixes
+  -> отдельный PR в main или точечный cherry-pick
 ```
 
-Регулярный rebase выполняется только при необходимости обновить базу от `main`. Product feature branches не обязаны ждать cloud-first работ, а cloud-first ветка не обязана содержать отдельную реализацию всей продуктовой функциональности.
+После merge PR Issue обновляется ссылкой на принятый PR и evidence, а следующий этап начинается от принятого состояния. Регулярный rebase выполняется только при необходимости обновить базу от `main`; product branches не обязаны ждать cloud-first работ.
 
 ## Definition of milestone complete
 
-Полная cloud-first веха считается завершённой только после отдельного решения о переходе на managed/serverless deployment и выполнения всех обязательных для этого решения критериев: scheduled Serverless Container без постоянного VPS, каноническое состояние в выбранном managed backend, публикация отчётов в Object Storage, достаточная observability, сохранение read-only/safety/AI epistemic contracts и контролируемая миграция с существующего deployment.
-
-Если такой переход не выбран, отдельные документы, spikes и небольшие исправления считаются завершёнными по своим критериям и могут быть слиты в `main` или перенесены через `git cherry-pick`; это не означает завершения всей cloud-first вехи.
+Полная cloud-first веха считается завершённой только после выполнения всех обязательных критериев: scheduled Serverless Container без постоянного VPS, каноническое состояние в выбранном managed backend, публикация отчётов в Object Storage, достаточная observability, сохранение read-only/safety/AI epistemic contracts и контролируемый cutover с legacy deployment. Каждая отдельная M0–M8 принимается через явный merge соответствующего GitHub PR.
