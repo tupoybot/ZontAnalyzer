@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.application.analysis import CALCULATION_VERSION
-from zont_analyzer.application.reasoning_context import original_ai_generated_at, reasoning_payload
+from zont_analyzer.application.reasoning_context import reuse_ai_interpretation
 from zont_analyzer.domain import Report
 from zont_analyzer.reports import render_html, render_text
 from zont_analyzer.reports.chart_data import cached_chart_data
@@ -223,10 +223,30 @@ class PilotService:
                 import hashlib
 
                 empty_revision = hashlib.sha256(b"[]").hexdigest()
+                stored_revision = report.context.get("input_revision", {}).get("telemetry") if report else None
+                unchanged_import = (
+                    report is not None and stored_revision is None and data_revision != empty_revision
+                    and self.runtime.db.legacy_period_data_revision(start, _end) == empty_revision
+                )
+                if (
+                    report is not None and isinstance(stored_revision, str)
+                    and not stored_revision.startswith("telemetry-v2:")
+                    and stored_revision != data_revision
+                    and stored_revision == self.runtime.db.legacy_period_data_revision(start, _end)
+                ):
+                    # A format upgrade is not new evidence. Adopt exact boundaries
+                    # only while the legacy markers still match the saved report.
+                    if not self.runtime.db.upgrade_report_telemetry_revision(report.id, stored_revision, data_revision):
+                        raise WorkerCycleError("Report changed during telemetry revision upgrade; retry next cycle")
+                    report = report.model_copy(deep=True)
+                    report.context["input_revision"]["telemetry"] = data_revision
+                    previous_report = report
                 must_analyze = report is None or (
                     selected == yesterday and report.context.get("calculation_version") != CALCULATION_VERSION
                 ) or (
-                    data_revision != empty_revision and report is not None
+                    report is not None and not unchanged_import and (data_revision != empty_revision or (
+                        isinstance(stored_revision, str) and stored_revision.startswith("telemetry-v2:")
+                    ))
                     and report.context.get("input_revision", {}).get("telemetry") != data_revision
                 )
                 if must_analyze:
@@ -240,23 +260,7 @@ class PilotService:
                         and previous_report.context.get("recommendation_policy")
                         == report.context.get("recommendation_policy")
                     ):
-                        context = dict(report.context)
-                        if isinstance(context.get("gas"), dict):
-                            context["gas"] = {**context["gas"], "ai_stale": True}
-                            context["gas_interpretation_stale"] = True
-                        context["pilot_ai_reuse"] = {
-                            "source_generated_at": original_ai_generated_at(previous_report),
-                            "reason": "daily facts recomputed without a duplicate OpenAI call",
-                        }
-                        report = report.model_copy(
-                            update={
-                                "context": context,
-                                "summary": previous_report.summary,
-                                "recommendations": previous_report.recommendations,
-                                "ai_used": True,
-                                **reasoning_payload(previous_report),
-                            }
-                        )
+                        report = reuse_ai_interpretation(previous_report, report)
                         self.runtime.db.save_report(report, render_text(report))
                     analyzed_dates.append(selected.isoformat())
                 if report is None:

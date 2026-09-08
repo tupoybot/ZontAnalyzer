@@ -299,3 +299,61 @@ def test_current_calculation_version_does_not_recompute_yesterday_on_each_poll(t
     PilotService(runtime).run_cycle()  # type: ignore[arg-type]
     PilotService(runtime).run_cycle()  # type: ignore[arg-type]
     assert runtime.analysis_service.calls == []
+
+
+def test_pilot_adopts_exact_revision_without_reanalysis_or_changing_ai(tmp_path: Path, monkeypatch) -> None:
+    from zont_analyzer.application.analysis import CALCULATION_VERSION
+
+    runtime = FakeRuntime(tmp_path, {'complete': True})
+    yesterday = _report(date(2026, 8, 3))
+    yesterday.ai_used = True
+    yesterday.context.update(calculation_version=CALCULATION_VERSION,
+                             input_revision={'telemetry': 'legacy-marker'})
+    runtime.db.reports[yesterday.id] = yesterday
+    monkeypatch.setattr(PilotService, '_completed_dates', lambda *args: [date(2026, 8, 3)])
+    monkeypatch.setattr(runtime.db, 'period_data_revision', lambda *args: 'telemetry-v2:exact')
+    monkeypatch.setattr(runtime.db, 'legacy_period_data_revision', lambda *args: 'legacy-marker', raising=False)
+    upgrades = []
+    monkeypatch.setattr(runtime.db, 'upgrade_report_telemetry_revision',
+                        lambda *args: upgrades.append(args) or True, raising=False)
+    result = PilotService(runtime).run_cycle()
+    assert result['analyzed_dates'] == []
+    assert runtime.analysis_service.calls == []
+    assert upgrades == [(yesterday.id, 'legacy-marker', 'telemetry-v2:exact')]
+    assert yesterday.ai_used and not yesterday.context.get('pilot_ai_reuse')
+
+
+@pytest.mark.parametrize('revision_changed', [False, True])
+def test_pilot_reanalyzes_only_changed_exact_period(tmp_path: Path, monkeypatch, revision_changed: bool) -> None:
+    from zont_analyzer.application.analysis import CALCULATION_VERSION
+
+    runtime = FakeRuntime(tmp_path, {'complete': True, 'samples': 10})
+    yesterday = _report(date(2026, 8, 3))
+    yesterday.ai_used = True
+    yesterday.context.update(calculation_version=CALCULATION_VERSION,
+                             input_revision={'telemetry': 'telemetry-v2:original'})
+    runtime.db.reports[yesterday.id] = yesterday
+    monkeypatch.setattr(PilotService, '_completed_dates', lambda *args: [date(2026, 8, 3)])
+    # Includes the all-samples-deleted case, formerly ignored as an empty revision.
+    import hashlib
+    revision = hashlib.sha256(b'[]').hexdigest() if revision_changed else 'telemetry-v2:original'
+    monkeypatch.setattr(runtime.db, 'period_data_revision', lambda *args: revision)
+    result = PilotService(runtime).run_cycle()
+    assert result['analyzed_dates'] == (['2026-08-03'] if revision_changed else [])
+    assert runtime.analysis_service.calls == ([(date(2026, 8, 3), False)] if revision_changed else [])
+
+
+def test_imported_history_without_revisions_is_not_reanalyzed_on_upgrade(tmp_path: Path, monkeypatch) -> None:
+    import hashlib
+
+    from zont_analyzer.application.analysis import CALCULATION_VERSION
+
+    runtime = FakeRuntime(tmp_path, {'complete': True})
+    yesterday = _report(date(2026, 8, 3))
+    yesterday.context['calculation_version'] = CALCULATION_VERSION
+    runtime.db.reports[yesterday.id] = yesterday
+    monkeypatch.setattr(PilotService, '_completed_dates', lambda *args: [date(2026, 8, 3)])
+    monkeypatch.setattr(runtime.db, 'period_data_revision', lambda *args: 'telemetry-v2:imported')
+    monkeypatch.setattr(runtime.db, 'legacy_period_data_revision',
+                        lambda *args: hashlib.sha256(b'[]').hexdigest(), raising=False)
+    assert PilotService(runtime).run_cycle()['analyzed_dates'] == []

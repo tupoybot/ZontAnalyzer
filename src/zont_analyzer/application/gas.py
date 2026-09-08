@@ -706,7 +706,10 @@ class GasService:
         gas = self.context(report.period_start, report.period_end,
                            complete=report.context.get('period', {}).get('complete', True))
         old = report.context.get('gas')
-        reused = bool(report.context.get('pilot_ai_reuse') or report.context.get('ai_interpretation_reuse'))
+        pilot_reuse = report.context.get('pilot_ai_reuse')
+        reused = bool(report.context.get('ai_interpretation_reuse') or (
+            pilot_reuse and pilot_reuse.get('facts_changed') is not False
+        ))
         stale = report.ai_used and (reused or not old or old.get('model_version') != gas['model_version'] or
                                    old.get('volume_m3') != gas['volume_m3'] or
                                    old.get('burner_usage_version') != gas['burner_usage_version'] or

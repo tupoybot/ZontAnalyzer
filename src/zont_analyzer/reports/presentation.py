@@ -25,6 +25,8 @@ def ai_freshness_notice(report: Report) -> str:
     """Explain automatic reuse separately from a changed gas calculation."""
     gas = report.context.get("gas")
     pilot_reuse = report.context.get("pilot_ai_reuse")
+    if isinstance(pilot_reuse, dict) and pilot_reuse.get("facts_changed") is False:
+        pilot_reuse = None
     failed_reuse = report.context.get("ai_interpretation_reuse")
     reuse = pilot_reuse or failed_reuse
     if not (reuse or isinstance(gas, dict) and gas.get("ai_stale")):
@@ -39,6 +41,11 @@ def ai_freshness_notice(report: Report) -> str:
         except (ValueError, ZoneInfoNotFoundError):
             pass
     if pilot_reuse:
+        if not isinstance(pilot_reuse, dict) or pilot_reuse.get("facts_changed") is not True:
+            return (
+                f"Пояснение AI{stamp} сохранено после автоматического пересчёта. "
+                "Для этого старого отчёта сравнение с исходными данными AI недоступно."
+            )
         return (
             "Показатели автоматически пересчитаны после обновления данных. "
             f"Пояснение AI{stamp} сохранено без повторного запроса и может не учитывать эти изменения."
