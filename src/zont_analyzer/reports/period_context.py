@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.domain import Report
+from zont_analyzer.reports.timezone_labels import timezone_label
 
 _LIMITS = {
     "second_intervention_between_windows": "Есть другое вмешательство: изолированный эффект не определён",
@@ -63,7 +64,7 @@ def period_text(report: Report) -> list[str]:
     result: list[str] = []
     if period:
         result.append(f"Границы периода: {_local(period['start'], report.timezone)} — "
-                      f"{_local(period['end'], report.timezone)}; часовой пояс {report.timezone}.")
+                      f"{_local(period['end'], report.timezone)}; часовой пояс {timezone_label(report.timezone)}.")
         if not period.get("complete", True):
             result.append("Промежуточный результат: обработаны данные до "
                           f"{_local(period['observed_end'], report.timezone)}.")

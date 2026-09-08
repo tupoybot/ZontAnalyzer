@@ -5,6 +5,14 @@ import pytest
 from zont_analyzer.reports.timezone_labels import timezone_label
 
 
+def test_experiment_form_labels_timezone_without_changing_stored_identifier() -> None:
+    from zont_analyzer.reports.experiment_forms import experiment_form
+
+    form = experiment_form({}, timezone="Etc/GMT-4")
+    assert "Время: UTC+4 — Самара, Удмуртия" in form
+    assert 'data-timezone="Etc/GMT-4"' in form
+
+
 @pytest.mark.parametrize(
     ("zone", "expected"),
     [
