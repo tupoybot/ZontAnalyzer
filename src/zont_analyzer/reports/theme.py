@@ -49,6 +49,12 @@ gap:20px;
 align-items:center}
 .period-label{font-size:18px;
 font-weight:600}
+.timezone-note{margin-bottom:4px}
+.ai-report-note{color:var(--muted);font-size:13px;margin-bottom:12px;overflow-wrap:anywhere}
+.ai-report-note .ai-provenance{margin:0}
+.ai-report-note summary{font-size:inherit;font-weight:400;padding:2px 0;min-height:24px}
+.ai-report-note p{margin:4px 0}
+.ai-report-note a{color:inherit}
 .eyebrow{font-size:12px;
 letter-spacing:1.8px;
 color:var(--accent);

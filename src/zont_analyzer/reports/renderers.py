@@ -1417,7 +1417,7 @@ def render_html(
 <title>{title}</title><style>{STYLE}</style></head><body data-feedback-api-base="{api_base}">
 <a class="skip-link" href="#report">К отчёту</a>
 <header><div class="header-line"><span class="brand">ZontAnalyzer<span class="secondary"> / отчёт</span></span>
-<div class="period-label">{period_dates} · {kind_label} · {provenance_html}{review_notice}</div>
+<div class="period-label">{period_dates} · {kind_label}</div>
 <div class="header-tools"><label>Debug <input id="debug-toggle" type="checkbox"></label>
 <button type="button" data-open-profile aria-label="Открыть профиль системы">⚙ Профиль системы</button></div></div>
 <nav class="archive-navigation" data-archive-navigation data-report-kind="{archive_kind}"
@@ -1440,6 +1440,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <p class="archive-status" role="status" aria-live="polite"></p><div class="archive-panel"></div></details>
 </div></nav>
 <p class="timezone-note">{html.escape(timezone_note(report))}</p>
+<div class="ai-report-note">{provenance_html}{review_notice}</div>
 <div class="debug-only"><p><strong>ID:</strong> <code>{html.escape(report.id)}</code></p>
 <p><strong>Период:</strong> {period}</p>
 <p><strong>AI-интерпретация:</strong> {"да" if report.ai_used else "нет"};
