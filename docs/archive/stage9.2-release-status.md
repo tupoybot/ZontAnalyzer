@@ -64,3 +64,28 @@ HTML/JSON/текст проверены: сведения об отоплени�
 `no-ai/daily.{html,json,txt}`, `hk-deploy.log`, `hk-smoke.log`,
 `hk-metadata-{before,after}.json`, `hk-browser-result.json`, `hk-final.log`,
 скриншоты `ui/hk-*.png` и `ui/app-*.png`.
+
+## Уточнение шапки по замечанию владельца
+
+AI-подпись перенесена из строки даты под часовой пояс: приглушённый цвет,
+13 px, обычное начертание. Подробности остаются свёрнутыми и раскрываются нажатием.
+
+- Код `a1fcde7ebda7380e9c6d9d06c7063f882697a7b0`, тег
+  `release-9.2-20260908-subtle-ai-header`;
+  [CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34215849031) прошёл.
+- Образ `ghcr.io/tupoybot/zontanalyzer@sha256:d3a15a262a59b61dba40efcdaad0e9bba16647becfc73ca85d20a048e46c8a15`;
+  checkout `/opt/zont-analyzer/releases/20260908-stage9.2-ai-header-a1fcde7`.
+- Локально: 593 теста, Ruff, mypy, wheel/sdist, сборка и Compose config прошли.
+  Опубликованный образ проверен на локальной копии: 146 отчётов, 144 публикации,
+  без новых анализов и изменения пользовательских данных, 25,01 с.
+- Перед deployment создан проверенный online backup
+  `/opt/zont-analyzer/data/backups/zont-analyzer-20260908T103902459989Z.sqlite3`.
+  Миграция не требовалась. Worker завершил цикл `ok` в 10:42:08 UTC,
+  контейнер healthy, перезапусков 0; nginx/Xray активны.
+- Desktop/mobile 1358/390 на живом сайте: строка ниже часового пояса,
+  шрифт 13 px/400, раскрытие работает; ошибок JavaScript и переполнения нет.
+  Пользовательские данные и имевшиеся перед обновлением 32 записи AI-журнала
+  сохранены. Генерации AI для этой правки не выполнялись.
+- Временный доступ удалён; после краткого отказа SSH очистка успешно повторена,
+  исходный хеш auth-файла подтверждён. Артефакты и скриншоты:
+  `/home/botkin/artifacts/stage9.2/header/`.
