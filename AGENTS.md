@@ -33,6 +33,9 @@ For substantial implementation tasks:
 
 ## Local Python work runs in Docker
 
+- Before every merge, run `docker system prune -af` locally. Do not run this
+  cleanup on HK; owner acceptance is still required before merging.
+
 - Build packages, run Python checks/tests and prepare data inside Docker containers.
 - Do not install Python dependencies into the host Python or use the host `.venv`
   for this workflow. Use `deploy/check-local.sh`; see `docs/container-development.md`.

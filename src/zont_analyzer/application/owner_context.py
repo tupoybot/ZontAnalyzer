@@ -142,6 +142,10 @@ def _decimal(value: Any) -> Decimal:
     if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
         raise ValueError("gas reading must be a finite non-negative decimal")
     text = str(value).strip()
+    if isinstance(value, str):
+        if "," in text and "." in text:
+            raise ValueError("gas reading must use one decimal separator")
+        text = text.replace(",", ".")
     if not text or len(text) > 64:
         raise ValueError("gas reading has an unsupported precision or magnitude")
     try:
@@ -155,6 +159,26 @@ def _decimal(value: Any) -> Decimal:
     if len(digits) > _MAX_GAS_DIGITS or numeric_exponent < -_MAX_GAS_DECIMALS or result.adjusted() >= _MAX_GAS_DIGITS:
         raise ValueError("gas reading has an unsupported precision or magnitude")
     return result
+
+
+def _finite_number(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+        raise ValueError("value must be a finite number")
+    text = str(value).strip()
+    if isinstance(value, str):
+        if "," in text and "." in text:
+            raise ValueError("value must use one decimal separator")
+        text = text.replace(",", ".")
+    if not text or len(text) > 64:
+        raise ValueError("value must be a finite number")
+    try:
+        decimal = Decimal(text)
+        number = float(decimal)
+    except (InvalidOperation, OverflowError, ValueError) as exc:
+        raise ValueError("value must be a finite number") from exc
+    if not decimal.is_finite() or not math.isfinite(number):
+        raise ValueError("value must be a finite number")
+    return number
 
 
 def _decimal_text(value: Decimal) -> str:
@@ -275,23 +299,22 @@ class OwnerContextStore:
                 raise ValueError(f"{field} must be true, false, or null")
             return value
         if field in _NUMBER_FIELDS:
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(float(value))
-                or value <= 0
-            ):
+            try:
+                number = _finite_number(value)
+            except ValueError as exc:
+                raise ValueError(f"{field} must be a positive finite number") from exc
+            if number <= 0:
                 raise ValueError(f"{field} must be a positive finite number")
-            return value
+            return number
         if field == "coordinates":
             if not isinstance(value, dict) or set(value) != {"latitude", "longitude"}:
                 raise ValueError("coordinates must be an object with latitude and longitude")
-            latitude, longitude = value["latitude"], value["longitude"]
-            if any(
-                isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(float(item))
-                for item in (latitude, longitude)
-            ):
-                raise ValueError("coordinates latitude and longitude must be finite numbers")
+            try:
+                latitude = _finite_number(value["latitude"])
+                longitude = _finite_number(value["longitude"])
+            except ValueError as exc:
+                raise ValueError("coordinates latitude and longitude must be finite numbers") from exc
+
             if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
                 raise ValueError("coordinates are outside geographic bounds")
             return {"latitude": latitude, "longitude": longitude}
@@ -507,7 +530,7 @@ class OwnerContextStore:
                 "reason": "Не удалось однозначно выбрать профиль оборудования для проверки расхода.",
                 "warnings": [],
             }
-        as_of = datetime.fromtimestamp(report.period_start, UTC)
+        as_of = utcnow()
         profile = self._profile_state(self._ordered_profile_rows(session, devices[0].id, as_of))
         values = {
             key: profile.get(key, {}).get("value")

@@ -75,3 +75,50 @@ def test_owner_api_rejects_spoofed_source_scope_dates_and_cross_origin(owner_ser
     assert client.put("/equipment/missing", json={"fields": {}}).status_code == 404
     assert client.get("/reports/missing/gas").status_code == 404
     assert client.get(url).json()["reading"] is None
+
+
+def test_monthly_tariff_api_audit_and_selective_publication(owner_server, monkeypatch) -> None:
+    from zont_analyzer.application.gas import GasService
+
+    runtime, reports, client = owner_server
+    refreshed = []
+    original = GasService.refresh_cost
+
+    def track(self, report):
+        refreshed.append(report.id)
+        return original(self, report)
+
+    monkeypatch.setattr(GasService, "refresh_cost", track)
+    feedback = runtime.db.recommendation_feedback()
+    assert client.get("/gas-tariffs").json() == {"history": []}
+    payload = {"price": "8,01", "currency": "RUB", "effective_month": "2026-08"}
+    saved = client.put("/gas-tariffs", json=payload)
+    assert saved.status_code == 200, saved.text
+    assert set(refreshed) == {report.id for report in reports}
+    first = saved.json()["tariff"]
+    refreshed.clear()
+    assert client.put("/gas-tariffs", json=payload).json()["idempotent"] is True
+    assert refreshed == []
+    future = client.put("/gas-tariffs", json={**payload, "effective_month": "2026-09", "price": "9"})
+    assert future.status_code == 200, future.text
+    assert refreshed == []
+    corrected = client.put("/gas-tariffs", json={"action": "correct", "id": first["id"],
+        "price": "8.02", "currency": "RUB", "correction_reason": "Опечатка"})
+    assert corrected.status_code == 200, corrected.text
+    assert set(refreshed) == {report.id for report in reports}
+    history = client.get("/gas-tariffs").json()["history"]
+    assert len(history) == 2 and history[0]["price"] == "8.02"
+    assert runtime.db.recommendation_feedback() == feedback
+    assert runtime.db.token_usage_this_month() == 0
+
+
+def test_tariff_api_rejects_invalid_values_and_cross_origin(owner_server) -> None:
+    _, _, client = owner_server
+    payload = {"price": "8,01", "currency": "RUB", "effective_month": "2026-08"}
+    for fields in ({"price": "-1"}, {"price": "NaN"}, {"currency": "XXX"},
+                   {"effective_month": "2026-08-15"}, {"scope": "other"},
+                   {"effective_from": "2026-08-15T00:00:00Z"}):
+        assert client.put("/gas-tariffs", json={**payload, **fields}).status_code == 422
+    assert client.put("/gas-tariffs", json=payload,
+                      headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    assert client.get("/gas-tariffs").json() == {"history": []}

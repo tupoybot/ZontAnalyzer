@@ -61,7 +61,7 @@ def scheduled_periods(analysis: AnalysisService, first: date, today: date) -> li
     return priorities + [item for item in ordered if item not in priorities]
 
 
-def schedule_signature(analysis: AnalysisService, period: Period) -> str:
+def schedule_signature(analysis: AnalysisService, period: Period, *, legacy_revision: bool = False) -> str:
     period_payload = period.model_dump(mode="json")
     previous = analysis.db.report(analysis.report_id_for(period.kind, period.start))
     old_period = previous.context.get("period", {}) if previous else {}
@@ -81,7 +81,10 @@ def schedule_signature(analysis: AnalysisService, period: Period) -> str:
         "period": period_payload,
         "config": analysis.config.model_dump(mode="json", include={"home", "preferences", "analysis", "dhw", "openai"}),
         "boundaries": analysis.season_boundaries()[0].model_dump(),
-        "data_revision": analysis.db.period_data_revision(period.start, period.observed_end),
+        "data_revision": (
+            analysis.db.legacy_period_data_revision(period.start, period.observed_end) if legacy_revision
+            else analysis.db.period_data_revision(period.start, period.observed_end)
+        ),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -111,6 +114,16 @@ def run_period_schedule(
         identifier = analysis.report_id_for(period.kind, period.start)
         signature = schedule_signature(analysis, period)
         previous = runtime.db.report(identifier)
+        if (
+            previous is not None and not _already_current(previous, period, signature)
+            and previous.context.get("schedule_signature") == schedule_signature(analysis, period, legacy_revision=True)
+        ):
+            # Changing revision format must not purchase another AI interpretation.
+            old_signature = previous.context["schedule_signature"]
+            if not runtime.db.upgrade_report_schedule_signature(identifier, old_signature, signature):
+                raise RuntimeError("Report changed during schedule signature upgrade; retry next cycle")
+            previous = previous.model_copy(deep=True)
+            previous.context["schedule_signature"] = signature
         if _already_current(previous, period, signature):
             continue
         path = _lock_path(runtime, identifier)

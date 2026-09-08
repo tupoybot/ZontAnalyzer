@@ -221,3 +221,17 @@ def test_gas_context_holds_old_setpoint_until_explicit_unknown(tmp_path: Path):
     window = GasService(r.db, r.config).window(start, start+timedelta(hours=3))
     assert window['target_hours'] == pytest.approx(2)
     assert window['target_degree_hours'] == pytest.approx(46)
+
+
+def test_publication_does_not_make_unchanged_ai_reuse_stale(tmp_path: Path):
+    from zont_analyzer.application.reasoning_context import reuse_ai_interpretation
+
+    runtime, _store, reports = history(tmp_path)
+    original = reports[-1].model_copy(deep=True)
+    original.ai_used = True
+    original.context['gas']['ai_stale'] = False
+    retained = reuse_ai_interpretation(original, original.model_copy(deep=True))
+    assert retained.context['pilot_ai_reuse']['facts_changed'] is False
+    refreshed = GasService(runtime.db, runtime.config).refresh(retained)
+    assert refreshed.context['gas']['ai_stale'] is False
+    assert not refreshed.context.get('gas_interpretation_stale')

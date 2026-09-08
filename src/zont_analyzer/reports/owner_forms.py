@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import html
 import json
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from zont_analyzer.domain import Report
 from zont_analyzer.reports.owner_script import OWNER_SCRIPT
@@ -62,6 +64,8 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
         "device_id": device_id,
         "report_id": report.id,
         "daily": report.kind == "daily",
+        "tariffs": owner_data.get("tariffs", []),
+        "timezone": report.timezone,
     }
     initial_json = _json_for_script(initial)
     fields: list[str] = []
@@ -103,8 +107,8 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
             longitude = html.escape(str(coordinates.get("longitude", "")), quote=True)
             fields.append(
                 f'<div class="owner-field" data-field="{name}"><details><summary>Уточнить координаты вручную</summary>'
-                f'<label>Широта<input type="number" class="owner-coordinate" data-coordinate="latitude" step="any" value="{latitude}"></label>'
-                f'<label>Долгота<input type="number" class="owner-coordinate" data-coordinate="longitude" step="any" value="{longitude}"></label></details>'
+                f'<label>Широта<input type="text" inputmode="decimal" class="owner-coordinate" data-coordinate="latitude" maxlength="64" value="{latitude}"></label>'
+                f'<label>Долгота<input type="text" inputmode="decimal" class="owner-coordinate" data-coordinate="longitude" maxlength="64" value="{longitude}"></label></details>'
                 f'<small class="owner-source">Источник: {source_text or "нет"}</small>'
                 '<button type="button" class="owner-reset">Сбросить к авто</button></div>'
             )
@@ -152,8 +156,8 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
                 '<button type="button" class="owner-reset">Сбросить к авто</button></div>'
             )
         else:
-            input_type = "number" if kind == "number" else "text"
-            step = ' step="any"' if kind == "number" else ""
+            input_type = "text"
+            step = ' inputmode="decimal" data-owner-number="true" maxlength="64"' if kind == "number" else ' maxlength="500"'
             fields.append(
                 f'<div class="owner-field" data-field="{name}"><label>{label}'
                 f'<input type="{input_type}" class="owner-value" value="{value_text}"{step}></label>'
@@ -188,7 +192,8 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
   <p class="owner-help">Накопленное показание счётчика, м³. День берётся из этого дневного отчёта; время снятия неизвестно.</p>
   <div class="owner-gas-summary"><p data-gas-current>{reading_summary}</p><button type="button" class="owner-secondary" data-gas-edit aria-controls="gas-editor" aria-expanded="false">Изменить показание</button></div>
   <details id="gas-editor" class="owner-gas-editor"><summary>Редактирование показания</summary>
-    <label>Накопленное показание, м³ <input name="gas-value" type="number" min="0" step="any" value="{html.escape(str(reading_value), quote=True)}"></label>
+    <label>Накопленное показание, м³ <input name="gas-value" type="text" inputmode="decimal" maxlength="64" value="{html.escape(str(reading_value), quote=True)}"></label>
+    <p class="owner-help">Дробные значения можно вводить через точку или запятую.</p>
     <label class="owner-inline"><input name="gas-reset" type="checkbox"> Явная замена, сброс или переполнение счётчика</label>
     <div class="owner-actions"><button type="button" data-gas-save>Сохранить</button><button type="button" data-gas-delete>Удалить</button></div>
   </details>
@@ -197,6 +202,33 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
   <p data-meter-boundary></p><details class="owner-gas-history"><summary>История показания</summary><pre data-gas-history></pre></details>
   <p class="owner-message" data-gas-message role="status" aria-live="polite"></p>
 </section>"""
+    from zont_analyzer.application.gas_tariffs import CURRENCIES
+
+    local_now = datetime.now(ZoneInfo(report.timezone))
+    next_month = f"{local_now.year + (local_now.month == 12):04d}-{local_now.month % 12 + 1:02d}"
+    currencies = "".join(
+        f'<option value="{code}"{" selected" if code == "RUB" else ""}>{code}</option>' for code in CURRENCIES
+    )
+    tariff_form = f"""<div class="owner-tariffs">
+<div class="owner-gas-summary"><p data-tariff-current>Цена за м³ не задана</p><button type="button" class="owner-secondary" data-tariff-edit aria-controls="tariff-editor" aria-expanded="false">Изменить цену</button></div>
+<p class="owner-help" data-tariff-planned></p>
+<details id="tariff-editor" class="owner-gas-editor"><summary>Цена газа за м³</summary>
+<p class="owner-help">Тариф за м³ действует с начала месяца до следующего изменения.
+Новая цена — со следующего месяца. Для внесения истории выберите нужный месяц.</p>
+<p class="owner-help">Дробные значения можно вводить через точку или запятую.</p>
+<div class="owner-fields">
+<div class="owner-field"><label>Цена за м³<input data-tariff-price type="text" inputmode="decimal" maxlength="64" autocomplete="off"></label></div>
+<div class="owner-field"><label>Валюта<select data-tariff-currency>{currencies}</select></label></div>
+<div class="owner-field"><label>Месяц начала действия<input data-tariff-month type="month" value="{next_month}"></label></div>
+</div><div class="owner-actions"><button type="button" data-tariff-save>Сохранить тариф</button></div>
+<details><summary>История тарифов и исправления</summary><div data-tariff-history></div>
+<div class="owner-field"><label>Исправить ошибку в тарифе<select data-tariff-correction><option value="">Выберите тариф</option></select></label>
+<label>Причина исправления<input data-tariff-reason type="text" maxlength="500"></label>
+<p class="owner-help">Укажите верную цену и валюту выше. Исправление сохраняет месяц действия и остаётся в истории.</p>
+<div class="owner-actions"><button type="button" data-tariff-correct>Исправить выбранный тариф</button></div></div></details>
+<p class="owner-message" data-tariff-message role="status" aria-live="polite"></p></details></div>"""
+    if gas_form:
+        gas_form = gas_form.replace('  <details id="gas-editor"', tariff_form + '\n  <details id="gas-editor"', 1)
     return f"""<style>
 .owner-forms{{margin:1.2rem 0;font:inherit}}.owner-form{{padding:1rem;margin:.8rem 0;background:#f6f8fa;border-radius:.6rem}}
 .owner-form summary{{cursor:pointer;font-weight:700;font-size:1.1rem}}.owner-fields{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:1rem;margin-top:1rem}}
@@ -217,6 +249,7 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
 </style><section class="owner-forms" data-owner-forms data-device-id="{html.escape(device_id, quote=True)}" data-report-id="{html.escape(report.id, quote=True)}">
 <details id="system-profile" class="owner-form owner-equipment" aria-label="Профиль оборудования"><summary>⚙ Профиль системы</summary>
 <p class="owner-help">Значения из ZONT помечены как автоматические. Координаты и модель котла уже найденные можно уточнить вручную. Пустые поля остаются неизвестными. Новые сведения действуют с момента сохранения, если дата ниже не указана.</p>
+<p class="owner-help">Дробные значения можно вводить через точку или запятую. Расход и мощность должны быть больше нуля; минимум расхода не должен превышать максимум.</p>
 <p data-coordinates-summary></p><label hidden>Устройство <select data-device-select></select></label>
 <div class="owner-fields">{"".join(grouped_fields)}</div>
 <details class="owner-history"><summary>История изменений</summary><pre data-profile-history></pre></details>

@@ -16,7 +16,7 @@ from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
 from zont_analyzer.domain.reasoning import Hypothesis, ObservedPattern, Prediction, RecommendedExperiment, Unknown
 
-PROMPT_VERSION = "analyst-v8.1"
+PROMPT_VERSION = "analyst-v8.2"
 
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
 _PACKET_CONTENT_MAX_BYTES = 60 * 1024
@@ -45,6 +45,17 @@ outside a safe user setting. Do not use generic emergency-checking, alarm-checki
 or specialist boilerplate. Do not invent temperature, pressure, timing, or other
 equipment thresholds; use only supplied values, events, and documented limits.
 Write all human-readable output in Russian; keep evidence IDs unchanged.
+Do not expose internal field names in human-readable output. Use «расчётный показатель»
+for derived metrics, «временные данные» for temporal_evidence, «сравнения с другими периодами»
+for period_comparisons, «расход рассчитан по модели» for estimated, «индекс надёжности» for
+reliability_index_pct, and «доля неизменных показаний» for stuck_pct. The latter describes
+unchanged readings in the interval; it does not by itself prove a faulty sensor. Keep these
+translations in prose only and preserve evidence IDs exactly.
+Use «закономерность» instead of «паттерн» and explain a derived candidate as a tentative
+finding from indirect signals, not as a directly measured event. Explain quality scores
+in ordinary language. In prose, display fixed timezones as UTC offsets: Etc/GMT-4 is UTC+4,
+not UTC-4 (IANA Etc/GMT uses the reversed POSIX sign). Preserve the actual instants of
+supplied timestamped evidence and use the correct ISO 8601 offset in structured intervals.
 Use control_context and heating_mode_change/target_temperature_change events when
 interpreting temperature episodes. Do not call an expected response inside a
 transition window an anomaly. Treat source=likely_manual as a hypothesis, not proof.

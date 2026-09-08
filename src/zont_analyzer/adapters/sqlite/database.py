@@ -28,11 +28,13 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    delete,
     event,
     func,
     inspect,
     or_,
     select,
+    update,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine.reflection import Inspector
@@ -291,7 +293,10 @@ class Database:
 
     def initialize(self, backup_dir: Path | None = None) -> MigrationResult:
         # Register the additive owner-input tables before schema inspection.
-        from zont_analyzer.application import owner_context  # noqa: F401
+        from zont_analyzer.application import (  # noqa: F401
+            gas_tariffs,
+            owner_context,
+        )
 
         result = self._migrate(backup_dir or self.path.parent / "backups")
         with self.session() as session:
@@ -567,7 +572,84 @@ class Database:
                 index_elements=["key"], set_={"value": statement.excluded.value},
             ))
 
+    def delete_samples(self, start: datetime, end: datetime, *, series_id: int | None = None) -> int:
+        """Delete a bounded telemetry interval and invalidate its day markers."""
+        if end <= start:
+            raise ValueError("period end must be after its start")
+        with self.session() as session:
+            statement = delete(TelemetrySampleRow).where(
+                TelemetrySampleRow.timestamp_utc >= int(start.timestamp()),
+                TelemetrySampleRow.timestamp_utc < int(end.timestamp()),
+            )
+            if series_id is not None:
+                statement = statement.where(TelemetrySampleRow.series_id == series_id)
+            deleted = session.execute(statement.returning(TelemetrySampleRow.timestamp_utc)).scalars().all()
+            self._mark_data_days(session, [int(timestamp) for timestamp in deleted])
+            return len(deleted)
+
     def period_data_revision(self, start: datetime, end: datetime) -> str:
+        """Return a cached, exact content fingerprint for ``[start, end)``.
+
+        UTC-day markers are deliberately only an invalidation cache: they avoid a
+        telemetry-table scan when no overlapping day changed.  On invalidation, the
+        fingerprint includes every stored field that affects telemetry semantics.
+        """
+        if end <= start:
+            raise ValueError("period end must be after its start")
+
+        marker_revision = self.legacy_period_data_revision(start, end)
+        cache_key = self._period_revision_cache_key(start, end)
+        with self.session() as session:
+            cached = session.get(AppMetaRow, cache_key)
+            if cached is not None:
+                try:
+                    value = json.loads(cached.value)
+                except json.JSONDecodeError:
+                    value = {}
+                if value.get("markers") == marker_revision and isinstance(value.get("revision"), str):
+                    return str(value["revision"])
+
+            digest = hashlib.sha256()
+            count = 0
+            rows = session.execute(
+                select(
+                    TelemetrySampleRow.series_id,
+                    TelemetrySampleRow.timestamp_utc,
+                    TelemetrySampleRow.value_num,
+                    TelemetrySampleRow.value_text,
+                    TelemetrySampleRow.quality,
+                ).where(
+                    TelemetrySampleRow.timestamp_utc >= int(start.timestamp()),
+                    TelemetrySampleRow.timestamp_utc < int(end.timestamp()),
+                ).order_by(TelemetrySampleRow.series_id, TelemetrySampleRow.timestamp_utc)
+            )
+            for row in rows:
+                digest.update(json.dumps(
+                    list(row), ensure_ascii=False, allow_nan=False, separators=(",", ":"),
+                ).encode("utf-8"))
+                digest.update(b"\n")
+                count += 1
+
+            # Keep the historical empty sentinel: pilot callers use it to recognise
+            # a period with no telemetry.  Non-empty fingerprints have a versioned
+            # namespace because their content schema is intentionally new.
+            revision = hashlib.sha256(b"[]").hexdigest() if count == 0 else f"telemetry-v2:{digest.hexdigest()}"
+            session.merge(AppMetaRow(
+                key=cache_key,
+                value=json.dumps({"markers": marker_revision, "revision": revision}, separators=(",", ":")),
+            ))
+            return revision
+
+    @staticmethod
+    def _period_revision_cache_key(start: datetime, end: datetime) -> str:
+        start_utc = start.astimezone(UTC).isoformat(timespec="microseconds")
+        end_utc = end.astimezone(UTC).isoformat(timespec="microseconds")
+        return f"telemetry-period-revision:v2:{start_utc}:{end_utc}"
+
+    def legacy_period_data_revision(self, start: datetime, end: datetime) -> str:
+        """Return the pre-v2 UTC-day marker revision for rollout compatibility."""
+        if end <= start:
+            raise ValueError("period end must be after its start")
         first = f"telemetry-day:{start.astimezone(UTC).date().isoformat()}"
         last = f"telemetry-day:{(end - timedelta(microseconds=1)).astimezone(UTC).date().isoformat()}"
         with self.session() as session:
@@ -882,6 +964,45 @@ class Database:
         with self.session() as session:
             row = session.get(ReportRow, report_id)
             return Report.model_validate_json(row.canonical_json) if row else None
+
+    def upgrade_report_telemetry_revision(self, report_id: str, old_revision: str, new_revision: str) -> bool:
+        """Atomically replace a report's legacy telemetry revision metadata.
+
+        This deliberately updates only ``reports.canonical_json``.  It lets the
+        pilot adopt an equivalent precise revision without regenerating report
+        metrics, recommendations, publication state, or AI output.
+        """
+        return self._upgrade_report_marker(report_id, ("input_revision", "telemetry"), old_revision, new_revision)
+
+    def upgrade_report_schedule_signature(self, report_id: str, old_signature: str, new_signature: str) -> bool:
+        """Adopt an equivalent calendar signature without re-running its AI."""
+        return self._upgrade_report_marker(report_id, ("schedule_signature",), old_signature, new_signature)
+
+    def _upgrade_report_marker(self, report_id: str, path: tuple[str, ...], old_value: str, new_value: str) -> bool:
+        with self.session() as session:
+            row = session.get(ReportRow, report_id)
+            if row is None:
+                return False
+            original_json = row.canonical_json
+            payload = json.loads(original_json)
+            context = payload.get("context")
+            if not isinstance(context, dict):
+                return False
+            for key in path[:-1]:
+                context = context.get(key)
+                if not isinstance(context, dict):
+                    return False
+            if context.get(path[-1]) != old_value:
+                return False
+            context[path[-1]] = new_value
+            replacement_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            result = session.execute(
+                update(ReportRow)
+                .where(ReportRow.id == report_id, ReportRow.canonical_json == original_json)
+                .values(canonical_json=replacement_json)
+                .returning(ReportRow.id)
+            )
+            return result.scalar_one_or_none() is not None
 
     def latest_report(self) -> Report | None:
         with self.session() as session:

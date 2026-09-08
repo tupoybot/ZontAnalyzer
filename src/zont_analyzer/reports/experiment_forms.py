@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .timezone_labels import timezone_label
+
 CATEGORIES = {
     "": "Не указано", "settings": "Настройки ZONT",
     "firmware_update": "Обновление прошивки", "firmware_rollback": "Откат прошивки",
@@ -47,7 +49,7 @@ def experiment_form(value: Any, disabled: str = "", timezone: str = "UTC") -> st
         '<p>Заполняйте по желанию. Укажите известные значения; остальные поля можно оставить пустыми.</p>'
         '<label>Тип изменения<select data-experiment-field="category"'
         f'{disabled}>{options}</select></label>{fields}'
-        f'<small>Время: {html.escape(timezone)}. Сведения сохраняются кнопкой «Выполнено». '
+        f'<small>Время: {html.escape(timezone_label(timezone))}. Сведения сохраняются кнопкой «Выполнено». '
         'Примечание можно добавить в комментарий. '
         'Для оценки результата меняйте один параметр за раз.</small></details>'
     )

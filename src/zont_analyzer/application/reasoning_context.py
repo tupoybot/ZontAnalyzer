@@ -1,11 +1,66 @@
 """Bounded historical context; interpretations never become independent facts."""
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from zont_analyzer.domain import DetectedEvent, Report
 
 REASONING_FIELDS = ("observed_patterns", "hypotheses", "predictions", "unknowns", "recommended_experiment")
+
+
+def report_facts_fingerprint(report: Report) -> str:
+    """Compare report evidence, not bookkeeping or the interpretation itself."""
+    payload = report.model_dump(mode="json", include={
+        "kind", "period_start", "period_end", "timezone", "quality", "metrics", "events", "context",
+    })
+    context = payload["context"]
+    for key in ("input_revision", "calculation_version", "pilot_ai_reuse", "ai_interpretation_reuse",
+                "ai_facts_fingerprint", "gas_interpretation_stale", "timezone_provenance"):
+        context.pop(key, None)
+    gas = context.get("gas")
+    if isinstance(gas, dict):
+        for key in ("ai_stale", "updated", "previous_model_version"):
+            gas.pop(key, None)
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def reuse_ai_interpretation(previous: Report, current: Report) -> Report:
+    """Retain AI with an explicit comparison against its original evidence."""
+    context = dict(current.context)
+    baseline = previous.context.get("ai_facts_fingerprint")
+    prior_reuse = previous.context.get("pilot_ai_reuse") or previous.context.get("ai_interpretation_reuse")
+    prior_gas = previous.context.get("gas", {})
+    if not baseline and not prior_reuse and not prior_gas.get("ai_stale"):
+        baseline = report_facts_fingerprint(previous)
+    changed = report_facts_fingerprint(current) != baseline if baseline else None
+    if baseline:
+        context["ai_facts_fingerprint"] = baseline
+    context["pilot_ai_reuse"] = {
+        "source_generated_at": original_ai_generated_at(previous),
+        "reason": "daily facts recomputed without a duplicate OpenAI call",
+        "facts_changed": changed,
+    }
+    if isinstance(context.get("gas"), dict):
+        context["gas"] = {**context["gas"], "ai_stale": changed is not False}
+    if changed is not False:
+        context["gas_interpretation_stale"] = True
+    else:
+        context.pop("gas_interpretation_stale", None)
+    return current.model_copy(update={
+        "context": context, "summary": previous.summary, "recommendations": previous.recommendations,
+        "ai_used": True, **reasoning_payload(previous),
+    })
+
+
+def original_ai_generated_at(report: Report) -> str:
+    """Keep the original AI timestamp across repeated deterministic refreshes."""
+    for key in ("pilot_ai_reuse", "ai_interpretation_reuse"):
+        reuse = report.context.get(key)
+        if isinstance(reuse, dict) and isinstance(reuse.get("source_generated_at"), str):
+            return str(reuse["source_generated_at"])
+    return report.generated_at.isoformat()
 
 
 def reasoning_payload(value: Any) -> dict[str, Any]:

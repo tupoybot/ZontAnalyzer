@@ -40,7 +40,12 @@ from zont_analyzer.analytics.evidence import (
 )
 from zont_analyzer.analytics.series_semantics import is_setpoint_series
 from zont_analyzer.application.ingestion import _object_names, heating_circuit_sensor_links
-from zont_analyzer.application.reasoning_context import reasoning_context, reasoning_payload
+from zont_analyzer.application.reasoning_context import (
+    original_ai_generated_at,
+    reasoning_context,
+    reasoning_payload,
+    report_facts_fingerprint,
+)
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue, QualityResult, Recommendation, Report
 from zont_analyzer.domain.periods import Period, SeasonBoundaries, midnight, season_period
@@ -829,7 +834,7 @@ class AnalysisService:
                     control_context["gas"]["ai_stale"] = True
                     control_context["gas_interpretation_stale"] = True
                     control_context["ai_interpretation_reuse"] = {
-                        "source_generated_at": previous_report.generated_at.isoformat(),
+                        "source_generated_at": original_ai_generated_at(previous_report),
                         "reason": "AI refresh failed validation; retained last valid interpretation",
                     }
                 else:
@@ -850,6 +855,12 @@ class AnalysisService:
             ai_used=ai_used,
             **reasoning,
         )
+        priced_report: Report = self._gas_service.refresh_cost(report)
+        report = priced_report
+        if ai_used and not control_context.get("ai_interpretation_reuse"):
+            report.context["ai_facts_fingerprint"] = report_facts_fingerprint(report)
+        elif ai_used and previous_report and previous_report.context.get("ai_facts_fingerprint"):
+            report.context["ai_facts_fingerprint"] = previous_report.context["ai_facts_fingerprint"]
         if persist:
             self.db.save_report(report, render_text(report))
         return report

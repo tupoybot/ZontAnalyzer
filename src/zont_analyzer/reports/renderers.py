@@ -12,7 +12,11 @@ from zont_analyzer.reports.experiment_forms import experiment_form
 from zont_analyzer.reports.presentation import (
     LEGACY_DUTY_METRICS,
     _gas_value,
+    _volume_and_cost,
+    ai_freshness_notice,
     burner_usage_rows,
+    gas_cost_comparisons_text,
+    gas_cost_lines,
     gas_purpose_text,
     gas_savings_text,
     number,
@@ -886,23 +890,38 @@ def render_text(report: Report) -> str:
         labels = {"unknown": "нет данных", "measured": "измерено", "estimated": "оценено",
                   "extrapolated": "экстраполировано"}
         lines.append(
-            f"Расход газа за период: {_gas_value(gas.get('volume_m3'), 'м³')} "
+            f"Расход газа за период: "
+            f"{_volume_and_cost(gas.get('volume_m3'), gas.get('cost')) if status != 'unknown' else 'Нет данных'} "
             f"({labels.get(status, 'нет данных')})"
         )
-        for key, label, unit in (("average_daily_m3", "Среднее за наблюдаемый день", "м³/сутки"),
-                                 ("average_weekly_m3", "Среднее за наблюдаемую неделю", "м³/неделю")):
+        for key, cost_key, label, unit in (
+            ("average_daily_m3", "average_daily_cost", "Среднее за наблюдаемый день", "м³/сутки"),
+            ("average_weekly_m3", "average_weekly_cost", "Среднее за наблюдаемую неделю", "м³/неделю"),
+        ):
             if isinstance(gas.get(key), (int, float)):
-                lines.append(f"{label}: {_gas_value(gas[key], unit)}")
+                lines.append(f"{label}: {_volume_and_cost(gas[key], gas.get(cost_key), unit)}")
         lines.extend(f"{label}: {value}" for label, value in burner_usage_rows(report))
         lines.append(f"Индекс надёжности: {_gas_value(gas.get('reliability_index_pct'), '%')}; не вероятность.")
         lines.append(f"Диапазон: {_gas_value(gas.get('lower_m3'), 'м³')} — "
                      f"{_gas_value(gas.get('upper_m3'), 'м³')}; покрытие {_gas_value(gas.get('coverage_pct'), '%')}")
         lines.append(f"Версия расчёта: {gas.get('model_version', 'неизвестна')}")
         lines.append(str(gas.get('source', '')))
-        if gas.get('ai_stale'):
-            lines.append("AI-интерпретация историческая и не учитывает текущую версию расчёта газа.")
+        if notice := ai_freshness_notice(report):
+            lines.append(notice)
+        lines.extend(gas_cost_lines(gas.get("cost")))
+        intervals = gas.get("measured_intervals")
+        if isinstance(intervals, list):
+            for item in intervals:
+                if isinstance(item, dict):
+                    start = str(item.get("start", item.get("before_start", "неизвестно")))[:10]
+                    end = str(item.get("end", item.get("after_end", "неизвестно")))[:10]
+                    lines.append(
+                        f"Измеренный интервал {start} — {end}: "
+                        f"{_volume_and_cost(item.get('volume_m3'), item.get('cost'))}"
+                    )
     lines.extend(gas_purpose_text(report))
     lines.extend(gas_savings_text(report))
+    lines.extend(gas_cost_comparisons_text(report))
     if report.context.get("counterfactual_question"):
         lines.append("Вопрос владельца: " + str(report.context["counterfactual_question"]))
     lines.extend(_temporal_evidence_text(report.context.get("temporal_evidence")))
@@ -1197,10 +1216,8 @@ def render_html(
     question_html = (
         "<p><strong>Вопрос владельца:</strong> " + html.escape(str(question)) + "</p>" if question else ""
     )
-    gas_context = report.context.get("gas")
-    if isinstance(gas_context, dict) and gas_context.get("ai_stale") is True:
-        question_html = ('<p class="gas-period-stale" role="status"><strong>AI-интерпретация историческая:</strong> '
-                         'расчёт расхода газа обновлён после этого AI-ответа.</p>' + question_html)
+    if notice := ai_freshness_notice(report):
+        question_html = f'<p class="gas-period-stale" role="status">{html.escape(notice)}</p>' + question_html
 
     def html_list(values: list[str], empty: str) -> str:
         return "<ul>" + "".join(f"<li>{html.escape(value)}</li>" for value in values) + "</ul>" if values else empty
@@ -1370,6 +1387,8 @@ def render_html(
     api_base = html.escape(feedback_api_base_url.rstrip("/"), quote=True)
     latest_href = html.escape(latest_report_href, quote=True)
     period_date = report.period_start.astimezone(ZoneInfo(report.timezone)).strftime('%d.%m.%Y')
+    period_end_date = report.period_end.astimezone(ZoneInfo(report.timezone)).strftime('%d.%m.%Y')
+    period_dates = period_date if report.kind == 'daily' else f'{period_date} - {period_end_date}'
     kind_label = {'daily': 'День', 'weekly': 'Неделя', 'monthly': 'Месяц',
                   'initial': 'Обзор', 'seasonal': 'Сезон'}[report.kind]
     return f"""<!doctype html>
@@ -1377,7 +1396,7 @@ def render_html(
 <title>{title}</title><style>{STYLE}</style></head><body data-feedback-api-base="{api_base}">
 <a class="skip-link" href="#report">К отчёту</a>
 <header><div class="header-line"><span class="brand">ZontAnalyzer<span class="secondary"> / отчёт</span></span>
-<span class="period-label">{period_date} · {kind_label}</span>
+<span class="period-label">{period_dates} · {kind_label}</span>
 <div class="header-tools"><label>Debug <input id="debug-toggle" type="checkbox"></label>
 <button type="button" data-open-profile aria-label="Открыть профиль системы">⚙ Профиль системы</button></div></div>
 <nav class="archive-navigation" data-archive-navigation data-report-kind="{archive_kind}"
@@ -1426,6 +1445,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="debug-only">{temporal_evidence}{historical_evidence}</div>
 <details class="debug-only"><summary>Канонический JSON</summary><pre>{canonical}</pre></details></div>
 {ui.gas_savings_section(report)}
+{ui.gas_cost_comparisons_section(report)}
 {period_context}
 {regeneration}
 <section class="full-width owner-settings" aria-label="Профиль и показания">{owner_forms}</section>

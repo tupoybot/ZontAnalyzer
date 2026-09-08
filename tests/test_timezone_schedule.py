@@ -38,8 +38,8 @@ def test_timezone_source_visible_in_html_and_text_without_relabelling_old_bounda
                     quality=QualityResult(score=1, coverage_pct=100, max_gap_seconds=0, stuck_pct=0,
                                           implausible_jumps=0, sample_count=1))
     for render in (render_html, render_text):
-        assert 'Часовой пояс: UTC+04:00 · настройки ZONT' in render(report)
+        assert 'Часовой пояс: Europe/Samara · UTC+04:00 · настройки ZONT' in render(report)
         changed = report.model_copy(deep=True)
         changed.context['gas']['timezone_provenance']['timezone'] = 'Etc/GMT-3'
-        assert 'сохранён при расчёте отчёта (Europe/Samara)' in render(changed)
+        assert 'Часовой пояс: Europe/Samara · UTC+04:00 · сохранён при расчёте отчёта' in render(changed)
         assert 'UTC+04:00 · настройки ZONT' not in render(changed)

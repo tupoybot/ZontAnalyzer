@@ -39,7 +39,7 @@ def test_unknown_gas_does_not_look_like_zero_and_stale_ai_is_visible() -> None:
     page = render_html(_report({"status": "unknown", "volume_m3": 0, "ai_stale": True, "flame_hours": 0}))
     assert "Расход газа за период" in page
     assert "Нет данных" in page
-    assert "Объяснение AI устарело" in page
+    assert "Расчёт расхода газа обновлён после AI-ответа" in page
     assert "0,0 ч" in page
 
 
@@ -129,13 +129,13 @@ def test_dashboard_uses_short_burner_labels_and_modelled_gas_denominator() -> No
     dashboard = kpis(report)
     assert "12 запусков · 75%" in dashboard
     assert "30 мин · 12,5%" in dashboard
-    assert "Надёжность: 72%" in dashboard
+    assert "(надёжность 72%)" in dashboard
     assert "времени горения" not in dashboard
     assert dashboard.index("Качество данных") < dashboard.index("Отопление · горелка")
     assert dashboard.index("Отопление · горелка") < dashboard.index("ГВС · догревы")
     assert 'class="gas-distribution-bar"' in dashboard
     assert "Распределение расхода</span>" in dashboard
-    assert "Распределение — оценка 1,00 м³; показание счётчика учитывается отдельно." in dashboard
+    assert "показание счётчика учитывается отдельно" not in dashboard
     assert "Не определено <b>0,15 м³ · 15%" in dashboard
     assert 'class="kpi-uptime-row" aria-label="Статус и аптаймы"' in dashboard
     assert "ZONT · на связи · аптайм 1 дн." in dashboard

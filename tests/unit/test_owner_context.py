@@ -138,9 +138,24 @@ def test_coordinates_require_exact_object_scalars_and_geographic_bounds(tmp_path
     _, store = _store(tmp_path)
     ok = store.update_profile("device", _manual({"coordinates": {"latitude": 48.25, "longitude": 12.5}}))
     assert ok["fields"]["coordinates"]["value"]["longitude"] == 12.5
-    for invalid in ({"latitude": 1}, {"latitude": "1", "longitude": 2}, {"latitude": 91, "longitude": 2}):
+    for invalid in ({"latitude": 1}, {"latitude": "1,2.3", "longitude": 2}, {"latitude": 91, "longitude": 2}):
         with pytest.raises(ValueError):
             store.update_profile("device", _manual({"coordinates": invalid}))
+
+
+@pytest.mark.parametrize(
+    ("latitude", "longitude"),
+    [("48,25", "12,5"), ("48.25", "12.5"), (-48.25, "+12,5")],
+)
+def test_coordinates_accept_signed_numbers_with_comma_or_point(
+    tmp_path: Path, latitude: object, longitude: object,
+) -> None:
+    _, store = _store(tmp_path)
+    result = store.update_profile(
+        "device", _manual({"coordinates": {"latitude": latitude, "longitude": longitude}}),
+    )
+    coordinates = result["fields"]["coordinates"]["value"]
+    assert coordinates == {"latitude": float(str(latitude).replace(",", ".")), "longitude": 12.5}
 
 
 def test_profile_numbers_and_gas_bounds_are_validated(tmp_path: Path) -> None:
@@ -151,6 +166,27 @@ def test_profile_numbers_and_gas_bounds_are_validated(tmp_path: Path) -> None:
         store.update_profile("device", _manual({"gas_min_m3h": 3.0, "gas_max_m3h": 2.0}))
     result = store.update_profile("device", _manual({"gas_min_m3h": 2.0, "gas_max_m3h": 3.0}))
     assert result["fields"]["gas_max_m3h"]["value"] == 3.0
+
+
+@pytest.mark.parametrize("value", ["2,69", "2.69", 2.69])
+def test_profile_numbers_accept_comma_or_point(tmp_path: Path, value: object) -> None:
+    _, store = _store(tmp_path)
+    result = store.update_profile("device", _manual({"gas_max_m3h": value}))
+    assert result["fields"]["gas_max_m3h"]["value"] == 2.69
+
+
+@pytest.mark.parametrize("value", ["2,6.9", "--2", "NaN", "Infinity", "-1", "0", True, ""])
+def test_invalid_profile_number_does_not_change_existing_data(tmp_path: Path, value: object) -> None:
+    _, store = _store(tmp_path)
+    original = store.update_profile("device", _manual({"gas_max_m3h": "2,69"}))
+    with pytest.raises(ValueError, match="positive finite"):
+        store.update_profile(
+            "device",
+            _manual({"gas_min_m3h": "1,5", "gas_max_m3h": value}),
+        )
+    after = store.profile("device")
+    assert after["fields"] == original["fields"]
+    assert after["history"] == original["history"]
 
 
 def test_profile_units_source_applicability_and_dhw_enum_are_strict(tmp_path: Path) -> None:
@@ -234,6 +270,24 @@ def test_gas_payload_is_strict_and_decimal_exponents_are_bounded(tmp_path: Path)
             store.update_gas("r1", {"value_m3": value})
 
 
+@pytest.mark.parametrize("value", ["10,250001", "10.250001"])
+def test_gas_reading_accepts_comma_or_point_with_exact_precision(tmp_path: Path, value: str) -> None:
+    db, store = _store(tmp_path)
+    _report(db, "r1", day=86400 * 20)
+    result = store.update_gas("r1", {"value_m3": value})
+    assert result["reading"]["value_m3"] == "10.250001"
+
+
+@pytest.mark.parametrize("value", ["1,2.3", "1.2,3", "NaN", "-1", True])
+def test_invalid_gas_reading_does_not_change_existing_data(tmp_path: Path, value: object) -> None:
+    db, store = _store(tmp_path)
+    _report(db, "r1", day=86400 * 20)
+    original = store.update_gas("r1", {"value_m3": "10,25"})
+    with pytest.raises(ValueError):
+        store.update_gas("r1", {"value_m3": value})
+    assert store.gas("r1") == original
+
+
 def test_gas_monotonicity_is_checked_inside_server_meter_segment(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -303,6 +357,25 @@ def test_gas_plausibility_warns_only_against_historical_known_maximum(tmp_path: 
     result = store.update_gas("r2", {"value_m3": 100})
     assert result["plausibility"]["status"] == "warning"
     assert result["plausibility"]["warnings"]
+
+
+def test_current_passport_value_is_visible_but_not_applied_before_its_effective_time(tmp_path: Path) -> None:
+    db, store = _store(tmp_path)
+    _report(db, "r1", day=86400 * 20)
+    _report(db, "r2", day=86400 * 21)
+    store.update_gas("r1", {"value_m3": 1})
+    store.update_gas("r2", {"value_m3": 100})
+    store.update_profile(
+        "device",
+        _manual({"gas_max_m3h": "2,69", "has_gas_stove": False}),
+    )
+
+    plausibility = store.gas("r2")["plausibility"]
+
+    assert plausibility["status"] == "preliminary"
+    assert plausibility["warnings"] == []
+    assert "ещё не указан" not in plausibility["reason"]
+    assert "на всём интервале" in plausibility["reason"]
 
 
 def test_default_profile_time_is_refreshed_after_waiting_for_writer(tmp_path: Path, monkeypatch) -> None:
