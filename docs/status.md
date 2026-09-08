@@ -72,3 +72,6 @@ Docker healthcheck использует curl и HTTP heartbeat, без запу�
 - HK: healthy, worker ok, HTTP-probe 11 мс; Basic Auth 401, nginx/xray active.
   Ограниченный smoke дал 0,125 CPU-секунды всего контейнера вокруг запроса
   и чтений счётчика. [Детали и границы измерения](./healthcheck-release.md).
+- Отдельный cloud-first трек: [план M0–M8](./cloud_first_milestone.md) уточнён
+  по зависимостям и обязательному proxy/egress M0–M1. Проверка документов/ссылок/diff;
+  облачная реализуемость ещё требует проверок M0–M2, инфраструктура не развёрнута.
