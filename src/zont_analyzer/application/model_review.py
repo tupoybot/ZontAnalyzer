@@ -325,6 +325,10 @@ class ModelReviewStore:
                     status, error = "unverified", "Не удалось проверить опубликованную стоимость текущей модели."
                     break
                 effort = effective.get(f"{profile}_reasoning_effort")
+                if (current.responses_supported is not True or current.structured_outputs_supported is not True
+                        or effort not in current.reasoning_efforts):
+                    status, error = "unverified", "Не удалось подтвердить совместимость текущего профиля анализа."
+                    break
                 if any(fact.input_price_per_mtok_usd is None or fact.output_price_per_mtok_usd is None
                        for fact in snapshot.models if fact.responses_supported and fact.structured_outputs_supported):
                     status, error = "unverified", "Не удалось проверить опубликованную стоимость кандидатов."

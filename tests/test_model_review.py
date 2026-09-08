@@ -56,6 +56,13 @@ def _settings(enabled: bool = True) -> dict[str, object]:
     }
 
 
+def test_missing_current_capability_is_not_a_successful_review(tmp_path: Path) -> None:
+    catalog = Catalog(_snapshot(_fact("gpt-5.6-terra", "2", "12", responses_supported=None)))
+    store = ModelReviewStore(_db(tmp_path), catalog)
+    assert store.run_if_due(_settings(), NOW)["status"] == "unverified"
+    assert store.state()["last_success_at"] is None
+
+
 def _snapshot(*models: ModelFact, incomplete: bool = False, error: str | None = None) -> CatalogSnapshot:
     return CatalogSnapshot(NOW, (), models, incomplete, error)
 
