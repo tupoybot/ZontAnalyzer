@@ -12,15 +12,28 @@ REASONING_FIELDS = ("observed_patterns", "hypotheses", "predictions", "unknowns"
 
 def report_facts_fingerprint(report: Report) -> str:
     """Compare report evidence, not bookkeeping or the interpretation itself."""
+    return "facts-v2:" + _facts_digest(report, include_ai_provenance=False)
+
+
+def _facts_digest(report: Report, *, include_ai_provenance: bool) -> str:
     payload = report.model_dump(mode="json", include={
         "kind", "period_start", "period_end", "timezone", "quality", "metrics", "events", "context",
     })
     context = payload["context"]
+    if not include_ai_provenance:
+        context.pop("ai_provenance", None)
+        for key, field in (("control_settings", "captured_at"),
+                           ("heating_analysis", "location_captured_at")):
+            value = context.get(key)
+            if isinstance(value, dict):
+                value.pop(field, None)
     for key in ("input_revision", "calculation_version", "pilot_ai_reuse", "ai_interpretation_reuse",
                 "ai_facts_fingerprint", "gas_interpretation_stale", "timezone_provenance"):
         context.pop(key, None)
     gas = context.get("gas")
     if isinstance(gas, dict):
+        if not include_ai_provenance:
+            gas.pop("timezone_provenance", None)
         for key in ("ai_stale", "updated", "previous_model_version"):
             gas.pop(key, None)
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -34,7 +47,19 @@ def reuse_ai_interpretation(previous: Report, current: Report) -> Report:
     prior_gas = previous.context.get("gas", {})
     if not baseline and not prior_reuse and not prior_gas.get("ai_stale"):
         baseline = report_facts_fingerprint(previous)
-    changed = report_facts_fingerprint(current) != baseline if baseline else None
+    fingerprint = report_facts_fingerprint(current)
+    changed = fingerprint != baseline if baseline else None
+    if isinstance(baseline, str) and not baseline.startswith("facts-v2:"):
+        # Old digests included metadata added only after a successful AI call.
+        # Prove equivalence against that exact digest before upgrading it; never
+        # replace an unknown historical baseline with today's changed facts.
+        legacy = current.model_copy(deep=True)
+        if previous.context.get("ai_provenance") is not None:
+            legacy.context["ai_provenance"] = previous.context["ai_provenance"]
+        matched = _facts_digest(legacy, include_ai_provenance=True) == baseline
+        changed = False if matched else None
+        if matched:
+            baseline = fingerprint
     if baseline:
         context["ai_facts_fingerprint"] = baseline
     context["pilot_ai_reuse"] = {

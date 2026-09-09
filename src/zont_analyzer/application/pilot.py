@@ -176,6 +176,7 @@ class PilotService:
                 self.runtime.db.recommendation_views_for_report(report.id),
                 chart_data=cached_chart_data(self.runtime.db, report),
                 feedback_api_base_url=self.runtime.config.feedback.public_api_base_url,
+                current_comfort_band_c=self.runtime.config.preferences.comfort_band_c,
                 latest_report_href="../latest.html",
             ),
             mode=0o644,

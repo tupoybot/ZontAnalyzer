@@ -98,7 +98,14 @@ def window_from_report(report: Report, *, label: str = "") -> ComparisonWindow:
     )
 
 
-def daily_history(db: Database, start: datetime, end: datetime, *, limit: int = 32) -> list[Report]:
+def daily_history(
+    db: Database,
+    start: datetime,
+    end: datetime,
+    *,
+    limit: int = 32,
+    exclude_report_id: str | None = None,
+) -> list[Report]:
     """Evenly spread days; load at most 32 canonical reports, never arbitrary raw telemetry."""
     with db.session() as session:
         rows = list(
@@ -112,6 +119,8 @@ def daily_history(db: Database, start: datetime, end: datetime, *, limit: int = 
                 .order_by(ReportRow.period_start)
             )
         )
+    if exclude_report_id is not None:
+        rows = [row for row in rows if str(row[0]) != exclude_report_id]
     if len(rows) > limit:
         rows = [rows[round(index * (len(rows) - 1) / (limit - 1))] for index in range(limit)]
     return [report for row in rows if (report := db.report(str(row[0]))) is not None]
@@ -189,7 +198,7 @@ def build_comparison_context(
     analyze_window: Callable[[datetime, datetime], Report],
 ) -> dict[str, Any]:
     history_start = min(period.start, period.observed_end - timedelta(days=28))
-    history = daily_history(db, history_start, period.observed_end)
+    history = daily_history(db, history_start, period.observed_end, exclude_report_id=report.id)
     context: dict[str, Any] = {
         "house_context": house_context(history),
         "period_comparisons": [],

@@ -23,6 +23,7 @@ def test_temperature_metrics_are_time_weighted() -> None:
     assert mean.value == pytest.approx((20 + 300) / 11, abs=0.001)
 
     by_name = {item.name: item for item in metrics}
+    assert by_name["time_in_target_band_pct"].context == {"comfort_band_c": 0.5}
     assert by_name["time_above_target_band_pct"].value == pytest.approx(10 / 11 * 100, abs=0.001)
     assert by_name["time_below_target_band_pct"].value == pytest.approx(1 / 11 * 100, abs=0.001)
     assert by_name["degree_hours_above_target"].value == pytest.approx(50 / 60, abs=0.001)

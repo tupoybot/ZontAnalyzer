@@ -135,7 +135,12 @@ def temperature_metrics(
             ("mean_error_while_below_target_c", below_degree_hours / (below_seconds / 3600), "°C")
         )
     metrics.extend(
-        MetricValue(id=_metric_id(period_id, name), name=name, value=round(value, 3), unit=unit)
+        MetricValue(
+            id=_metric_id(period_id, name), name=name, value=round(value, 3), unit=unit,
+            context={"comfort_band_c": comfort_band_c} if name in {
+                "time_in_target_band_pct", "time_above_target_band_pct", "time_below_target_band_pct",
+            } else {},
+        )
         for name, value, unit in values_to_add
     )
     return metrics
