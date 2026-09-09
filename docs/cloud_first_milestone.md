@@ -10,7 +10,7 @@
 его реализации и не замена продолжающегося этапа 9. Действующие источники
 и сохраняемые контракты перечислены в [cloud-архитектуре](./cloud_first_architecture.md#статус-и-связь-с-действующими-документами).
 
-Основной product/analytics функционал уже реализован в `main`. M0–M8 описывают отдельный инфраструктурный трек: IaC, cloud runtime, managed storage, публикацию, observability и cutover. Старая VPS/SQLite-инфраструктура сохраняется рабочей до завершения и приёмки миграции; функциональные изменения продукта в этот трек не входят и переносятся в `main` merge-ом или точечным `git cherry-pick`.
+Основной product/analytics функционал уже реализован в `main`. M0–M8 описывают отдельный инфраструктурный трек: IaC, cloud runtime, managed storage, публикацию, observability и cutover. Старая VPS/SQLite-инфраструктура сохраняется рабочей до завершения и приёмки миграции; функциональные изменения продукта в этот трек не входят и проходят отдельный review/merge в `main`.
 
 ## Общие правила выполнения M0–M8
 
@@ -190,6 +190,34 @@ cutover.
 предполагать, что Basic Auth/cookies проходят фильтрацию заголовков без изменений.
 
 Не добавлять Cloud Functions только ради вызова контейнера.
+
+### CI/CD actions for M1
+
+- Application-release workflow принимает только `main`: для одного commit SHA
+  выполняет проверки, собирает image ровно один раз, публикует его по digest и
+  сохраняет provenance (commit SHA, digest, workflow run и результаты проверок).
+- Infrastructure-deploy workflow принимает digest как явный immutable input из
+  registry; он планирует/разворачивает IaC и environment configuration в cloud,
+  не пересобирая application image. Выбор digest и environment config видны в
+  deployment evidence.
+- Для dual-target проверки тот же digest разворачивается на VPS и в cloud с
+  раздельными secrets/configuration. Проверка сравнивает фактические running
+  image digests, а не только tag или номер релиза.
+- Cloud-only code не попадает в application image. Если нужен runtime-compatibility
+  change, отдельный PR сначала принимает его в `main`, затем release workflow
+  выпускает новый digest, который выбирает infrastructure workflow.
+
+### Критерии CI/CD-приёмки
+
+- По одному `main` commit SHA существует один опубликованный immutable digest и
+  воспроизводимая provenance-запись; deployment не принимает floating tag.
+- Cloud deployment изменяет только выбранные infrastructure/environment targets,
+  а VPS и cloud запускают один и тот же проверенный digest.
+- Конфигурация, secrets, state, publication namespace и side-effect sinks
+  разделены по окружениям; M1 smoke не запускает duplicate production analysis,
+  AI generation, messages или пользовательские записи.
+- Deployment может быть повторён с тем же digest без пересборки и без изменения
+  application artifact; legacy VPS остаётся рабочим rollback path.
 
 ### Критерии приёмки
 
@@ -480,7 +508,7 @@ architecture/cloud-first-serverless
   -> PR, явная приёмка владельца, затем merge
 
 product fixes
-  -> отдельный PR в main или точечный cherry-pick
+  -> отдельный review/PR в main
 ```
 
 После merge PR Issue обновляется ссылкой на принятый PR и evidence, а следующий этап начинается от принятого состояния. Регулярный rebase выполняется только при необходимости обновить базу от `main`; product branches не обязаны ждать cloud-first работ.
