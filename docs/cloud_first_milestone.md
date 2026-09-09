@@ -200,9 +200,11 @@ cutover.
   registry; он планирует/разворачивает IaC и environment configuration в cloud,
   не пересобирая application image. Выбор digest и environment config видны в
   deployment evidence.
-- Для dual-target проверки тот же digest разворачивается на VPS и в cloud с
-  раздельными secrets/configuration. Проверка сравнивает фактические running
-  image digests, а не только tag или номер релиза.
+- Workflow и IaC поддерживают dual-target deployment одного digest на VPS и в
+  cloud с раздельными secrets/configuration; M1 проверяет выбор digest,
+  rendering и bounded initial runtime smoke. Фактическая одновременная проверка
+  running image digests относится к повторной приёмке M2 в M4 и финальной проверке
+  M8, после доказательства runtime/storage compatibility.
 - Cloud-only code не попадает в application image. Если нужен runtime-compatibility
   change, отдельный PR сначала принимает его в `main`, затем release workflow
   выпускает новый digest, который выбирает infrastructure workflow.
@@ -211,8 +213,9 @@ cutover.
 
 - По одному `main` commit SHA существует один опубликованный immutable digest и
   воспроизводимая provenance-запись; deployment не принимает floating tag.
-- Cloud deployment изменяет только выбранные infrastructure/environment targets,
-  а VPS и cloud запускают один и тот же проверенный digest.
+- Cloud deployment изменяет только выбранные infrastructure/environment targets;
+  M1 подтверждает digest selection/rendering и bounded smoke, не требуя готового
+  dual-runtime production path.
 - Конфигурация, secrets, state, publication namespace и side-effect sinks
   разделены по окружениям; M1 smoke не запускает duplicate production analysis,
   AI generation, messages или пользовательские записи.
@@ -327,6 +330,12 @@ durability, leases и безопасности реальных конкурен
 - Core storage contract suite проходит на обоих backend.
 - Существующие SQLite tests остаются зелёными.
 - Migrations/schema initialization выбранного backend воспроизводимы и идемпотентны.
+- Повторная приёмка M2 выполняется на выбранном application digest после
+  доказательства storage compatibility: VPS и cloud запускаются на одном digest
+  с раздельными environment configuration, shadow state и side-effect sinks;
+  фактические running digests фиксируются. Production analysis, AI, messages и
+  пользовательские записи не дублируются. Финальная повторная проверка этого
+  dual-runtime контракта и single-writer перехода выполняется в M8.
 - Сохранены идентичности, связи, исходная гранулярность, пользовательские данные,
   аудит, UTC-время и календарные границы в зоне объекта; настройки не переносятся назад.
 - Одинаковые входные данные периода не вызывают пересчёта из-за смены backend;
