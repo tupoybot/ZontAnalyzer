@@ -87,6 +87,12 @@ Examples:
 * Mechanical inspection of files, locating definitions, simple repository searches:
 
   * use a lightweight model unless deeper reasoning is required;
+* Small, well-scoped code or documentation corrections with a clear target and acceptance
+  criterion:
+
+  * use `gpt-5.3-codex-spark` with high reasoning for fast, focused edits;
+  * do not use it for boiler operation analysis, thermal or gas interpretation, root-cause
+    analysis, architecture, or other work requiring domain judgment;
 * Terraform design, security-sensitive changes, architecture, debugging non-obvious failures:
 
   * keep in the main agent or use a stronger model only when necessary.
