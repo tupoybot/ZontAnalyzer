@@ -127,6 +127,7 @@ def test_ai_metadata_is_not_evidence_and_real_changes_remain_stale() -> None:
     del fresh.context['ai_facts_fingerprint']
     fresh.context['control_settings']['captured_at'] = '2026-09-08T20:08:00Z'
     fresh.context['heating_analysis']['location_captured_at'] = '2026-09-08T20:08:00Z'
+    fresh.context['gas']['timezone_provenance'] = 'same timezone rediscovered'
     retained = reuse_ai_interpretation(old, fresh)
     assert retained.context['pilot_ai_reuse']['facts_changed'] is False
     assert retained.context['ai_provenance'] == old.context['ai_provenance']

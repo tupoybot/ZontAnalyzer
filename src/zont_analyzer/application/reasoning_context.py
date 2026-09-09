@@ -32,6 +32,8 @@ def _facts_digest(report: Report, *, include_ai_provenance: bool) -> str:
         context.pop(key, None)
     gas = context.get("gas")
     if isinstance(gas, dict):
+        if not include_ai_provenance:
+            gas.pop("timezone_provenance", None)
         for key in ("ai_stale", "updated", "previous_model_version"):
             gas.pop(key, None)
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
