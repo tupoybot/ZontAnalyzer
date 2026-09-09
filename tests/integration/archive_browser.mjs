@@ -122,6 +122,9 @@ try {
   await page.unroute("**/reports.json");
 
   await page.goto(`${baseURL}/daily/2026-08-05.html`, { waitUntil: "networkidle" });
+  assert.equal(await page.locator('.target-band-note').count(), 1);
+  assert.equal(await page.locator('.overview > .target-band-note').isVisible(), true);
+  assert.match(await page.locator('.target-band-note').textContent(), /±0,5 °C/);
   const gasCard = page.locator("#metrics .gas-period-card");
   await gasCard.waitFor();
   assert.match(await gasCard.textContent(), /Расход газа за период/);

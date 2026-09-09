@@ -21,6 +21,30 @@ def esc(value: Any) -> str:
     return html.escape(str(value))
 
 
+def target_band_note(report: Report, current_comfort_band_c: float | None = None) -> str:
+    """Explain the analytical tolerance once, retaining historical thresholds."""
+    metrics = [metric for metric in report.metrics if metric.name in {
+        "time_in_target_band_pct", "time_above_target_band_pct", "time_below_target_band_pct",
+    }]
+    if not metrics:
+        return ""
+    stored = [metric.context.get("comfort_band_c") for metric in metrics]
+    known = [value for value in stored if isinstance(value, (int, float))
+             and not isinstance(value, bool) and math.isfinite(value) and value > 0]
+    if known and any(value != known[0] for value in known):
+        return ""
+    band = known[0] if known else current_comfort_band_c
+    if not isinstance(band, (int, float)) or isinstance(band, bool) or not math.isfinite(band) or band <= 0:
+        return ""
+    prefix = "Допуск анализа" if known else "Текущий допуск анализа"
+    value = f"{band:g}".replace(".", ",")
+    return (
+        f"{prefix} относительно уставки: ±{value} °C. "
+        "«В диапазоне» включает отклонения в пределах этого допуска; "
+        "«ниже» и «выше диапазона» — только выход за его границы."
+    )
+
+
 def ai_freshness_notice(report: Report) -> str:
     """Explain automatic reuse separately from a changed gas calculation."""
     gas = report.context.get("gas")

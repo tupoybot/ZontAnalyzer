@@ -23,6 +23,7 @@ from zont_analyzer.reports.presentation import (
     gas_savings_text,
     number,
     period_target,
+    target_band_note,
     timezone_note,
 )
 from zont_analyzer.reports.wording import normalize_report_for_display
@@ -867,7 +868,7 @@ def _historical_evidence_html(context: Mapping[str, Any]) -> str:
     )
 
 
-def render_text(report: Report) -> str:
+def render_text(report: Report, *, current_comfort_band_c: float | None = None) -> str:
     report = normalize_report_for_display(report)
     lines = [
         f"ZontAnalyzer — {report.kind}",
@@ -877,6 +878,8 @@ def render_text(report: Report) -> str:
         ai_provenance_label(report),
     ]
     lines.extend(ai_provenance_details(report))
+    if note := target_band_note(report, current_comfort_band_c):
+        lines.append(note)
     for metric in report.metrics:
         if metric.name in {"boiler_uptime_seconds", "zont_uptime_seconds"}:
             value, unit = _metric_display(metric)
@@ -1119,6 +1122,7 @@ def render_html(
     owner_data: dict[str, Any] | None = None,
     latest_report_href: str = "latest.html",
     chart_data: dict[str, Any] | None = None,
+    current_comfort_band_c: float | None = None,
 ) -> str:
     from . import presentation as ui
     from .charts import render_charts
@@ -1126,6 +1130,8 @@ def render_html(
 
     canonical_report = report
     report = normalize_report_for_display(report)
+    band_note = target_band_note(report, current_comfort_band_c)
+    band_note_html = f'<p class="chart-note target-band-note">{html.escape(band_note)}</p>' if band_note else ""
     title = html.escape(f"ZontAnalyzer — {report.kind}")
     from zont_analyzer.reports.owner_forms import render_owner_forms
 
@@ -1447,6 +1453,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 {html.escape(report.algorithm_version)}</p></div>
 </header><main id="report" class="report-layout">
 <div class="overview">{ui.hero(report)}{ui.kpis(report)}
+{band_note_html}
 {render_charts(report, chart_data, panel_ids=("climate",))}</div>
 <aside class="actions"><span class="eyebrow">СЛЕДУЮЩИЙ ШАГ</span><h2>Что делать</h2>
 {recommendations or '<p>Рекомендаций за этот период нет.</p>'}</aside>

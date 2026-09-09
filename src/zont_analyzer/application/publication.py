@@ -172,6 +172,7 @@ def _publish_report_locked(
         runtime.db.recommendation_views_for_report(published_report.id),
         chart_data=cached_chart_data(runtime.db, published_report),
         feedback_api_base_url=runtime.config.feedback.public_api_base_url,
+        current_comfort_band_c=runtime.config.preferences.comfort_band_c,
         latest_report_href="../latest.html",
         owner_data=owner_data,
     )
@@ -233,6 +234,7 @@ def _publish_report_locked(
                 runtime.db.recommendation_views_for_report(published_report.id),
                 chart_data=cached_chart_data(runtime.db, published_report),
                 feedback_api_base_url=runtime.config.feedback.public_api_base_url,
+                current_comfort_band_c=runtime.config.preferences.comfort_band_c,
                 owner_data=owner_data,
             ))
     latest_id = (
@@ -314,6 +316,7 @@ def _publish_locked(
             runtime.db.recommendation_views_for_report(report.id),
             chart_data=cached_chart_data(runtime.db, report),
             feedback_api_base_url=runtime.config.feedback.public_api_base_url,
+            current_comfort_band_c=runtime.config.preferences.comfort_band_c,
             latest_report_href="../latest.html",
             owner_data=owner_data(report),
         )
@@ -344,6 +347,7 @@ def _publish_locked(
             runtime.db.recommendation_views_for_report(latest.id),
             chart_data=cached_chart_data(runtime.db, latest),
             feedback_api_base_url=runtime.config.feedback.public_api_base_url,
+            current_comfort_band_c=runtime.config.preferences.comfort_band_c,
             owner_data=owner_data(latest),
         ))
     return {

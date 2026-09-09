@@ -148,7 +148,7 @@ def analyze_initial(
     ] = None,
 ) -> None:
     report = _runtime(ctx).analysis(no_ai=no_ai).analyze_initial(use_ai=not no_ai, days=days)
-    typer.echo(render_text(report))
+    typer.echo(render_text(report, current_comfort_band_c=_runtime(ctx).config.preferences.comfort_band_c))
 
 
 @recommendations_app.command("maintain")
@@ -168,7 +168,7 @@ def analyze_daily(
     except ValueError as exc:
         raise typer.BadParameter("Date must look like 2026-08-01") from exc
     report = analysis.analyze_daily(report_date, use_ai=not no_ai)
-    typer.echo(render_text(report))
+    typer.echo(render_text(report, current_comfort_band_c=_runtime(ctx).config.preferences.comfort_band_c))
 
 
 @analyze_app.command("weekly")
@@ -183,7 +183,7 @@ def analyze_weekly(
     report = (
         _runtime(ctx).analysis(no_ai=no_ai).analyze_week(int(match.group(1)), int(match.group(2)), use_ai=not no_ai)
     )
-    typer.echo(render_text(report))
+    typer.echo(render_text(report, current_comfort_band_c=_runtime(ctx).config.preferences.comfort_band_c))
 
 
 @analyze_app.command("monthly")
@@ -198,7 +198,7 @@ def analyze_monthly(
     report = (
         _runtime(ctx).analysis(no_ai=no_ai).analyze_month(int(match.group(1)), int(match.group(2)), use_ai=not no_ai)
     )
-    typer.echo(render_text(report))
+    typer.echo(render_text(report, current_comfort_band_c=_runtime(ctx).config.preferences.comfort_band_c))
 
 
 @analyze_app.command("seasonal")
@@ -211,7 +211,7 @@ def analyze_seasonal(
     if not match:
         raise typer.BadParameter("Season must look like 2026-winter")
     report = _runtime(ctx).analysis(no_ai=no_ai).analyze_season(int(match.group(1)), match.group(2), use_ai=not no_ai)
-    typer.echo(render_text(report))
+    typer.echo(render_text(report, current_comfort_band_c=_runtime(ctx).config.preferences.comfort_band_c))
 
 
 @report_app.command("latest")
@@ -219,7 +219,7 @@ def report_latest(ctx: typer.Context) -> None:
     report = _runtime(ctx).db.latest_report()
     if report is None:
         raise typer.BadParameter("No reports exist")
-    typer.echo(render_text(report))
+    typer.echo(render_text(report, current_comfort_band_c=_runtime(ctx).config.preferences.comfort_band_c))
 
 
 @report_app.command("publish")
@@ -277,9 +277,10 @@ def report_export(
             db.recommendation_views_for_report(report.id),
             chart_data=cached_chart_data(db, report),
             feedback_api_base_url=_runtime(ctx).config.feedback.public_api_base_url,
+            current_comfort_band_c=_runtime(ctx).config.preferences.comfort_band_c,
         )
     elif format_ in {"text", "md"}:
-        content = render_text(report)
+        content = render_text(report, current_comfort_band_c=_runtime(ctx).config.preferences.comfort_band_c)
     elif format_ == "json":
         content = report.model_dump_json(indent=2)
     else:

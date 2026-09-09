@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.application.publication import publish_reports
-from zont_analyzer.domain import Hypothesis, TimeInterval
+from zont_analyzer.domain import Hypothesis, MetricValue, TimeInterval
 from zont_analyzer.reports import render_html, render_text
 from zont_analyzer.runtime import build_runtime
 
@@ -35,6 +35,9 @@ def save_with_gas(report, gas: dict) -> None:
 # The gaps are intentional: navigation must skip 2 and 4 August.
 for selected in (date(2026, 8, 1), date(2026, 8, 3), date(2026, 8, 5)):
     report = analysis.analyze_daily(selected, use_ai=False)
+    report.metrics.append(MetricValue(
+        id=f"band:{selected}", name="time_in_target_band_pct", value=100, unit="%",
+    ))
     report.hypotheses = [Hypothesis(
         id="h:browser", statement="Синтетическая гипотеза <unsafe>", confidence=.4,
         confidence_basis="Нет прямого сигнала", rationale="Только косвенные признаки",

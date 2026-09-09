@@ -137,3 +137,33 @@ def test_recalculated_setpoints_do_not_claim_ai_was_regenerated():
     report = fixture_report().model_copy(update={"ai_used": True})
     report.context["setpoint_recalculation"] = {"version": "setpoints-v1"}
     assert "Текст AI сохранён из предыдущей версии отчёта" in render_html(report)
+
+
+def test_target_band_footnote_preserves_saved_tolerance_and_report() -> None:
+    from zont_analyzer.reports import render_text
+
+    report = fixture_report()
+    report.metrics.append(MetricValue(
+        id='band', name='time_in_target_band_pct', value=96.8, unit='%',
+        context={'comfort_band_c': 0.25},
+    ))
+    raw = report.model_dump_json()
+    page = render_html(report, current_comfort_band_c=0.5)
+    assert page.count('class="chart-note target-band-note"') == 1
+    for output in (page, render_text(report, current_comfort_band_c=0.5)):
+        assert output.count('Допуск анализа относительно уставки: ±0,25 °C.') == 1
+        assert 'Текущий допуск анализа' not in output
+        assert 'только выход за его границы' in output
+    assert report.model_dump_json() == raw
+
+
+def test_legacy_target_band_note_labels_current_setting_without_changing_metrics() -> None:
+    from zont_analyzer.reports.presentation import target_band_note
+
+    report = fixture_report()
+    assert target_band_note(report, 0.5) == ''
+    report.metrics.append(MetricValue(id='band', name='time_in_target_band_pct', value=100, unit='%'))
+    raw = report.model_dump_json()
+    assert target_band_note(report) == ''
+    assert 'Текущий допуск анализа относительно уставки: ±0,5 °C.' in target_band_note(report, 0.5)
+    assert report.model_dump_json() == raw
