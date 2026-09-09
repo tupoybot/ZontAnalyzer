@@ -50,7 +50,7 @@
 Развёрнуто 2026-09-09: commit `18b9158`, тег `release-9-target-band-note-20260909`,
 HK release `20260909-target-band-18b9158`.
 Образ: `ghcr.io/tupoybot/zontanalyzer@sha256:85aaccd1b39dbf4821db3a647cb6886136d0317e9e28ff3544e8d1ee5946f00e`.
-Ветка `stage9/ai-freshness` ожидает приёмки, слияния не было.
+Ветка `stage9/ai-freshness` принята владельцем и слита в `main` 2026-09-09 (`5b436a9`).
 
 - Docker на devbox: Ruff, mypy, 600 тестов, wheel/sdist прошли.
   [CI](https://github.com/tupoybot/ZontAnalyzer/actions/runs/34316760839) зелёный,
