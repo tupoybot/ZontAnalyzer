@@ -173,6 +173,28 @@ def test_season_pairs_house_context_and_missing_history_are_explicit(tmp_path: P
     assert any(item["label"] == "Предыдущая осень" for item in missing["period_comparisons"])
 
 
+def test_daily_comparison_context_excludes_persisted_current_report(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    start = datetime(2026, 9, 2, tzinfo=UTC)
+    current = _report(start)
+    period = calendar_period("daily", start.date(), "UTC")
+    boundaries = SeasonBoundaries()
+
+    def no_analysis(_start: datetime, _end: datetime) -> Report:
+        raise AssertionError("no intervention means no comparison callback")
+
+    before = build_comparison_context(
+        db, current, period, boundaries=boundaries, analyze_window=no_analysis,
+    )
+    _save(db, current)
+    after = build_comparison_context(
+        db, current, period, boundaries=boundaries, analyze_window=no_analysis,
+    )
+
+    assert before == after
+    assert current.id not in after["house_context"]["source_report_ids"]
+
+
 def test_firmware_outcome_preserves_prediction_and_second_intervention_blocks_isolation(tmp_path: Path) -> None:
     db = _db(tmp_path)
     current_start = datetime(2026, 10, 1, tzinfo=UTC)

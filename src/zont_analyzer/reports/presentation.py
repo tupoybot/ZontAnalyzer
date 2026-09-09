@@ -25,6 +25,12 @@ def ai_freshness_notice(report: Report) -> str:
     """Explain automatic reuse separately from a changed gas calculation."""
     gas = report.context.get("gas")
     pilot_reuse = report.context.get("pilot_ai_reuse")
+    baseline = report.context.get("ai_facts_fingerprint")
+    if (isinstance(pilot_reuse, dict) and pilot_reuse.get("facts_changed") is True
+            and isinstance(baseline, str) and not baseline.startswith("facts-v2:")):
+        # The legacy comparator included AI/discovery bookkeeping, so its
+        # mismatch does not prove that the evidence changed.
+        pilot_reuse = {**pilot_reuse, "facts_changed": None}
     if isinstance(pilot_reuse, dict) and pilot_reuse.get("facts_changed") is False:
         pilot_reuse = None
     failed_reuse = report.context.get("ai_interpretation_reuse")
@@ -44,7 +50,7 @@ def ai_freshness_notice(report: Report) -> str:
         if not isinstance(pilot_reuse, dict) or pilot_reuse.get("facts_changed") is not True:
             return (
                 f"Пояснение AI{stamp} сохранено после автоматического пересчёта. "
-                "Для этого старого отчёта сравнение с исходными данными AI недоступно."
+                "Точное сравнение с исходными данными AI недоступно."
             )
         return (
             "Показатели автоматически пересчитаны после обновления данных. "
@@ -364,8 +370,6 @@ def gas_period_card(report: Report) -> str:
             "boiler": "котёл", "shared_meter": "приближение по общему счётчику",
             "whole_meter": "весь счётчик",
         }.get(str(scope), str(scope)))
-    notice = ai_freshness_notice(report)
-    stale = f'<p class="gas-period-stale" role="status">{esc(notice)}</p>' if notice else ""
     intervals = gas.get("measured_intervals")
     interval_rows = []
     if isinstance(intervals, list):
@@ -395,7 +399,6 @@ def gas_period_card(report: Report) -> str:
     return (
         '<details class="metric-group gas-period-card"><summary id="gas-period-title">Газ</summary>'
         f'<p class="gas-period-details">{esc(" · ".join(details))}</p>'
-        + stale
         + purpose_details
         + "".join(f'<p class="gas-cost-note">{esc(line)}</p>' for line in gas_cost_lines(gas.get("cost")))
         + interval_details
