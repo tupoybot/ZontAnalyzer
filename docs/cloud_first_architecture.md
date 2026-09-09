@@ -353,6 +353,31 @@ evidence, состоянием legacy deployment и rollback/cutover impact. П�
 
 После merge PR этап считается принятым, Issue обновляется ссылкой на PR и evidence, а следующий этап начинается от принятого состояния. Для небольшого функционального исправления, не относящегося к cloud-инфраструктуре, используется отдельный PR в `main` или точечный `git cherry-pick`; такое исправление не считается приёмкой cloud-вехи.
 
+### CI/CD и dual-runtime contract
+
+Application releases строятся из принятого `main`: feature-разработка проходит
+обычный review/merge, затем CI и локальная Docker-проверка выпускают immutable
+image, идентифицируемый digest. Cloud-инфраструктура развивается независимо и
+может выбирать этот digest в своём deployment PR. Коммиты IaC, cloud runtime и
+environment wiring не становятся частью application image и не должны требовать
+слияния каждого инфраструктурного изменения в `main`.
+
+VPS и cloud могут временно работать одновременно на одном и том же application
+image digest. Их различия задаются environment configuration и managed secrets:
+storage target, report prefix, расписание, credentials, egress policy и режим
+side effects не зашиваются в image. Если runtime compatibility требует изменения
+кода, оно сначала входит в `main` отдельным ограниченным PR, после чего оба runtime
+получают новый digest. Нельзя выдавать код, присутствующий только в cloud-ветке,
+за код application release или за совместимый baseline VPS.
+
+До M8 dual-runtime используется только как изолированный shadow/pilot. Cloud
+получает отдельные state, publication namespace и sinks для побочных эффектов;
+production analysis, AI generation, messages, feedback writes и прочие внешние
+эффекты не запускаются повторно. Разрешены read-only сравнения и mock/no-op
+side effects. Legacy VPS сохраняет единственного production writer и scheduler
+до согласованного cutover; M8 отдельно проверяет остановку старого расписания,
+перенос финальной дельты и возврат при rollback.
+
 ## 12. Философия миграции
 
 Предпочтительный порядок:
