@@ -65,6 +65,8 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
         "device_id": device_id,
         "report_id": report.id,
         "daily": report.kind == "daily",
+        "report_kind": report.kind,
+        "report_day": report.period_start.astimezone(ZoneInfo(report.timezone)).date().isoformat(),
         "tariffs": owner_data.get("tariffs", []),
         "timezone": report.timezone,
     }
@@ -190,9 +192,10 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
     gas_form = "" if report.kind != "daily" else f"""
 <section class="owner-form owner-gas" data-owner-gas>
   <h2>Показание газа</h2>
-  <p class="owner-help">Накопленное показание счётчика, м³. День берётся из этого дневного отчёта; время снятия неизвестно.</p>
-  <div class="owner-gas-summary"><p data-gas-current>{reading_summary}</p><button type="button" class="owner-secondary" data-gas-edit aria-controls="gas-editor" aria-expanded="false">Изменить показание</button></div>
+  <p class="owner-help">Накопленное показание счётчика, м³. Выберите календарный день; время снятия пока не указывается.</p>
+  <div class="owner-gas-summary"><p data-gas-current>{reading_summary}</p><div class="owner-gas-controls"><button type="button" class="owner-secondary" data-gas-new>Новое показание</button><button type="button" class="owner-secondary" data-gas-edit aria-controls="gas-editor" aria-expanded="false">Изменить показание</button></div></div>
   <details id="gas-editor" class="owner-gas-editor"><summary>Редактирование показания</summary>
+    <label>Дата показания <input name="gas-date" type="date" value="{report.period_start.astimezone(ZoneInfo(report.timezone)).date().isoformat()}"></label>
     <label>Накопленное показание, м³ <input name="gas-value" type="text" inputmode="decimal" maxlength="64" value="{html.escape(str(reading_value), quote=True)}"></label>
     <p class="owner-help">Дробные значения можно вводить через точку или запятую.</p>
     <label class="owner-inline"><input name="gas-reset" type="checkbox"> Явная замена, сброс или переполнение счётчика</label>
@@ -200,7 +203,7 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
   </details>
   <p class="owner-help">Расход ещё не рассчитан. Показание сохраняется для дальнейшего анализа.</p>
   <p class="owner-help" data-gas-plausibility></p>
-  <p data-meter-boundary></p><details class="owner-gas-history"><summary>История показания</summary><pre data-gas-history></pre></details>
+  <p data-meter-boundary></p><details class="owner-gas-history"><summary>История показаний</summary><div data-gas-history></div></details>
   <p class="owner-message" data-gas-message role="status" aria-live="polite"></p>
 </section>"""
     from zont_analyzer.application.gas_tariffs import CURRENCIES
@@ -241,6 +244,7 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
 .owner-inline input,.owner-tristate{{width:auto!important}}.owner-source,.owner-help{{overflow-wrap:anywhere;color:#536579;font-size:.9rem}}.owner-actions{{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.7rem}}
 .owner-actions button,.owner-reset,.owner-secondary{{font:inherit;padding:.4rem .7rem;border:0;border-radius:.35rem;background:#287943;color:#fff;cursor:pointer}}
 .owner-secondary{{background:#516275}}
+.owner-gas-controls{{display:flex;gap:.5rem;flex-wrap:wrap}}
 .owner-forms .owner-secondary:hover,.owner-forms .owner-reset:hover{{background:#394b60;color:#fff}}
 .owner-forms .owner-actions button:hover{{background:#1b6033;color:#fff}}
 .owner-forms .owner-reset{{justify-self:start;min-height:40px}}.owner-gas-summary{{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}}.owner-gas-summary p{{margin:.2rem 0;font-weight:700}}

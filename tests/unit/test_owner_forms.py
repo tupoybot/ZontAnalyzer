@@ -30,7 +30,11 @@ def test_owner_forms_include_safe_profile_and_daily_gas_contract() -> None:
     assert "/equipment" in rendered and "/reports/" in rendered and "/gas" in rendered
     assert "has_gas_stove" in rendered and "installation_notes" in rendered
     assert 'name="gas-value"' in rendered
-    assert 'name="gas-date"' not in rendered and 'name="gas-time"' not in rendered
+    assert 'name="gas-date" type="date" value="2026-09-06"' in rendered
+    assert 'name="gas-time"' not in rendered
+    initial = json.loads(embedded.group(1))
+    assert initial["report_kind"] == "daily"
+    assert initial["report_day"] == "2026-09-06"
 
 
 def test_gas_form_is_absent_for_non_daily_reports() -> None:
@@ -46,6 +50,7 @@ def test_owner_progressive_disclosures_keep_edit_and_history_hooks() -> None:
     assert ' open' not in rendered[profile_start:rendered.index('>', profile_start)]
     assert rendered.count('class="owner-field-group"') == 5
     assert '<div class="owner-gas-summary"><p data-gas-current>Текущее показание: 12.50 м³' in rendered
+    assert 'data-gas-new' in rendered
     assert 'data-gas-edit' in rendered and 'aria-expanded="false"' in rendered
     assert '<details id="gas-editor"' in rendered
     assert '<details class="owner-gas-history"' in rendered

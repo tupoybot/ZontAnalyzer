@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.application.publication import publish_report, publish_reports
@@ -116,7 +116,9 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
             """Equipment and meter writes share the existing loopback/Basic Auth perimeter."""
             from zont_analyzer.application.owner_context import OwnerContextStore
 
-            path = urlsplit(self.path).path
+            request = urlsplit(self.path)
+            path = request.path
+            query = parse_qs(request.query, keep_blank_values=True)
             equipment_prefix = f"{api_path}/equipment/"
             gas_prefix = f"{api_path}/reports/"
             kind = ""
@@ -174,8 +176,14 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
 
                             if not value.get("idempotent"):
                                 publish_tariff_change(runtime, value["affected_start"], value["affected_end"])
-                        else:
+                        elif kind == "profile":
                             publish_reports(runtime)
+                        # Gas writes are already durable. The regular worker
+                        # publication reads current readings and refreshes the
+                        # archive, including calibrated/comparison contexts.
+                        # Never make this response wait for the publication lock
+                        # or another full archive pass; restart/retry is covered
+                        # by the next successful worker cycle.
                     except (OSError, ValueError):
                         value["publish_warning"] = "Сохранено; HTML обновится в следующем цикле."
                 elif kind == "profiles":
@@ -185,7 +193,13 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
 
                     value = {"history": GasTariffStore(runtime.db).history()}
                 else:
-                    value = store.profile(identifier) if kind == "profile" else store.gas(identifier)
+                    if kind == "profile":
+                        value = store.profile(identifier)
+                    else:
+                        days = query.get("day", [])
+                        if len(days) > 1:
+                            raise ValueError("Укажите одну дату показания в формате YYYY-MM-DD.")
+                        value = store.gas(identifier, days[0] if days else None)
             except KeyError:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "Устройство или дневной отчёт не найдены."})
                 return True

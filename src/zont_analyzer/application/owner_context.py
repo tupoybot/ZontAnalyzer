@@ -452,7 +452,7 @@ class OwnerContextStore:
         return self.profile(device_id)
 
     @staticmethod
-    def _report_day(session: Session, report_id: str) -> tuple[ReportRow, str, str]:
+    def _report_day(session: Session, report_id: str) -> tuple[ReportRow, str, str, ZoneInfo]:
         row = session.get(ReportRow, report_id)
         if row is None:
             raise KeyError(report_id)
@@ -460,16 +460,39 @@ class OwnerContextStore:
             raise ValueError("gas readings belong to daily reports only")
         try:
             report = json.loads(row.canonical_json)
-            timezone = str(report.get("timezone") or "UTC")
+            timezone = ZoneInfo(str(report.get("timezone") or "UTC"))
             context = report.get("context") if isinstance(report.get("context"), dict) else {}
             # Gas readings describe the installation meter. A report may name
             # a selected analysis device, which must not split this meter.
             del context
             device_id = "installation"
-            day = datetime.fromtimestamp(row.period_start, UTC).astimezone(ZoneInfo(timezone)).date().isoformat()
+            day = datetime.fromtimestamp(row.period_start, UTC).astimezone(timezone).date().isoformat()
         except Exception as exc:
             raise ValueError("invalid report time or timezone") from exc
-        return row, day, device_id
+        return row, day, device_id, timezone
+
+    @staticmethod
+    def _selected_gas_day(value: Any, report_day: str, timezone: ZoneInfo) -> str:
+        """Validate an explicitly selected local calendar day.
+
+        A browser timezone is intentionally not submitted as authority.  Permit
+        one day past the UTC date so an owner on either side of the site's
+        timezone can enter their already-current browser day, while still
+        rejecting arbitrary future meter readings.
+        """
+        if value is None:
+            return report_day
+        if not isinstance(value, str) or len(value) != 10:
+            raise ValueError("Укажите дату показания в формате YYYY-MM-DD.")
+        try:
+            selected = date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("Укажите дату показания в формате YYYY-MM-DD.") from exc
+        if selected.isoformat() != value:
+            raise ValueError("Укажите дату показания в формате YYYY-MM-DD.")
+        if selected > datetime.now(UTC).date() + timedelta(days=1):
+            raise ValueError("Дата показания не может быть в будущем.")
+        return value
 
     @staticmethod
     def _boundaries(session: Session, device_id: str) -> list[GasMeterBoundaryRow]:
@@ -495,29 +518,51 @@ class OwnerContextStore:
         for reading in session.scalars(select(GasReadingRow).where(GasReadingRow.device_id == device_id)).all():
             reading.meter_segment = cls._segment_for_day(session, device_id, reading.reading_day)
 
-    def gas(self, report_id: str) -> dict[str, Any]:
+    def gas(self, report_id: str, day: str | None = None) -> dict[str, Any]:
         with self.db.session() as session:
-            report, day, device_id = self._report_day(session, report_id)
+            report, report_day, device_id, timezone = self._report_day(session, report_id)
+            selected_day = self._selected_gas_day(day, report_day, timezone)
             row = session.scalar(
                 select(GasReadingRow).where(
                     GasReadingRow.device_id == device_id,
-                    GasReadingRow.reading_day == day,
+                    GasReadingRow.reading_day == selected_day,
                 )
             )
-            audits = session.scalars(
+            all_audits = session.scalars(
                 select(GasReadingAuditRow)
-                .where(
-                    GasReadingAuditRow.device_id == device_id,
-                    GasReadingAuditRow.reading_day == day,
-                )
+                .where(GasReadingAuditRow.device_id == device_id)
                 .order_by(GasReadingAuditRow.created_at, GasReadingAuditRow.id)
             ).all()
+            # A move is recorded under its destination day.  Keep it visible
+            # from both ends of history by inspecting the immutable snapshots.
+            audits = [
+                item for item in all_audits
+                if item.reading_day == selected_day
+                or row is not None and item.reading_id == row.id
+                or any(
+                    snapshot and json.loads(snapshot).get("day") == selected_day
+                    for snapshot in (item.before_json, item.after_json)
+                )
+            ]
+            readings = list(session.scalars(
+                select(GasReadingRow).where(GasReadingRow.device_id == device_id)
+                .order_by(GasReadingRow.reading_day, GasReadingRow.id)
+            ).all())
+            latest_period_start = next((candidate.period_start for candidate in session.execute(
+                select(ReportRow.period_start, ReportRow.period_end, ReportRow.generated_at)
+                .where(ReportRow.kind == "daily", ReportRow.period_end <= int(utcnow().timestamp()))
+                .order_by(ReportRow.period_start.desc())
+            ) if int(_as_utc(candidate.generated_at).timestamp()) >= candidate.period_end), None)
             return {
                 "report_id": report_id,
                 "time_precision": "day",
+                "report_day": report_day,
+                "selected_day": selected_day,
+                "is_latest_report": report.period_start == latest_period_start,
                 "reading": self._reading(row) if row else None,
+                "readings": [self._reading(item) for item in readings],
                 "audit": [self._audit(item) for item in audits],
-                "plausibility": self._gas_plausibility(session, report, day, row),
+                "plausibility": self._gas_plausibility(session, report, selected_day, row),
             }
 
     def _gas_plausibility(
@@ -620,20 +665,23 @@ class OwnerContextStore:
         }
 
     @staticmethod
-    def _gas_payload(payload: dict[str, Any]) -> tuple[bool, bool, Decimal | None]:
-        if not isinstance(payload, dict) or set(payload) - {"value_m3", "delete", "reset"}:
-            raise ValueError("gas payload accepts only value_m3, delete, and reset")
+    def _gas_payload(payload: dict[str, Any]) -> tuple[bool, bool, Decimal | None, Any, bool]:
+        if not isinstance(payload, dict) or set(payload) - {"value_m3", "delete", "reset", "day", "reading_id"}:
+            raise ValueError("gas payload accepts only value_m3, delete, reset, day, and reading_id")
         delete, reset = payload.get("delete", False), payload.get("reset", False)
         if not isinstance(delete, bool) or not isinstance(reset, bool):
             raise ValueError("delete and reset must be booleans")
+        reading_id = payload.get("reading_id")
+        if reading_id is not None and (not isinstance(reading_id, str) or not reading_id):
+            raise ValueError("reading_id must be a non-empty string or null")
         has_value = "value_m3" in payload
         if delete:
             if has_value:
                 raise ValueError("delete cannot include value_m3")
-            return True, reset, None
+            return True, reset, None, reading_id, "reading_id" in payload
         if not has_value:
             raise ValueError("value_m3 is required unless delete is true")
-        return False, reset, _decimal(payload["value_m3"])
+        return False, reset, _decimal(payload["value_m3"]), reading_id, "reading_id" in payload
 
     def _validate_monotonic(
         self, session: Session, device_id: str, day: str, number: Decimal, reading_id: str | None
@@ -654,15 +702,35 @@ class OwnerContextStore:
                 )
 
     def update_gas(self, report_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        delete, reset, number = self._gas_payload(payload)
+        delete, reset, number, reading_id, reading_id_supplied = self._gas_payload(payload)
         with self._write_session() as session:
-            _report, day, device_id = self._report_day(session, report_id)
-            existing = session.scalar(
+            _report, report_day, device_id, timezone = self._report_day(session, report_id)
+            day = self._selected_gas_day(payload.get("day"), report_day, timezone)
+            target = session.scalar(
                 select(GasReadingRow).where(
                     GasReadingRow.device_id == device_id,
                     GasReadingRow.reading_day == day,
                 )
             )
+            existing = target
+            if isinstance(reading_id, str):
+                existing = session.get(GasReadingRow, reading_id)
+                if existing is None or existing.device_id != device_id:
+                    raise ValueError("Показание не найдено. Обновите страницу и выберите его в истории.")
+                if delete and existing.reading_day != day:
+                    raise ValueError("Дата показания изменилась. Перед удалением выберите его в истории заново.")
+                if existing.reading_day != day and session.scalar(
+                    select(GasMeterBoundaryRow).where(
+                        GasMeterBoundaryRow.device_id == device_id,
+                        GasMeterBoundaryRow.boundary_day == existing.reading_day,
+                    )
+                ) is not None:
+                    raise ValueError("Нельзя переместить показание на границе сброса счётчика.")
+                if target is not None and target.id != existing.id:
+                    raise ValueError(f"Конфликт: показание за {day} уже существует.")
+            elif reading_id_supplied:  # Explicit null is create-only, never an upsert.
+                if target is not None:
+                    raise ValueError(f"Конфликт: показание за {day} уже существует.")
             boundary = session.scalar(
                 select(GasMeterBoundaryRow).where(
                     GasMeterBoundaryRow.device_id == device_id,
@@ -670,19 +738,20 @@ class OwnerContextStore:
                 )
             )
             if delete and existing is None:
-                return self.gas(report_id)
+                return self.gas(report_id, day)
             if (
                 not delete
                 and existing is not None
                 and number is not None
                 and existing.value_m3 == _decimal_text(number)
                 and (not reset or boundary is not None)
+                and existing.reading_day == day
             ):
-                return self.gas(report_id)
+                return self.gas(report_id, day)
             before = self._reading(existing) if existing else None
             if reset and boundary is None:
                 boundary = GasMeterBoundaryRow(
-                    id=f"reset:{report_id}",
+                    id=f"reset:{uuid4()}",
                     device_id=device_id,
                     report_id=report_id,
                     boundary_day=day,
@@ -714,8 +783,11 @@ class OwnerContextStore:
                     session.add(existing)
                     action = "reset" if reset else "create"
                 else:
+                    moved = existing.reading_day != day
+                    existing.reading_day = day
+                    existing.report_id = report_id
                     existing.meter_segment, existing.value_m3, existing.updated_at = segment, _decimal_text(number), now
-                    action = "reset" if reset else "update"
+                    action = "move" if moved else ("reset" if reset else "update")
                 session.flush()
                 after, reading_id = self._reading(existing), existing.id
             session.add(
@@ -731,4 +803,4 @@ class OwnerContextStore:
                     created_at=utcnow(),
                 )
             )
-        return self.gas(report_id)
+        return self.gas(report_id, day)

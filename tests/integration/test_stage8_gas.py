@@ -84,6 +84,31 @@ def test_reset_boundary_prevents_subtraction_and_profile_alone_is_not_gas_measur
     assert gas['lower_m3'] <= 24 and gas['upper_m3'] >= 48
 
 
+def test_meter_intervals_follow_selected_days_without_reports_and_recalibrate_after_move(tmp_path: Path):
+    r, store, reports = history(tmp_path)
+    source_report = reports[0]
+    first = store.update_gas(source_report.id, {'day': '2026-01-02', 'value_m3': 100, 'reading_id': None})
+    last = store.update_gas(source_report.id, {'day': '2026-01-08', 'value_m3': 244, 'reading_id': None})
+    before = GasService(r.db, r.config)
+    interval, = before.intervals()
+    assert interval.start == datetime(2026, 1, 2, 12, tzinfo=UTC)
+    assert interval.end == datetime(2026, 1, 8, 12, tzinfo=UTC)
+    assert interval.volume_m3 == 144
+    assert interval.boundary_uncertainty_m3 > 0  # No fabricated exact measurement time.
+    version = before.model()[0]
+    store.update_gas(source_report.id, {
+        'reading_id': last['reading']['id'], 'day': '2026-01-09', 'value_m3': 244,
+    })
+    after = GasService(r.db, r.config)
+    moved, = after.intervals()
+    assert moved.end == datetime(2026, 1, 9, 12, tzinfo=UTC)
+    assert moved.volume_m3 == interval.volume_m3
+    assert after.model()[0] != version
+    assert len(after.readings) == 2
+    assert store.gas(source_report.id, '2026-01-02')['reading']['id'] == first['reading']['id']
+    assert store.gas(source_report.id, '2026-01-08')['reading'] is None
+
+
 def test_missing_fl_is_not_reconstructed_from_modulation(tmp_path: Path):
     r = build_runtime(None, tmp_path)
     start = datetime(2026, 1, 1, tzinfo=UTC)

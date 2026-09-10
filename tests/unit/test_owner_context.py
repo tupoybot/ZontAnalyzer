@@ -250,6 +250,66 @@ def test_gas_aliases_for_same_daily_day_share_one_reading(tmp_path: Path) -> Non
     assert alias["time_precision"] == "day"
 
 
+def test_gas_selected_day_does_not_need_a_report_and_exposes_report_metadata(tmp_path: Path) -> None:
+    db, store = _store(tmp_path)
+    _report(db, "older", day=86400 * 20)
+    _report(db, "latest", day=86400 * 22)
+    _report(db, "unfinished", day=2_600_000_000)
+    saved = store.update_gas("older", {"day": "1970-01-23", "value_m3": "10"})
+    assert saved["report_day"] == "1970-01-21"
+    assert saved["selected_day"] == "1970-01-23"
+    assert saved["is_latest_report"] is False
+    assert saved["reading"]["day"] == "1970-01-23"
+    latest = store.gas("latest", "1970-01-23")
+    assert latest["is_latest_report"] is True
+    assert latest["reading"]["id"] == saved["reading"]["id"]
+
+
+def test_gas_explicit_reading_id_moves_atomically_and_audit_is_visible_from_both_days(tmp_path: Path) -> None:
+    db, store = _store(tmp_path)
+    _report(db, "r1", day=86400 * 20)
+    first = store.update_gas("r1", {"day": "1970-01-20", "value_m3": 10})
+    reading_id = first["reading"]["id"]
+    moved = store.update_gas("r1", {"reading_id": reading_id, "day": "1970-01-21", "value_m3": 11})
+    assert moved["reading"]["id"] == reading_id
+    assert moved["reading"]["day"] == "1970-01-21"
+    assert moved["audit"][-1]["action"] == "move"
+    assert store.gas("r1", "1970-01-20")["reading"] is None
+    assert store.gas("r1", "1970-01-20")["audit"][-1]["action"] == "move"
+
+
+def test_gas_move_rejects_occupied_target_and_monotonic_neighbors_without_changing_state(tmp_path: Path) -> None:
+    db, store = _store(tmp_path)
+    _report(db, "r1", day=86400 * 20)
+    first = store.update_gas("r1", {"day": "1970-01-20", "value_m3": 10})
+    store.update_gas("r1", {"day": "1970-01-22", "value_m3": 20})
+    with pytest.raises(ValueError, match="Конфликт: показание за 1970-01-22"):
+        store.update_gas("r1", {"reading_id": first["reading"]["id"], "day": "1970-01-22", "value_m3": 12})
+    with pytest.raises(ValueError, match="Конфликт с показанием за 1970-01-22"):
+        store.update_gas("r1", {"reading_id": first["reading"]["id"], "day": "1970-01-21", "value_m3": 25})
+    assert store.gas("r1", "1970-01-20")["reading"]["value_m3"] == "10"
+
+
+def test_gas_explicit_null_reading_id_is_create_only_and_reset_boundary_cannot_move(tmp_path: Path) -> None:
+    db, store = _store(tmp_path)
+    _report(db, "r1", day=86400 * 20)
+    reading = store.update_gas("r1", {"day": "1970-01-20", "value_m3": 10})["reading"]
+    with pytest.raises(ValueError, match="Конфликт: показание"):
+        store.update_gas("r1", {"reading_id": None, "day": "1970-01-20", "value_m3": 11})
+    reset = store.update_gas("r1", {"day": "1970-01-21", "value_m3": 2, "reset": True})["reading"]
+    with pytest.raises(ValueError, match="границе сброса"):
+        store.update_gas("r1", {"reading_id": reset["id"], "day": "1970-01-22", "value_m3": 3})
+    assert store.gas("r1", "1970-01-20")["reading"]["id"] == reading["id"]
+
+
+@pytest.mark.parametrize("day", ["1970-1-20", "1970-01-32", "1970-01-20T00:00:00", 19700120])
+def test_gas_selected_day_is_strict(tmp_path: Path, day: object) -> None:
+    db, store = _store(tmp_path)
+    _report(db, "r1", day=86400 * 20)
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        store.update_gas("r1", {"day": day, "value_m3": 10})
+
+
 def test_gas_state_is_idempotent_without_an_idempotency_key(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
