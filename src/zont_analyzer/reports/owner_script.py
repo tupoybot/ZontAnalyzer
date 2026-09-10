@@ -114,21 +114,89 @@ OWNER_SCRIPT = r"""
     deviceId = event.target.value; form.dataset.deviceId = deviceId; changed.clear();
     applyProfile(profiles.find(p => p.device_id === deviceId));
   });
-  function applyGas(data) {
-    if (!initial.daily) return;
-    const value = data?.reading?.value_m3 ?? '';
-    form.querySelector('[name=gas-value]').value = value;
-    form.querySelector('[data-gas-current]').textContent = value === ''
-      ? 'Показание не задано' : `Текущее показание: ${value} м³`;
-    form.querySelector('[name=gas-reset]').checked = false;
+  const gasDate = form.querySelector('[name=gas-date]');
+  const gasValue = form.querySelector('[name=gas-value]');
+  const gasReset = form.querySelector('[name=gas-reset]');
+  const localToday = () => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  };
+  let isLatestReport = false;
+  const gasDefaultDay = () => isLatestReport ? localToday() : initial.report_day;
+  let gasState = {reading: null, loading: false, sequence: 0};
+  const gasControls = () => form.querySelectorAll('[data-gas-save],[data-gas-delete],[data-gas-edit],[data-gas-new]');
+  function setGasLoading(value) {
+    gasState.loading = value;
+    gasControls().forEach(button => { button.disabled = value; });
+    [gasDate, gasValue, gasReset].forEach(input => { if (input) input.disabled = value; });
+  }
+  function gasSummary(reading, day) {
+    const summary = form.querySelector('[data-gas-current]');
+    summary.textContent = reading && reading.day !== day
+      ? `Переносится показание ${reading.value_m3} м³ с ${reading.day} на ${day}; сохраните изменение.`
+      : reading ? `Показание за ${day}: ${reading.value_m3} м³` : `Показание за ${day} не задано`;
+  }
+  function renderGasHistory(readings) {
+    const history = form.querySelector('[data-gas-history]');
+    if (!history) return;
+    history.replaceChildren();
+    if (!readings?.length) { history.textContent = 'Нет сохранённых показаний.'; return; }
+    const list = document.createElement('ul');
+    for (const item of readings) {
+      const row = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button'; button.dataset.gasReading = item.id; button.dataset.gasDay = item.day;
+      button.textContent = `Редактировать ${item.day}: ${item.value_m3} м³`;
+      row.append(button); list.append(row);
+    }
+    history.append(list);
+  }
+  function applyGas(data, preserveInputs = false) {
+    if (!initial.daily || !data) return;
+    isLatestReport = data.is_latest_report === true;
+    const selectedDay = data.selected_day || gasDate.value || initial.report_day;
+    if (!preserveInputs) {
+      gasDate.value = selectedDay;
+      gasValue.value = data.reading?.value_m3 ?? '';
+      gasReset.checked = false;
+      gasState.reading = data.reading || null;
+    }
+    gasSummary(preserveInputs ? gasState.reading : (data.reading || null), preserveInputs ? gasDate.value : selectedDay);
     form.querySelector('[data-gas-plausibility]').textContent =
       [data?.plausibility?.reason, ...(data?.plausibility?.warnings || [])].filter(Boolean).join(' ');
-    form.querySelector('[data-gas-history]').textContent = (data?.audit || []).map(item =>
-      `${item.created_at}: ${item.action}; ${item.before?.value_m3 ?? '—'} → ${item.after?.value_m3 ?? '—'} м³`
-    ).join('\n') || 'Нет изменений.';
+    renderGasHistory(data.readings || []);
+    const audit = data?.audit || [];
+    const history = form.querySelector('[data-gas-history]');
+    if (audit.length && history) {
+      const auditNote = document.createElement('p');
+      auditNote.className = 'owner-help';
+      auditNote.textContent = audit.map(item => `${item.created_at}: ${item.action}; ${item.before?.day ?? '—'} ${item.before?.value_m3 ?? '—'} → ${item.after?.day ?? '—'} ${item.after?.value_m3 ?? '—'} м³`).join(' | ');
+      history.append(auditNote);
+    }
     const boundary = data?.reading?.meter_segment;
     form.querySelector('[data-meter-boundary]').textContent = boundary && boundary !== 'default'
       ? 'Показание относится к новому участку учёта после замены/сброса. Разность через границу не рассчитывается.' : '';
+  }
+  async function loadGas(day, preserveInputs = false, discoverLatest = false) {
+    if (!initial.daily) return;
+    const sequence = ++gasState.sequence;
+    setGasLoading(true);
+    try {
+      const data = await request('/reports/' + encodeURIComponent(reportId) + '/gas?day=' + encodeURIComponent(day));
+      if (sequence !== gasState.sequence) return;
+      applyGas(data, preserveInputs);
+      if (discoverLatest && data.is_latest_report && day !== localToday()) {
+        // The first response identifies the newest report.  Only then choose
+        // browser-local today; never derive it from a UTC ISO string.
+        gasDate.value = localToday(); gasValue.value = ''; gasState.reading = null;
+        gasSummary(null, gasDate.value);
+        loadGas(gasDate.value);
+      }
+    } catch (error) {
+      if (sequence === gasState.sequence) message(gasMessage, error.message, true);
+    } finally {
+      if (sequence === gasState.sequence) setGasLoading(false);
+    }
   }
   for (const node of fieldNodes) {
     node.querySelectorAll('input,select').forEach(input => input.addEventListener('change', () => {
@@ -151,8 +219,7 @@ OWNER_SCRIPT = r"""
     profiles = profiles.map(p => p.device_id === deviceId ? updated : p);
     applyProfile(updated); changed.clear();
     message(profileMessage, node || 'Профиль сохранён.');
-    if (initial.daily) request('/reports/' + encodeURIComponent(reportId) + '/gas').then(applyGas)
-      .catch(error => message(gasMessage, error.message, true));
+    if (initial.daily) loadGas(gasDate.value, true);
   }
   form.querySelector('[data-profile-save]').addEventListener('click', async () => {
     try {
@@ -195,24 +262,38 @@ OWNER_SCRIPT = r"""
     catch (error) { message(profileMessage, error.message, true); }
   }));
   form.querySelector('[data-gas-save]')?.addEventListener('click', async () => {
-    const input = form.querySelector('[name=gas-value]');
+    if (gasState.loading) return;
     try {
+      if (!gasDate.value || !gasDate.reportValidity()) throw new Error('Укажите допустимую дату показания.');
+      ++gasState.sequence; setGasLoading(true);
+      message(gasMessage, 'Сохраняем показание…');
       const saved = await request('/reports/' + encodeURIComponent(reportId) + '/gas', {
-        value_m3: decimalInput(input, 'Показание газа', 0), reset: form.querySelector('[name=gas-reset]').checked,
+        value_m3: decimalInput(gasValue, 'Показание газа', 0), reset: gasReset.checked,
+        day: gasDate.value, reading_id: gasState.reading?.id ?? null,
       });
       applyGas(saved);
       form.querySelector('#gas-editor')?.removeAttribute('open');
       form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'false');
       message(gasMessage, 'Показание сохранено. Отчёты обновятся при ближайшем фоновом обновлении.');
     } catch (error) { message(gasMessage, error.message, true); }
+    finally { setGasLoading(false); }
   });
   form.querySelector('[data-gas-delete]')?.addEventListener('click', async () => {
+    if (gasState.loading) return;
     try {
-      applyGas(await request('/reports/' + encodeURIComponent(reportId) + '/gas', {delete:true}));
+      if (!gasState.reading?.id) throw new Error('Нет сохранённого показания для удаления.');
+      ++gasState.sequence; setGasLoading(true);
+      message(gasMessage, 'Удаляем показание…');
+      // A changed date is a pending move.  Deletion must still target the row
+      // that was selected before editing, never an unrelated date.
+      applyGas(await request('/reports/' + encodeURIComponent(reportId) + '/gas', {
+        delete:true, day: gasState.reading.day, reading_id: gasState.reading.id,
+      }));
       form.querySelector('#gas-editor')?.removeAttribute('open');
       form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'false');
       message(gasMessage, 'Показание удалено. Отчёты обновятся при ближайшем фоновом обновлении.');
     } catch (error) { message(gasMessage, error.message, true); }
+    finally { setGasLoading(false); }
   });
   form.querySelector('[data-gas-edit]')?.addEventListener('click', () => {
     const editor = form.querySelector('#gas-editor');
@@ -221,7 +302,46 @@ OWNER_SCRIPT = r"""
     form.querySelector('[data-gas-edit]').setAttribute('aria-expanded', String(editor.open));
     if (editor.open) form.querySelector('[name=gas-value]')?.focus();
   });
-  selectProfiles(profiles); applyGas(initial.gas);
+  form.querySelector('[data-gas-new]')?.addEventListener('click', () => {
+    gasState.reading = null;
+    gasDate.value = gasDefaultDay(); gasValue.value = ''; gasReset.checked = false;
+    gasSummary(null, gasDate.value);
+    const editor = form.querySelector('#gas-editor');
+    if (editor) editor.open = true;
+    form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'true');
+    gasValue.focus();
+  });
+  form.querySelector('[data-gas-history]')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-gas-reading]');
+    if (!button || gasState.loading) return;
+    // The selected id is resolved from the server so its current value and
+    // audit trail cannot be confused with a stale history rendering.
+    if (button.dataset.gasDay) {
+      const editor = form.querySelector('#gas-editor');
+      if (editor) editor.open = true;
+      form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'true');
+      loadGas(button.dataset.gasDay);
+    }
+  });
+  if (gasDate) {
+    gasDate.max = localToday();
+    gasDate.addEventListener('change', () => {
+      // Changing a date is an intentional move/create target.  Do not fetch
+      // and silently replace the value or id the owner is editing.
+      gasSummary(gasState.reading, gasDate.value);
+    });
+  }
+  selectProfiles(profiles);
+  const offline = window.location.protocol === "file:";
+  if (initial.daily && offline) {
+    applyGas({...initial.gas, selected_day: initial.report_day});
+  } else if (initial.daily) {
+    // Rendered data belongs to the report day and must not briefly impersonate
+    // a new reading for today's browser date on the newest report.
+    gasDate.value = initial.report_day; gasValue.value = ''; gasState.reading = null;
+    gasSummary(null, initial.report_day);
+    loadGas(initial.report_day, false, true);
+  }
   const tariffMessage = form.querySelector('[data-tariff-message]');
   let tariffItems = [];
   const tariffMonth = form.querySelector('[data-tariff-month]');
@@ -303,12 +423,10 @@ OWNER_SCRIPT = r"""
     if (editor.open) form.querySelector('[data-tariff-price]').focus();
   });
   applyTariffs(initial.tariffs || []);
-  if (window.location.protocol === "file:") return;
+  if (offline) return;
   if (initial.daily) request('/gas-tariffs').then(data => applyTariffs(data.history || []))
     .catch(error => message(tariffMessage, error.message, true));
   request('/equipment').then(data => selectProfiles(data.profiles || []))
     .catch(error => message(profileMessage, error.message, true));
-  if (initial.daily) request('/reports/' + encodeURIComponent(reportId) + '/gas').then(applyGas)
-    .catch(error => message(gasMessage, error.message, true));
 })();
 """

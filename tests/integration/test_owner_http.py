@@ -100,10 +100,14 @@ def test_gas_writes_do_not_wait_for_publication_and_survive_restart(owner_server
     assert runtime.db.token_usage_this_month() == 0
 
 
-def test_owner_api_rejects_spoofed_source_scope_dates_and_cross_origin(owner_server) -> None:
+def test_owner_api_accepts_selected_dates_and_rejects_spoofed_scope_and_cross_origin(owner_server) -> None:
     _, reports, client = owner_server
     url = f"/reports/{reports[0].id}/gas"
-    for extra in ({"day": "2026-08-02"}, {"device_id": "other"}, {"meter_segment": "invented"}):
+    selected = client.put(url, json={"day": "2026-08-02", "value_m3": "1"})
+    assert selected.status_code == 200, selected.text
+    assert selected.json()["selected_day"] == "2026-08-02"
+    assert client.get(url + "?day=2026-08-02").json()["reading"]["id"] == selected.json()["reading"]["id"]
+    for extra in ({"device_id": "other"}, {"meter_segment": "invented"}, {"day": "2026-8-2"}):
         response = client.put(url, json={"value_m3": "1", **extra})
         assert response.status_code == 422
     assert client.put(url, content='{"value_m3": 1}', headers={"Content-Type": "text/plain"}).status_code == 422
