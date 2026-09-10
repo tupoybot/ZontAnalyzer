@@ -27,8 +27,14 @@ OWNER_SCRIPT = r"""
       headers: {'Content-Type': 'application/json'},
       ...(payload === undefined ? {} : {body: JSON.stringify(payload)}),
     });
-    const value = await response.json();
-    if (!response.ok) throw new Error(value.error || `Ошибка HTTP ${response.status}`);
+    let value;
+    try {
+      value = await response.json();
+    } catch (_error) {
+      if (!response.ok) throw new Error(`Ошибка HTTP ${response.status}: сервер вернул некорректный ответ.`);
+      throw new Error('Не удалось подтвердить сохранение или перезагрузить данные.');
+    }
+    if (!response.ok) throw new Error(value?.error || `Ошибка HTTP ${response.status}`);
     return value;
   }
   function decimalInput(input, label, minimum = null, maximum = null, strictlyPositive = false) {
@@ -196,18 +202,16 @@ OWNER_SCRIPT = r"""
       });
       applyGas(saved);
       form.querySelector('#gas-editor')?.removeAttribute('open');
-      form.querySelector('[data-gas-edit]').setAttribute('aria-expanded', 'false');
       form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'false');
-      message(gasMessage, ['Показание сохранено.', saved.publish_warning].filter(Boolean).join(' '));
+      message(gasMessage, 'Показание сохранено. Отчёты обновятся при ближайшем фоновом обновлении.');
     } catch (error) { message(gasMessage, error.message, true); }
   });
   form.querySelector('[data-gas-delete]')?.addEventListener('click', async () => {
     try {
       applyGas(await request('/reports/' + encodeURIComponent(reportId) + '/gas', {delete:true}));
       form.querySelector('#gas-editor')?.removeAttribute('open');
-      form.querySelector('[data-gas-edit]').setAttribute('aria-expanded', 'false');
       form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'false');
-      message(gasMessage, 'Показание удалено.');
+      message(gasMessage, 'Показание удалено. Отчёты обновятся при ближайшем фоновом обновлении.');
     } catch (error) { message(gasMessage, error.message, true); }
   });
   form.querySelector('[data-gas-edit]')?.addEventListener('click', () => {

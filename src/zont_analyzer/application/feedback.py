@@ -174,8 +174,14 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
 
                             if not value.get("idempotent"):
                                 publish_tariff_change(runtime, value["affected_start"], value["affected_end"])
-                        else:
+                        elif kind == "profile":
                             publish_reports(runtime)
+                        # Gas writes are already durable. The regular worker
+                        # publication reads current readings and refreshes the
+                        # archive, including calibrated/comparison contexts.
+                        # Never make this response wait for the publication lock
+                        # or another full archive pass; restart/retry is covered
+                        # by the next successful worker cycle.
                     except (OSError, ValueError):
                         value["publish_warning"] = "Сохранено; HTML обновится в следующем цикле."
                 elif kind == "profiles":

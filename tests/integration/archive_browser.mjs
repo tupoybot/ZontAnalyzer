@@ -283,6 +283,58 @@ try {
   await historicalGas.locator("[data-gas-delete]").click();
   await historicalGas.locator("[data-gas-message]").filter({ hasText: "удалено" }).waitFor();
   assert.equal((await (await context.request.get(`${baseURL}/api/reports/${encodeURIComponent(historicalReportId)}/gas`)).json()).reading, null);
+
+  // Owner gas actions keep the input on malformed/error responses and do not
+  // depend on the optional edit control being present after a successful PUT.
+  await page.goto(`${baseURL}/daily/2026-08-05.html`, { waitUntil: "networkidle" });
+  const mockedGas = page.locator("[data-owner-gas]");
+  const mockedReportId = await page.locator("[data-owner-forms]").getAttribute("data-report-id");
+  const mockedGasUrl = `${baseURL}/api/reports/${encodeURIComponent(mockedReportId)}/gas`;
+  const mockGasPut = async (status, body, contentType) => {
+    await page.route(mockedGasUrl, async route => {
+      if (route.request().method() !== "PUT") return route.continue();
+      await route.fulfill({ status, contentType, body });
+    });
+  };
+  const finishMockGasPut = async () => page.unroute(mockedGasUrl);
+  await mockedGas.locator("[data-gas-edit]").click();
+  await mockedGas.locator("[name=gas-value]").fill("13");
+  await mockGasPut(504, "<html>gateway timeout</html>", "text/html");
+  await mockedGas.locator("[data-gas-save]").click();
+  await mockedGas.locator("[data-gas-message]").filter({ hasText: "504" }).waitFor();
+  const timeoutMessage = await mockedGas.locator("[data-gas-message]").textContent();
+  assert.match(timeoutMessage, /504/);
+  assert.doesNotMatch(timeoutMessage, /<html>|gateway timeout/);
+  assert.equal(await mockedGas.locator("[name=gas-value]").inputValue(), "13");
+  await finishMockGasPut();
+
+  await mockGasPut(422, JSON.stringify({ error: "Показание уже существует." }), "application/json");
+  await mockedGas.locator("[data-gas-save]").click();
+  await mockedGas.locator("[data-gas-message]").filter({ hasText: "Показание уже существует." }).waitFor();
+  assert.equal(await mockedGas.locator("[data-gas-message]").textContent(), "Показание уже существует.");
+  assert.equal(await mockedGas.locator("[name=gas-value]").inputValue(), "13");
+  await finishMockGasPut();
+
+  await mockGasPut(200, "not json", "text/plain");
+  await mockedGas.locator("[data-gas-save]").click();
+  await mockedGas.locator("[data-gas-message]").filter({ hasText: "Не удалось подтвердить сохранение или перезагрузить данные" }).waitFor();
+  assert.match(await mockedGas.locator("[data-gas-message]").textContent(), /Не удалось подтвердить сохранение или перезагрузить данные/);
+  assert.equal(await mockedGas.locator("[name=gas-value]").inputValue(), "13");
+  await finishMockGasPut();
+
+  await mockedGas.locator("[data-gas-edit]").evaluate(button => button.remove());
+  await mockGasPut(200, JSON.stringify({ reading: { value_m3: "13" }, audit: [] }), "application/json");
+  await mockedGas.locator("[data-gas-save]").click();
+  await mockedGas.locator("[data-gas-message]").filter({ hasText: "Показание сохранено" }).waitFor();
+  assert.match(await mockedGas.locator("[data-gas-message]").textContent(), /Показание сохранено.*Отчёты обновятся/);
+  await finishMockGasPut();
+  await mockedGas.locator("#gas-editor").evaluate(editor => { editor.open = true; });
+  await mockGasPut(200, JSON.stringify({ reading: null, audit: [] }), "application/json");
+  await mockedGas.locator("[data-gas-delete]").click();
+  await mockedGas.locator("[data-gas-message]").filter({ hasText: "Показание удалено" }).waitFor();
+  assert.match(await mockedGas.locator("[data-gas-message]").textContent(), /Показание удалено.*Отчёты обновятся/);
+  await finishMockGasPut();
+
   await page.goto(`${baseURL}/latest.html`, { waitUntil: "networkidle" });
   assert.equal(await page.locator("[data-owner-forms][data-report-id]").count(), 1);
   assert.equal(await page.locator("[data-owner-gas] [name=gas-value]").inputValue(), "10", "latest uses the displayed report's reading");
