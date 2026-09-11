@@ -10,7 +10,7 @@ from typing import Any, NamedTuple, TypeVar
 
 from zont_analyzer.domain import DetectedEvent, MetricValue
 
-ALGORITHM_VERSION = "dhw-v2"
+ALGORITHM_VERSION = "dhw-v3"
 _T = TypeVar("_T")
 
 
@@ -178,6 +178,22 @@ def _values_between(
     samples: list[tuple[datetime, float]], start: datetime, end: datetime
 ) -> list[tuple[datetime, float]]:
     return [(timestamp, value) for timestamp, value in samples if start <= timestamp <= end]
+
+
+def _target_is_stable(
+    samples: Sequence[tuple[datetime, float | None]],
+    *,
+    start: datetime,
+    end: datetime,
+    expected: float,
+    lookback: timedelta = timedelta(minutes=15),
+) -> bool:
+    """Confirm that the observed DHW setpoint stayed unchanged around an episode."""
+
+    window_start = start - lookback
+    values = [_value_at(samples, window_start)]
+    values.extend(value for timestamp, value in samples if window_start < timestamp <= end)
+    return bool(values) and all(value is not None and abs(value - expected) < 0.01 for value in values)
 
 
 def _bool_at(samples: list[tuple[datetime, float | bool]], timestamp: datetime) -> bool | None:
@@ -427,9 +443,20 @@ def _hot_tail_seconds(
 def _observation_window_is_continuous(
     states: list[BoilerStateSample], start: datetime, end: datetime, maximum_gap_seconds: float
 ) -> bool:
+    return _timestamp_window_is_continuous(
+        [sample.timestamp for sample in states],
+        start,
+        end,
+        maximum_gap_seconds,
+    )
+
+
+def _timestamp_window_is_continuous(
+    timestamps: list[datetime], start: datetime, end: datetime, maximum_gap_seconds: float
+) -> bool:
     if end <= start:
         return True
-    relevant = [sample.timestamp for sample in states if start <= sample.timestamp <= end]
+    relevant = [timestamp for timestamp in timestamps if start <= timestamp <= end]
     if not relevant or relevant[0] > start:
         return False
     return (
@@ -499,6 +526,8 @@ def analyze_dhw_interactions(
     heating_worktime = heating_worktime_samples or []
     flow_temperatures = flow_temperature_samples or []
     states = classify_boiler_states(boiler_state_samples)
+    temperature_timestamps = [timestamp for timestamp, _value in dhw_temperature_samples]
+    maximum_temperature_gap = _maximum_gap(temperature_timestamps)
     intervals, maximum_state_gap = _state_intervals(
         states,
         period_start,
@@ -573,7 +602,9 @@ def analyze_dhw_interactions(
             else None
         )
         recovery = (achieved_at - episode.start).total_seconds() / 60 if achieved_at else None
-        peak_temperature_c = max((value for _, value in temperatures), default=None)
+        peak_temperature_sample = max(temperatures, key=lambda item: item[1]) if temperatures else None
+        peak_temperature_at = peak_temperature_sample[0] if peak_temperature_sample else None
+        peak_temperature_c = peak_temperature_sample[1] if peak_temperature_sample else None
         overshoot_c = (
             max(0.0, peak_temperature_c - target_c) if target_c is not None and peak_temperature_c is not None else None
         )
@@ -590,6 +621,16 @@ def analyze_dhw_interactions(
             returned_at or episode.end,
             maximum_state_gap,
         )
+        service_cycle_data_reliable = (
+            peak_temperature_at is not None
+            and _observation_window_is_continuous(states, episode.start, episode.end, maximum_state_gap)
+            and _timestamp_window_is_continuous(
+                temperature_timestamps,
+                episode.start,
+                peak_temperature_at,
+                maximum_temperature_gap,
+            )
+        )
         flame_observed = any(interval.sample.flame_on for interval in episode.intervals)
         enabled_after = _mode_enabled_at(mode_samples, mode_catalog, episode.end)
         temperature_rise_c = (
@@ -597,18 +638,41 @@ def analyze_dhw_interactions(
             if peak_temperature_c is not None and start_temperature_c is not None
             else None
         )
+        target_unchanged = (
+            target_c is not None
+            and _target_is_stable(
+                dhw_target_samples,
+                start=episode.start,
+                end=episode.end,
+                expected=target_c,
+            )
+        )
+        temperature_above_target_c = (
+            peak_temperature_c - target_c
+            if peak_temperature_c is not None and target_c is not None
+            else None
+        )
+        off_mode_service_cycle = dhw_enabled is False and enabled_after is False
+        unchanged_setpoint_service_cycle = (
+            dhw_enabled is not False
+            and target_unchanged
+            and target_c is not None
+            and target_c < 55.0
+            and temperature_above_target_c is not None
+            and temperature_above_target_c >= 3.0
+        )
         probable_antilegionella = (
-            dhw_enabled is False
-            and enabled_after is False
-            and flame_observed
-            and episode_data_reliable
+            flame_observed
+            and service_cycle_data_reliable
             and peak_temperature_c is not None
             and 55.0 <= peak_temperature_c <= 65.0
             and temperature_rise_c is not None
             and temperature_rise_c >= 3.0
+            and (off_mode_service_cycle or unchanged_setpoint_service_cycle)
         )
         if probable_antilegionella:
             assert temperature_rise_c is not None
+            assert peak_temperature_at is not None
             antilegionella_count += 1
             events.append(
                 DetectedEvent(
@@ -624,20 +688,29 @@ def analyze_dhw_interactions(
                         "facts": {
                             "selected_system_mode_id": selected_mode_id,
                             "selected_system_mode_name": selected_mode.get("name") if selected_mode else None,
-                            "dhw_enabled_before_cycle": False,
-                            "dhw_enabled_after_cycle": False,
+                            "dhw_enabled_before_cycle": dhw_enabled,
+                            "dhw_enabled_after_cycle": enabled_after,
+                            "dhw_target_c": target_c,
+                            "dhw_target_unchanged": target_unchanged,
                             "dhw_temperature_start_c": start_temperature_c,
+                            "dhw_temperature_peak_at": peak_temperature_at.isoformat(),
                             "dhw_temperature_peak_c": peak_temperature_c,
                             "temperature_rise_c": round(temperature_rise_c, 3),
+                            "temperature_above_target_c": (
+                                round(temperature_above_target_c, 3)
+                                if temperature_above_target_c is not None
+                                else None
+                            ),
                             "flame_observed": True,
+                            "cycle_observation_continuous": True,
                         },
                         "inference": {
                             "cycle_classification": "probable_antilegionella",
                             "expected_service_cycle": True,
                         },
                         "hypothesis": (
-                            "Нагрев отключённого режимом ГВС до санитарного диапазона 55–65 °C с возвратом "
-                            "в OFF похож на автономный цикл антилегионеллы котла, не управляемый ZONT."
+                            "Автономный нагрев ГВС до санитарного диапазона 55–65 °C без повышения уставки "
+                            "похож на штатный цикл антилегионеллы котла, не управляемый ZONT."
                         ),
                     },
                     algorithm_version=ALGORITHM_VERSION,
