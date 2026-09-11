@@ -75,8 +75,8 @@ def test_normal_reheat_uses_historical_target_mode_status_and_worktime() -> None
     assert _metrics(result)["dhw_mean_overshoot_c"] == 1
     assert _metrics(result)["dhw_confirmed_heating_pause_count"] == 1
     episode = next(event for event in result.events if event.kind == "dhw_reheat_episode")
-    assert episode.algorithm_version == "dhw-v2"
-    assert episode.id == f"event:day:1:dhw_episode:{int(_at(10).timestamp())}:dhw-v2"
+    assert episode.algorithm_version == "dhw-v3"
+    assert episode.id == f"event:day:1:dhw_episode:{int(_at(10).timestamp())}:dhw-v3"
     assert episode.details["facts"]["selected_system_mode_id"] == 1
     assert episode.details["facts"]["dhw_enabled_by_selected_mode"] is True
     assert episode.details["facts"]["dhw_status"] == 7
@@ -161,6 +161,119 @@ def test_off_to_sanitary_temperature_and_back_is_probable_antilegionella() -> No
     event = next(item for item in result.events if item.kind == "dhw_antilegionella_cycle")
     assert event.severity == "info"
     assert event.details["inference"]["expected_service_cycle"] is True
+
+
+def test_unchanged_active_setpoint_with_sanitary_boost_is_probable_antilegionella() -> None:
+    result = _base_analysis(
+        boiler_state_samples=[
+            (_at(0), "['ch', 'fl']"),
+            (_at(5), "['dhw', 'fl']"),
+            (_at(10), "['dhw', 'fl']"),
+            (_at(15), "[]"),
+            (_at(20), "[]"),
+        ],
+        dhw_temperature_samples=[
+            (_at(0), 47.0),
+            (_at(5), 48.0),
+            (_at(10), 56.0),
+            (_at(15), 59.0),
+            (_at(20), 58.0),
+        ],
+        dhw_target_samples=[(_at(-60), 50.0), (_at(0), 50.0), (_at(15), 50.0)],
+    )
+
+    assert _metrics(result)["dhw_episode_count"] == 0
+    assert _metrics(result)["dhw_antilegionella_cycle_count"] == 1
+    event = next(item for item in result.events if item.kind == "dhw_antilegionella_cycle")
+    assert event.details["facts"]["dhw_enabled_before_cycle"] is True
+    assert event.details["facts"]["dhw_target_c"] == 50
+    assert event.details["facts"]["dhw_target_unchanged"] is True
+    assert event.details["facts"]["temperature_above_target_c"] == 9
+
+
+def test_complete_service_cycle_is_detected_despite_low_whole_day_quality() -> None:
+    result = _base_analysis(
+        boiler_state_samples=[
+            (_at(0), "[]"),
+            (_at(5), "['dhw', 'fl']"),
+            (_at(10), "['dhw', 'fl']"),
+            (_at(15), "[]"),
+            (_at(20), "[]"),
+        ],
+        dhw_temperature_samples=[
+            (_at(0), 39.0),
+            (_at(5), 39.0),
+            (_at(10), 48.0),
+            (_at(15), 55.0),
+            (_at(20), 56.5),
+        ],
+        dhw_target_samples=[(_at(-60), 35.0), (_at(0), 35.0)],
+        quality_score=0.6,
+    )
+
+    assert result.context["quality_sufficient_for_alerts"] is False
+    assert _metrics(result)["dhw_antilegionella_cycle_count"] == 1
+    event = next(item for item in result.events if item.kind == "dhw_antilegionella_cycle")
+    assert event.details["facts"]["cycle_observation_continuous"] is True
+
+
+def test_temperature_gap_prevents_service_cycle_classification() -> None:
+    result = _base_analysis(
+        boiler_state_samples=[
+            (_at(0), "[]"),
+            (_at(5), "['dhw', 'fl']"),
+            (_at(10), "['dhw', 'fl']"),
+            (_at(15), "[]"),
+            (_at(20), "[]"),
+        ],
+        dhw_temperature_samples=[
+            *((_at(minute), 39.0) for minute in range(11)),
+            (_at(20), 56.5),
+            *((_at(minute), 56.0) for minute in range(21, 41)),
+        ],
+        dhw_target_samples=[(_at(-60), 35.0), (_at(0), 35.0)],
+        quality_score=0.6,
+    )
+
+    assert _metrics(result)["dhw_antilegionella_cycle_count"] == 0
+    assert not any(item.kind == "dhw_antilegionella_cycle" for item in result.events)
+
+
+def test_sanitary_target_is_not_classified_as_antilegionella() -> None:
+    result = _base_analysis(
+        dhw_temperature_samples=[
+            (_at(0), 52.0),
+            (_at(5), 51.0),
+            (_at(10), 50.0),
+            (_at(15), 57.0),
+            (_at(20), 58.0),
+            (_at(25), 57.0),
+            (_at(30), 56.0),
+            (_at(35), 55.0),
+        ],
+        dhw_target_samples=[(_at(-60), 55.0), (_at(0), 55.0)],
+    )
+
+    assert _metrics(result)["dhw_episode_count"] == 1
+    assert _metrics(result)["dhw_antilegionella_cycle_count"] == 0
+    assert not any(item.kind == "dhw_antilegionella_cycle" for item in result.events)
+
+
+def test_changed_active_setpoint_is_not_classified_as_antilegionella() -> None:
+    result = _base_analysis(
+        dhw_temperature_samples=[
+            (_at(0), 47.0),
+            (_at(5), 48.0),
+            (_at(10), 56.0),
+            (_at(15), 59.0),
+            (_at(20), 58.0),
+        ],
+        dhw_target_samples=[(_at(-60), 50.0), (_at(3), 55.0)],
+    )
+
+    assert _metrics(result)["dhw_episode_count"] == 1
+    assert _metrics(result)["dhw_antilegionella_cycle_count"] == 0
+    assert not any(item.kind == "dhw_antilegionella_cycle" for item in result.events)
 
 
 def test_recirculation_candidate_is_explicitly_inference_only() -> None:
@@ -314,6 +427,6 @@ def test_metric_ids_are_stable_and_use_metric_dto() -> None:
     result = _base_analysis()
     metric = next(item for item in result.metrics if item.name == "dhw_episode_count")
 
-    assert metric.id == "metric:day:1:dhw_episode_count:dhw-v2"
-    assert metric.algorithm_version == "dhw-v2"
+    assert metric.id == "metric:day:1:dhw_episode_count:dhw-v3"
+    assert metric.algorithm_version == "dhw-v3"
     assert metric.value == pytest.approx(1)
