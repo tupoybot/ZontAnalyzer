@@ -18,3 +18,13 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+
+# Private Terraform inputs and generated state/plans; keep .terraform.lock.hcl tracked.
+.terraform/
+*.tfvars
+*.tfvars.json
+*.tfbackend
+*.tfstate
+*.tfstate.*
+*.tfplan
+/.local/terraform/
