@@ -89,6 +89,7 @@ Docker healthcheck использует curl и HTTP heartbeat, без запу�
 - Подтверждены read-only доступ к выбранному cloud, активный billing и свободные
   квоты Containers/YDB. Полная смета ещё не закрыта.
 - Подготовлены карта данных/web API, storage/publisher/jobs/secrets контракты.
-  Остались интерфейс подключения выбранного egress, bootstrap/state, web/DNS
-  и внешние условия M0.
+  Выбран отдельный тестовый поддомен с внешним DNS; адрес хранится приватно.
+  Остались интерфейс подключения выбранного egress, bootstrap/state, способ
+  внесения DNS-записей и внешние условия M0.
   M0 не принят, M1 не начат; application/production и облачные ресурсы не менялись.
