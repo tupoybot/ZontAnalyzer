@@ -223,11 +223,15 @@ def report_latest(ctx: typer.Context) -> None:
 
 
 @report_app.command("publish")
-def report_publish(ctx: typer.Context) -> None:
-    """Publish existing completed daily/weekly/monthly reports without analysis or AI."""
+def report_publish(
+    ctx: typer.Context,
+    rebuild: bool = typer.Option(False, help="Rebuild the disposable archive index and queue all reports."),
+    batch_size: int = typer.Option(8, min=1, max=100, help="Maximum reports refreshed in this invocation."),
+) -> None:
+    """Publish a bounded batch of changed reports without analysis or AI."""
     from zont_analyzer.application.publication import publish_reports
 
-    _json(publish_reports(_runtime(ctx)))
+    _json(publish_reports(_runtime(ctx), rebuild=rebuild, batch_size=batch_size))
 
 
 @report_app.command("show")

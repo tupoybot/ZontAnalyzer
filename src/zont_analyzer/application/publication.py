@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from zont_analyzer.application.pilot import atomic_write_text, reports_directory
+from zont_analyzer.application.pilot import atomic_write_text as atomic_write_text
+from zont_analyzer.application.pilot import reports_directory
 from zont_analyzer.domain import Report
-from zont_analyzer.reports import render_html
-from zont_analyzer.reports.chart_data import cached_chart_data
+from zont_analyzer.reports import render_html as render_html
+from zont_analyzer.reports.chart_data import cached_chart_data as cached_chart_data
 
 if TYPE_CHECKING:
     from zont_analyzer.runtime import Runtime
@@ -33,7 +34,9 @@ def _write_changed(path: Path, content: str) -> None:
         atomic_write_text(path, content, mode=0o644)
 
 
-def publish_reports(runtime: Runtime, *, now: datetime | None = None) -> dict[str, Any]:
+def publish_reports(
+    runtime: Runtime, *, now: datetime | None = None, batch_size: int = 8, rebuild: bool = False,
+) -> dict[str, Any]:
     """Commit complete artifacts before advertising URLs, with serialized writers.
 
     Each file is fsynced and atomically replaced. The manifest is installed only
@@ -46,7 +49,9 @@ def publish_reports(runtime: Runtime, *, now: datetime | None = None) -> dict[st
     output_dir.mkdir(parents=True, exist_ok=True)
     with (output_dir / ".publication.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        return _publish_locked(runtime, output_dir, checked_at)
+        from zont_analyzer.application.incremental_publication import publish_incremental
+
+        return publish_incremental(runtime, output_dir, checked_at, batch_size=batch_size, rebuild=rebuild)
 
 
 def publish_report(runtime: Runtime, report_id: str, *, now: datetime | None = None) -> dict[str, Any]:
@@ -66,66 +71,8 @@ def publish_report(runtime: Runtime, report_id: str, *, now: datetime | None = N
 
 
 def publish_tariff_change(runtime: Runtime, start: str, end: str | None) -> dict[str, Any]:
-    """Update money only in affected observation/comparison windows, under the publication lock."""
-    from zont_analyzer.application.gas import GasService
-
-    left = datetime.fromisoformat(start)
-    right = datetime.fromisoformat(end) if end else datetime.max.replace(tzinfo=UTC)
-
-    def overlaps(first: datetime, last: datetime) -> bool:
-        return first < right and last > left
-
-    def affected(report: Report) -> bool:
-        if overlaps(report.period_start, report.period_end):
-            return True
-        # Comparisons can refer to older windows outside this report's own period.
-        def inspect(value: Any) -> bool:
-            if isinstance(value, list):
-                return any(inspect(item) for item in value)
-            if not isinstance(value, dict):
-                return False
-            for key, first in value.items():
-                if key.endswith("start") and isinstance(first, str):
-                    last = value.get(key[:-5] + "end")
-                    if isinstance(last, str):
-                        try:
-                            a, b = datetime.fromisoformat(first), datetime.fromisoformat(last)
-                            if a.tzinfo and b.tzinfo and overlaps(a, b):
-                                return True
-                        except ValueError:
-                            pass
-            return any(inspect(item) for item in value.values() if isinstance(item, (dict, list)))
-
-        return inspect(report.context)
-
-    now = datetime.now(UTC)
-    output_dir = reports_directory(runtime)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    count = 0
-    with (output_dir / ".publication.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        service = GasService(runtime.db, runtime.config)
-        reports = {report.id: report for report in runtime.db.completed_reports(now)}
-        for kind in KINDS:
-            for path in (output_dir / kind).glob("*.json"):
-                try:
-                    report = Report.model_validate_json(path.read_text(encoding="utf-8"))
-                    html_path, json_path = archive_paths(output_dir, report)
-                    if (json_path == path and html_path.is_file() and report.period_end <= now
-                            and report.generated_at >= report.period_end):
-                        previous = reports.get(report.id)
-                        if previous is None or report.generated_at > previous.generated_at:
-                            reports[report.id] = report
-                except (OSError, ValueError):
-                    continue
-        for report in reports.values():
-            if not affected(report):
-                continue
-            refreshed = service.refresh_cost(report)
-            if service.persist_refresh(report, refreshed):
-                _publish_report_locked(runtime, output_dir, refreshed, now)
-                count += 1
-    return {"reports": count}
+    """Drain a bounded batch; the tariff transaction journals the affected windows."""
+    return publish_reports(runtime)
 
 
 def _publish_report_locked(
@@ -249,6 +196,17 @@ def _publish_report_locked(
 def _publish_locked(
     runtime: Runtime, output_dir: Path, now: datetime, *, overrides: list[Report] | None = None,
 ) -> dict[str, Any]:
+    if overrides:
+        # Regeneration owns the candidate DB commit. Publish only its artifacts;
+        # the durable report change schedules dependent worker work afterwards.
+        from zont_analyzer.application.gas import GasService
+
+        service = GasService(runtime.db, runtime.config)
+        result: dict[str, Any] = {}
+        for candidate in overrides:
+            result = _publish_report_locked(runtime, output_dir, service.refresh(candidate), now)
+        return result
+
     from zont_analyzer.application.owner_context import OwnerContextStore
 
     owner_store = OwnerContextStore(runtime.db)

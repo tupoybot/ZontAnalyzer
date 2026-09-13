@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from zont_analyzer.application.pilot import atomic_write_text, reports_directory
-from zont_analyzer.application.publication import _publish_locked
+from zont_analyzer.application.publication import _publish_locked, archive_paths
+from zont_analyzer.domain import Report
 from zont_analyzer.reports import render_text
 from zont_analyzer.runtime import Runtime
 
@@ -62,28 +63,34 @@ def normalize_counterfactual_question(question: str | None) -> str | None:
     return value or None
 
 
-def _publication_snapshot(runtime: Runtime) -> dict[Path, tuple[bytes, int]]:
+def _publication_snapshot(
+    runtime: Runtime, report_id: str, candidate: Report | None = None,
+) -> dict[Path, tuple[bytes, int] | None]:
     root = reports_directory(runtime)
-    if not root.exists():
+    report = runtime.db.report(report_id)
+    if report is None:
         return {}
-    snapshot: dict[Path, tuple[bytes, int]] = {}
-    for path in root.rglob("*"):
-        if path.is_file() and path.suffix in {".html", ".json"}:
-            snapshot[path.relative_to(root)] = (path.read_bytes(), os.stat(path).st_mode & 0o777)
+    html_path, json_path = archive_paths(root, report)
+    paths = {html_path, json_path, root / "reports.json", root / "latest.html"}
+    if candidate is not None:
+        paths.update(archive_paths(root, candidate))
+    snapshot: dict[Path, tuple[bytes, int] | None] = {}
+    for path in paths:
+        relative = path.relative_to(root)
+        snapshot[relative] = (
+            (path.read_bytes(), os.stat(path).st_mode & 0o777) if path.is_file() else None
+        )
     return snapshot
 
 
-def _restore_publication(runtime: Runtime, snapshot: dict[Path, tuple[bytes, int]]) -> None:
+def _restore_publication(runtime: Runtime, snapshot: dict[Path, tuple[bytes, int] | None]) -> None:
     root = reports_directory(runtime)
-    current = {
-        path.relative_to(root)
-        for path in root.rglob("*")
-        if path.is_file() and path.suffix in {".html", ".json"}
-    } if root.exists() else set()
-    for relative in current - snapshot.keys():
-        (root / relative).unlink(missing_ok=True)
-    for relative, (content, mode) in snapshot.items():
+    for relative, saved in snapshot.items():
         target = root / relative
+        if saved is None:
+            target.unlink(missing_ok=True)
+            continue
+        content, mode = saved
         atomic_write_text(target, content.decode("utf-8"), mode=mode)
 
 
@@ -141,7 +148,7 @@ def _run(runtime: Runtime, report_id: str, lock: Any, question: str | None = Non
         output_dir.mkdir(parents=True, exist_ok=True)
         with (output_dir / ".publication.lock").open("a") as publication_lock:
             fcntl.flock(publication_lock, fcntl.LOCK_EX)
-            snapshot = _publication_snapshot(runtime)
+            snapshot = _publication_snapshot(runtime, report_id, candidate)
             try:
                 _publish_locked(runtime, output_dir, datetime.now(UTC), overrides=[candidate])
                 runtime.db.save_report(candidate, render_text(candidate))

@@ -79,6 +79,18 @@ class FakeDatabase:
 
 @pytest.fixture(autouse=True)
 def fake_owner_store(monkeypatch):
+    from zont_analyzer.application import incremental_publication, publication
+
+    # These in-memory tests exercise scheduling and artifacts. The durable
+    # journal/queue has separate real-SQLite publication integration coverage.
+    original_publish = incremental_publication.publish_incremental
+
+    def publish(runtime, output, now, **kwargs):
+        if isinstance(runtime.db, FakeDatabase):
+            return publication._publish_locked(runtime, output, now)
+        return original_publish(runtime, output, now, **kwargs)
+
+    monkeypatch.setattr(incremental_publication, "publish_incremental", publish)
     # Model maintenance has real-DB HTTP/scheduling coverage in test_ai_http and
     # test_model_review. This fixture isolates the telemetry scheduling fake.
     monkeypatch.setattr("zont_analyzer.application.ai_maintenance.start_review", lambda *args: False)

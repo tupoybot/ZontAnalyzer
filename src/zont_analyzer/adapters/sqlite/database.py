@@ -390,7 +390,10 @@ class Database:
         needs_change = previous_revision != head
         backup_path = self.backup(backup_dir) if needs_change and existing_tables else None
         if adopted_legacy_schema:
-            self._run_alembic(config, "stamp", head)
+            # The validated create_all baseline predates the SQL publication
+            # journal/triggers, which cannot be adopted by stamping alone.
+            self._run_alembic(config, "stamp", "d92a10b4c601")
+            self._run_alembic(config, "upgrade", "head")
         elif needs_change:
             self._run_alembic(config, "upgrade", "head")
 
@@ -568,6 +571,10 @@ class Database:
 
     @staticmethod
     def _mark_data_days(session: Session, timestamps: list[int]) -> None:
+        from zont_analyzer.adapters.sqlite.publication_journal import mark_change
+
+        for hour in {datetime.fromtimestamp(value, UTC).strftime("%Y-%m-%dT%H") for value in timestamps}:
+            mark_change(session, "telemetry", hour)
         for day in {datetime.fromtimestamp(value, UTC).date().isoformat() for value in timestamps}:
             statement = sqlite_insert(AppMetaRow).values(key=f"telemetry-day:{day}", value=str(uuid.uuid4()))
             session.execute(statement.on_conflict_do_update(
