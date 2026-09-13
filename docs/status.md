@@ -54,7 +54,7 @@ Docker healthcheck использует curl и HTTP heartbeat, без запу�
 - Опубликованный immutable image проверен отдельно. Backup, upgrade/downgrade,
   сравнение и измерения выполнены локально; на HK только миграция, деплой и smoke.
   [Подробные доказательства и ограничения](./incremental-publication.md).
-- Следующий шаг: приёмка лёгкого healthcheck; cloud-first остаётся отдельным треком.
+- Лёгкий healthcheck принят владельцем 2026-09-13; следующий шаг — cloud-first.
 
 ## Лёгкий healthcheck — 2026-09-13
 
@@ -68,7 +68,7 @@ Docker healthcheck использует curl и HTTP heartbeat, без запу�
 - Локально: 668 тестов, Ruff/mypy, wheel/sdist, Docker и Compose прошли.
   Медиана curl+HTTP-handler: 7,1 мс CPU на probe при лимите 1 CPU/384 MiB.
   Изолированная копия: 149 отчётов, пересчётов/очереди нет. AI-запросов: 0.
-  Merge после приёмки владельца.
+  Приёмка владельца получена 2026-09-13; доработка включается в main.
 - HK: healthy, worker ok, HTTP-probe 11 мс; Basic Auth 401, nginx/xray active.
   Ограниченный smoke дал 0,125 CPU-секунды всего контейнера вокруг запроса
   и чтений счётчика. [Детали и границы измерения](./healthcheck-release.md).
