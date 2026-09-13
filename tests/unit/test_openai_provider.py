@@ -450,3 +450,30 @@ def test_ai_ledger_fails_closed_on_corruption_and_unknown_usage_stays_charged(tm
     ledger.finish("ambiguous", status="failure", input_tokens=0, output_tokens=0, charge_reserved=True)
     with pytest.raises(RuntimeError, match="exhausted"):
         ledger.reserve("another", budget=100, used=0, estimate=21, billing_month="2026-09")
+
+
+def test_settings_snapshot_time_comes_from_input_and_preserves_other_intervals() -> None:
+    captured = datetime(2026, 9, 13, 4, 24, 50, tzinfo=UTC)
+    # Observed model failure: the UTC clock value was relabelled +04:00.
+    wrong = '2026-09-13T04:24:50+04:00'
+    parsed = _StructuredAnalysisResult(summary='Configured PID with PZA', unknowns=[
+        {'id': 'u:settings', 'statement': 'Snapshot does not prove full period history',
+         'interval': {'started_at': wrong, 'ended_at': wrong, 'timezone': 'UTC+4'},
+         'evidence': [{'id': 'settings:1:pza_curve'}, {'id': 'setting:1:regulation'}]},
+        {'id': 'u:mixed', 'statement': 'Mixed observation',
+         'interval': {'started_at': wrong, 'ended_at': wrong, 'timezone': 'UTC+4'},
+         'evidence': [{'id': 'setting:1:regulation'}, {'id': 'metric:temperature'}]},
+        {'id': 'u:other', 'statement': 'Different circuit',
+         'interval': {'started_at': wrong, 'ended_at': wrong, 'timezone': 'UTC+4'},
+         'evidence': [{'id': 'setting:2:regulation'}]},
+    ])
+    original = parsed.model_dump_json()
+    packet = {'control_context': {'control_settings': {'id': 'settings:1', 'captured_at': captured.isoformat()}}}
+    result = _validate_structured_result(parsed, packet)
+    assert result.unknowns[0].interval.started_at == captured
+    assert result.unknowns[0].interval.ended_at == captured
+    assert result.unknowns[0].statement == parsed.unknowns[0].statement
+    assert result.unknowns[1].interval == parsed.unknowns[1].interval
+    assert result.unknowns[2].interval == parsed.unknowns[2].interval
+    assert parsed.model_dump_json() == original
+    assert _validate_structured_result(parsed).unknowns == parsed.unknowns

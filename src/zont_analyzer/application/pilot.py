@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import tempfile
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
@@ -162,6 +162,17 @@ class PilotService:
         start = max(min(earliest_date, yesterday), bounded_start)
         return [start + timedelta(days=offset) for offset in range((yesterday - start).days + 1)]
 
+    def _local_now(self) -> datetime:
+        """Return the wall clock used for the daily publication boundary."""
+        return datetime.now(ZoneInfo(self.runtime.config.home.effective_timezone))
+
+    def _daily_report_ready(self, today: date, now: datetime) -> bool:
+        timezone = ZoneInfo(self.runtime.config.home.effective_timezone)
+        boundary = datetime.combine(today, time.min, timezone) + timedelta(
+            minutes=self.runtime.config.pilot.daily_report_delay_minutes
+        )
+        return now.astimezone(timezone) >= boundary
+
     def _archive_paths(self, report_date: date) -> tuple[Path, Path]:
         archive_dir = self.output_dir / "daily"
         stem = report_date.isoformat()
@@ -208,6 +219,9 @@ class PilotService:
             today = analysis.local_today()
             yesterday = today - timedelta(days=1)
             candidates = self._completed_dates(today)
+            daily_report_ready = self._daily_report_ready(today, self._local_now())
+            if not daily_report_ready:
+                candidates = [selected for selected in candidates if selected != yesterday]
             analyzed_dates: list[str] = []
             published_dates: list[str] = []
             latest_report: Report | None = None
@@ -274,20 +288,30 @@ class PilotService:
                     raise WorkerCycleError(f"daily report was not created for {selected.isoformat()}")
                 if must_analyze or not html_path.exists() or not json_path.exists():
                     published_dates.append(selected.isoformat())
-                if selected == yesterday:
-                    latest_report = report
+                # Candidates are chronological, so the last available report is
+                # the latest report even while yesterday is waiting for its boundary.
+                latest_report = report
 
-            if latest_report is None:
-                raise WorkerCycleError("no report was produced for the latest completed local day")
+            if not daily_report_ready:
+                # A report created manually for yesterday is already safe to keep
+                # as latest; the delayed automatic cycle must not reinterpret it.
+                start, _end = analysis.local_day_window(yesterday)
+                latest_report = self.runtime.db.report(analysis.report_id_for("daily", start)) or latest_report
+
             from zont_analyzer.application.period_schedule import run_period_schedule
 
-            period_results = run_period_schedule(self.runtime, analysis, today, self.runtime.analysis)
+            period_results = (
+                run_period_schedule(self.runtime, analysis, today, self.runtime.analysis)
+                if daily_report_ready
+                else []
+            )
             latest_path = self.output_dir / "latest.html"
             self._write_status(
                 "publishing",
                 analyzed_dates=analyzed_dates,
                 published_dates=published_dates,
-                latest_report_id=latest_report.id,
+                latest_report_id=latest_report.id if latest_report else None,
+                daily_report_waiting=not daily_report_ready,
                 sync=sync_result,
             )
             from zont_analyzer.application.publication import publish_reports
@@ -302,7 +326,8 @@ class PilotService:
                 "sync": sync_result,
                 "analyzed_dates": analyzed_dates,
                 "published_dates": published_dates,
-                "latest_report_id": latest_report.id,
+                "latest_report_id": latest_report.id if latest_report else None,
+                "daily_report_waiting": not daily_report_ready,
                 "latest_html": str(latest_path),
                 "reports_dir": str(self.output_dir),
                 "status_file": str(self.status_file),

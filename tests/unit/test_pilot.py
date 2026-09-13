@@ -361,3 +361,79 @@ def test_imported_history_without_revisions_is_not_reanalyzed_on_upgrade(tmp_pat
     monkeypatch.setattr(runtime.db, 'legacy_period_data_revision',
                         lambda *args: hashlib.sha256(b'[]').hexdigest(), raising=False)
     assert PilotService(runtime).run_cycle()['analyzed_dates'] == []
+
+
+@pytest.mark.parametrize(
+    ("timezone", "current", "ready"),
+    [
+        ("UTC", datetime(2026, 8, 4, 0, 59, tzinfo=UTC), False),
+        ("UTC", datetime(2026, 8, 4, 1, 0, tzinfo=UTC), True),
+        ("Europe/Samara", datetime(2026, 8, 3, 20, 59, tzinfo=UTC), False),
+        ("Europe/Samara", datetime(2026, 8, 3, 21, 0, tzinfo=UTC), True),
+    ],
+)
+def test_daily_report_waits_until_configured_local_boundary(
+    tmp_path: Path, monkeypatch, timezone: str, current: datetime, ready: bool
+) -> None:
+    runtime = FakeRuntime(tmp_path, {"complete": True, "samples": 4, "errors": []})
+    runtime.config = runtime.config.model_copy(
+        update={"home": runtime.config.home.model_copy(update={"timezone": timezone})}
+    )
+    yesterday = date(2026, 8, 3)
+    monkeypatch.setattr(PilotService, "_completed_dates", lambda *_args: [yesterday])
+    monkeypatch.setattr(PilotService, "_local_now", lambda _service: current)
+
+    result = PilotService(runtime).run_cycle()  # type: ignore[arg-type]
+
+    assert result["daily_report_waiting"] is (not ready)
+    assert runtime.analysis_service.calls == ([(yesterday, True)] if ready else [])
+    assert result["latest_report_id"] == (_report(yesterday).id if ready else None)
+
+
+def test_waiting_cycle_keeps_existing_latest_and_restart_does_not_repeat_ai(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = FakeRuntime(tmp_path, {"complete": True, "samples": 4, "errors": []})
+    runtime.config = runtime.config.model_copy(
+        update={"home": runtime.config.home.model_copy(update={"timezone": "UTC"})}
+    )
+    yesterday = date(2026, 8, 3)
+    previous = _report(date(2026, 8, 2))
+    runtime.db.reports[previous.id] = previous
+    monkeypatch.setattr(PilotService, "_completed_dates", lambda *_args: [previous.period_start.date(), yesterday])
+    current = {"value": datetime(2026, 8, 4, 0, 59, tzinfo=UTC)}
+    monkeypatch.setattr(PilotService, "_local_now", lambda _service: current["value"])
+
+    waiting = PilotService(runtime).run_cycle()  # type: ignore[arg-type]
+    assert waiting["latest_report_id"] == previous.id
+    assert runtime.analysis_service.calls == []
+
+    current["value"] = datetime(2026, 8, 4, 1, 0, tzinfo=UTC)
+    first_eligible = PilotService(runtime).run_cycle()  # type: ignore[arg-type]
+    assert first_eligible["latest_report_id"] == _report(yesterday).id
+    assert runtime.analysis_service.calls == [(yesterday, True)]
+
+    runtime.analysis_service.calls.clear()
+    PilotService(runtime).run_cycle()  # type: ignore[arg-type]
+    assert runtime.analysis_service.calls == [(yesterday, False)]
+
+
+def test_waiting_cycle_keeps_manually_generated_yesterday_without_ai(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = FakeRuntime(tmp_path, {"complete": True, "samples": 4, "errors": []})
+    runtime.config = runtime.config.model_copy(
+        update={"home": runtime.config.home.model_copy(update={"timezone": "UTC"})}
+    )
+    yesterday = date(2026, 8, 3)
+    manual = _report(yesterday)
+    runtime.db.reports[manual.id] = manual
+    monkeypatch.setattr(PilotService, "_completed_dates", lambda *_args: [yesterday])
+    monkeypatch.setattr(
+        PilotService, "_local_now", lambda _service: datetime(2026, 8, 4, 0, 59, tzinfo=UTC)
+    )
+
+    result = PilotService(runtime).run_cycle()  # type: ignore[arg-type]
+
+    assert result["latest_report_id"] == manual.id
+    assert runtime.analysis_service.calls == []

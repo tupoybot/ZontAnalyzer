@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from zont_analyzer.application.ai_provenance import details as ai_provenance_details
 from zont_analyzer.application.ai_provenance import label as ai_provenance_label
 from zont_analyzer.domain import Report
+from zont_analyzer.reports.control_settings import control_settings_html, control_settings_text
 from zont_analyzer.reports.experiment_forms import experiment_form
 from zont_analyzer.reports.presentation import (
     LEGACY_DUTY_METRICS,
@@ -754,11 +755,29 @@ def _evidence_text(references: Any, known: set[str]) -> str:
 def _interval_text(interval: Any, timezone: str) -> str:
     if interval is None:
         return "интервал не указан"
-    display_timezone = interval.timezone or timezone
     return (
-        f"{_local(interval.started_at, display_timezone)} — "
-        f"{_local(interval.ended_at, display_timezone)}"
+        f"{_local(interval.started_at, timezone)} — "
+        f"{_local(interval.ended_at, timezone)}"
     )
+
+
+def _is_settings_snapshot_unknown(unknown: Any) -> bool:
+    interval = getattr(unknown, "interval", None)
+    if interval is None or interval.started_at != interval.ended_at:
+        return False
+    evidence = getattr(unknown, "evidence", None)
+    identifiers = [str(getattr(item, "id", item)) for item in (evidence or [])]
+    return bool(identifiers) and all(item.startswith(("setting:", "settings:")) for item in identifiers)
+
+
+def _unknown_interval_text(unknown: Any, timezone: str) -> str:
+    if _is_settings_snapshot_unknown(unknown):
+        return f"Время снимка: {_local(unknown.interval.started_at, timezone)}"
+    return _interval_text(unknown.interval, timezone)
+
+
+def _unknown_interval_label(unknown: Any) -> str:
+    return "Время снимка" if _is_settings_snapshot_unknown(unknown) else "Временной интервал"
 
 
 def _context_time(value: Any, timezone: str) -> str:
@@ -964,6 +983,7 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
         )
         active_time_pct = 100 - float(heating_circuit.get("inactive_time_pct", 0))
         lines.append(f"Контроль отопительной уставки был активен {active_time_pct:g}% периода.")
+    lines.extend(control_settings_text(report.context.get("control_settings"), report.timezone))
     dhw_interaction = report.context.get("dhw_interaction")
     if isinstance(dhw_interaction, dict):
         dhw_circuit = dhw_interaction.get("dhw_circuit", {})
@@ -1071,7 +1091,8 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
         for unknown in report.unknowns:
             lines.extend([
                 f"- {unknown.statement}",
-                f"  Временной интервал: {_interval_text(unknown.interval, report.timezone)}",
+                f"  {_unknown_interval_label(unknown)}: "
+                f"{_unknown_interval_text(unknown, report.timezone).removeprefix('Время снимка: ')}",
                 f"  Свидетельства: {_evidence_text(unknown.evidence, known_evidence)}",
             ])
     if report.recommended_experiment is not None:
@@ -1192,6 +1213,7 @@ def render_html(
             f"Контроль отопительной уставки активен "
             f"{ui.number(100 - float(heating_circuit.get('inactive_time_pct', 0)), '%')} периода.</p>"
         )
+    control_settings_context = control_settings_html(report.context.get("control_settings"), report.timezone)
     dhw_interaction = report.context.get("dhw_interaction")
     dhw_context = ""
     if isinstance(dhw_interaction, dict):
@@ -1291,7 +1313,8 @@ def render_html(
         cards = "".join(
             '<article class="reasoning-item unknown">'
             f"<h3>{html.escape(item.statement)}</h3>"
-            f"<p><strong>Интервал:</strong> {html.escape(_interval_text(item.interval, report.timezone))}</p>"
+            f"<p><strong>{_unknown_interval_label(item)}:</strong> "
+            f"{html.escape(_unknown_interval_text(item, report.timezone).removeprefix('Время снимка: '))}</p>"
             f"<p class=\"debug-only\"><strong>Свидетельства:</strong> {evidence_html(item.evidence)}</p></article>"
             for item in report.unknowns
         )
@@ -1460,7 +1483,8 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 
 <section class="thermal-system full-width"><h2>Тепловая система</h2>
 <p class="boiler-context">Один котёл · отопление и горячая вода</p>
-<div class="thermal-columns"><section><h3>Отопление</h3>{mode_context}{summer_context}</section>
+<div class="thermal-columns"><section><h3>Отопление</h3>{mode_context}{summer_context}
+{control_settings_context}</section>
 <section>{dhw_context or '<h3>ГВС</h3><p>Недостаточно данных о работе ГВС за период.</p>'}</section></div>
 {thermal_interaction}
 <div class="engineering-chart">{render_charts(report, chart_data, panel_ids=("thermal",))}</div>
