@@ -109,9 +109,9 @@ Timer Trigger
 Serverless Container
 report job: sync required window -> analyze -> publish
     |
-    +--> управляемый egress/proxy --> ZONT read-only API
+    +--> разрешённый direct --> ZONT read-only API
     +--> YDB Serverless
-    +--> управляемый egress/proxy --> OpenAI API
+    +--> локальный Xray-клиент --> управляемый egress --> OpenAI API
     +--> Object Storage (публикуемые HTML/JSON-артефакты)
     +--> Lockbox (runtime-секреты)
     +--> Monium (метрики/логи/алерты)
@@ -276,10 +276,13 @@ Cloud runtime должен использовать service account/IAM permissi
 ### Исходящий трафик
 
 Обязателен единый контракт маршрутизации по назначениям: proxy, явно разрешённый
-direct или deny. Внешний HTTPS проходит через аутентифицированный CONNECT proxy
-с allowlist, таймаутами и лимитами соединений/байтов, с проверкой TLS целевого API.
-Cloud APIs и служебная identity имеют отдельные разрешённые маршруты. Политика
-охватывает ZONT, OpenAI SDK, metadata и загрузку каталога моделей.
+direct или deny. OpenAI API/metadata и каталог моделей используют локальный
+HTTP CONNECT интерфейс Xray-клиента рядом с приложением и аутентифицированный
+внешний транспорт VLESS/XHTTP/REALITY. ZONT идёт напрямую по явному разрешению.
+Обязательны allowlist, таймауты и лимиты соединений/байтов, проверка TLS целевого API.
+Cloud APIs и служебная identity имеют отдельные разрешённые маршруты.
+Локальный proxy не публикуется наружу. Совместный lifecycle, готовность и ресурсы
+Xray требуют проверки в M1; это выбранный контракт, не реализованный cloud runtime.
 
 При отказе обязательного proxy прямого fallback нет. Проверяется
 маршрутизация всех прикладных клиентов, SDK и redirects;
