@@ -303,3 +303,16 @@ feedback этим инструментом не допускается. Пред
 если изменился только газовый контекст. Изменение тепловых фактов или периода
 не разрешает такое переиспользование. Доказательства выпуска этапа 8:
 [stage-8-acceptance.md](../docs/archive/pre-operation/stage-8-acceptance.md).
+
+### Лёгкий Docker healthcheck
+
+Периодическая проверка запускает `python -m zont_analyzer.healthcheck`:
+только стандартная библиотека и чтение JSON статуса, без runtime, SQLite,
+сети и обслуживания рекомендаций. CLI `zont-analyzer healthcheck` сохранён
+для совместимости ручных вызовов; не используйте его для периодического опроса.
+Интервал 60 секунд, timeout 5 секунд, три неудачи до `unhealthy`.
+По умолчанию `/data/worker-status.json` должен обновляться не реже 900 секунд.
+При нестандартных `pilot.worker_status_file` или `scheduler.sync_every_minutes`
+задайте в deployment `.env` соответственно `ZONT_HEALTH_STATUS_FILE` (путь внутри
+контейнера) и `ZONT_HEALTH_MAX_AGE_SECONDS` (как минимум
+`max(sync_every_minutes * 180, 300)`). Настройки приложения probe не загружает.

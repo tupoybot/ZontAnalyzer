@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 from zont_analyzer.application.analysis import CALCULATION_VERSION
 from zont_analyzer.application.reasoning_context import reuse_ai_interpretation
 from zont_analyzer.domain import Report
+from zont_analyzer.healthcheck import read_worker_status
+from zont_analyzer.healthcheck import worker_health as worker_health
 from zont_analyzer.reports import render_html, render_text
 from zont_analyzer.reports.chart_data import cached_chart_data
 
@@ -83,42 +85,6 @@ def atomic_write_text(path: Path, content: str, *, mode: int = 0o600) -> None:
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
-
-
-def read_worker_status(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("worker status root must be an object")
-    return payload
-
-
-def worker_health(path: Path, *, max_age_seconds: int, now: datetime | None = None) -> dict[str, Any]:
-    checked_at = (now or datetime.now(UTC)).astimezone(UTC)
-    try:
-        status = read_worker_status(path)
-        updated_at = datetime.fromisoformat(str(status["updated_at"]))
-        if updated_at.tzinfo is None:
-            raise ValueError("updated_at has no timezone")
-        age_seconds = max(0.0, (checked_at - updated_at.astimezone(UTC)).total_seconds())
-        state = str(status.get("state", "unknown"))
-        healthy = state in {"starting", "syncing", "analyzing", "publishing", "ok"} and (
-            age_seconds <= max_age_seconds
-        )
-        return {
-            "ok": healthy,
-            "state": state,
-            "age_seconds": round(age_seconds, 3),
-            "max_age_seconds": max_age_seconds,
-            "status_file": str(path),
-        }
-    except (OSError, ValueError, KeyError) as exc:
-        return {
-            "ok": False,
-            "state": "missing_or_invalid",
-            "error": f"{type(exc).__name__}: {exc}",
-            "max_age_seconds": max_age_seconds,
-            "status_file": str(path),
-        }
 
 
 class PilotService:

@@ -49,9 +49,9 @@ services:
     pids_limit: 128
     stop_grace_period: 45s
     healthcheck:
-      test: ["CMD", "zont-analyzer", "--config", "/config/config.yaml", "--data-dir", "/data", "healthcheck"]
+      test: ["CMD", "python", "-m", "zont_analyzer.healthcheck", "--status-file", "${ZONT_HEALTH_STATUS_FILE:-/data/worker-status.json}", "--max-age-seconds", "${ZONT_HEALTH_MAX_AGE_SECONDS:-900}"]
       interval: 1m
-      timeout: 20s
+      timeout: 5s
       retries: 3
       start_period: 45s
     logging:
