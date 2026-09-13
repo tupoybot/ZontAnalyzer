@@ -49,7 +49,7 @@ services:
     pids_limit: 128
     stop_grace_period: 45s
     healthcheck:
-      test: ["CMD", "python", "-m", "zont_analyzer.healthcheck", "--status-file", "${ZONT_HEALTH_STATUS_FILE:-/data/worker-status.json}", "--max-age-seconds", "${ZONT_HEALTH_MAX_AGE_SECONDS:-900}"]
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "3", "${ZONT_HEALTH_URL:-http://127.0.0.1:8787/za/api/worker-health}"]
       interval: 1m
       timeout: 5s
       retries: 3

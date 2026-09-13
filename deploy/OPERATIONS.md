@@ -306,13 +306,16 @@ feedback этим инструментом не допускается. Пред
 
 ### Лёгкий Docker healthcheck
 
-Периодическая проверка запускает `python -m zont_analyzer.healthcheck`:
-только стандартная библиотека и чтение JSON статуса, без runtime, SQLite,
-сети и обслуживания рекомендаций. CLI `zont-analyzer healthcheck` сохранён
-для совместимости ручных вызовов; не используйте его для периодического опроса.
-Интервал 60 секунд, timeout 5 секунд, три неудачи до `unhealthy`.
-По умолчанию `/data/worker-status.json` должен обновляться не реже 900 секунд.
-При нестандартных `pilot.worker_status_file` или `scheduler.sync_every_minutes`
-задайте в deployment `.env` соответственно `ZONT_HEALTH_STATUS_FILE` (путь внутри
-контейнера) и `ZONT_HEALTH_MAX_AGE_SECONDS` (как минимум
-`max(sync_every_minutes * 180, 300)`). Настройки приложения probe не загружает.
+Docker раз в минуту вызывает через curl внутренний HTTP endpoint
+`/za/api/worker-health`. Уже работающий HTTP-сервер читает только JSON
+heartbeat: допустимое состояние и возраст не больше
+`max(scheduler.sync_every_minutes * 180, 300)` секунд. Нет запуска Python,
+инициализации runtime, обращений к БД или внешней сети. HTTP 200 означает
+свежий рабочий статус; 503 — ошибку, отсутствие или устаревание heartbeat.
+Существующий `/health` остаётся проверкой доступности HTTP.
+
+Timeout curl 3 секунды, Docker 5 секунд, три неудачи до unhealthy.
+Для нестандартного порта/API-префикса задайте `ZONT_HEALTH_URL` в deployment
+`.env` (адрес внутри контейнера). Путь heartbeat и интервал синхронизации
+берутся из конфигурации уже работающего приложения. В Docker feedback HTTP
+должен быть включён. Ручной CLI `zont-analyzer healthcheck` сохранён.

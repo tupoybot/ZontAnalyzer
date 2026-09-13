@@ -2,6 +2,8 @@ FROM python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system --gid 10001 zont \
     && useradd --system --uid 10001 --gid zont --home-dir /app zont
 COPY pyproject.toml README.md ./

@@ -134,3 +134,37 @@ def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch
     assert feedback[0]["recommendation_id"] == recommendation.id
     assert feedback[0]["status"] == "rejected"
     assert feedback[0]["owner_note"] == payload["owner_note"]
+
+
+def test_worker_health_checks_heartbeat_without_database(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    runtime = build_runtime(None, tmp_path / "data")
+    runtime.config.feedback.listen_port = 0
+    runtime.config.feedback.public_api_base_url = "/custom"
+    runtime.config.pilot.worker_status_file = "custom-status.json"
+    runtime.config.scheduler.sync_every_minutes = 10
+    server = build_feedback_server(runtime)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    path = runtime.loaded.data_dir / "custom-status.json"
+    # A heartbeat request must not consult DB or initialize another runtime.
+    monkeypatch.setattr(runtime, "db", None)
+    url = f"http://127.0.0.1:{server.server_address[1]}/custom/worker-health"
+    try:
+        with httpx.Client(timeout=5) as client:
+            assert client.get(url).status_code == 503
+            for state, age, expected in [("ok", 1200, 200), ("ok", 1801, 503), ("error", 0, 503)]:
+                path.write_text(json.dumps({
+                    "state": state,
+                    "updated_at": (datetime.now(UTC) - timedelta(seconds=age)).isoformat(),
+                }))
+                response = client.get(url)
+                assert response.status_code == expected
+                assert response.json() == {"ok": expected == 200}
+            path.write_text("invalid JSON")
+            assert client.get(url).status_code == 503
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

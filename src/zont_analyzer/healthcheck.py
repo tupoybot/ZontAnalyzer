@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,19 +42,3 @@ def worker_health(path: Path, *, max_age_seconds: int, now: datetime | None = No
             "max_age_seconds": max_age_seconds,
             "status_file": str(path),
         }
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--status-file", type=Path, default=Path("/data/worker-status.json"))
-    parser.add_argument("--max-age-seconds", type=int, default=900)
-    args = parser.parse_args()
-    if args.max_age_seconds < 1:
-        parser.error("--max-age-seconds must be positive")
-    result = worker_health(args.status_file, max_age_seconds=args.max_age_seconds)
-    print(json.dumps(result))
-    raise SystemExit(0 if result["ok"] else 1)
-
-
-if __name__ == "__main__":
-    main()

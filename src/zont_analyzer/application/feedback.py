@@ -10,10 +10,12 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 from zoneinfo import ZoneInfo
 
+from zont_analyzer.application.pilot import worker_status_path
 from zont_analyzer.application.publication import publish_report, publish_reports
 from zont_analyzer.application.regeneration import normalize_counterfactual_question
 from zont_analyzer.application.regeneration import start as start_regeneration
 from zont_analyzer.application.regeneration import status as regeneration_status
+from zont_analyzer.healthcheck import worker_health
 from zont_analyzer.runtime import Runtime
 
 logger = logging.getLogger(__name__)
@@ -249,6 +251,16 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
             )
 
         def do_GET(self) -> None:  # noqa: N802
+            if urlsplit(self.path).path == f"{api_path}/worker-health":
+                result = worker_health(
+                    worker_status_path(runtime),
+                    max_age_seconds=max(runtime.config.scheduler.sync_every_minutes * 180, 300),
+                )
+                self._send_json(
+                    HTTPStatus.OK if result["ok"] else HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"ok": result["ok"]},
+                )
+                return
             if self._ai_request():
                 return
             if urlsplit(self.path).path == f"{api_path}/health":
