@@ -52,6 +52,9 @@ def _set(cache: sqlite3.Connection, key: str, value: str) -> None:
 def _open(path: Path) -> sqlite3.Connection:
     def connect() -> sqlite3.Connection:
         cache = sqlite3.connect(path)
+        # It is process state, not a static report. Also protect legacy /za/
+        # servers whose prefix location does not apply the dotfile deny rule.
+        path.chmod(0o600)
         cache.row_factory = sqlite3.Row
         try:
             cache.executescript("""

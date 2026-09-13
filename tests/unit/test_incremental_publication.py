@@ -173,6 +173,7 @@ def test_disposable_cache_and_artifact_recovery(tmp_path: Path, damage: str) -> 
     publication.publish_reports(runtime)
     output = reports_directory(runtime)
     cache = output / ".publication-cache.sqlite3"
+    assert cache.stat().st_mode & 0o777 == 0o600
     if damage == "missing_cache":
         cache.unlink()
     elif damage == "corrupt_cache":

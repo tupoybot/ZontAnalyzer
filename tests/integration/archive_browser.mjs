@@ -19,6 +19,11 @@ try {
   }
   await anonymous.close();
 
+  for (const path of ["/.publication-cache.sqlite3", "/za/.publication-cache.sqlite3"]) {
+    const response = await context.request.get(`${baseURL}${path}`);
+    assert.equal(response.status(), 403, `${path} is private process state`);
+  }
+
   for (const path of ["/", "/latest.html", "/daily/2026-08-05.html", "/za/latest.html", "/za/daily/2026-08-05.html"]) {
     const response = await context.request.get(`${baseURL}${path}`);
     assert.equal(response.status(), 200, `${path} is a protected direct report URL`);
