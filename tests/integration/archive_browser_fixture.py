@@ -72,7 +72,12 @@ for year, season in ((2025, "autumn"), (2026, "spring"), (2026, "autumn")):
 
 # Rendering fixtures deliberately exercise gas UI states independently of model tests.
 with patch("zont_analyzer.application.gas.GasService.refresh", lambda self, report: report):
-    result = publish_reports(runtime)
+    # Fixture preparation drains the same bounded queue used by normal cycles.
+    for _ in range(3):
+        result = publish_reports(runtime)
+        if not result["pending_reports"]:
+            break
+    assert result["pending_reports"] == 0
 assert result["reports"] == 12
 
 # Render large values through the real template, without changing stored reports.

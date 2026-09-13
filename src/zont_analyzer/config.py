@@ -142,6 +142,7 @@ class PilotConfig(StrictModel):
     reports_dir: str = Field(default="reports", min_length=1)
     worker_status_file: str = Field(default="worker-status.json", min_length=1)
     max_catchup_days: int = Field(default=90, ge=1, le=3660)
+    daily_report_delay_minutes: int = Field(default=60, ge=0, le=1439)
 
     @field_validator("reports_dir", "worker_status_file")
     @classmethod

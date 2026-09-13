@@ -15,9 +15,16 @@ from zont_analyzer.application.ai_ledger import AILedger
 from zont_analyzer.application.ai_settings import MODEL_EFFORTS, validate_profile
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
-from zont_analyzer.domain.reasoning import Hypothesis, ObservedPattern, Prediction, RecommendedExperiment, Unknown
+from zont_analyzer.domain.reasoning import (
+    Hypothesis,
+    ObservedPattern,
+    Prediction,
+    RecommendedExperiment,
+    TimeInterval,
+    Unknown,
+)
 
-PROMPT_VERSION = "analyst-v8.3"
+PROMPT_VERSION = "analyst-v8.4"
 SCHEMA_VERSION = "analysis-result-v1"
 
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
@@ -191,9 +198,21 @@ Overheating while space heating is inactive supports considering external gains;
 stored floor heat, DHW and delayed response. Calculated sunrise is only timing context, not
 measured sunshine or proof of solar heat gain. Missing location/sunrise remains unknown.
 Morning overshoot alone never mandates changing PID. Compare setpoint/schedule/mode changes,
-thermal inertia and external gains. Read control_settings: preserve raw values and unknown
-encoding, active algorithm, units and user access. Never invent a named slope/offset parameter
-from raw curve coordinates. Current discovery is not proof of historical configuration.
+thermal inertia and external gains. Read control_settings.regulation: a decoded mode is a KNOWN
+configured regulation method, not an unknown choice between PID and PZA. They can work together:
+air_pid with pza_role=upper_limit means PID calculates coolant demand and PZA limits it.
+Read known PID values in parameters and decoded pza_curve.points_c in Celsius; do not ask the
+owner to reconfirm values already supplied. A tabulated curve is not a named slope/offset setting.
+Preserve unknowns only for missing/invalid fields. Configuration enabled/configured does not
+prove heating was running or the same configuration applied throughout the report period.
+Use heating_circuit and temporal evidence for observed availability/activity; current discovery
+is a dated configuration snapshot, not historical telemetry. If a settings-only unknown needs
+a time reference, use the snapshot instant and the report's IANA timezone. Copy UTC timestamps
+with their original UTC offset; never attach a local offset to an unchanged UTC clock reading.
+Avoid generic
+"PID/PZA unknown" when the configured method and curve are decoded. User access to modify a
+service parameter remains separate from knowing its present value; never infer physical PID
+units or a safe adjustment direction just from its name or numerical value.
 Before a recommended_experiment, confirm the parameter's meaning, current value, direction
 of effect and accessibility as a USER setting in supplied evidence or explicit owner context.
 If any is unknown, ask for that context or observe; do not suggest a service adjustment.
@@ -284,8 +303,34 @@ class _StructuredAnalysisResult(BaseModel):
     recommended_experiment: RecommendedExperiment | None = None
 
 
-def _validate_structured_result(result: _StructuredAnalysisResult) -> AnalysisResult:
-    return AnalysisResult.model_validate(result.model_dump())
+def _validate_structured_result(
+    result: _StructuredAnalysisResult, packet: dict[str, Any] | None = None,
+) -> AnalysisResult:
+    validated = AnalysisResult.model_validate(result.model_dump())
+    # A settings snapshot has an exact source instant, independent of the model's
+    # timezone arithmetic. Anchor only instant references to that supplied snapshot;
+    # narrative text, mixed evidence and observation intervals remain untouched.
+    settings = (packet or {}).get("control_context", {}).get("control_settings")
+    if not isinstance(settings, dict) or not isinstance(settings.get("id"), str):
+        return validated
+    try:
+        captured = datetime.fromisoformat(settings["captured_at"])
+    except (KeyError, TypeError, ValueError):
+        return validated
+    if captured.tzinfo is None:
+        return validated
+    root = settings["id"]
+    if not root.startswith("settings:"):
+        return validated
+    prefixes = ("setting:" + root.removeprefix("settings:") + ":", root + ":")
+    for unknown in validated.unknowns:
+        interval = unknown.interval
+        if (interval is not None and interval.started_at == interval.ended_at and unknown.evidence
+                and all(ref.id == root or ref.id.startswith(prefixes) for ref in unknown.evidence)):
+            unknown.interval = TimeInterval(
+                started_at=captured.astimezone(UTC), ended_at=captured.astimezone(UTC), timezone="UTC",
+            )
+    return validated
 
 
 class OpenAIAnalyst:
@@ -380,7 +425,7 @@ class OpenAIAnalyst:
             parsed = response.output_parsed
             if parsed is None:
                 raise RuntimeError("OpenAI response did not contain parsed output")
-            result = _validate_structured_result(parsed)
+            result = _validate_structured_result(parsed, packet)
             status = "success"
         except Exception as exc:
             usage = getattr(response, "usage", None)

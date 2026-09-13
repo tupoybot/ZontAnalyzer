@@ -39,6 +39,7 @@ scheduler:
   overlap_minutes: 15
 
 pilot:
+  daily_report_delay_minutes: 60
   reports_dir: /publish
   worker_status_file: worker-status.json
   max_catchup_days: 90
