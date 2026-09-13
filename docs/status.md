@@ -10,21 +10,20 @@
   `facts-v2`; отображение настроек ещё не принято.
 - По просьбе владельца добавлена [инкрементальная публикация](./incremental-publication.md).
   Штатный цикл пересчитывает только изменённые отчёты, не более восьми за вызов.
-  Healthcheck и его настройки не менялись.
+  Принято и слито в `main` (`0c266bf`).
 - Известный дефект среднего превышения температуры остаётся открытым.
   Этапы **10/11** необязательны и отложены. Приложение только читает ZONT.
 
 ## Развёрнутая версия
 
-HK: `20260913-incremental-6ccae88`, commit `6ccae88`,
-тег `release-9-incremental-publication-20260913-3`;
-образ `ghcr.io/tupoybot/zontanalyzer@sha256:3de7e267c24ba17f3e90d9a934f49fb4ebcf9aafe787d1b2016e6e56ef1dfd36`.
+HK: `20260913-healthcheck-f9d5c71`, commit `f9d5c71`,
+тег `release-9-lightweight-healthcheck-20260913-http`;
+образ `ghcr.io/tupoybot/zontanalyzer@sha256:bb944c5568767802062526a790d96801702c7c1fafe362f2f68dd22aedf063e0`.
 Миграция `f1a2b3c4d5e6`. Сайт: [za.tupoybot.ru](https://za.tupoybot.ru/).
-Первый штатный цикл завершён `ok` **13:59:54 UTC**: 149 записей архива,
-8 обработано, 141 ожидает следующих циклов; API health 200, Basic Auth 401
-без авторизации. Сохранённый AI и блок настроек проверены. Nginx/Xray активны.
-Docker healthcheck в момент smoke ещё `starting`; его прежние тайм-ауты
-не входят в эту доработку. [Предыдущий выпуск](./zont-control-settings.md).
+Публикация инкрементальная; очередь из 149 отчётов обработана штатными циклами.
+Docker healthcheck использует curl и HTTP heartbeat, без запуска Python.
+[Проверки выпуска](./healthcheck-release.md),
+[предыдущая оптимизация](./incremental-publication.md).
 
 ## Активные контракты
 
@@ -55,16 +54,21 @@ Docker healthcheck в момент smoke ещё `starting`; его прежни�
 - Опубликованный immutable image проверен отдельно. Backup, upgrade/downgrade,
   сравнение и измерения выполнены локально; на HK только миграция, деплой и smoke.
   [Подробные доказательства и ограничения](./incremental-publication.md).
-- Следующий шаг: просмотр владельцем блока настроек и принятие доработки публикации.
-  Ветка `stage9/report-delay-control-settings` открыта; merge требует явной приёмки.
+- Следующий шаг: приёмка лёгкого healthcheck; cloud-first остаётся отдельным треком.
 
 ## Лёгкий healthcheck — 2026-09-13
 
 - Ветка `stage9/lightweight-healthcheck` от принятой оптимизации публикации
   (`main`, merge `0c266bf`). Cloud-first рабочая ветка сохранена отдельно.
-- Docker проверяет только JSON heartbeat стандартной библиотекой Python.
-  Импорт приложения, открытие БД и обслуживание рекомендаций исключены.
+- Docker вызывает curl к HTTP worker-health; запущенный сервер читает JSON heartbeat.
+  Запуск Python, импорт приложения, открытие БД и обслуживание рекомендаций исключены.
   Семантика состояний и порог 15 минут сохранены; timeout снижен до 5 секунд.
-  Нестандартный путь/порог задаются через Compose environment interpolation:
+  Путь/порог берутся из конфигурации worker, нестандартный URL — из `ZONT_HEALTH_URL`:
   [инструкция](../deploy/OPERATIONS.md#лёгкий-docker-healthcheck).
-- Локальные проверки и выпуск выполняются; merge после приёмки владельца.
+- Локально: 668 тестов, Ruff/mypy, wheel/sdist, Docker и Compose прошли.
+  Медиана curl+HTTP-handler: 7,1 мс CPU на probe при лимите 1 CPU/384 MiB.
+  Изолированная копия: 149 отчётов, пересчётов/очереди нет. AI-запросов: 0.
+  Merge после приёмки владельца.
+- HK: healthy, worker ok, HTTP-probe 11 мс; Basic Auth 401, nginx/xray active.
+  Ограниченный smoke дал 0,125 CPU-секунды всего контейнера вокруг запроса
+  и чтений счётчика. [Детали и границы измерения](./healthcheck-release.md).
