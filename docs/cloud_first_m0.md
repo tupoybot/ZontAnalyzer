@@ -1,6 +1,6 @@
 # M0 — контракты и предварительная реализуемость
 
-Дата: 2026-09-13. Статус: **в работе, не принят**. Ветка `docs/cloud-first-m0`
+Дата: 2026-09-14. Статус: **в работе, не принят**. Ветка `docs/cloud-first-m0`
 от `architecture/cloud-first-serverless`; application baseline — `main`, `82a7a82`.
 Исходники приложения между этими ветками совпадают. Этот документ определяет
 будущие контракты; интерфейсы/YDB/runtime adapter здесь не реализованы.
@@ -266,49 +266,56 @@ Proxy-маршруты должны выходить только через в�
 
 Размещение и доступность OpenAI проверяются по
 [официальному списку](https://developers.openai.com/api/docs/supported-countries)
-и фактической схеме доступа. M2 сначала проверяет DNS/TLS/маршрут без ключей,
+и фактической схеме доступа. Проверка списка 2026-09-14: Россия в нём отсутствует.
+Выбор внешнего egress не подтверждает допустимость всей схемы доступа из
+выбранного runtime; этот M0 gate остаётся открытым до подтверждения внешних условий.
+M2 сначала проверяет DNS/TLS/маршрут без ключей,
 затем выполняет не более одного аутентифицированного запроса за пользовательскую
 итерацию. В M0 запросов OpenAI: 0.
 
 ## Предварительная стоимость
 
-Ниже сценарии выбранного запуска по отчёту, **не замеры**: 30 дней, 30 daily jobs,
-1 CPU, 0,5 GiB RAM,
-без provisioned instances. Ставки 2026-09-13: CPU 5,69 RUB/core-hour,
-RAM 3,79 RUB/GiB-hour, вызовы 18,97 RUB/миллион. Учтены отдельно варианты с
-полностью доступными бесплатными 5 CPU-hour/10 GiB-hour/миллионом вызовов и без них.
-Источник: [тариф Serverless Containers](https://yandex.cloud/ru/docs/serverless-containers/pricing).
+Ориентир владельца относится только к ресурсам проекта в Yandex Cloud; платежи
+OpenAI и существующий внешний proxy учитываются отдельно. CPU/RAM Xray-клиента
+в cloud и облачный исходящий трафик входят в смету Yandex Cloud. Ориентир с допуском
+не является жёстким денежным лимитом; меньший расход не требует увеличения ресурсов.
+Суммы владельца, детализация сценариев и сравнение с ориентиром хранятся приватно.
 
-| Суммарное время одного daily job, включая cold start/сеть | Compute с free tier, RUB | Compute без free tier, RUB |
+На 2026-09-14 подготовлен воспроизводимый расчёт для 30 дней: простой с сохранением
+ресурсов, базовая нагрузка и чувствительность к удвоению runtime/YDB RU. Это
+**расчётные сценарии, не замеры**. Базовый и сценарий чувствительности укладываются
+в согласованный диапазон даже без бесплатных пакетов. Свободный остаток пакетов
+аккаунта не подтверждён; вариант с ними показан отдельно и не является основанием
+для provisioning. Ставки RUB с НДС проверены через read-only
+[Billing SKU API](https://yandex.cloud/en/docs/billing/api-ref/Sku/list)
+и страницы тарифов; индивидуальные скидки и гранты не предполагаются.
+
+| Компонент | Платная ставка и единица для расчёта | Что включать |
 | --- | --- | --- |
-| 60 s | 0,00 | 3,79 |
-| 300 s | 0,00 | 18,96 |
-| 600 s, несколькими bounded порциями | 0,00 | 37,93 |
+| [Containers](https://yandex.cloud/ru/docs/serverless-containers/pricing) | 5,69 RUB/core-hour; 3,79 RUB/GiB-hour; 18,97 RUB/млн вызовов | Приложение/Xray, cold start, сеть, report/web/publication/recovery jobs; provisioned instances = 0 |
+| [YDB Serverless](https://yandex.cloud/ru/docs/ydb/pricing/serverless) | 24,64 RUB/млн RU; 0,0342 RUB/GiB-hour | Данные и индексы, обычные операции, export/restore; provisioned capacity = 0 |
+| [Lockbox](https://yandex.cloud/ru/docs/lockbox/pricing) | 0,0274 RUB/version-hour; 3,79 RUB/10 тыс. операций | Все сохраняемые версии секретов, включая web auth и Xray; чтения при cold start |
+| [Registry](https://yandex.cloud/ru/docs/container-registry/pricing) | 0,004575 RUB/GiB-hour | Суммарные сохранённые слои всех образов и версий; платное сканирование добавлять отдельно |
+| [Object Storage](https://yandex.cloud/ru/docs/storage/pricing) | Standard 0,0033 RUB/GiB-hour; PUT/LIST 0,5692 RUB/тыс.; GET 0,46 RUB/10 тыс. | Публикации, state, backup, старые версии объектов и операции с ними |
+| [KMS](https://yandex.cloud/ru/docs/kms/pricing) | 0,00439 RUB/key-version-hour; 3,16 RUB/10 тыс. symmetric crypto operations | Шифрование state/backup, число версий ключа и операций |
+| [API Gateway](https://yandex.cloud/ru/docs/api-gateway/pricing) | 142,3 RUB/млн запросов | Весь web/API трафик, включая отклонённые запросы; authorizer считается отдельно |
+| [Functions](https://yandex.cloud/ru/docs/functions/pricing) | 6,48 RUB/GiB-hour; 18,97 RUB/млн вызовов | Кандидат authorizer без экономии от cache; фактический механизм проверяется M1 |
+| [Monium](https://yandex.cloud/ru/docs/monium/pricing) | Логи 4,40 RUB/ГБ; запись метрик 0,32 RUB/млн; чтение API 7,686 RUB/млн; alerts 1,50 RUB/тыс. alert-hours | Объём записи/чтения, все alerts/subalerts; SMS/звонки и tracing не включены по умолчанию |
+| [Cloud Logging](https://yandex.cloud/ru/docs/logging/pricing) | Запись 25,55046 RUB/GiB; хранение 0,015494 RUB/GiB-hour | Резерв на platform logs и их хранение, даже если копия передаётся в Monium |
+| [Internet egress](https://yandex.cloud/ru/docs/vpc/pricing) | 1,42 RUB/GiB; из Object Storage 1,67994 RUB/GiB в первом платном диапазоне | Отдельно ответы сайта/backup download и исходящие запросы контейнера |
 
-Дополнительные месячные/недельные, ручные, publication и recovery jobs считаются
-по фактическому времени отдельно. Для примера: ещё 10 CPU-hours при 0,5 GiB RAM —
-75,85 RUB без free tier плюс вызовы. Отдельный периодический сбор
-в эту оценку не входит.
+[Certificate Manager](https://yandex.cloud/ru/docs/certificate-manager/pricing)
+дополнительно не тарифицируется. Существующий внешний DNS сохраняется; новая
+облачная DNS-зона не нужна. В выбранном сценарии нет дополнительных VM, NAT gateway,
+LB или CDN. Их появление, рост версий секретов/образов/данных и платные опции
+требуют пересчёта до включения. Сценарий чувствительности не является верхней
+границей счёта: реальный RU расход и размер YDB/индексов проверяются в M3,
+совместные RAM/runtime приложения и Xray — в M1–M2.
 
-Для небольшого стенда дополнительно: три версии Lockbox secrets на 720 часов
-стоят 59,18 RUB, 30 тысяч чтений — 11,37 RUB. Registry 1 GiB на 720 часов —
-3,29 RUB. Object Storage standard — 0,0033 RUB/GiB-hour после free tier;
-PUT/LIST — 0,5692 RUB/тысячу, GET — 0,46 RUB/10 тысяч после free tier.
-Источники: [Lockbox](https://yandex.cloud/ru/docs/lockbox/pricing),
-[Registry](https://yandex.cloud/ru/docs/container-registry/pricing),
-[Storage](https://yandex.cloud/ru/docs/storage/pricing), read-only
-[Billing SKU API](https://yandex.cloud/en/docs/billing/api-ref/Sku/list).
-SKU: `dn2j3lv6ln3prgf1sotn`, `dn2v4cf61h9ogav4id0n`, `dn25odoxu3dfmjrnzxjy`,
-`dn2blgm6egk7u97t0mr0`, `dn2c17otu20ij2eu4k18`, `dn2tsb3bn2sgk6tict7r`.
-
-YDB RU/storage, gateway/authorizer, logging/metrics, исходящий трафик, state/backup,
-proxy и доля расходов существующих серверов ещё не оценены полностью. Free tier
-других ресурсов аккаунта не проверен. Поэтому полная смета ещё не подтверждена.
-Сценарий daily до 300 s + ещё 10 часов прочих jobs + указанные Lockbox/registry
-даёт около 169 RUB до YDB/storage/egress/observability. Это запас для дальнейшей
-оценки, не подтверждённая стоимость production.
-M1 — ручные bounded probes без расписания;
-бюджетные alerts не считаются hard cap, хранение/secret versions платные и в простое.
+M1 использует ручные bounded probes без расписания. Перед provisioning задать
+лимиты concurrency/instances, YDB throughput/storage, log retention и бюджетные
+alerts из приватной конфигурации. Alerts и технические квоты не гарантируют hard
+cap; хранение, secret/key versions и проверяемые alerts платные и в простое.
 
 ## Bootstrap, приёмка и незакрытые решения
 
@@ -368,23 +375,42 @@ Terraform управляет облачными ресурсами и привя
 Источники: [подключение домена API Gateway](https://yandex.cloud/ru/docs/api-gateway/operations/api-gw-domains),
 [подтверждение домена для сертификата](https://yandex.cloud/ru/docs/certificate-manager/operations/managed/cert-validate).
 
-Предлагаемый IaC state: отдельный private versioned bucket в отдельном bootstrap
-state, исключённом из destroy application stack, с блокировкой параллельного
-apply и резервным восстановлением. Конкретные backend/lock mechanism проверить
-Terraform validation и конкурентным тестом M1. Bootstrap identity отделена от
-folder-scoped deploy SA; минимальные IAM права выводятся из выбранных ресурсов.
+Выбранный IaC backend — S3 в отдельном private versioned bucket с SSE-KMS;
+bucket/key и bootstrap state исключены из destroy application stack. Bootstrap
+выполняется локально в Docker с действующей приватной identity: создать/import
+project folder, state bucket/key и identities; начальный local state с режимом
+0600 перенести в отдельный bootstrap key backend и сохранить защищённую копию.
+Bootstrap credentials не передаются application deployment workflow.
+
+Блокировка — `use_lockfile = true` в Terraform S3 backend; GitHub concurrency
+дополняет её, не заменяет. Основание выбора —
+[S3 lockfile](https://developer.hashicorp.com/terraform/language/backend/s3)
+и поддержка [conditional PUT](https://yandex.cloud/ru/docs/storage/s3/api-ref/object/upload)
+в Object Storage. Это выбор механизма, не доказательство совместимости:
+до первого application apply в M1 проверить pinned Terraform/backend, два
+конкурирующих клиента, освобождение после сбоя и восстановление версии state.
+При провале остановить provisioning; не отключать lock ради продолжения.
+
+Deployment provider использует краткоживущий IAM token через
+[workload identity federation](https://yandex.cloud/en/docs/iam/concepts/workload-identity)
+с точным GitHub Environment subject. Доступ S3 backend проверяется отдельно:
+его credentials должны поддерживаться выбранным backend и иметь доступ лишь
+к state prefix/lock и нужному KMS key. Если необходим static S3 key, создать его
+вне Terraform state, передать приватно и задать ротацию. Runtime identity не
+читает state и deployment credentials. Bootstrap identity отделена от
+folder-scoped deploy SA; effective permissions и изоляция проверяются в M1.
 Registry — Yandex Container Registry; копировать immutable artifact без rebuild
 и проверять digest. Secrets payload загружается вне Terraform state.
 
 | Gate | Ответственный / срок | Текущее состояние и критерий |
 | --- | --- | --- |
 | Cloud, billing, folder | Исполнитель / M0–M1 | Cloud/billing read подтверждены; folder создаётся/import в M1; проверить effective bootstrap permissions |
-| Полная смета | Исполнитель + владелец / до provisioning M1 | Оценить все компоненты и сверить с приватно согласованным бюджетом |
+| Полная смета | Исполнитель / M0, замеры M1–M3 | Расчёт всех выбранных компонентов сверён с приватным ориентиром только для Yandex Cloud; базовый и удвоенный runtime/RU сценарии укладываются без free tier; замеры и лимиты до дальнейшего расширения |
 | Egress strength/runtime | Владелец + исполнитель / M0, проверка M1 | Согласован Xray-клиент рядом с приложением: OpenAI через локальный HTTP CONNECT и туннель, ZONT direct; lifecycle/ресурсы/failure проверить в M1 |
 | Cadence / разделение jobs | Владелец + исполнитель / M0 | Выбрано получение телеметрии при отчёте, без отдельного polling; полнота архива/config snapshots проверяется M2 |
 | Внешний proxy | Владелец + исполнитель / M0, smoke M1 | Параметры VLESS/XHTTP/REALITY найдены в существующей приватной конфигурации; облачный доступ, лимиты, журнал без payload, восстановление и стоимость требуют проверки |
 | AI placement/account | Владелец + исполнитель / M0, smoke M2 | Фактическое размещение и схема доступа требуют проверки |
-| State/bootstrap | Исполнитель / решение M0, проверка M1 | Предложен независимый private backend; параметры не provisioned |
+| State/bootstrap | Исполнитель / решение M0, проверка M1 | Выбраны независимый S3/SSE-KMS backend, versioning, native lockfile и отдельные identities; effective IAM, конкурентный lock/restore и federation/backend access проверяются M1 |
 | Web/TLS/DNS | Владелец + исполнитель / выбор M0, spike M1 | Выбран отдельный тестовый поддомен с внешним DNS; владелец внесёт подготовленные записи вручную, DNS/TLS/auth проверить в M1 |
 | YDB semantics | Исполнитель / M3–M4 | Маппинг типов/операций выше; race, journal, graph size, fingerprint и import round-trip на Docker YDB, затем managed |
 
