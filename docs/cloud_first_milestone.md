@@ -107,6 +107,10 @@ SQLite в новых application releases снимается в M8.2. Единс
 
 ## M0 — Зафиксировать архитектурные контракты без изменения product baseline
 
+Принят владельцем 2026-09-15: [PR #4](https://github.com/tupoybot/ZontAnalyzer/pull/4)
+слит в `architecture/cloud-first-serverless`, коммит `95f75d2`.
+[Решения и оставшиеся проверки](./cloud_first_m0.md). M1 пока не начат.
+
 ### Цель
 
 Определить границы, на которые будет опираться полная cloud-инфраструктура, не меняя стабильный product baseline в `main`.

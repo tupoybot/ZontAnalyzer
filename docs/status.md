@@ -86,7 +86,7 @@ worker-health OK, Basic Auth 401, соседние сервисы active.
   M8.2 удаляет SQLite и переводит локальные инструкции/тесты на YDB в Docker.
   Это утверждённое направление плана; реализация и приёмка вех ещё впереди.
 
-## Cloud-first M0 — подготовлен к приёмке
+## Cloud-first M0 — принят и слит 2026-09-15
 
 - [Контракты и проверки M0](./cloud_first_m0.md), ветка `docs/cloud-first-m0`.
   Владелец выбрал получение телеметрии при генерации отчёта, без отдельного
@@ -110,7 +110,9 @@ worker-health OK, Basic Auth 401, соседние сервисы active.
   независимо не проверялся. Эксплуатационный контракт egress определён;
   IAM/backend/runtime smoke остаётся в M1–M2.
 - Документы/ссылки/diff/privacy проверены, application совпадает с `origin/main`
-  (`82a7a82`). [PR M0](https://github.com/tupoybot/ZontAnalyzer/pull/4) ожидает приёмки
-  и merge в `architecture/cloud-first-serverless`. M1 не начат;
+  (`82a7a82`). Владелец принял и слил
+  [PR M0](https://github.com/tupoybot/ZontAnalyzer/pull/4)
+  в `architecture/cloud-first-serverless` (`95f75d2`). Следующий этап — M1,
+  он пока не начат;
   application image и облачные ресурсы проекта не менялись; отдельная настройка
   production-интервала описана выше. Сбор перед отчётом пока является планом.
