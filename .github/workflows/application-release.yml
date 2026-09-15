@@ -1,0 +1,58 @@
+name: Accepted main application release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: application-release-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Check accepted source in Docker
+        run: deploy/check-local.sh all
+      - name: Build and verify the production artifact
+        env:
+          COMMIT: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${REPOSITORY,,}"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          if docker manifest inspect "$image:sha-$COMMIT" >/dev/null 2>&1; then
+            docker pull "$image:sha-$COMMIT"
+          else
+            docker build --target production --provenance=false \
+              --label "org.opencontainers.image.source=https://github.com/$REPOSITORY" \
+              --label "org.opencontainers.image.revision=$COMMIT" \
+              -t "$image:sha-$COMMIT" .
+          fi
+          docker run --rm --network none --tmpfs /data:uid=10001,gid=10001 \
+            "$image:sha-$COMMIT" init
+          docker push "$image:sha-$COMMIT"
+          digest=$(docker image inspect "$image:sha-$COMMIT" --format '{{index .RepoDigests 0}}')
+          jq -n --arg commit "$COMMIT" --arg image "$digest" \
+            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{commit:$commit,image:$image,workflow_run:$run,checks:"passed",source_ref:"main"}' \
+            > application-provenance.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: application-provenance
+          path: application-provenance.json
