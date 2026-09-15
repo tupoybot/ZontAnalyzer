@@ -32,12 +32,12 @@ jobs:
       - name: Check deployment scope rejection
         run: >-
           docker run --rm --network none
-          --mount type=bind,src=${{ github.workspace }}/infra/scripts,dst=/tests,readonly
-          --workdir /tests m1-tools sh -c 'ruff check --no-cache . && python -m unittest -v'
+          --mount type=bind,src=${{ github.workspace }},dst=/repo,readonly
+          --workdir /repo m1-tools sh -c 'ruff check --no-cache infra/scripts && cd infra/scripts && python -m unittest -v'
       - name: Test isolated probe without cloud credentials
         run: >-
           docker run --rm --network none
-          --mount type=bind,src=${{ github.workspace }}/infra/probe,dst=/tests,readonly
-          --workdir /tests -e PYTHONDONTWRITEBYTECODE=1
-          m1-tools sh -c 'ruff check --no-cache . && mypy --check-untyped-defs --cache-dir /tmp/mypy . && python -m unittest -v'
+          --mount type=bind,src=${{ github.workspace }},dst=/repo,readonly
+          --workdir /repo -e PYTHONDONTWRITEBYTECODE=1
+          m1-tools sh -c 'ruff check --no-cache infra/probe && cd infra/probe && mypy --config-file /dev/null --check-untyped-defs --cache-dir /tmp/mypy . && python -m unittest -v'
       - run: docker build -t m1-probe infra/probe
