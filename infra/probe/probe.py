@@ -17,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
+from telemetry import Telemetry
+
 MAX_BYTES = 65536
 CONNECTIONS = threading.BoundedSemaphore(4)
 METADATA_HOST = "169.254.169.254"
@@ -223,6 +225,7 @@ def smoke(server):
 
 
 class ProbeServer(ThreadingHTTPServer):
+    telemetry: Telemetry | None = None
     tunnel: Tunnel
     client: PolicyClient
     smoke_url: str
@@ -250,10 +253,19 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/ready":
             self.reply(200 if self.server.tunnel.ready() else 503)
         elif self.path == "/smoke" and self.command == "POST":
+            started = time.monotonic()
             try:
                 smoke(self.server)
+                if self.server.telemetry is not None:
+                    self.server.last_phase = "grafana"
+                    self.server.telemetry.send(self.server.client, True, time.monotonic() - started)
                 self.reply(200)
             except Exception as error:  # noqa: BLE001 - expose only phase and error class
+                if self.server.telemetry is not None and self.server.last_phase != "grafana":
+                    try:
+                        self.server.telemetry.send(self.server.client, False, time.monotonic() - started)
+                    except Exception:  # noqa: BLE001 - retain original failure, never log secrets
+                        print("Grafana failure metric export failed", flush=True)
                 errno = getattr(error, "errno", None)
                 status = getattr(error, "status", None)
                 self.reply(502, f"failed:{self.server.last_phase}:{type(error).__name__}:{errno}:{status}\n".encode())
@@ -308,7 +320,12 @@ def main():
         server = ProbeServer(("0.0.0.0", int(os.environ.get("PORT", "8080"))), Handler)
         server.tunnel = tunnel
         server.smoke_url = smoke_url
-        server.client = PolicyClient({smoke_host}, {MONITORING_HOST}, port)
+        telemetry_config = os.environ.pop("GRAFANA_OTLP_CONFIG", "")
+        server.telemetry = Telemetry(telemetry_config, os.environ["ZONT_ENVIRONMENT"]) if telemetry_config else None
+        direct_hosts = {MONITORING_HOST}
+        if server.telemetry is not None:
+            direct_hosts.add(server.telemetry.host)
+        server.client = PolicyClient({smoke_host}, direct_hosts, port)
         credentials = os.environ.pop("PROBE_WEB_CREDENTIALS")
         server.web_authorization = "Basic " + base64.b64encode(credentials.encode()).decode()
         for sig in (signal.SIGTERM, signal.SIGINT):

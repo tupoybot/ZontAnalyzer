@@ -87,3 +87,9 @@ variable "secret_version_id" {
   type        = string
   sensitive   = true
 }
+
+variable "grafana_metrics_enabled" {
+  description = "Enable after adding the scoped OTLP credentials to the selected Lockbox version."
+  type        = bool
+  default     = false
+}

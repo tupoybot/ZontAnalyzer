@@ -91,6 +91,15 @@ resource "yandex_serverless_container" "probe" {
     key                  = "web_credentials"
     environment_variable = "PROBE_WEB_CREDENTIALS"
   }
+  dynamic "secrets" {
+    for_each = var.grafana_metrics_enabled ? [true] : []
+    content {
+      id                   = yandex_lockbox_secret.probe.id
+      version_id           = var.secret_version_id
+      key                  = "grafana_otlp_config"
+      environment_variable = "GRAFANA_OTLP_CONFIG"
+    }
+  }
   mounts {
     mount_point_path = "/publication"
     mode             = "ro"
