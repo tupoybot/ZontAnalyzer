@@ -35,16 +35,24 @@ jobs:
         with:
           fetch-depth: 0
       - name: Prepare private environment configuration
+        id: configuration
         env:
           SCOPE: ${{ secrets.M1_SCOPE_JSON }}
           CONFIG: ${{ secrets.M1_CONFIG_JSON }}
           BACKEND: ${{ secrets.M1_BACKEND_JSON }}
           STATE_ACCESS_KEY: ${{ secrets.M1_STATE_ACCESS_KEY }}
           STATE_SECRET_KEY: ${{ secrets.M1_STATE_SECRET_KEY }}
+          DEPLOY_SERVICE_ACCOUNT: ${{ secrets.M1_DEPLOY_SERVICE_ACCOUNT }}
           APPLICATION_IMAGE: ${{ inputs.application_image }}
         run: |
           set -euo pipefail
           umask 077
+          for name in SCOPE CONFIG BACKEND STATE_ACCESS_KEY STATE_SECRET_KEY DEPLOY_SERVICE_ACCOUNT; do
+            if [[ -z "${!name}" ]]; then
+              printf '::error::Required cloud-dev Environment Secret is missing (%s).\n' "$name"
+              exit 1
+            fi
+          done
           private="$RUNNER_TEMP/m1"
           mkdir -p "$private/cloud-work"
           printf '%s' "$SCOPE" > "$private/scope.json"
@@ -116,7 +124,7 @@ jobs:
         if: inputs.apply
         run: infra/deploy.sh apply "$RUNNER_TEMP/m1"
       - name: Preserve private deployment evidence
-        if: always()
+        if: always() && steps.configuration.outcome == 'success'
         run: |
           set -euo pipefail
           private="$RUNNER_TEMP/m1"

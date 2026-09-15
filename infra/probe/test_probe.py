@@ -5,7 +5,7 @@ from contextlib import redirect_stdout
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from probe import PolicyClient, Tunnel, smoke, validate_config
+from probe import Handler, PolicyClient, Tunnel, smoke, validate_config
 
 
 class PolicyTests(unittest.TestCase):
@@ -125,6 +125,44 @@ class SmokeTests(unittest.TestCase):
               redirect_stdout(io.StringIO())):
             smoke(server)
         self.assertEqual(server.client.request.call_count, 2)
+
+
+class HandlerTelemetryTests(unittest.TestCase):
+    def setUp(self):
+        self.handler = object.__new__(Handler)
+        self.handler.connection = MagicMock()
+        self.handler.headers = {}  # type: ignore[assignment]
+        self.handler.rfile = io.BytesIO()
+        self.handler.path = "/smoke"
+        self.handler.command = "POST"
+        self.handler.server = MagicMock()
+        self.reply = MagicMock()
+        self.handler.reply = self.reply  # type: ignore[method-assign]
+        self.server: Any = self.handler.server
+        self.server.last_phase = "egress"
+
+    def test_success_requires_metric_delivery(self):
+        with patch("probe.smoke") as check:
+            self.handler.handle_request()
+        check.assert_called_once_with(self.server)
+        self.assertTrue(self.server.telemetry.send.call_args.args[1])
+        self.reply.assert_called_once_with(200)
+
+    def test_failed_check_exports_zero_without_leaking_error(self):
+        with patch("probe.smoke", side_effect=ValueError("private upstream credential")):
+            self.handler.handle_request()
+        self.assertFalse(self.server.telemetry.send.call_args.args[1])
+        self.assertEqual(self.reply.call_args.args[0], 502)
+        self.assertNotIn(b"credential", self.reply.call_args.args[1])
+
+    def test_delivery_failure_does_not_report_success_or_retry(self):
+        self.server.telemetry.send.side_effect = RuntimeError("private token")
+        with patch("probe.smoke"):
+            self.handler.handle_request()
+        self.server.telemetry.send.assert_called_once()
+        self.assertEqual(self.reply.call_args.args[0], 502)
+        self.assertIn(b"grafana", self.reply.call_args.args[1])
+        self.assertNotIn(b"token", self.reply.call_args.args[1])
 
 
 if __name__ == "__main__":
