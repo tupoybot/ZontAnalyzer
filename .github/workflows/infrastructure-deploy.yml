@@ -82,6 +82,23 @@ jobs:
           # The form upload must contain only JWT bytes, without jq's trailing newline.
           jq -ejr '.value | select(type == "string" and length > 0)' "$private/oidc.json" > "$private/oidc-token"
           printf 'GitHub OIDC token acquired.\n'
+          node - "$private/oidc-token" <<'JS'
+          const fs = require('fs');
+          const token = fs.readFileSync(process.argv[2], 'utf8');
+          const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url'));
+          const expected = {
+            iss: 'https://token.actions.githubusercontent.com',
+            aud: 'https://iam.api.cloud.yandex.net/iam/v1/tokens',
+            sub: `repo:${process.env.GITHUB_REPOSITORY}:environment:cloud-dev`,
+          };
+          for (const [key, value] of Object.entries(expected)) {
+            if (claims[key] !== value) {
+              console.error(`::error::GitHub OIDC ${key} does not match the configured federation.`);
+              process.exit(1);
+            }
+          }
+          console.log('OIDC issuer, audience and subject match the expected configuration.');
+          JS
           curl --fail --silent --show-error --max-time 20 \
             --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
             --data-urlencode 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' \
