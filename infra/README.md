@@ -10,6 +10,11 @@ Root `bootstrap/` создаёт каталог в явно разрешённо
 записи и backend состояния. Подготовить приватный `inputs.tfvars.json` по
 обязательным переменным `bootstrap/variables.tf`. Проверить `cloud_id` до первого
 запроса. В отдельный рабочий каталог скопировать `.tf` и `.terraform.lock.hcl`.
+Для GitHub задать также числовые `github_repository_owner_id` и
+`github_repository_id` из API репозитория. Федерация использует неизменяемый
+формат subject с этими ID и точным именем защищённого Environment. Для старого
+репозитория предварительно включить immutable subject в настройках GitHub;
+новые репозитории используют его по умолчанию с июля 2026 года.
 
 Собрать инструменты: `docker build -t zont-m1-tools:local infra/tools`.
 В контейнере с приватной конфигурацией и bootstrap IAM-токеном выполнить

@@ -86,10 +86,11 @@ jobs:
           const fs = require('fs');
           const token = fs.readFileSync(process.argv[2], 'utf8');
           const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url'));
+          const [owner, repository] = process.env.GITHUB_REPOSITORY.split('/');
           const expected = {
             iss: 'https://token.actions.githubusercontent.com',
             aud: 'https://iam.api.cloud.yandex.net/iam/v1/tokens',
-            sub: `repo:${process.env.GITHUB_REPOSITORY}:environment:cloud-dev`,
+            sub: `repo:${owner}@${process.env.GITHUB_REPOSITORY_OWNER_ID}/${repository}@${process.env.GITHUB_REPOSITORY_ID}:environment:cloud-dev`,
           };
           for (const [key, value] of Object.entries(expected)) {
             if (claims[key] !== value) {

@@ -9,7 +9,7 @@ resource "yandex_iam_workload_identity_oidc_federation" "github" {
 resource "yandex_iam_workload_identity_federated_credential" "github" {
   service_account_id  = yandex_iam_service_account.deploy.id
   federation_id       = yandex_iam_workload_identity_oidc_federation.github.id
-  external_subject_id = "repo:${var.github_repository}:environment:${var.github_environment}"
+  external_subject_id = "repo:${split("/", var.github_repository)[0]}@${var.github_repository_owner_id}/${split("/", var.github_repository)[1]}@${var.github_repository_id}:environment:${var.github_environment}"
 }
 
 resource "yandex_kms_symmetric_key_iam_binding" "state" {

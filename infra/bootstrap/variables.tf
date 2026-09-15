@@ -21,3 +21,21 @@ variable "github_repository" {
 variable "github_environment" {
   type = string
 }
+
+variable "github_repository_owner_id" {
+  description = "Immutable GitHub owner ID from the repository API."
+  type        = string
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repository_owner_id))
+    error_message = "A numeric GitHub owner ID is required."
+  }
+}
+
+variable "github_repository_id" {
+  description = "Immutable GitHub repository ID from the repository API."
+  type        = string
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repository_id))
+    error_message = "A numeric GitHub repository ID is required."
+  }
+}
