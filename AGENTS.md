@@ -1,3 +1,26 @@
+# Public repository and privacy
+
+- This GitHub repository is public. Before writing documentation, staging changes,
+  committing/pushing, or publishing PR/Issue text, review the exact content for
+  personal and infrastructure information.
+- Do not publish personal server hostnames/URLs/IPs, cloud/account/folder IDs or
+  names, private network topology, credentials, private paths, account inventory,
+  or the owner's financial details. Use role names, placeholders, and private
+  environment configuration instead. Public product/project links and official
+  provider endpoints are different; review their purpose before including them.
+- Information shared in chat or observed through tools is not permission to publish
+  it. Existing exposure in Git is not permission to repeat it.
+- Terraform source must use parameterized inputs without personal defaults. Put
+  private environment identifiers/addresses in GitHub Environment Secrets or private
+  local configuration; Variables are for values safe to disclose. Protect state,
+  saved plans and actual plan/apply logs as private data. `sensitive = true` and
+  GitHub masking do not make state/plan files or arbitrary output safe to publish.
+- Document the current technical contract, rationale, validation and unresolved
+  work. Do not turn the conversation into a transcript or retain discarded options
+  merely to say they were excluded; remove obsolete ideas from the active plan.
+- If private information has already been pushed, sanitize the current files and
+  report the remaining history exposure. Do not rewrite shared history silently.
+
 # Documentation entrypoint and context budget
 
 - Start with `docs/status.md` and only the relevant section of `docs/implementation_plan.md`.
@@ -15,6 +38,24 @@
   decisions and completed execution history. Reduce context through selective reading.
 - Stage 9 is ongoing pilot production operation and improvements. Stages 10 (multi-room)
   and 11 (control) are optional and deferred; do not start them automatically.
+
+# Понятная документация
+
+- Пишите документацию для человека, который не участвовал в обсуждении и не знает
+  внутреннего устройства кода. Читатель должен с первого прочтения понимать,
+  что работает сейчас, что предлагается изменить, зачем и как проверить результат.
+- Используйте простые русские предложения. Не смешивайте русский текст с цепочками
+  английских терминов, сокращений и названий архитектурных шаблонов. Необходимый
+  технический термин объясняйте при первом употреблении.
+- Названия параметров, классов и API оставляйте точными, когда они помогают найти
+  настройку или код. Сначала объясняйте смысл действия, затем приводите идентификатор;
+  перечисление внутренних компонентов не заменяет объяснения.
+- Явно различайте текущее поведение, запланированное изменение и ещё не проверенное
+  предположение. Не упрощайте текст за счёт потери важных условий и ограничений.
+- Перед сохранением перечитайте изменённый фрагмент как пользователь: если для
+  понимания приходится расшифровывать жаргон или восстанавливать контекст беседы,
+  перепишите его. Для ссылок на файлы используйте относительные пути репозитория,
+  а не адреса редактора или локального окружения.
 
 # Development workflow
 
@@ -34,7 +75,7 @@ For substantial implementation tasks:
 ## Local Python work runs in Docker
 
 - Before every merge, run `docker system prune -af` locally. Do not run this
-  cleanup on HK; owner acceptance is still required before merging.
+  cleanup on the production host; owner acceptance is still required before merging.
 
 - Build packages, run Python checks/tests and prepare data inside Docker containers.
 - Do not install Python dependencies into the host Python or use the host `.venv`
@@ -42,17 +83,17 @@ For substantial implementation tasks:
 - Keep source mounts read-only and temporary databases/caches in containers or
   explicitly isolated artifact directories. Production-host load limits still apply.
 
-## HK production host: keep load minimal
+## Production host: keep load minimal
 
-- Never build images, packages, or application artifacts on `hk.tupoybot.ru`.
+- Never build images, packages, or application artifacts on the production host.
 - Run builds, full tests, integration tests, and production-data acceptance locally.
-- When real data is needed, create a SQLite online backup on HK, download it, and
+- When real data is needed, create a SQLite online backup on the production host, download it, and
   test against a separately writable local copy with an isolated publication directory.
-- Deploy only the already built and tested immutable image to HK, then run a short,
+- Deploy only the already built and tested immutable image to the production host, then run a short,
   bounded smoke check. Do not repeat full analysis, backfills, benchmarks, or heavy
   database checks on the server as part of acceptance.
-- HK has other workloads and its hosting provider has complained about sustained
-  load. Keep deployment and diagnostics brief; never use the server as a build/test runner.
+- The production host is shared. Keep deployment and diagnostics brief; never use
+  the server as a build/test runner.
 
 ## Delegation
 
@@ -123,8 +164,8 @@ Do not use a stronger model merely because it is available.
 - A work portion includes implementation and related tests. Keep a short handoff in
   `docs/status.md`: contracts, changed scope, validation, remaining work and next step.
 - Local checkpoints within a stage do not each require production deployment. A functional
-  release requires local checks/isolated acceptance, a tested immutable image and bounded HK smoke.
+  release requires local checks/isolated acceptance, a tested immutable image and bounded production host smoke.
 - Documentation-only changes need document/link/diff checks, not an application deployment.
-- Never run test suites, image builds or acceptance analysis on HK, including temporary directories.
+- Never run test suites, image builds or acceptance analysis on the production host, including temporary directories.
 - The one real OpenAI request limit is shared by the main agent and all subagents per user turn;
   coordinate it explicitly and use mocks for the remaining checks.
