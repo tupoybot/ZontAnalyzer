@@ -116,15 +116,14 @@ class TunnelTests(unittest.TestCase):
 
 
 class SmokeTests(unittest.TestCase):
-    def test_actual_monitoring_api_response(self):
+    def test_identity_storage_and_egress_without_legacy_metric_write(self):
         server = MagicMock()
-        server.client.request.side_effect = [b"synthetic", b'{"writtenMetricsCount":1}']
+        server.client.request.return_value = b"synthetic"
         with (patch("probe.identity_token", return_value="test-token"),
               patch("probe.Path.read_bytes", return_value=b"m1-private-object\n"),
-              patch.dict("os.environ", {"ZONT_FOLDER_ID": "test-folder"}),
               redirect_stdout(io.StringIO())):
             smoke(server)
-        self.assertEqual(server.client.request.call_count, 2)
+        server.client.request.assert_called_once_with(server.smoke_url)
 
 
 class HandlerTelemetryTests(unittest.TestCase):

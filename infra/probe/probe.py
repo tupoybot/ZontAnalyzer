@@ -15,14 +15,13 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlsplit
 
 from telemetry import Telemetry
 
 MAX_BYTES = 65536
 CONNECTIONS = threading.BoundedSemaphore(4)
 METADATA_HOST = "169.254.169.254"
-MONITORING_HOST = "monitoring.api.cloud.yandex.net"
 
 
 class UpstreamStatusError(RuntimeError):
@@ -210,18 +209,9 @@ def smoke(server):
     if not server.tunnel.ready():
         raise RuntimeError("tunnel unavailable")
     phase("egress", lambda: server.client.request(server.smoke_url))
-    token = phase("identity", identity_token)
+    phase("identity", identity_token)
     if phase("storage", lambda: Path("/publication/probe.txt").read_bytes()) != b"m1-private-object\n":
         raise RuntimeError("private object mismatch")
-    query = urlencode({"folderId": os.environ["ZONT_FOLDER_ID"], "service": "custom"})
-    result = phase("metric", lambda: server.client.request(
-        f"https://{MONITORING_HOST}/monitoring/v2/data/write?{query}", "POST",
-        json.dumps({"metrics": [{"name": "m1_probe_health", "value": 1}]}).encode(),
-        {"Authorization": "Bearer " + token, "Content-Type": "application/json"},
-    ))
-    if int(json.loads(result).get("writtenMetricsCount", 0)) != 1:
-        server.last_phase = "metric-confirmation"
-        raise RuntimeError("metric write not confirmed")
 
 
 class ProbeServer(ThreadingHTTPServer):
@@ -322,7 +312,7 @@ def main():
         server.smoke_url = smoke_url
         telemetry_config = os.environ.pop("GRAFANA_OTLP_CONFIG", "")
         server.telemetry = Telemetry(telemetry_config, os.environ["ZONT_ENVIRONMENT"]) if telemetry_config else None
-        direct_hosts = {MONITORING_HOST}
+        direct_hosts = set()
         if server.telemetry is not None:
             direct_hosts.add(server.telemetry.host)
         server.client = PolicyClient({smoke_host}, direct_hosts, port)

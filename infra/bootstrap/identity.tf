@@ -29,7 +29,6 @@ resource "yandex_resourcemanager_folder_iam_member" "deployment" {
     "ydb.admin",
     "storage.admin",
     "logging.admin",
-    "monitoring.editor",
     "api-gateway.admin",
     "certificate-manager.admin",
     "resource-manager.viewer",
@@ -69,13 +68,6 @@ resource "yandex_resourcemanager_folder_iam_member" "runtime_logs" {
   for_each  = yandex_iam_service_account.runtime
   folder_id = yandex_resourcemanager_folder.project.id
   role      = "logging.writer"
-  member    = "serviceAccount:${each.value.id}"
-}
-
-resource "yandex_resourcemanager_folder_iam_member" "runtime_metrics" {
-  for_each  = yandex_iam_service_account.runtime
-  folder_id = yandex_resourcemanager_folder.project.id
-  role      = "monitoring.editor"
   member    = "serviceAccount:${each.value.id}"
 }
 

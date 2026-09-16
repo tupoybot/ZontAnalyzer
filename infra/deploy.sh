@@ -2,12 +2,12 @@
 # Plans, logs and credentials remain in a private directory outside tracked files.
 set -eu
 umask 077
-[ "$#" = 2 ] || { echo 'Usage: infra/deploy.sh plan|apply|plan-foundation|apply-foundation|recover-dashboard PRIVATE_DIRECTORY' >&2; exit 2; }
+[ "$#" = 2 ] || { echo 'Usage: infra/deploy.sh plan|apply|plan-foundation|apply-foundation PRIVATE_DIRECTORY' >&2; exit 2; }
 ACTION=$1
 PRIVATE=$(realpath "$2")
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TOOLS=${M1_TOOLS_IMAGE:-zont-m1-tools:local}
-case "$ACTION" in plan|apply|plan-foundation|apply-foundation|recover-dashboard) ;; *) exit 2 ;; esac
+case "$ACTION" in plan|apply|plan-foundation|apply-foundation) ;; *) exit 2 ;; esac
 [ -d "$PRIVATE/cloud-work" ]
 [ -f "$PRIVATE/cloud-work/inputs.tfvars.json" ]
 [ -f "$PRIVATE/cloud.tfbackend.json" ]
@@ -20,6 +20,11 @@ docker run --rm --network none --user "$(id -u):$(id -g)" \
   "$TOOLS" python /scripts/check-scope.py /private/scope.json /private/cloud-work/inputs.tfvars.json /private/cloud.tfbackend.json
 
 if [ "$ACTION" = plan ] || [ "$ACTION" = plan-foundation ]; then
+  # The private work directory mirrors this root; remove retired source files.
+  for file in "$PRIVATE/cloud-work/"*.tf; do
+    [ -f "$file" ] || continue
+    [ -f "$ROOT/infra/cloud/$(basename "$file")" ] || rm -- "$file"
+  done
   cp "$ROOT"/infra/cloud/*.tf "$ROOT/infra/cloud/.terraform.lock.hcl" "$PRIVATE/cloud-work/"
 fi
 
@@ -41,10 +46,6 @@ docker run --rm --user "$(id -u):$(id -g)" \
       terraform plan "$@" -input=false -no-color -lock-timeout=30s \
         -var-file=inputs.tfvars.json -out=deployment.tfplan > /private/deploy-plan.log 2>&1
       terraform show -json deployment.tfplan > /private/deploy-plan.json
-    elif [ "$M1_ACTION" = recover-dashboard ]; then
-      python /scripts/recover_dashboard.py /private > /private/dashboard-recovery.log 2>&1
-      terraform import -input=false -no-color -lock-timeout=30s -var-file=inputs.tfvars.json \
-        yandex_monitoring_dashboard.probe "$(cat /private/dashboard-id)" >> /private/dashboard-recovery.log 2>&1
     else
       terraform show -json deployment.tfplan > /private/deploy-plan.json
       python /scripts/check-scope.py /private/scope.json /private/deploy-plan.json /private/cloud.tfbackend.json

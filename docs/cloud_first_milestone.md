@@ -271,7 +271,7 @@ cloud/billing ресурсы учитывать как внешние завис
 - placeholders/references секретов Lockbox;
 - изолированную YDB Serverless database для M3, ещё не production backend;
 - Object Storage bucket/prefix для публикуемых отчётов;
-- ресурсы Monium/monitoring, требующие явного provisioning;
+- панель Grafana, экспорт health-метрик и оповещение владельцу;
 - выбранный proxy/egress, необходимые сетевые ресурсы и secret references;
 - минимальные логи/alerts, бюджет стенда, ограничения invocation/concurrency/retries
   и документированное выключение расписания. Billing alert не считать hard cap.

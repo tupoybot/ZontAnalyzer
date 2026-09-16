@@ -58,7 +58,7 @@ jobs:
           printf '%s' "$SCOPE" > "$private/scope.json"
           printf '%s' "$BACKEND" > "$private/cloud.tfbackend.json"
           printf '%s' "$CONFIG" | jq --arg image "$APPLICATION_IMAGE" \
-            'if $image != "" then .application_image=$image else . end | .enable_timer=false' > "$private/cloud-work/inputs.tfvars.json"
+            'if $image != "" then .application_image=$image else . end' > "$private/cloud-work/inputs.tfvars.json"
           printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' \
             "$STATE_ACCESS_KEY" "$STATE_SECRET_KEY" > "$private/state.env"
           docker build -t zont-m1-tools:local infra/tools
@@ -141,7 +141,7 @@ jobs:
       - name: Plan infrastructure without publishing its private output
         run: infra/deploy.sh plan "$RUNNER_TEMP/m1"
       - name: Apply the selected artifact and environment
-        if: inputs.apply
+        if: inputs.apply || (github.event_name == 'push' && startsWith(github.event.head_commit.message, '[m1-apply] '))
         run: infra/deploy.sh apply "$RUNNER_TEMP/m1"
       - name: Preserve private deployment evidence
         if: always() && steps.configuration.outcome == 'success'
@@ -158,7 +158,7 @@ jobs:
               python /scripts/archive_evidence.py /private "$EVIDENCE_RUN"
             '
       - name: Safe result summary
-        run: printf 'Infrastructure workflow succeeded. Evidence is in the encrypted private state bucket. Timer is disabled.\n' >> "$GITHUB_STEP_SUMMARY"
+        run: printf 'Infrastructure workflow succeeded. Evidence is in the encrypted private state bucket. Schedule follows the selected environment configuration.\n' >> "$GITHUB_STEP_SUMMARY"
       - name: Remove temporary credentials
         if: always()
         run: rm -rf -- "$RUNNER_TEMP/m1"

@@ -70,6 +70,10 @@ variable "enable_timer" {
   description = "Enable only after manual runtime smoke succeeds."
   type        = bool
   default     = false
+  validation {
+    condition     = !var.enable_timer || var.grafana_metrics_enabled
+    error_message = "Configure Grafana metric export before enabling scheduled checks."
+  }
 }
 
 variable "timer_schedule" {
@@ -92,4 +96,10 @@ variable "grafana_metrics_enabled" {
   description = "Enable after adding the scoped OTLP credentials to the selected Lockbox version."
   type        = bool
   default     = false
+}
+
+variable "deletion_protection" {
+  description = "Protect the database and certificate; disable explicitly before tearing down an isolated test stack."
+  type        = bool
+  default     = true
 }

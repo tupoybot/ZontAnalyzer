@@ -38,6 +38,11 @@ run "isolated_defaults" {
   command = plan
 
   assert {
+    condition     = yandex_ydb_database_serverless.probe.deletion_protection && yandex_cm_certificate.probe.deletion_protection
+    error_message = "Persistent resources must be protected by default."
+  }
+
+  assert {
     condition     = length(yandex_function_trigger.timer) == 0
     error_message = "A new environment must not start its timer."
   }
@@ -73,4 +78,40 @@ run "reject_production" {
     environment = "prod"
   }
   expect_failures = [var.environment]
+}
+
+run "timer_requires_metrics" {
+  command = plan
+  variables {
+    enable_timer = true
+  }
+  expect_failures = [var.enable_timer]
+}
+
+run "monitored_timer" {
+  command = plan
+  variables {
+    enable_timer            = true
+    grafana_metrics_enabled = true
+  }
+  assert {
+    condition     = length(yandex_function_trigger.timer) == 1
+    error_message = "A monitored environment must be able to enable its timer."
+  }
+  assert {
+    condition     = anytrue([for secret in yandex_serverless_container.probe.secrets : secret.key == "grafana_otlp_config" && secret.environment_variable == "GRAFANA_OTLP_CONFIG"])
+    error_message = "The runtime must receive Grafana credentials by secret reference."
+  }
+}
+
+run "explicit_test_teardown" {
+  command = plan
+  variables {
+    environment         = "pilot"
+    deletion_protection = false
+  }
+  assert {
+    condition     = !yandex_ydb_database_serverless.probe.deletion_protection && !yandex_cm_certificate.probe.deletion_protection
+    error_message = "An explicitly selected test stack must support controlled teardown."
+  }
 }

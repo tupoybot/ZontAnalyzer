@@ -33,7 +33,7 @@ resource "yandex_lockbox_secret_iam_binding" "runtime" {
 resource "yandex_ydb_database_serverless" "probe" {
   folder_id           = data.yandex_resourcemanager_folder.project.id
   name                = "${local.name}-isolated"
-  deletion_protection = true
+  deletion_protection = var.deletion_protection
   serverless_database {
     enable_throttling_rcu_limit = true
     provisioned_rcu_limit       = 0
@@ -75,7 +75,6 @@ resource "yandex_serverless_container" "probe" {
     environment = {
       ZONT_ENVIRONMENT = var.environment
       ZONT_PROBE_ONLY  = "true"
-      ZONT_FOLDER_ID   = var.folder_id
       PROBE_SMOKE_URL  = var.smoke_url
     }
   }

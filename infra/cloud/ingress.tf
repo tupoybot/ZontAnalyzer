@@ -2,7 +2,7 @@ resource "yandex_cm_certificate" "probe" {
   folder_id           = data.yandex_resourcemanager_folder.project.id
   name                = "${local.name}-web"
   domains             = [var.test_domain]
-  deletion_protection = true
+  deletion_protection = var.deletion_protection
   managed {
     challenge_type = "DNS_CNAME"
   }
