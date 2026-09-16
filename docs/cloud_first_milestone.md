@@ -109,7 +109,8 @@ SQLite в новых application releases снимается в M8.2. Единс
 
 Принят владельцем 2026-09-15: [PR #4](https://github.com/tupoybot/ZontAnalyzer/pull/4)
 слит в `architecture/cloud-first-serverless`, коммит `95f75d2`.
-[Решения M0](./cloud_first_m0.md). [Реализация и проверки M1](./cloud_first_m1.md) продолжаются.
+[Решения M0](./cloud_first_m0.md). [Реализация и проверки M1](./cloud_first_m1.md) завершены;
+М1 ожидает приёмки владельца.
 
 ### Цель
 

@@ -114,7 +114,7 @@ worker-health OK, Basic Auth 401, соседние сервисы active.
   [PR M0](https://github.com/tupoybot/ZontAnalyzer/pull/4)
   в `architecture/cloud-first-serverless` (`95f75d2`). Сбор перед отчётом пока является планом.
 
-## Cloud-first M1 — реализация продолжается
+## Cloud-first M1 — ожидает приёмки владельца
 
 - [Каркас и технические проверки](./cloud_first_m1.md), ветка `stageM1/cloud-foundation`.
   Созданы изолированные ресурсы; ручной и плановый вызовы probe проверяют Xray,
@@ -131,6 +131,8 @@ worker-health OK, Basic Auth 401, соседние сервисы active.
   связанные IAM-права отозваны; логи и уведомления о расходах сохранены.
   Отдельный стенд развёрнут с пустого состояния и удалён; рабочий стенд после
   удаления снова прошёл smoke. Учётные данные окружений проверены на разделение.
-  GitHub OIDC, копирование образа и план без изменений прошли в реальном workflow;
-  явный workflow apply пока не проверен. Ограничение веток Environment подтверждено API.
+  GitHub OIDC, копирование образа, план без изменений и явный
+  [CI apply со smoke](https://github.com/tupoybot/ZontAnalyzer/actions/runs/35051789183)
+  прошли. Приватный архив подтверждает выбранные конфигурацию и область deployment;
+  ограничение веток Environment подтверждено API.
   Этап не принят, следующий этап не начат.
