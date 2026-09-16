@@ -15,7 +15,7 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 TIMEOUT_SECONDS = 15
 FOLDER_UID = "zont-m1"
 FOLDER_TITLE = "ZontAnalyzer M1"
-DASHBOARD_UID = "zont-m1"
+DASHBOARD_UID = "zont-m1-overview"
 RULE_UID = "zont-m1-dev-health"
 
 

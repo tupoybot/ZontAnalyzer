@@ -55,12 +55,14 @@ class GrafanaSetupTests(unittest.TestCase):
     def test_dashboard_update_preserves_version_and_selects_datasource(self):
         template = json.loads((TEMPLATE_DIR / "dashboard.json").read_text())
         existing = {
-            "dashboard": {"uid": "zont-m1", "title": template["title"], "tags": ["zont-m1"], "version": 8},
+            "dashboard": {"uid": "zont-m1-overview", "title": template["title"], "tags": ["zont-m1"], "version": 8},
             "meta": {"folderUid": "zont-m1"},
         }
         api = FakeAPI([(200, existing), (200, {"status": "success"})])
         g.ensure_dashboard(api, template, "prom-42")
         payload = api.calls[-1][2]["dashboard"]
+        self.assertEqual(payload["uid"], template["uid"])
+        self.assertNotEqual(payload["uid"], api.calls[-1][2]["folderUid"])
         self.assertEqual(payload["version"], 8)
         self.assertEqual(payload["id"], None)
         self.assertEqual(payload["panels"][0]["datasource"]["uid"], "${datasource}")
