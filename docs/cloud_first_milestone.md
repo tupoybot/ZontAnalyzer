@@ -107,6 +107,10 @@ SQLite в новых application releases снимается в M8.2. Единс
 
 ## M0 — Зафиксировать архитектурные контракты без изменения product baseline
 
+Принят владельцем 2026-09-15: [PR #4](https://github.com/tupoybot/ZontAnalyzer/pull/4)
+слит в `architecture/cloud-first-serverless`, коммит `95f75d2`.
+[Решения M0](./cloud_first_m0.md). [Реализация и проверки M1](./cloud_first_m1.md) продолжаются.
+
 ### Цель
 
 Определить границы, на которые будет опираться полная cloud-инфраструктура, не меняя стабильный product baseline в `main`.
@@ -267,7 +271,7 @@ cloud/billing ресурсы учитывать как внешние завис
 - placeholders/references секретов Lockbox;
 - изолированную YDB Serverless database для M3, ещё не production backend;
 - Object Storage bucket/prefix для публикуемых отчётов;
-- ресурсы Monium/monitoring, требующие явного provisioning;
+- панель Grafana, экспорт health-метрик и оповещение владельцу;
 - выбранный proxy/egress, необходимые сетевые ресурсы и secret references;
 - минимальные логи/alerts, бюджет стенда, ограничения invocation/concurrency/retries
   и документированное выключение расписания. Billing alert не считать hard cap.

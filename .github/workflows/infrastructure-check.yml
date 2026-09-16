@@ -1,0 +1,43 @@
+name: Infrastructure checks
+
+on:
+  push:
+    paths: ['infra/**', '.github/workflows/infrastructure-check.yml']
+  pull_request:
+    paths: ['infra/**', '.github/workflows/infrastructure-check.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.13.1
+      - run: terraform fmt -check -recursive infra
+      - run: terraform -chdir=infra/bootstrap init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/bootstrap validate
+      - run: terraform -chdir=infra/cloud init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/cloud validate
+      - run: terraform -chdir=infra/cloud test
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: docker build -t m1-tools infra/tools
+      - name: Check deployment scope rejection
+        run: >-
+          docker run --rm --network none
+          --mount type=bind,src=${{ github.workspace }},dst=/repo,readonly
+          --workdir /repo m1-tools sh -c 'ruff check --no-cache infra/scripts && cd infra/scripts && python -m unittest -v'
+      - name: Test isolated probe without cloud credentials
+        run: >-
+          docker run --rm --network none
+          --mount type=bind,src=${{ github.workspace }},dst=/repo,readonly
+          --workdir /repo -e PYTHONDONTWRITEBYTECODE=1
+          m1-tools sh -c 'ruff check --no-cache infra/probe && cd infra/probe && mypy --config-file /dev/null --check-untyped-defs --cache-dir /tmp/mypy . && python -m unittest -v'
+      - run: docker build -t m1-probe infra/probe

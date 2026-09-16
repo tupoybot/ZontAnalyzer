@@ -27,4 +27,4 @@ build/
 *.tfstate
 *.tfstate.*
 *.tfplan
-/.local/terraform/
+/.local/

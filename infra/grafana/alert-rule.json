@@ -1,0 +1,76 @@
+{
+  "uid": "zont-m1-dev-health",
+  "title": "M1: отказ или отсутствие проверок",
+  "folderUID": "zont-m1",
+  "ruleGroup": "m1",
+  "orgId": 1,
+  "condition": "B",
+  "noDataState": "Alerting",
+  "execErrState": "Alerting",
+  "for": "5m",
+  "isPaused": true,
+  "labels": {
+    "project": "zont-m1",
+    "environment": "dev"
+  },
+  "annotations": {
+    "summary": "Проверка M1 завершилась ошибкой или не поступала более двух часов.",
+    "description": "Проверить расписание, revision, Xray, доступ к объекту и доставку OTLP. При штатном выключении расписания приостановить это правило."
+  },
+  "data": [
+    {
+      "refId": "A",
+      "queryType": "",
+      "relativeTimeRange": {
+        "from": 7200,
+        "to": 0
+      },
+      "datasourceUid": "${datasource_uid}",
+      "model": {
+        "expr": "(1 - min(last_over_time(zont_m1_probe_success{environment=\"dev\"}[2h]))) or vector(1)",
+        "instant": true,
+        "range": false,
+        "refId": "A",
+        "intervalMs": 60000,
+        "maxDataPoints": 120
+      }
+    },
+    {
+      "refId": "B",
+      "queryType": "",
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      },
+      "datasourceUid": "__expr__",
+      "model": {
+        "refId": "B",
+        "type": "threshold",
+        "expression": "A",
+        "conditions": [
+          {
+            "type": "query",
+            "evaluator": {
+              "type": "gt",
+              "params": [
+                0
+              ]
+            },
+            "operator": {
+              "type": "and"
+            },
+            "reducer": {
+              "type": "last",
+              "params": []
+            },
+            "query": {
+              "params": [
+                "B"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
