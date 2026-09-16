@@ -3,7 +3,6 @@ name: Deploy isolated cloud infrastructure
 on:
   push:
     branches: ['stageM1/cloud-foundation', 'architecture/cloud-first-serverless']
-    paths: ['infra/**', '.github/workflows/infrastructure-deploy.yml']
   workflow_dispatch:
     inputs:
       application_image:
