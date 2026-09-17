@@ -1,6 +1,8 @@
 .git
 .github
 .access
+.local
+infra
 docs
 .venv
 __pycache__
