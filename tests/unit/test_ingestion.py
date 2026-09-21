@@ -11,11 +11,30 @@ from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.adapters.zont_readonly import ZontReadOnlyClient
 from zont_analyzer.adapters.zont_readonly.client import infer_role
 from zont_analyzer.application.analysis import _select_control_temperature_series
-from zont_analyzer.application.ingestion import IngestionService, _linked_indoor_sensor_ids, _object_names
+from zont_analyzer.application.ingestion import (
+    IngestionService,
+    _linked_indoor_sensor_ids,
+    _object_names,
+    _record_connection_events,
+)
 from zont_analyzer.config import AppConfig
-from zont_analyzer.domain import TelemetryPoint
+from zont_analyzer.domain import SourceEvent, TelemetryPoint
 
 CONTRACT_FIXTURES = Path(__file__).parents[1] / "fixtures" / "zont_contract"
+
+
+def test_same_second_connection_events_apply_disconnect_before_restore() -> None:
+    timestamp = datetime(2026, 8, 25, tzinfo=UTC)
+    events = [
+        SourceEvent(id="a-restore", device_id="1", event_type="connected", timestamp_utc=timestamp),
+        SourceEvent(id="z-loss", device_id="1", event_type="disconnected", timestamp_utc=timestamp),
+    ]
+
+    state = _record_connection_events({}, events)
+
+    assert state["open_disconnect_at"] is None
+    assert state["pending_replay_start"] == timestamp
+    assert state["pending_restore_at"] == timestamp
 
 
 def test_explicit_backfill_replays_requested_interval_despite_current_cursor(tmp_path: Path) -> None:
@@ -191,6 +210,120 @@ def test_normal_sync_replays_late_telemetry_and_events_with_two_hour_overlap(tmp
     assert len(db.fetch_samples(series_id, now - timedelta(hours=2), now)) == 2
     assert len(db.list_source_events(now - timedelta(days=1), now)) == 1
     assert client.event_calls[1]["start"] == now - timedelta(hours=2)
+
+
+def test_reconnect_replays_history_before_overlap_and_retries_once(tmp_path: Path) -> None:
+    class ReconnectClient:
+        def __init__(self) -> None:
+            self.history_calls: list[dict[str, object]] = []
+            self.event_calls = 0
+            self.fail_recovery_once = True
+
+        def discover_devices(self) -> list[dict[str, object]]:
+            return [{"device_id": 1, "name": "test"}]
+
+        def load_history(self, **kwargs: object) -> list[dict[str, object]]:
+            self.history_calls.append(kwargs)
+            start = cast(datetime, kwargs["start"])
+            if (
+                len(self.history_calls) >= 3
+                and start <= disconnect_at - timedelta(hours=2)
+                and self.fail_recovery_once
+            ):
+                self.fail_recovery_once = False
+                raise RuntimeError("temporary recovery failure")
+            return [{"device_id": 1, "ok": True, "start": start}]
+
+        def normalize_history(
+            self, response: dict[str, object]
+        ) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
+            if cast(datetime, response["start"]) > buffered_at or len(self.history_calls) == 4:
+                return [], {}
+            return [
+                TelemetryPoint(
+                    device_id="1",
+                    source_type="z3k_temperature",
+                    entity_id="zont:1:z3k_temperature:1",
+                    metric_key="z3k_temperature",
+                    timestamp_utc=buffered_at,
+                    value_num=19.5,
+                    unit="°C",
+                ),
+                TelemetryPoint(
+                    device_id="1",
+                    source_type="z3k_temperature",
+                    entity_id="zont:1:z3k_temperature:1",
+                    metric_key="z3k_temperature",
+                    timestamp_utc=observed_after_restore,
+                    value_num=19.7,
+                    unit="°C",
+                ),
+            ], {}
+
+        def load_events(self, **kwargs: object) -> list[list[Any]]:
+            self.event_calls += 1
+            if self.event_calls == 5:
+                raise RuntimeError("temporary event failure")
+            rows = [
+                ["disconnect", int(disconnect_at.timestamp()), "disconnected"],
+                ["buffered-power", int(buffered_event_at.timestamp()), "PowerOn"],
+                ["restore", int(restored_at.timestamp()), "reconnected"],
+            ]
+            start = cast(datetime, kwargs["start"])
+            end = cast(datetime, kwargs["end"])
+            return [row for row in rows if start <= datetime.fromtimestamp(row[1], UTC) <= end]
+
+        def normalize_events(self, device_id: str, events: list[list[Any]]) -> list[Any]:
+            return ZontReadOnlyClient.normalize_events(device_id, events)
+
+    disconnect_at = datetime(2026, 8, 25, 0, tzinfo=UTC)
+    buffered_at = disconnect_at + timedelta(hours=1)
+    buffered_event_at = disconnect_at + timedelta(hours=1, minutes=30)
+    restored_at = disconnect_at + timedelta(hours=5)
+    observed_after_restore = restored_at + timedelta(minutes=5)
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    db.set_cursor("1", "history_bootstrap_complete:z3k_temperature", disconnect_at)
+    db.set_cursor("1", "z3k_temperature", disconnect_at)
+    client = ReconnectClient()
+    config = AppConfig.model_validate({"zont": {"history_data_types": ["z3k_temperature"]}})
+    service = IngestionService(db, cast(ZontReadOnlyClient, client), config)
+
+    service.sync(now=disconnect_at + timedelta(minutes=30))
+    # Regular successful empty responses can advance while the controller is
+    # offline, leaving buffered device history older than the normal overlap.
+    db.set_cursor("1", "z3k_temperature", restored_at - timedelta(minutes=30))
+    db.set_cursor("1", "raw_events", restored_at - timedelta(minutes=30))
+    restored = service.sync(now=restored_at)
+    failed_replay = service.sync(now=restored_at + timedelta(minutes=30))
+    empty_replay = service.sync(now=restored_at + timedelta(hours=1))
+    empty_recovery_state = json.loads(db.get_app_meta("connection_recovery:1") or "{}")
+    failed_event_replay = service.sync(now=restored_at + timedelta(hours=1, minutes=30))
+    completed_replay = service.sync(now=restored_at + timedelta(hours=2))
+    ordinary_next = service.sync(now=restored_at + timedelta(hours=2, minutes=30))
+
+    assert restored["complete"] is True
+    assert failed_replay["complete"] is False
+    assert empty_replay["complete"] is True
+    assert "pending_replay_start" in empty_recovery_state
+    assert failed_event_replay["complete"] is False
+    assert completed_replay["complete"] is True
+    assert ordinary_next["complete"] is True
+    recovery_starts = [cast(datetime, call["start"]) for call in client.history_calls]
+    assert recovery_starts[2] == disconnect_at - timedelta(hours=2)
+    assert recovery_starts[3] == disconnect_at - timedelta(hours=2)
+    assert recovery_starts[4] == disconnect_at - timedelta(hours=2)
+    assert recovery_starts[5] == disconnect_at - timedelta(hours=2)
+    assert recovery_starts[6] == restored_at
+    assert client.event_calls == 7
+    series_id = db.list_series()[0]["id"]
+    recovered_samples = db.fetch_samples(series_id, disconnect_at, restored_at)
+    assert len(recovered_samples) == 1
+    assert recovered_samples[0][0] == buffered_at
+    recovery = json.loads(db.get_app_meta("connection_recovery:1") or "{}")
+    assert recovery == {"handled_restore_at": restored_at.isoformat()}
+    events = db.list_source_events(disconnect_at, restored_at + timedelta(seconds=1))
+    assert [event.event_type for event in events] == ["disconnected", "PowerOn", "reconnected"]
 
 
 @pytest.mark.parametrize("existing_event_cursor", [False, True])

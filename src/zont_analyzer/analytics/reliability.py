@@ -14,7 +14,13 @@ MAIN_POWER_LOSS_TYPES = frozenset({"MainPowerLost"})
 MAIN_POWER_RESTORE_TYPES = frozenset({"MainPowerFound", "MainPowerRestored"})
 CONTROLLER_OFF_TYPES = frozenset({"PowerOff"})
 CONTROLLER_ON_TYPES = frozenset({"PowerOn"})
-DEFAULT_MAXIMUM_SAMPLE_AGE = timedelta(minutes=10)
+CONNECTION_LOSS_TYPES = frozenset({"disconnected"})
+CONNECTION_RESTORE_TYPES = frozenset({"connected", "reconnected"})
+# Unchanged ZONT readings can arrive ten minutes apart. Allow three reporting
+# intervals before treating telemetry as unavailable; this is not a reboot.
+DEFAULT_MAXIMUM_SAMPLE_AGE = timedelta(minutes=30)
+CONNECTION_LOST_TIMEOUT = timedelta(hours=2)
+BATTERY_DEPLETION_MINIMUM_RUNTIME = timedelta(hours=2)
 INCIDENT_CAUSE_TOLERANCE = timedelta(minutes=2)
 EVENT_INTERVAL_MERGE_TOLERANCE = timedelta(minutes=2)
 
@@ -73,7 +79,7 @@ def _metric(period_id: str, name: str, value: float, unit: str, **context: objec
 def _ordered_events(events: list[SourceEvent], as_of: datetime) -> list[SourceEvent]:
     return sorted(
         {item.id: item for item in events if item.timestamp_utc < as_of}.values(),
-        key=lambda item: (item.timestamp_utc, item.id),
+        key=lambda item: (item.timestamp_utc, item.event_type not in CONNECTION_LOSS_TYPES, item.id),
     )
 
 
@@ -319,7 +325,7 @@ def _first_sustained_at(
     timestamps: list[datetime],
     *,
     after: datetime | None = None,
-    maximum_spacing: timedelta = timedelta(minutes=5),
+    maximum_spacing: timedelta = DEFAULT_MAXIMUM_SAMPLE_AGE,
 ) -> datetime | None:
     ordered = sorted({item for item in timestamps if after is None or item >= after})
     for index in range(len(ordered) - 2):
@@ -364,6 +370,51 @@ def _overlap_seconds(start: datetime, end: datetime, intervals: list[tuple[datet
     return sum(max(0.0, (min(end, right) - max(start, left)).total_seconds()) for left, right in intervals)
 
 
+def _connection_status(
+    events: list[SourceEvent],
+    as_of: datetime,
+    latest_sample: datetime | None,
+    status_samples: list[tuple[datetime, float]],
+) -> dict[str, object]:
+    """Cloud reachability is distinct from a controller reboot or power loss."""
+    lost_at: datetime | None = None
+    restored_at: datetime | None = None
+    mains_lost_at: datetime | None = None
+    for item in events:
+        if item.event_type in MAIN_POWER_LOSS_TYPES and mains_lost_at is None:
+            mains_lost_at = item.timestamp_utc
+        elif item.event_type in MAIN_POWER_RESTORE_TYPES:
+            mains_lost_at = None
+        if item.event_type in CONNECTION_LOSS_TYPES and lost_at is None:
+            lost_at = item.timestamp_utc
+        elif item.event_type in CONNECTION_RESTORE_TYPES:
+            restored_at = item.timestamp_utc
+            lost_at = None
+    state = "unknown"
+    if lost_at is not None:
+        state = "lost" if as_of - lost_at >= CONNECTION_LOST_TIMEOUT else "pending"
+    elif restored_at is not None:
+        state = "connected" if latest_sample is not None and latest_sample >= restored_at else "awaiting_telemetry"
+    # This is a revisable inference, not a synthetic PowerOff event. New
+    # telemetry after the disconnect disproves the assumed shutdown there.
+    probable_battery_depletion = (
+        lost_at is not None and mains_lost_at is not None
+        and lost_at - mains_lost_at >= BATTERY_DEPLETION_MINIMUM_RUNTIME
+        and (latest_sample is None or latest_sample <= lost_at)
+        and not any(
+            mains_lost_at < timestamp < as_of and bool(int(value) & 1)
+            for timestamp, value in status_samples
+        )
+    )
+    return {
+        "connection_state": state,
+        "connection_lost_at": lost_at.isoformat() if lost_at else None,
+        "connection_restored_at": restored_at.isoformat() if restored_at else None,
+        "lost_after_seconds": CONNECTION_LOST_TIMEOUT.total_seconds(),
+        "probable_battery_depletion": probable_battery_depletion,
+    }
+
+
 def analyze_reliability(
     *,
     period_id: str,
@@ -403,6 +454,7 @@ def analyze_reliability(
     boiler_gap_intervals = _telemetry_gap_intervals(boiler_timestamps, as_of, maximum_sample_age)
     observability_gap_intervals = _union_intervals([*zont_gap_intervals, *boiler_gap_intervals])
     power_intervals = _main_power_intervals(ordered_events, zont_status_samples, as_of)
+    connection_status = _connection_status(ordered_events, as_of, latest_zont_sample, zont_status_samples)
     controller_intervals = _merge_intervals(
         [
             *_intervals_from_events(
@@ -437,7 +489,9 @@ def analyze_reliability(
     open_incident = incidents[-1] if incidents and incidents[-1].restored_at is None else None
     inferred_boiler_restore: datetime | None = None
     if open_incident is not None:
-        inferred_restore = _first_sustained_at(boiler_timestamps, after=open_incident.lost_at)
+        inferred_restore = _first_sustained_at(
+            boiler_timestamps, after=open_incident.lost_at, maximum_spacing=maximum_sample_age,
+        )
         if inferred_restore is not None:
             open_incident.restored_at = inferred_restore
             open_incident.restore_inferred_from_metrics = True
@@ -460,14 +514,16 @@ def analyze_reliability(
     zont_lower_bound = False
     if latest_power_off is None or (latest_power_on is not None and latest_power_on >= latest_power_off):
         if latest_power_on is not None:
-            zont_anchor = _first_sustained_at(zont_timestamps, after=latest_power_on)
+            zont_anchor = _first_sustained_at(
+                zont_timestamps, after=latest_power_on, maximum_spacing=maximum_sample_age,
+            )
             zont_basis = "stable_metrics_after_power_on"
         else:
-            zont_anchor = _first_sustained_at(zont_timestamps)
+            zont_anchor = _first_sustained_at(zont_timestamps, maximum_spacing=maximum_sample_age)
             zont_basis = "first_sustained_metrics"
             zont_lower_bound = zont_anchor is not None
     zont_continuity_gap_count = (
-        sum(start > zont_anchor for start, _end in observability_gap_intervals) if zont_anchor is not None else 0
+        sum(start > zont_anchor for start, _end in zont_gap_intervals) if zont_anchor is not None else 0
     )
     zont_continuity_uncertain = zont_continuity_gap_count > 0
     zont_online = zont_anchor is not None and zont_data_fresh
@@ -479,6 +535,8 @@ def analyze_reliability(
                 (as_of - zont_anchor).total_seconds() if zont_online else 0.0,
                 "s",
                 online=zont_online,
+                data_fresh=zont_data_fresh,
+                **connection_status,
                 anchor_at=zont_anchor.isoformat(),
                 basis=zont_basis,
                 lower_bound=zont_lower_bound,
@@ -515,7 +573,7 @@ def analyze_reliability(
     # boiler restart, so it remains an observability exclusion rather than
     # replacing a confirmed restoration or first-observed anchor.
     if open_incident is None and boiler_anchor is None:
-        boiler_anchor = _first_sustained_at(boiler_timestamps)
+        boiler_anchor = _first_sustained_at(boiler_timestamps, maximum_spacing=maximum_sample_age)
         boiler_basis = "first_sustained_boiler_metrics"
         boiler_lower_bound = boiler_anchor is not None
     boiler_continuity_gap_count = (
@@ -536,6 +594,7 @@ def analyze_reliability(
                 (as_of - boiler_anchor).total_seconds() if boiler_online else 0.0,
                 "s",
                 online=boiler_online,
+                data_fresh=boiler_data_fresh and zont_data_fresh,
                 anchor_at=boiler_anchor.isoformat(),
                 basis=boiler_basis,
                 lower_bound=boiler_lower_bound,
@@ -586,7 +645,7 @@ def analyze_reliability(
         if item.restored_at is not None
     ]
     unconfirmed_controller_intervals = _subtract_intervals(controller_intervals, running_intervals)
-    first_sustained_boiler = _first_sustained_at(boiler_timestamps)
+    first_sustained_boiler = _first_sustained_at(boiler_timestamps, maximum_spacing=maximum_sample_age)
     first_boiler_restore = min(
         (item.timestamp_utc for item in ordered_events if item.event_type in BOILER_RESTORE_TYPES),
         default=None,
@@ -678,6 +737,33 @@ def analyze_reliability(
                 )
             )
 
+    for started, ended in _intervals_from_events(
+        ordered_events, loss_types=CONNECTION_LOSS_TYPES, restore_types=CONNECTION_RESTORE_TYPES, as_of=as_of,
+    ):
+        if started < as_of and ended > period_start:
+            ongoing = ended == as_of
+            detected.append(
+                DetectedEvent(
+                    id=f"event:{period_id}:zont_connection_loss:{int(started.timestamp())}",
+                    kind="zont_connection_loss",
+                    started_at=started,
+                    ended_at=None if ongoing else ended,
+                    severity="warning" if ongoing and (
+                        connection_status["connection_state"] == "lost"
+                        or connection_status["probable_battery_depletion"]
+                    ) else "info",
+                    details={
+                        "duration_seconds": (ended - started).total_seconds(),
+                        "connection_restored": not ongoing,
+                        "downtime_confirmed": False,
+                        "probable_battery_depletion": ongoing and connection_status["probable_battery_depletion"],
+                        "interpretation": "Cloud connection loss alone does not establish a controller shutdown; "
+                        "reassess using backfilled telemetry and power events after reconnection.",
+                    },
+                    algorithm_version="reliability-v2",
+                )
+            )
+
     context: dict[str, object] = {
         "boiler": {
             "online": boiler_online,
@@ -700,6 +786,7 @@ def analyze_reliability(
             "open_loss_at": open_incident.lost_at.isoformat() if open_incident else None,
         },
         "zont": {
+            **connection_status,
             "online": zont_online,
             "uptime_anchor": zont_anchor.isoformat() if zont_anchor else None,
             "uptime_basis": zont_basis,

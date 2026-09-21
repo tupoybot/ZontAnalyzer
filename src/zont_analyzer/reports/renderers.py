@@ -26,6 +26,7 @@ from zont_analyzer.reports.presentation import (
     period_target,
     target_band_note,
     timezone_note,
+    zont_connection_label,
 )
 from zont_analyzer.reports.wording import normalize_report_for_display
 
@@ -106,6 +107,7 @@ EVENT_LABELS = {
     "unconfirmed_burner_pulse": "Шумовой сигнал включения горелки",
     "boiler_connection_loss": "Потеря связи с котлом",
     "main_power_outage": "Пропадание основного питания",
+    "zont_connection_loss": "Потеря связи ZONT с сервером",
 }
 
 SENSOR_GROUP_LABELS = {
@@ -414,6 +416,10 @@ def _metric_label(name: str, context: dict[str, Any] | None = None) -> str:
         label = SPACE_HEATING_METRIC_LABELS.get(name, METRIC_LABELS.get(name, name.replace("_", " ")))
     else:
         label = METRIC_LABELS.get(name, name.replace("_", " "))
+    if name == "zont_uptime_seconds" and context and (connection_label := zont_connection_label(context)):
+        return f"{label} ({connection_label})"
+    if name in {"boiler_uptime_seconds", "zont_uptime_seconds"} and context and context.get("data_fresh") is False:
+        return f"{label} (нет свежих данных)"
     if offline:
         return f"{label} (офлайн)"
     if name in {"boiler_uptime_seconds", "zont_uptime_seconds"} and context and context.get(

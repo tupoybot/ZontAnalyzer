@@ -123,6 +123,16 @@ def test_reliability_events_are_privacy_minimized_and_stable() -> None:
     assert "43.1" not in first[0].model_dump_json()
 
 
+@pytest.mark.parametrize("event_type", ["disconnected", "connected", "reconnected"])
+def test_connection_events_are_allowed_and_normalized(event_type: str) -> None:
+    event = ZontReadOnlyClient.normalize_events(
+        "7", [["id", 1_700_000_000, event_type, None, None, None, None, False]]
+    )
+
+    assert len(event) == 1
+    assert event[0].event_type == event_type
+
+
 def test_load_events_uses_filtered_read_only_endpoint() -> None:
     captured: dict[str, object] = {}
 
@@ -148,6 +158,9 @@ def test_load_events_uses_filtered_read_only_endpoint() -> None:
     assert captured["path"] == "/api/raw_events"
     assert '"only"' in str(captured["body"])
     assert "LossConnectionBoiler" in str(captured["body"])
+    assert "disconnected" in str(captured["body"])
+    assert "connected" in str(captured["body"])
+    assert "reconnected" in str(captured["body"])
     assert events[0][2] == "OTFound"
 
 

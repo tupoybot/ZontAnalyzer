@@ -142,6 +142,7 @@ def test_power_related_boiler_loss_is_a_service_failure() -> None:
     metrics = {item.name: item for item in result.metrics}
 
     assert metrics["zont_uptime_seconds"].value == 180 * 60
+    assert metrics["zont_uptime_seconds"].context["online"] is True
     assert metrics["boiler_mtbf_hours"].value == pytest.approx(119 / 60, abs=0.001)
     assert metrics["boiler_mtbf_hours"].context["confirmed_failures"] == 1
     assert metrics["boiler_mttr_hours"].value == 1
@@ -209,7 +210,7 @@ def test_power_on_and_missing_restore_event_use_first_sustained_metrics() -> Non
     )
     metrics = {item.name: item for item in result.metrics}
 
-    assert metrics["zont_uptime_seconds"].value == 30 * 60
+    assert metrics["zont_uptime_seconds"].value == 40 * 60
     assert metrics["boiler_uptime_seconds"].value == 10 * 60
     assert result.context["boiler"]["online"] is True  # type: ignore[index]
     loss = next(item for item in result.events if item.kind == "boiler_connection_loss")
@@ -260,6 +261,131 @@ def test_stale_telemetry_reports_zero_uptime_and_suppresses_reliability_means() 
     assert result.context["boiler"]["data_fresh"] is False  # type: ignore[index]
 
 
+@pytest.mark.parametrize(("age_minutes", "expected_fresh"), [(30, True), (31, False)])
+def test_zont_freshness_uses_thirty_minute_inclusive_boundary(age_minutes: int, expected_fresh: bool) -> None:
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START - timedelta(minutes=20),
+        as_of=START + timedelta(minutes=age_minutes),
+        source_events=[],
+        boiler_metric_timestamps=[],
+        zont_status_samples=[
+            (START - timedelta(minutes=20), 73.0),
+            (START - timedelta(minutes=10), 73.0),
+            (START, 73.0),
+        ],
+    )
+
+    metric = next(item for item in result.metrics if item.name == "zont_uptime_seconds")
+    assert metric.context["data_fresh"] is expected_fresh
+    assert result.context["zont"]["data_fresh"] is expected_fresh  # type: ignore[index]
+
+
+def test_regular_ten_minute_zont_samples_are_continuous() -> None:
+    samples = [
+        (START + timedelta(minutes=10 * index, seconds=3), 73.0)
+        for index in range(7)
+    ]
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(minutes=60, seconds=3),
+        source_events=[],
+        boiler_metric_timestamps=[],
+        zont_status_samples=samples,
+    )
+
+    metric = next(item for item in result.metrics if item.name == "zont_uptime_seconds")
+    assert metric.context["continuity_uncertain"] is False
+    assert result.context["zont"]["telemetry_gaps"] == 0  # type: ignore[index]
+
+
+def test_cloud_connection_loss_is_pending_before_two_hours() -> None:
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(hours=2) - timedelta(seconds=1),
+        source_events=[_event(0, "disconnected"), _event(1, "disconnected")],
+        boiler_metric_timestamps=[],
+        zont_status_samples=_status(0, 30),
+    )
+
+    assert result.context["zont"]["connection_state"] == "pending"  # type: ignore[index]
+    assert result.context["zont"]["connection_lost_at"] == START.isoformat()  # type: ignore[index]
+    assert result.context["zont"]["lost_after_seconds"] == 7200.0  # type: ignore[index]
+
+
+def test_cloud_connection_loss_is_lost_at_exactly_two_hours_without_restarting_timer() -> None:
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(hours=2),
+        source_events=[_event(0, "disconnected"), _event(1, "disconnected")],
+        boiler_metric_timestamps=[],
+        zont_status_samples=_status(0, 30),
+    )
+
+    assert result.context["zont"]["connection_state"] == "lost"  # type: ignore[index]
+    assert result.context["zont"]["connection_lost_at"] == START.isoformat()  # type: ignore[index]
+
+
+def test_cloud_reconnect_waits_for_backfilled_telemetry() -> None:
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(minutes=90),
+        source_events=[_event(0, "disconnected"), _event(60, "reconnected")],
+        boiler_metric_timestamps=[],
+        zont_status_samples=_status(0, 30),
+    )
+
+    assert result.context["zont"]["connection_state"] == "awaiting_telemetry"  # type: ignore[index]
+    assert result.context["zont"]["connection_restored_at"] == (
+        START + timedelta(minutes=60)
+    ).isoformat()  # type: ignore[index]
+
+
+def test_cloud_reconnect_with_backfilled_telemetry_is_connected() -> None:
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(minutes=90),
+        source_events=[_event(0, "disconnected"), _event(60, "reconnected")],
+        boiler_metric_timestamps=[],
+        zont_status_samples=_status(0, 90),
+    )
+
+    assert result.context["zont"]["connection_state"] == "connected"  # type: ignore[index]
+    assert result.context["zont"]["connection_lost_at"] is None  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("extra_events", "last_minute", "status_value", "expected"),
+    [
+        ([], 170, 72, True),
+        ([_event(190, "connected")], 170, 72, False),
+        ([_event(60, "MainPowerFound")], 170, 72, False),
+        ([], 190, 72, False),
+        ([], 170, 73, False),
+    ],
+)
+def test_open_cloud_loss_after_two_hours_of_main_power_loss_can_indicate_battery_depletion(
+    extra_events: list[SourceEvent], last_minute: int, status_value: int, expected: bool
+) -> None:
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(minutes=200),
+        source_events=[_event(0, "MainPowerLost"), _event(180, "disconnected"), *extra_events],
+        boiler_metric_timestamps=[],
+        zont_status_samples=_status(0, last_minute, status_value),
+    )
+
+    assert result.context["zont"]["probable_battery_depletion"] is expected  # type: ignore[index]
+    metric = next(item for item in result.metrics if item.name == "zont_uptime_seconds")
+    assert metric.context["probable_battery_depletion"] is expected
+
+
 def test_zont_gap_preserves_uptime_anchor_but_marks_continuity_uncertain() -> None:
     zont_times = [*_timestamps(0, 10), *_timestamps(90, 120)]
     result = analyze_reliability(
@@ -304,7 +430,7 @@ def test_gap_without_restart_keeps_boiler_first_observed_anchor() -> None:
     assert metrics["boiler_uptime_seconds"].context["basis"] == "first_sustained_boiler_metrics"
     assert metrics["boiler_uptime_seconds"].context["continuity_uncertain"] is True
     assert metrics["boiler_uptime_seconds"].context["continuity_gap_count"] == 1
-    assert metrics["boiler_mtbf_hours"].context["observed_operating_seconds"] == 50 * 60
+    assert metrics["boiler_mtbf_hours"].context["observed_operating_seconds"] == 70 * 60
 
 
 def test_boiler_gap_marks_uptime_continuity_after_both_anchors() -> None:
@@ -319,7 +445,7 @@ def test_boiler_gap_marks_uptime_continuity_after_both_anchors() -> None:
     )
     metrics = {item.name: item for item in result.metrics}
 
-    assert metrics["zont_uptime_seconds"].context["continuity_uncertain"] is True
+    assert metrics["zont_uptime_seconds"].context["continuity_uncertain"] is False
     assert metrics["boiler_uptime_seconds"].context["continuity_uncertain"] is True
     assert result.context["zont"]["telemetry_gaps"] == 0  # type: ignore[index]
 
