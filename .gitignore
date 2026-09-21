@@ -1,4 +1,5 @@
 .access/
+/.local/
 zontaccesstoken.json
 .zont-analyzer/
 config.yaml

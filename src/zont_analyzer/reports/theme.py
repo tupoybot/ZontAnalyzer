@@ -13,6 +13,16 @@ STYLE = r"""
 --danger:#a13832;
 --info:#326783}
 
+.gas-daily{min-width:0}
+.gas-daily-scroll{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--elevated)}
+.gas-daily-scroll svg{display:block;width:100%;min-width:680px}
+.gas-daily-scroll text{font:12px system-ui,sans-serif;fill:var(--secondary)}
+.gas-grid{stroke:var(--border);stroke-width:1}
+.gas-day-measured{fill:#26704c;background:#26704c}
+.gas-day-estimated{fill:#326783;background:#326783}
+.gas-day-bar:hover{opacity:.75}
+.gas-daily-legend{display:flex;flex-wrap:wrap;gap:18px;margin:12px 0;font-size:13px;color:var(--secondary)}
+.gas-daily-legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px}
 *{box-sizing:border-box}
 body{font:16px/1.55 system-ui,sans-serif;
 margin:0;

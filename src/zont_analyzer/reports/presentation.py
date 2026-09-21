@@ -885,29 +885,39 @@ def metric_groups(report: Report, missing_mttr: str | None) -> str:
 
 
 def timeline(report: Report) -> str:
+    from .event_highlights import is_routine, rank_events
     from .renderers import _event_label
 
     significant: list[str] = []
     routine: list[str] = []
-    for e in sorted(report.events, key=lambda e: e.started_at):
+    for ranked in rank_events(report.events, period_kind=report.kind):
+        e = ranked.event
         time = e.started_at.astimezone(ZoneInfo(report.timezone)).strftime(
             "%H:%M" if report.kind == "daily" else "%d.%m %H:%M"
         )
-        duration = f" · {number((e.ended_at - e.started_at).total_seconds() / 60, 'мин')}" if e.ended_at else ""
+        duration = f" · {number(ranked.total_duration_minutes, 'мин')}" if ranked.total_duration_minutes else ""
+        repetitions = (
+            (" суммарно" if duration else "") + f" · Эпизодов: {ranked.count}"
+            if ranked.count > 1 else ""
+        )
         row = (
             f"<li><time>{time}</time><div><strong>{esc(_event_label(e.kind))}</strong>"
-            f'<span>{esc(duration)}</span><span class="event-severity">'
+            f'<span>{esc(duration + repetitions)}</span><span class="event-severity">'
             f"{ {'info': '', 'warning': 'Требует внимания', 'critical': 'Критическое событие'}[e.severity] }</span>"
-            + debug(e.model_dump(), "Событие / evidence")
+            + debug(
+                [item.model_dump() for item in ranked.events] if ranked.count > 1 else e.model_dump(),
+                "События группы / evidence" if ranked.count > 1 else "Событие / evidence",
+            )
             + "</div></li>"
         )
-        (
-            routine if e.kind in {"burner_cycle", "unconfirmed_burner_pulse"} and e.severity == "info" else significant
-        ).append(row)
+        (routine if is_routine(ranked) else significant).append(row)
     visible = "".join(significant[:8])
     more = significant[8:]
     return (
-        '<section id="events"><h2>Значимые события</h2><ol class="timeline">'
+        '<section id="events"><h2>Значимые события</h2>'
+        '<p class="chart-note">По важности: сбои, предупреждения и длительные отклонения.'
+        + (" Повторы объединены; дата — наиболее значимый эпизод." if report.kind in {"weekly", "monthly"} else "")
+        + '</p><ol class="timeline">'
         + (visible or "<li>Значимые события за период не зарегистрированы.</li>")
         + "</ol>"
         + (
@@ -917,7 +927,7 @@ def timeline(report: Report) -> str:
             else ""
         )
         + (
-            f'<details class="technical-events"><summary>Показать ещё {len(routine)} технических событий</summary>'
+            '<details class="technical-events"><summary>Остальные события и штатные эпизоды</summary>'
             f'<ol class="timeline">{"".join(routine)}</ol></details>'
             if routine
             else ""

@@ -348,7 +348,9 @@ class GasService:
             self.db.set_app_meta(f'gas-model:{key}', _json(snapshot))
         return key, self._models[key], intervals
 
-    def context(self, start: datetime, end: datetime, *, complete: bool = True) -> dict[str, Any]:
+    def context(
+        self, start: datetime, end: datetime, *, complete: bool = True, include_daily: bool = False,
+    ) -> dict[str, Any]:
         from zont_analyzer.analytics.gas import estimate_exposure
 
         version, model, intervals = self.model()
@@ -454,9 +456,40 @@ class GasService:
                     datetime.fromisoformat(interval['start']), datetime.fromisoformat(interval['end']),
                     interval.get('volume_m3'), model, can_allocate=whole_meter_allocation,
                 )
+        if include_daily:
+            result['daily'] = self.daily_values(start, end, model, intervals)
         # Canonical context must survive a JSON round trip without tuple/list or
         # datetime/string differences triggering writes on every publication.
         return dict(json.loads(_json(result)))
+
+    def daily_values(
+        self, start: datetime, end: datetime, model: GasModel, intervals: list[GasInterval],
+    ) -> list[dict[str, Any]]:
+        """Use calendar-day exposure, never divide a period total into invented days."""
+        from zont_analyzer.analytics.gas import estimate_exposure
+
+        zone = ZoneInfo(self.timezone)
+        result = []
+        cursor = start
+        while cursor < end:
+            day = cursor.astimezone(zone).date()
+            boundary = _utc(day + timedelta(days=1), self.timezone)
+            after = min(end, boundary)
+            estimate = estimate_exposure(self._exposure(self.window(cursor, after)), model,
+                                         start=cursor, end=after)
+            status, volume = estimate.status, estimate.volume_m3
+            full_day = cursor == _utc(day, self.timezone) and after == boundary
+            # A day-precision reading interval is measured only for that exact
+            # pair of dates. Longer meter intervals cannot supply daily bars.
+            measured = next((i for i in intervals if full_day
+                             and i.start.astimezone(zone).date() == day
+                             and i.end.astimezone(zone).date() == day + timedelta(days=1)), None)
+            if measured is not None:
+                status, volume = 'measured', measured.volume_m3
+            result.append({'day': day.isoformat(), 'status': status, 'volume_m3': volume,
+                           'coverage_pct': estimate.coverage * 100, 'complete': full_day})
+            cursor = after
+        return result
 
     @staticmethod
     def _model_from_context(gas: dict[str, Any]) -> GasModel | None:
@@ -704,7 +737,8 @@ class GasService:
 
     def refresh(self, report: Report) -> Report:
         gas = self.context(report.period_start, report.period_end,
-                           complete=report.context.get('period', {}).get('complete', True))
+                           complete=report.context.get('period', {}).get('complete', True),
+                           include_daily=report.kind in {'weekly', 'monthly'})
         old = report.context.get('gas')
         pilot_reuse = report.context.get('pilot_ai_reuse')
         reused = bool(report.context.get('ai_interpretation_reuse') or (

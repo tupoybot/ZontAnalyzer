@@ -724,7 +724,9 @@ class AnalysisService:
 
         if include_comparisons or self._gas_service is None:
             self._gas_service = GasService(self.db, self.config)
-        control_context["gas"] = self._gas_service.context(start, end, complete=period.complete)
+        control_context["gas"] = self._gas_service.context(
+            start, end, complete=period.complete, include_daily=kind in {"weekly", "monthly"},
+        )
         if include_comparisons:
             control_context["gas_savings"] = self._gas_service.savings(end)
         control_context["season_boundaries"] = self.season_boundaries()[0].model_dump()
