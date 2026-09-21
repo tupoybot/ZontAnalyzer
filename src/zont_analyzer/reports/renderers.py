@@ -1159,6 +1159,7 @@ def render_html(
 ) -> str:
     from . import presentation as ui
     from .charts import render_charts
+    from .charts.gas import render_daily_gas
     from .theme import SCRIPT, STYLE
 
     canonical_report = report
@@ -1502,6 +1503,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="engineering-chart">{render_charts(report, chart_data, panel_ids=("thermal",))}</div>
 </section>
 <div class="lower-grid full-width">{ui.timeline(report)}{ui.quality(report)}</div>
+{render_daily_gas(report)}
 {more_actions}
 <section class="details-area full-width"><h2>Почему сделаны эти выводы</h2>
 {question_html}{reasoning or '<p>Дополнительные объяснения за период не сформированы.</p>'}
