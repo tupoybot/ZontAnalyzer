@@ -139,6 +139,31 @@ class ModelReviewStore:
 
     def state(self, settings_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
         with self.db.session() as session:
+            if settings_snapshot is not None:
+                settings_version = str(settings_snapshot.get("version", ""))
+                # Older releases could persist a price-only proposal.  Retire
+                # it on the first local state read so the UI does not keep
+                # presenting an unsupported recommendation until the next
+                # scheduled catalog fetch.
+                for proposal in session.scalars(
+                    select(ModelReviewProposalRow).where(
+                        ModelReviewProposalRow.status.in_(("open", "deferred")),
+                        ModelReviewProposalRow.settings_version == settings_version,
+                    )
+                ):
+                    recommendation = json.loads(proposal.recommendation_json)
+                    if (
+                        recommendation.get("reason") != "current_model_deprecated"
+                        and not (
+                            isinstance(recommendation.get("evaluation"), dict)
+                            and isinstance(recommendation.get("current_evaluation"), dict)
+                            and self._assessments_comparable(
+                                recommendation["current_evaluation"], recommendation["evaluation"],
+                            )
+                        )
+                    ):
+                        proposal.status = "superseded"
+                        proposal.decided_at = utcnow()
             state = session.get(ModelReviewStateRow, SCOPE)
             runs = session.scalars(
                 select(ModelReviewRunRow)
@@ -250,9 +275,48 @@ class ModelReviewStore:
 
     def _assessment(self, model: str, effort: str | None) -> dict[str, Any] | None:
         assessment = self.assessments.get(model)
-        if assessment and assessment.get("measurements", {}).get("parameters", {}).get("reasoning_effort") == effort:
-            return dict(assessment)
-        return None
+        if not isinstance(assessment, dict):
+            return None
+        measurements = assessment.get("measurements")
+        parameters = measurements.get("parameters") if isinstance(measurements, dict) else None
+        scores = assessment.get("scores")
+        completed_case_ids = assessment.get("completed_case_ids")
+        if (
+            not all(isinstance(assessment.get(key), str) and assessment[key].strip()
+                    for key in ("dataset_sha256", "prompt_id", "schema_id", "assessor", "date", "rationale"))
+            or not isinstance(completed_case_ids, list)
+            or not completed_case_ids
+            or any(not isinstance(case_id, str) or not case_id.strip() for case_id in completed_case_ids)
+            or len(set(completed_case_ids)) != len(completed_case_ids)
+            or not isinstance(parameters, dict)
+            or parameters.get("reasoning_effort") != effort
+            or not isinstance(scores, dict)
+            or any(
+                not isinstance(scores.get(dimension), (int, float))
+                or isinstance(scores.get(dimension), bool)
+                or not 0 <= scores[dimension] <= 1
+                for dimension in ("factual", "advice", "uncertainty")
+            )
+        ):
+            return None
+        return dict(assessment)
+
+    @staticmethod
+    def _assessments_comparable(old: dict[str, Any], new: dict[str, Any]) -> bool:
+        # The loader normally guarantees these identities. Keep the guard at
+        # the selection boundary too because callers may provide assessments
+        # directly to this store.
+        for key in ("dataset_sha256", "prompt_id", "schema_id"):
+            if old.get(key) != new.get(key):
+                return False
+        old_measurements = old.get("measurements")
+        new_measurements = new.get("measurements")
+        if not isinstance(old_measurements, dict) or not isinstance(new_measurements, dict):
+            return False
+        if old_measurements.get("parameters") != new_measurements.get("parameters"):
+            return False
+        old_cases, new_cases = old.get("completed_case_ids"), new.get("completed_case_ids")
+        return isinstance(old_cases, list) and isinstance(new_cases, list) and set(old_cases) == set(new_cases)
 
     def _candidate(self, current: ModelFact, candidates: list[ModelFact], effort: str | None) -> ModelFact | None:
         if current.input_price_per_mtok_usd is None or current.output_price_per_mtok_usd is None:
@@ -279,14 +343,22 @@ class ModelReviewStore:
             except InvalidOperation:
                 continue
             old_evaluation, new_evaluation = self._assessment(current.id, effort), self._assessment(item.id, effort)
+            quality_comparable = False
             improved_quality = False
-            if old_evaluation and new_evaluation:
+            if old_evaluation and new_evaluation and self._assessments_comparable(old_evaluation, new_evaluation):
                 old_scores, new_scores = old_evaluation["scores"], new_evaluation["scores"]
                 dimensions = ("factual", "advice", "uncertainty")
-                improved_quality = (all(new_scores[key] >= old_scores[key] for key in dimensions)
-                                    and any(new_scores[key] > old_scores[key] for key in dimensions))
-            if current.deprecated or improved_quality or (cost_in <= base_in and cost_out <= base_out
-                                      and (cost_in < base_in or cost_out < base_out)):
+                quality_comparable = all(new_scores[key] >= old_scores[key] for key in dimensions)
+                improved_quality = quality_comparable and any(
+                    new_scores[key] > old_scores[key] for key in dimensions
+                )
+            cheaper = cost_in <= base_in and cost_out <= base_out and (cost_in < base_in or cost_out < base_out)
+            # Price alone is not evidence that a replacement is suitable.  A
+            # non-deprecated model may be proposed only after comparable
+            # package evaluations show that its quality does not regress.  A
+            # deprecated current model remains the explicit exception: it
+            # needs a replacement proposal even before local evaluation.
+            if current.deprecated or (quality_comparable and (cheaper or improved_quality)):
                 return item
         return None
 
@@ -334,7 +406,7 @@ class ModelReviewStore:
                     status, error = "unverified", "Не удалось проверить опубликованную стоимость кандидатов."
                     break
                 candidate = self._candidate(current, list(snapshot.models), effort if isinstance(effort, str) else None)
-                if current.deprecated:
+                if current.deprecated and candidate:
                     proposals.append(
                         {
                             "profile": profile,
@@ -355,6 +427,7 @@ class ModelReviewStore:
                     )
             if status != "unverified":
                 status = "proposal" if proposals else "no_change"
+        deprecated_current = any(fact.id in profiles.values() and fact.deprecated for fact in snapshot.models)
         result = {
             "checked_at": moment.isoformat(),
             "status": status,
@@ -366,7 +439,9 @@ class ModelReviewStore:
             if status == "unverified"
             else "Перед сменой модели нужна локальная оценка на пакетах приложения."
             if proposals
-            else "Публичные данные не подтвердили основание для смены модели.",
+            else "Текущая модель помечена к отключению, но совместимая замена пока не подтверждена."
+            if deprecated_current
+            else "Нет подтверждённых сопоставимой оценкой качества оснований для смены; одной цены недостаточно.",
         }
         with self._write() as session:
             state = session.get(ModelReviewStateRow, SCOPE)
@@ -449,6 +524,9 @@ class ModelReviewStore:
                             "reason": item["reason"],
                             "requires_evaluation": evaluation is None,
                             "evaluation": evaluation,
+                            "current_evaluation": self._assessment(
+                                current.id, effective.get(f"{item['profile']}_reasoning_effort"),
+                            ),
                             "tradeoffs": {
                                 "quality": quality_note,
                                 "latency": latency_note,
@@ -476,6 +554,24 @@ class ModelReviewStore:
                             recommendation_json=_json(recommendation),
                         )
                     )
+                # A successful review reconciles pending notices as well as
+                # creating new ones. This removes an old price-only (or stale
+                # assessment) proposal from the settings UI once its basis is
+                # no longer valid.
+                valid = {
+                    (item["profile"], item["current"].id, item["candidate"].id)
+                    for item in proposals
+                    if item["candidate"] is not None
+                }
+                for previous in session.scalars(
+                    select(ModelReviewProposalRow).where(
+                        ModelReviewProposalRow.status.in_(("open", "deferred")),
+                        ModelReviewProposalRow.settings_version == str(settings_snapshot.get("version", "")),
+                    )
+                ):
+                    if (previous.profile, previous.current_model, previous.candidate_model) not in valid:
+                        previous.status = "superseded"
+                        previous.decided_at = moment
             return self._run_item(run)
 
     def decide(

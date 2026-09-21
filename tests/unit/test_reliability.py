@@ -260,7 +260,7 @@ def test_stale_telemetry_reports_zero_uptime_and_suppresses_reliability_means() 
     assert result.context["boiler"]["data_fresh"] is False  # type: ignore[index]
 
 
-def test_zont_gap_resets_uptime_and_is_excluded_from_boiler_mtbf() -> None:
+def test_zont_gap_preserves_uptime_anchor_but_marks_continuity_uncertain() -> None:
     zont_times = [*_timestamps(0, 10), *_timestamps(90, 120)]
     result = analyze_reliability(
         period_id="day",
@@ -276,11 +276,52 @@ def test_zont_gap_resets_uptime_and_is_excluded_from_boiler_mtbf() -> None:
     )
     metrics = {item.name: item for item in result.metrics}
 
-    assert metrics["zont_uptime_seconds"].value == 30 * 60
+    assert metrics["zont_uptime_seconds"].value == 120 * 60
     assert metrics["boiler_uptime_seconds"].value == 10 * 60
+    assert metrics["zont_uptime_seconds"].context["basis"] == "first_sustained_metrics"
+    assert metrics["zont_uptime_seconds"].context["continuity_uncertain"] is True
+    assert metrics["zont_uptime_seconds"].context["continuity_gap_count"] == 1
+    assert metrics["boiler_uptime_seconds"].context["continuity_uncertain"] is False
     assert metrics["boiler_mtbf_hours"].context["confirmed_failures"] == 0
     assert "boiler_mttr_hours" not in metrics
     assert result.context["zont"]["telemetry_gaps"] == 1  # type: ignore[index]
+
+
+def test_gap_without_restart_keeps_boiler_first_observed_anchor() -> None:
+    timestamps = [*_timestamps(0, 10), *_timestamps(90, 120)]
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(minutes=120),
+        source_events=[],
+        boiler_metric_timestamps=timestamps,
+        zont_status_samples=[(item, 73.0) for item in timestamps],
+    )
+    metrics = {item.name: item for item in result.metrics}
+
+    assert metrics["zont_uptime_seconds"].value == 120 * 60
+    assert metrics["boiler_uptime_seconds"].value == 120 * 60
+    assert metrics["boiler_uptime_seconds"].context["basis"] == "first_sustained_boiler_metrics"
+    assert metrics["boiler_uptime_seconds"].context["continuity_uncertain"] is True
+    assert metrics["boiler_uptime_seconds"].context["continuity_gap_count"] == 1
+    assert metrics["boiler_mtbf_hours"].context["observed_operating_seconds"] == 50 * 60
+
+
+def test_boiler_gap_marks_uptime_continuity_after_both_anchors() -> None:
+    boiler_timestamps = [*_timestamps(0, 10), *_timestamps(90, 120)]
+    result = analyze_reliability(
+        period_id="day",
+        period_start=START,
+        as_of=START + timedelta(minutes=120),
+        source_events=[],
+        boiler_metric_timestamps=boiler_timestamps,
+        zont_status_samples=_status(0, 120),
+    )
+    metrics = {item.name: item for item in result.metrics}
+
+    assert metrics["zont_uptime_seconds"].context["continuity_uncertain"] is True
+    assert metrics["boiler_uptime_seconds"].context["continuity_uncertain"] is True
+    assert result.context["zont"]["telemetry_gaps"] == 0  # type: ignore[index]
 
 
 def test_zont_restart_is_observability_only() -> None:

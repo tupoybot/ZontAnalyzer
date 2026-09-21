@@ -13,7 +13,7 @@ from zont_analyzer.adapters.openai.model_catalog import (
 )
 from zont_analyzer.adapters.sqlite.database import Database
 from zont_analyzer.application.ai_settings import AISettingsStore
-from zont_analyzer.application.model_review import ModelReviewStore
+from zont_analyzer.application.model_review import ModelReviewProposalRow, ModelReviewRunRow, ModelReviewStore
 from zont_analyzer.config import AppConfig, OpenAIConfig
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -86,6 +86,64 @@ def test_unknown_price_is_unverified_not_current_optimal(tmp_path: Path, missing
     assert store.state()["last_success_at"] is None
 
 
+def _assessment(*, model: str = "candidate", effort: str = "medium", cases: list[str] | None = None,
+                dataset: str = "dataset-v1") -> dict[str, object]:
+    return {
+        "model": model,
+        "dataset_sha256": dataset,
+        "prompt_id": "prompt-v1",
+        "schema_id": "schema-v1",
+        "assessor": "owner",
+        "date": "2026-01-01",
+        "rationale": "Reviewed all supplied cases and evidence.",
+        "completed_case_ids": cases or ["normal", "gas"],
+        "scores": {"factual": 0.9, "advice": 0.8, "uncertainty": 0.9},
+        "measurements": {"parameters": {"reasoning_effort": effort}, "latency_ms": 100},
+    }
+
+
+def test_cheaper_candidate_is_not_recommended_without_comparable_quality(tmp_path: Path) -> None:
+    current = _fact("gpt-5.6-terra", "2", "12")
+    candidate = _fact("gpt-5.6-luna", "0.2", "1.2")
+    store = ModelReviewStore(_db(tmp_path), Catalog(_snapshot(current, candidate)))
+    result = store.run_if_due(_settings(), NOW)
+    assert result and result["status"] == "no_change"
+    assert store.state()["proposals"] == []
+
+
+def test_quality_must_be_comparable_before_cheaper_candidate_is_proposed(tmp_path: Path) -> None:
+    current = _fact("gpt-5.6-terra", "2", "12")
+    candidate = _fact("gpt-5.6-luna", "0.2", "1.2")
+    assessments = {
+        current.id: _assessment(model=current.id),
+        candidate.id: _assessment(model=candidate.id, dataset="different-dataset"),
+    }
+    store = ModelReviewStore(_db(tmp_path), Catalog(_snapshot(current, candidate)), assessments=assessments)
+    result = store.run_if_due(_settings(), NOW)
+    assert result and result["status"] == "no_change"
+    assert store.state()["proposals"] == []
+
+
+def test_state_retires_persisted_price_only_proposal_without_network(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    with db.session() as session:
+        session.add(ModelReviewRunRow(
+            id="legacy-run", scope="installation", started_at=NOW, trigger="scheduled", status="no_change",
+            settings_version="settings-v1", settings_json="{}",
+        ))
+        session.flush()
+        session.add(ModelReviewProposalRow(
+            id="legacy-price-only", run_id="legacy-run", settings_version="settings-v1",
+            profile="daily", current_model="gpt-5.6-terra", candidate_model="gpt-5.6-luna",
+            recommendation_json='{"reason":"published_candidate_requires_evaluation",'
+            '"requires_evaluation":true,"evaluation":null}',
+        ))
+    store = ModelReviewStore(db, Catalog(_snapshot()))
+    assert store.state(_settings())["proposals"] == []
+    with db.session() as session:
+        assert session.get(ModelReviewProposalRow, "legacy-price-only").status == "superseded"
+
+
 def test_malformed_catalog_retries_three_times_without_success(tmp_path: Path) -> None:
     catalog = Catalog(_snapshot(incomplete=True, error="official models page contained no recognised model cards"))
     store = ModelReviewStore(_db(tmp_path), catalog)
@@ -153,7 +211,10 @@ def test_accept_rechecks_candidate_effort_before_saving(tmp_path: Path) -> None:
         _fact("gpt-5.6-luna", "0.2", "1.2"),
     )
     catalog = Catalog(first)
-    store = ModelReviewStore(db, catalog)
+    store = ModelReviewStore(db, catalog, assessments={
+        "gpt-5.6-terra": _assessment(model="gpt-5.6-terra"),
+        "gpt-5.6-luna": _assessment(model="gpt-5.6-luna"),
+    })
     assert store.run_if_due(settings.snapshot(), NOW)
     proposal = store.state()["proposals"][0]
     catalog.snapshot = _snapshot(

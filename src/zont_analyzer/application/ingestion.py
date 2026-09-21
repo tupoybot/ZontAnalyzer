@@ -461,24 +461,38 @@ class IngestionService:
         finally:
             self._refresh_series_roles(devices, inferred_entities, config_names)
         source_events = 0
-        if failed_windows == 0 and cursor >= now:
+        # Events use their own cursor and endpoint.  Keep collecting them when
+        # history is temporarily unavailable so a history outage cannot hide
+        # reliability events; the failed history cursor remains behind and is
+        # retried on the next sync.
+        if device_ids:
             retained_start = now - backfill if backfill is not None else self.db.earliest_sample_time()
             retained_start = retained_start or now - timedelta(days=1)
             for device_id in device_ids:
                 event_cursor = self.db.get_cursor(device_id, "raw_events")
+                # Keep a bounded recent lookback even when the first telemetry
+                # sample is newer than a late event.  Once established, the
+                # event cursor plus overlap controls the replay window.
                 event_start = retained_start
-                if event_cursor is not None:
-                    event_start = max(
+                if backfill is None:
+                    event_start = min(
                         retained_start,
-                        event_cursor - timedelta(minutes=self.config.scheduler.overlap_minutes),
+                        now - timedelta(minutes=self.config.scheduler.overlap_minutes),
                     )
+                if event_cursor is not None and backfill is None and not bootstrap:
+                    event_start = event_cursor - timedelta(minutes=self.config.scheduler.overlap_minutes)
                 if event_start >= now:
                     continue
                 try:
                     raw_events = self.client.load_events(device_id=device_id, start=event_start, end=now)
                     normalized_events = self.client.normalize_events(device_id, raw_events)
                     source_events += self.db.upsert_source_events(normalized_events)
-                    self.db.set_cursor(device_id, "raw_events", now)
+                    # A partial all-time bootstrap has not established the
+                    # archive floor yet.  Keep the event cursor unset so the
+                    # eventual completion run can cover events older than the
+                    # bounded recent fallback window.
+                    if not (bootstrap and bootstrap_requests):
+                        self.db.set_cursor(device_id, "raw_events", now)
                 except Exception as exc:
                     failed_windows += 1
                     errors.append(f"raw events device {device_id}: {type(exc).__name__}: {exc}")

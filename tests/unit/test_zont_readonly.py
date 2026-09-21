@@ -9,6 +9,7 @@ import pytest
 
 from zont_analyzer.adapters.zont_readonly.client import (
     ALLOWED_METHODS,
+    ZontApiError,
     ZontReadOnlyClient,
     decode_delta_time_array,
     redact,
@@ -148,6 +149,18 @@ def test_load_events_uses_filtered_read_only_endpoint() -> None:
     assert '"only"' in str(captured["body"])
     assert "LossConnectionBoiler" in str(captured["body"])
     assert events[0][2] == "OTFound"
+
+
+def test_load_events_rejects_successful_response_without_events() -> None:
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, json={"ok": True}))
+    client = ZontReadOnlyClient(token="token", client_email="user@example.com", transport=transport)
+
+    with pytest.raises(ZontApiError, match="does not contain events"):
+        client.load_events(
+            device_id="7",
+            start=datetime(2023, 11, 14, tzinfo=UTC),
+            end=datetime(2023, 11, 15, tzinfo=UTC),
+        )
 
 
 def test_redaction_covers_nested_network_and_identity_fields() -> None:

@@ -414,7 +414,13 @@ def _metric_label(name: str, context: dict[str, Any] | None = None) -> str:
         label = SPACE_HEATING_METRIC_LABELS.get(name, METRIC_LABELS.get(name, name.replace("_", " ")))
     else:
         label = METRIC_LABELS.get(name, name.replace("_", " "))
-    return f"{label} (офлайн)" if offline else label
+    if offline:
+        return f"{label} (офлайн)"
+    if name in {"boiler_uptime_seconds", "zont_uptime_seconds"} and context and context.get(
+        "continuity_uncertain"
+    ) is True:
+        return f"{label} (непрерывность не подтверждена)"
+    return label
 
 
 def _event_label(kind: str) -> str:

@@ -373,7 +373,9 @@ class ZontReadOnlyClient:
                 "only": sorted(RELIABILITY_EVENT_TYPES),
             },
         )
-        events = payload.get("events", [])
+        if "events" not in payload:
+            raise ZontApiError("ZONT raw_events response does not contain events")
+        events = payload["events"]
         if not isinstance(events, list):
             raise ZontApiError("ZONT raw_events response does not contain a list")
         return [item for item in events if isinstance(item, list)]

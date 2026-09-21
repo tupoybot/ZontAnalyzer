@@ -616,6 +616,12 @@ def test_partial_sync_does_not_advance_cursor(tmp_path: Path) -> None:
         def normalize_history(self, _response):
             raise AssertionError("failed response must not be normalized")
 
+        def load_events(self, **_kwargs):
+            return []
+
+        def normalize_events(self, _device_id, _events):
+            return []
+
     db = Database(tmp_path / "state.sqlite3")
     db.initialize()
     service = IngestionService(db, PartialClient(), AppConfig())  # type: ignore[arg-type]
@@ -625,6 +631,7 @@ def test_partial_sync_does_not_advance_cursor(tmp_path: Path) -> None:
     assert result["complete"] is False
     assert result["failed_windows"] == 1
     assert db.get_cursor("1", "temperature") is None
+    assert db.get_cursor("1", "raw_events") == datetime(2026, 8, 1, tzinfo=UTC)
 
 
 def test_fresh_database_is_created_at_alembic_head(tmp_path: Path) -> None:
