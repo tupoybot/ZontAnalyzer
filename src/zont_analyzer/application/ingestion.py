@@ -479,7 +479,7 @@ class IngestionService:
                         retained_start,
                         now - timedelta(minutes=self.config.scheduler.overlap_minutes),
                     )
-                if event_cursor is not None and backfill is None:
+                if event_cursor is not None and backfill is None and not bootstrap:
                     event_start = event_cursor - timedelta(minutes=self.config.scheduler.overlap_minutes)
                 if event_start >= now:
                     continue
@@ -487,7 +487,12 @@ class IngestionService:
                     raw_events = self.client.load_events(device_id=device_id, start=event_start, end=now)
                     normalized_events = self.client.normalize_events(device_id, raw_events)
                     source_events += self.db.upsert_source_events(normalized_events)
-                    self.db.set_cursor(device_id, "raw_events", now)
+                    # A partial all-time bootstrap has not established the
+                    # archive floor yet.  Keep the event cursor unset so the
+                    # eventual completion run can cover events older than the
+                    # bounded recent fallback window.
+                    if not (bootstrap and bootstrap_requests):
+                        self.db.set_cursor(device_id, "raw_events", now)
                 except Exception as exc:
                     failed_windows += 1
                     errors.append(f"raw events device {device_id}: {type(exc).__name__}: {exc}")

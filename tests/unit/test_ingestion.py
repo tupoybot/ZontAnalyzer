@@ -22,6 +22,7 @@ def test_explicit_backfill_replays_requested_interval_despite_current_cursor(tmp
     class RecordingClient:
         def __init__(self) -> None:
             self.history_calls: list[dict[str, object]] = []
+            self.event_calls: list[dict[str, object]] = []
 
         def discover_devices(self) -> list[dict[str, object]]:
             return [{"device_id": 1, "name": "test"}]
@@ -36,6 +37,7 @@ def test_explicit_backfill_replays_requested_interval_despite_current_cursor(tmp
             return [], {}
 
         def load_events(self, **_kwargs: object) -> list[list[Any]]:
+            self.event_calls.append(_kwargs)
             return []
 
         def normalize_events(self, _device_id: str, _events: list[list[Any]]) -> list[Any]:
@@ -59,6 +61,7 @@ def test_explicit_backfill_replays_requested_interval_despite_current_cursor(tmp
         ]
     )
     db.set_cursor("1", "temperature", now)
+    db.set_cursor("1", "raw_events", now)
     client = RecordingClient()
 
     result = IngestionService(db, cast(ZontReadOnlyClient, client), AppConfig()).sync(
@@ -70,6 +73,7 @@ def test_explicit_backfill_replays_requested_interval_despite_current_cursor(tmp
     assert result["windows"] == 1
     assert client.history_calls[0]["start"] == requested_start
     assert client.history_calls[0]["end"] == now
+    assert client.event_calls[0]["start"] == requested_start
 
 
 def test_history_failure_does_not_hide_events_and_both_paths_retry_without_duplicates(tmp_path: Path) -> None:
@@ -189,10 +193,14 @@ def test_normal_sync_replays_late_telemetry_and_events_with_two_hour_overlap(tmp
     assert client.event_calls[1]["start"] == now - timedelta(hours=2)
 
 
-def test_empty_database_bootstrap_retries_the_all_time_request_and_reports_observed_range(tmp_path: Path) -> None:
+@pytest.mark.parametrize("existing_event_cursor", [False, True])
+def test_empty_database_bootstrap_retries_the_all_time_request_and_reports_observed_range(
+    tmp_path: Path, existing_event_cursor: bool,
+) -> None:
     class PagingClient:
         def __init__(self) -> None:
             self.history_calls: list[dict[str, object]] = []
+            self.event_calls: list[dict[str, object]] = []
             self.calls = 0
 
         def discover_devices(self) -> list[dict[str, object]]:
@@ -233,15 +241,21 @@ def test_empty_database_bootstrap_retries_the_all_time_request_and_reports_obser
             )
 
         def load_events(self, **_kwargs: object) -> list[list[Any]]:
+            self.event_calls.append(_kwargs)
+            event_time = now - timedelta(days=29)
+            if cast(datetime, _kwargs['start']) <= event_time:
+                return [['older-event', int(event_time.timestamp()), 'PowerOn']]
             return []
 
         def normalize_events(self, _device_id: str, _events: list[list[Any]]) -> list[Any]:
-            return []
+            return ZontReadOnlyClient.normalize_events(_device_id, _events)
 
     now = datetime(2026, 8, 25, 12, tzinfo=UTC)
     db = Database(tmp_path / "state.sqlite3")
     db.initialize()
     client = PagingClient()
+    if existing_event_cursor:
+        db.set_cursor("1", "raw_events", now)
     config = AppConfig.model_validate({"zont": {"history_data_types": ["z3k_temperature"]}})
     service = IngestionService(db, cast(ZontReadOnlyClient, client), config)
 
@@ -250,6 +264,7 @@ def test_empty_database_bootstrap_retries_the_all_time_request_and_reports_obser
     assert interrupted["complete"] is False
     assert client.history_calls[0]["start"] == datetime.fromtimestamp(0, UTC)
     assert client.history_calls[0]["end"] == now
+    assert db.get_cursor("1", "raw_events") == (now if existing_event_cursor else None)
 
     completed = service.sync(now=now)
 
@@ -270,6 +285,9 @@ def test_empty_database_bootstrap_retries_the_all_time_request_and_reports_obser
         }
     }
     assert db.get_cursor("1", "z3k_temperature") == now
+    assert db.get_cursor("1", "raw_events") == now
+    assert client.event_calls[-1]['start'] == now - timedelta(days=30)
+    assert len(db.list_source_events(now - timedelta(days=30), now)) == 1
 
 
 def test_empty_bootstrap_response_records_no_invented_bounds_and_completes(tmp_path: Path) -> None:
