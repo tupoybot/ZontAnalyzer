@@ -9,7 +9,7 @@ from sqlalchemy import event
 
 from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.adapters.sqlite.database import ReportRow
-from zont_analyzer.domain import TelemetryPoint
+from zont_analyzer.domain import SourceEvent, TelemetryPoint
 
 EMPTY_REVISION = hashlib.sha256(b"[]").hexdigest()
 
@@ -100,6 +100,49 @@ def test_legacy_period_revision_remains_available_for_lazy_rollout(tmp_path: Pat
     before = database.legacy_period_data_revision(start, end)
     database.upsert_samples([_point(start)])
     assert database.legacy_period_data_revision(start, end) != before
+
+
+def test_source_event_revision_includes_all_prior_semantic_content(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    boundary = datetime(2026, 9, 2, tzinfo=UTC)
+    original = database.source_event_revision(boundary)
+    event = SourceEvent(
+        id="event-1",
+        device_id="1",
+        event_type="PowerOn",
+        timestamp_utc=boundary - timedelta(days=2),
+        details={"reason": "restored"},
+    )
+    database.upsert_source_events([event])
+    changed = database.source_event_revision(boundary)
+
+    assert changed != original
+    assert database.source_event_revision(boundary - timedelta(days=3)) == original
+    database.upsert_source_events([event.model_copy(update={"important": True})])
+    assert database.source_event_revision(boundary) != changed
+
+
+def test_legacy_event_baselines_seed_from_report_metadata_without_loading_json(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    period_end = datetime(2026, 9, 2, tzinfo=UTC)
+    with database.session() as session:
+        session.add(
+            ReportRow(
+                id="legacy-report",
+                kind="daily",
+                period_start=int((period_end - timedelta(days=1)).timestamp()),
+                period_end=int(period_end.timestamp()),
+                canonical_json="not needed for baseline seeding",
+                generated_at=period_end,
+                algorithm_version="legacy",
+            )
+        )
+
+    assert database.seed_source_event_report_baselines() == 1
+    assert database.get_app_meta("source-event-report-baseline:v1:legacy-report") == (
+        database.source_event_revision(period_end)
+    )
+    assert database.seed_source_event_report_baselines() == 0
 
 
 def test_upgrade_report_telemetry_revision_is_compare_and_swap_metadata_only(tmp_path: Path) -> None:

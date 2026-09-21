@@ -50,7 +50,28 @@ class FakeDatabase:
 
     def __init__(self) -> None:
         self.reports: dict[str, Report] = {}
+        self.app_meta: dict[str, str] = {}
+        self.event_revision = "source-events-v1:empty"
         self.path = Path("/tmp/zont-analyzer-fake.sqlite3")
+
+    def source_event_revision(self, _end: datetime) -> str:
+        return self.event_revision
+
+    def get_app_meta(self, key: str) -> str | None:
+        return self.app_meta.get(key)
+
+    def set_app_meta(self, key: str, value: str) -> None:
+        self.app_meta[key] = value
+
+    def seed_source_event_report_baselines(self) -> int:
+        if self.app_meta.get("source-event-report-baselines:v1:complete") == "1":
+            return 0
+        for report in self.reports.values():
+            self.app_meta.setdefault(
+                f"source-event-report-baseline:v1:{report.id}", self.source_event_revision(report.period_end)
+            )
+        self.app_meta["source-event-report-baselines:v1:complete"] = "1"
+        return len(self.reports)
 
     def list_devices(self) -> list[dict[str, Any]]:
         return []
@@ -149,6 +170,10 @@ class FakeAnalysis:
     def analyze_daily(self, selected: date, *, use_ai: bool = True) -> Report:
         self.calls.append((selected, use_ai))
         report = _report(selected)
+        report.context["input_revision"] = {
+            "telemetry": self.db.period_data_revision(report.period_start, report.period_end),
+            "reliability_events": self.db.source_event_revision(report.period_end),
+        }
         self.db.reports[report.id] = report
         return report
 
@@ -357,6 +382,37 @@ def test_pilot_reanalyzes_only_changed_exact_period(tmp_path: Path, monkeypatch,
     result = PilotService(runtime).run_cycle()
     assert result['analyzed_dates'] == (['2026-08-03'] if revision_changed else [])
     assert runtime.analysis_service.calls == ([(date(2026, 8, 3), False)] if revision_changed else [])
+
+
+def test_pilot_baselines_legacy_event_revision_before_sync(tmp_path: Path, monkeypatch) -> None:
+    from zont_analyzer.application.analysis import CALCULATION_VERSION
+
+    runtime = FakeRuntime(tmp_path, {"complete": True})
+    yesterday = _report(date(2026, 8, 3))
+    yesterday.context.update(
+        calculation_version=CALCULATION_VERSION,
+        input_revision={"telemetry": "telemetry-v2:original"},
+    )
+    runtime.db.reports[yesterday.id] = yesterday
+    monkeypatch.setattr(PilotService, "_completed_dates", lambda *args: [date(2026, 8, 3)])
+    monkeypatch.setattr(runtime.db, "period_data_revision", lambda *args: "telemetry-v2:original")
+
+    class LateEventIngestion:
+        def sync(self) -> dict[str, Any]:
+            runtime.db.event_revision = "source-events-v1:late"
+            return {"complete": True}
+
+    monkeypatch.setattr(runtime, "ingestion", lambda _client: LateEventIngestion())
+
+    result = PilotService(runtime).run_cycle()
+
+    assert result["analyzed_dates"] == ["2026-08-03"]
+    assert runtime.db.app_meta[
+        f"source-event-report-baseline:v1:{yesterday.id}"
+    ] == "source-events-v1:empty"
+    assert runtime.db.reports[yesterday.id].context["input_revision"]["reliability_events"] == (
+        "source-events-v1:late"
+    )
 
 
 def test_imported_history_without_revisions_is_not_reanalyzed_on_upgrade(tmp_path: Path, monkeypatch) -> None:

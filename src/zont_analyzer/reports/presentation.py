@@ -712,6 +712,16 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
     )
 
 
+def zont_connection_label(context: Mapping[str, Any]) -> str | None:
+    if context.get("probable_battery_depletion") is True:
+        return "вероятное отключение: разряд резервного питания"
+    return {
+        "pending": "связь потеряна; ожидаем восстановления",
+        "lost": "устройство потеряно: нет связи более 2 ч",
+        "awaiting_telemetry": "связь восстановлена; ожидаем телеметрию",
+    }.get(str(context.get("connection_state")))
+
+
 def reliability(report: Report) -> str:
     statuses = []
     by_name = {metric.name: metric for metric in report.metrics}
@@ -719,15 +729,25 @@ def reliability(report: Report) -> str:
         metric = by_name.get(key)
         if metric is None:
             label = "ZONT" if key.startswith("zont") else "Котёл"
+            zont_context = report.context.get("reliability", {}).get("zont", {})
+            connection_label = zont_connection_label(zont_context) if key.startswith("zont") else None
             statuses.append(
                 '<span class="uptime-unknown"><i class="uptime-dot"></i>'
-                f'{label} · статус неизвестен · аптайм: нет данных</span>'
+                f'{label} · {esc(connection_label or "статус неизвестен")} · аптайм: нет данных</span>'
             )
             continue
         name = "ZONT" if metric.name.startswith("zont") else "Котёл"
         online = metric.context.get("online")
         status = "на связи" if online is True else "не на связи" if online is False else "статус неизвестен"
         status_class = "uptime-online" if online is True else "uptime-offline" if online is False else "uptime-unknown"
+        data_missing = metric.context.get("data_fresh") is False
+        if data_missing:
+            status = "нет свежих данных"
+            status_class = "uptime-unknown"
+        connection_label = zont_connection_label(metric.context) if key.startswith("zont") else None
+        if connection_label:
+            status = connection_label
+            status_class = "uptime-unknown"
         seconds = metric.value
         duration = (
             f"{int(seconds // 86400)} дн."
@@ -736,6 +756,8 @@ def reliability(report: Report) -> str:
             if seconds >= 3600
             else f"{int(seconds // 60)} мин"
         )
+        if data_missing or connection_label:
+            duration = "нет данных"
         continuity_note = (
             "; непрерывность не подтверждена из-за пропуска телеметрии"
             if metric.context.get("continuity_uncertain") is True

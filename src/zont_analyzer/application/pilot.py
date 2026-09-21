@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.application.analysis import CALCULATION_VERSION
 from zont_analyzer.application.reasoning_context import reuse_ai_interpretation
 from zont_analyzer.domain import Report
@@ -22,10 +23,22 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+_SOURCE_EVENT_BASELINE_PREFIX = "source-event-report-baseline:v1"
 
 
 class WorkerCycleError(RuntimeError):
     """A worker iteration did not complete and must not be reported as successful."""
+
+
+def _source_event_baseline_key(report_id: str) -> str:
+    return f"{_SOURCE_EVENT_BASELINE_PREFIX}:{report_id}"
+
+
+def _report_source_event_revision(db: Database, report: Report) -> str | None:
+    stored = report.context.get("input_revision", {}).get("reliability_events")
+    if isinstance(stored, str):
+        return stored
+    return db.get_app_meta(_source_event_baseline_key(report.id))
 
 
 def _configured_path(data_dir: Path, configured: str, *, label: str) -> Path:
@@ -174,6 +187,9 @@ class PilotService:
             recommendation_maintenance = self.runtime.maintain_recommendation_lifecycle(
                 now=self._cycle_started_at
             )
+            analysis = self.runtime.analysis()
+            today = analysis.local_today()
+            self.runtime.db.seed_source_event_report_baselines()
             self._write_status("syncing")
             with self.runtime.zont_client() as client:
                 sync_result = self.runtime.ingestion(client).sync()
@@ -181,8 +197,6 @@ class PilotService:
                 details = sync_result.get("errors") or "no details"
                 raise WorkerCycleError(f"ZONT sync was incomplete: {details}")
 
-            analysis = self.runtime.analysis()
-            today = analysis.local_today()
             yesterday = today - timedelta(days=1)
             candidates = self._completed_dates(today)
             daily_report_ready = self._daily_report_ready(today, self._local_now())
@@ -211,6 +225,10 @@ class PilotService:
 
                 empty_revision = hashlib.sha256(b"[]").hexdigest()
                 stored_revision = report.context.get("input_revision", {}).get("telemetry") if report else None
+                event_revision = self.runtime.db.source_event_revision(_end)
+                stored_event_revision = (
+                    _report_source_event_revision(self.runtime.db, report) if report else None
+                )
                 unchanged_import = (
                     report is not None and stored_revision is None and data_revision != empty_revision
                     and self.runtime.db.legacy_period_data_revision(start, _end) == empty_revision
@@ -230,6 +248,8 @@ class PilotService:
                     previous_report = report
                 must_analyze = report is None or (
                     selected == yesterday and report.context.get("calculation_version") != CALCULATION_VERSION
+                ) or (
+                    report is not None and stored_event_revision != event_revision
                 ) or (
                     report is not None and not unchanged_import and (data_revision != empty_revision or (
                         isinstance(stored_revision, str) and stored_revision.startswith("telemetry-v2:")

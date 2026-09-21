@@ -11,6 +11,7 @@ from zont_analyzer.adapters.sqlite import Database
 from zont_analyzer.adapters.zont_readonly import ZontReadOnlyClient
 from zont_analyzer.adapters.zont_readonly.client import infer_role
 from zont_analyzer.config import AppConfig
+from zont_analyzer.domain import SourceEvent
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ _BOOTSTRAP_COMPLETE_CURSOR = "history_bootstrap_complete"
 _BOOTSTRAP_FIRST_OBSERVED_CURSOR = "history_bootstrap_first_observed"
 _BOOTSTRAP_LAST_OBSERVED_CURSOR = "history_bootstrap_last_observed"
 _BOOTSTRAP_OBSERVATION_META = "history_bootstrap_observation"
+_CONNECTION_RECOVERY_META = "connection_recovery"
 # This is a protocol boundary rather than an assumed archive-retention date.
 # mintime=0 requests all available ZONT history without a home-specific cutoff.
 _UNIVERSAL_HISTORY_START = datetime.fromtimestamp(0, UTC)
@@ -29,6 +31,91 @@ _UNIVERSAL_HISTORY_START = datetime.fromtimestamp(0, UTC)
 
 def _bootstrap_cursor(kind: str, data_type: str) -> str:
     return f"{kind}:{data_type}"
+
+
+def _connection_recovery_key(device_id: str) -> str:
+    return f"{_CONNECTION_RECOVERY_META}:{device_id}"
+
+
+def _parse_recovery_time(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def _load_connection_recovery(db: Database, device_id: str) -> dict[str, datetime | None]:
+    try:
+        raw = json.loads(db.get_app_meta(_connection_recovery_key(device_id)) or "{}")
+    except (json.JSONDecodeError, TypeError):
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        name: _parse_recovery_time(raw.get(name))
+        for name in ("open_disconnect_at", "pending_replay_start", "pending_restore_at", "handled_restore_at")
+    }
+
+
+def _save_connection_recovery(
+    db: Database, device_id: str, state: dict[str, datetime | None]
+) -> None:
+    db.set_app_meta(
+        _connection_recovery_key(device_id),
+        json.dumps(
+            {name: value.isoformat() for name, value in state.items() if value is not None},
+            sort_keys=True,
+        ),
+    )
+
+
+def _record_connection_events(
+    state: dict[str, datetime | None], events: list[SourceEvent]
+) -> dict[str, datetime | None]:
+    handled = state.get("handled_restore_at")
+    pending_start = state.get("pending_replay_start")
+    pending_restore = state.get("pending_restore_at")
+    open_disconnect = state.get("open_disconnect_at")
+    for event in sorted(
+        events,
+        key=lambda item: (
+            item.timestamp_utc,
+            item.event_type != "disconnected",
+            item.id,
+        ),
+    ):
+        timestamp = event.timestamp_utc.astimezone(UTC)
+        if event.event_type == "disconnected":
+            if handled is not None and timestamp <= handled:
+                continue
+            if pending_restore is not None and timestamp <= pending_restore:
+                continue
+            open_disconnect = (
+                timestamp if open_disconnect is None else min(open_disconnect, timestamp)
+            )
+        elif event.event_type in {"connected", "reconnected"}:
+            if handled is not None and timestamp <= handled:
+                continue
+            if pending_restore is not None and timestamp <= pending_restore:
+                continue
+            if open_disconnect is None or timestamp < open_disconnect:
+                continue
+            pending_start = (
+                open_disconnect if pending_start is None else min(pending_start, open_disconnect)
+            )
+            pending_restore = timestamp
+            open_disconnect = None
+    return {
+        "open_disconnect_at": open_disconnect,
+        "pending_replay_start": pending_start,
+        "pending_restore_at": pending_restore,
+        "handled_restore_at": handled,
+    }
 
 
 def _object_names(devices: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
@@ -257,6 +344,13 @@ class IngestionService:
         if not device_ids:
             return {"samples": 0, "series": 0, "windows": 0}
         data_types = self.config.zont.history_data_types
+        recovery_by_device = {
+            device_id: _load_connection_recovery(self.db, device_id) for device_id in device_ids
+        }
+        recovery_restore_at_start = {
+            device_id: state["pending_restore_at"]
+            for device_id, state in recovery_by_device.items()
+        }
         config_names = _object_names(devices)
         inferred_entities: dict[str, dict[str, Any]] = {}
         samples = 0
@@ -387,6 +481,17 @@ class IngestionService:
             start = earliest_cursor - timedelta(minutes=self.config.scheduler.overlap_minutes)
         else:
             start = now - timedelta(days=1)
+        if backfill is None:
+            pending_replay_starts = [
+                value
+                for state in recovery_by_device.values()
+                if (value := state["pending_replay_start"]) is not None
+            ]
+            if pending_replay_starts:
+                recovery_start = min(pending_replay_starts) - timedelta(
+                    minutes=self.config.scheduler.overlap_minutes
+                )
+                start = min(start, recovery_start)
         windows = 0
         failed_windows = 0
         errors: list[str] = []
@@ -460,6 +565,19 @@ class IngestionService:
                         logger.info("ZONT sync progress: %d/%d windows", windows, total_windows)
         finally:
             self._refresh_series_roles(devices, inferred_entities, config_names)
+        recovery_history_ready: dict[str, bool] = {}
+        if backfill is None and not bootstrap and failed_windows == 0 and cursor >= now:
+            for device_id, state in recovery_by_device.items():
+                pending_restore = state["pending_restore_at"]
+                if pending_restore is not None:
+                    # A successful but empty response can precede the device's
+                    # buffered upload.  Keep retrying until persisted telemetry
+                    # proves that history at or after the restore is available.
+                    recovery_history_ready[device_id] = bool(
+                        self.db.fetch_device_sample_timestamps(
+                            device_id, pending_restore, now + timedelta(seconds=1)
+                        )
+                    )
         source_events = 0
         # Events use their own cursor and endpoint.  Keep collecting them when
         # history is temporarily unavailable so a history outage cannot hide
@@ -481,12 +599,36 @@ class IngestionService:
                     )
                 if event_cursor is not None and backfill is None and not bootstrap:
                     event_start = event_cursor - timedelta(minutes=self.config.scheduler.overlap_minutes)
+                pending_replay_start = recovery_by_device[device_id]["pending_replay_start"]
+                if pending_replay_start is not None and backfill is None:
+                    event_start = min(
+                        event_start,
+                        pending_replay_start
+                        - timedelta(minutes=self.config.scheduler.overlap_minutes),
+                    )
                 if event_start >= now:
                     continue
                 try:
                     raw_events = self.client.load_events(device_id=device_id, start=event_start, end=now)
                     normalized_events = self.client.normalize_events(device_id, raw_events)
                     source_events += self.db.upsert_source_events(normalized_events)
+                    recovery_by_device[device_id] = _record_connection_events(
+                        recovery_by_device[device_id], normalized_events
+                    )
+                    state = recovery_by_device[device_id]
+                    pending_restore = state["pending_restore_at"]
+                    if (
+                        recovery_history_ready.get(device_id)
+                        and pending_restore is not None
+                        and pending_restore == recovery_restore_at_start[device_id]
+                    ):
+                        handled = state["handled_restore_at"]
+                        state["handled_restore_at"] = (
+                            pending_restore if handled is None else max(handled, pending_restore)
+                        )
+                        state["pending_replay_start"] = None
+                        state["pending_restore_at"] = None
+                    _save_connection_recovery(self.db, device_id, state)
                     # A partial all-time bootstrap has not established the
                     # archive floor yet.  Keep the event cursor unset so the
                     # eventual completion run can cover events older than the

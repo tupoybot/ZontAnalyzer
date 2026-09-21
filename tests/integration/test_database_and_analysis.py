@@ -261,7 +261,7 @@ def test_reliability_events_persist_and_uptime_is_prominent(tmp_path: Path) -> N
     assert "01:22:00" in rendered_html
 
 
-def test_stale_reliability_data_is_rendered_as_offline(tmp_path: Path) -> None:
+def test_stale_reliability_data_is_rendered_as_missing_fresh_data(tmp_path: Path) -> None:
     db = Database(tmp_path / "state.sqlite3")
     db.initialize()
     telemetry_start = datetime(2026, 7, 20, 20, tzinfo=UTC)
@@ -299,10 +299,86 @@ def test_stale_reliability_data_is_rendered_as_offline(tmp_path: Path) -> None:
 
     rendered_text = render_text(report)
     rendered_html = render_html(report)
-    assert "Аптайм котла (офлайн): 00:00:00 дд:чч:мм" in rendered_text
-    assert "Аптайм ZONT (офлайн): 00:00:00 дд:чч:мм" in rendered_text
-    assert "Аптайм котла (офлайн)" in rendered_html
-    assert "Аптайм ZONT (офлайн)" in rendered_html
+    assert "Аптайм котла (нет свежих данных): 00:00:00 дд:чч:мм" in rendered_text
+    assert "Аптайм ZONT (нет свежих данных): 00:00:00 дд:чч:мм" in rendered_text
+    assert "Аптайм котла (нет свежих данных)" in rendered_html
+    assert "Аптайм ZONT (нет свежих данных)" in rendered_html
+    assert "Аптайм котла (офлайн)" not in rendered_html
+    assert "Аптайм ZONT (офлайн)" not in rendered_html
+
+
+@pytest.mark.parametrize("same_device_has_fresh_temperature", [True, False])
+def test_zont_freshness_uses_valid_telemetry_from_only_the_reliability_device(
+    tmp_path: Path, same_device_has_fresh_temperature: bool
+) -> None:
+    db = Database(tmp_path / "state.sqlite3")
+    db.initialize()
+    start = datetime(2026, 7, 31, 20, tzinfo=UTC)
+    end = start + timedelta(days=1)
+    latest = end - timedelta(minutes=5)
+    db.upsert_samples(
+        [
+            TelemetryPoint(
+                device_id="1",
+                source_type="ztc_state",
+                entity_id="zont",
+                metric_key="status_flags",
+                timestamp_utc=timestamp,
+                value_num=73,
+            )
+            for timestamp in (start - timedelta(minutes=20), start - timedelta(minutes=10), start)
+        ]
+        + [
+            TelemetryPoint(
+                device_id="1",
+                source_type="ztc_state",
+                entity_id="zont",
+                metric_key="voltage",
+                timestamp_utc=start,
+                value_num=12.0,
+            ),
+            TelemetryPoint(
+                device_id="1",
+                source_type="ztc_state",
+                entity_id="zont",
+                metric_key="voltage",
+                timestamp_utc=latest,
+                value_num=None,
+                quality="invalid",
+            ),
+        ]
+    )
+    if same_device_has_fresh_temperature:
+        fresh_points = [
+            TelemetryPoint(
+                device_id="1",
+                source_type="z3k_temperature",
+                entity_id="room",
+                metric_key="temperature",
+                timestamp_utc=latest,
+                value_num=21.0,
+                unit="°C",
+            )
+        ]
+    else:
+        fresh_points = [
+            TelemetryPoint(
+                device_id="2",
+                source_type="z3k_temperature",
+                entity_id="other-room",
+                metric_key="temperature",
+                timestamp_utc=latest,
+                value_num=21.0,
+                unit="°C",
+            )
+        ]
+    db.upsert_samples(fresh_points)
+
+    report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
+    zont_uptime = next(item for item in report.metrics if item.name == "zont_uptime_seconds")
+
+    assert zont_uptime.context["data_fresh"] is same_device_has_fresh_temperature
+    assert report.context["reliability"]["zont"]["data_fresh"] is same_device_has_fresh_temperature  # type: ignore[index]
 
 
 def test_uptime_renderer_does_not_wrap_days_after_99(tmp_path: Path) -> None:

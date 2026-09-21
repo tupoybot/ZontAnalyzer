@@ -24,6 +24,9 @@ RELIABILITY_EVENT_TYPES = frozenset(
         "MainPowerRestored",
         "PowerOff",
         "PowerOn",
+        "connected",
+        "disconnected",
+        "reconnected",
     }
 )
 _SENSITIVE_KEY_PARTS = frozenset(
