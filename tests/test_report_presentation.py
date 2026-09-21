@@ -79,7 +79,7 @@ def test_debug_metadata_is_preserved_but_outside_normal_reading_flow():
     assert "Отклонено" in normal
     assert 'id="debug-toggle" type="checkbox"' in page
     assert "localStorage" in page and "get('debug')" in page
-    assert "Показать ещё 60 технических событий" in normal
+    assert "Остальные события и штатные эпизоды" in normal
     assert report.model_dump_json() == before
 
 
