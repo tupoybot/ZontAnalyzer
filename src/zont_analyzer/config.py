@@ -135,7 +135,7 @@ class OpenAIConfig(StrictModel):
 
 class SchedulerConfig(StrictModel):
     sync_every_minutes: int = Field(default=5, ge=1, le=1440)
-    overlap_minutes: int = Field(default=15, ge=1, le=1440)
+    overlap_minutes: int = Field(default=120, ge=1, le=1440)
 
 
 class PilotConfig(StrictModel):

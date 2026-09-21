@@ -330,17 +330,6 @@ def _first_sustained_at(
     return None
 
 
-def _last_gap_recovery(timestamps: list[datetime], as_of: datetime) -> datetime | None:
-    ordered = sorted({item for item in timestamps if item < as_of})
-    candidates: list[datetime] = []
-    for previous, current in zip(ordered, ordered[1:], strict=False):
-        if current - previous >= timedelta(minutes=10):
-            sustained = _first_sustained_at(ordered, after=current)
-            if sustained is not None:
-                candidates.append(sustained)
-    return candidates[-1] if candidates else None
-
-
 def _telemetry_gap_intervals(
     timestamps: list[datetime],
     as_of: datetime,
@@ -411,6 +400,8 @@ def analyze_reliability(
         maximum_sample_age,
     )
     zont_gap_intervals = _telemetry_gap_intervals(zont_timestamps, as_of, maximum_sample_age)
+    boiler_gap_intervals = _telemetry_gap_intervals(boiler_timestamps, as_of, maximum_sample_age)
+    observability_gap_intervals = _union_intervals([*zont_gap_intervals, *boiler_gap_intervals])
     power_intervals = _main_power_intervals(ordered_events, zont_status_samples, as_of)
     controller_intervals = _merge_intervals(
         [
@@ -464,21 +455,21 @@ def analyze_reliability(
         (item.timestamp_utc for item in ordered_events if item.event_type in CONTROLLER_OFF_TYPES),
         default=None,
     )
-    gap_recovery = _last_gap_recovery(zont_timestamps, as_of)
     zont_anchor: datetime | None = None
     zont_basis = "insufficient_data"
     zont_lower_bound = False
     if latest_power_off is None or (latest_power_on is not None and latest_power_on >= latest_power_off):
-        recovery_candidate = max((item for item in (latest_power_on, gap_recovery) if item is not None), default=None)
-        if recovery_candidate is not None:
-            zont_anchor = _first_sustained_at(zont_timestamps, after=recovery_candidate)
-            zont_basis = (
-                "stable_metrics_after_power_on" if latest_power_on == recovery_candidate else "stable_metrics_after_gap"
-            )
+        if latest_power_on is not None:
+            zont_anchor = _first_sustained_at(zont_timestamps, after=latest_power_on)
+            zont_basis = "stable_metrics_after_power_on"
         else:
             zont_anchor = _first_sustained_at(zont_timestamps)
             zont_basis = "first_sustained_metrics"
             zont_lower_bound = zont_anchor is not None
+    zont_continuity_gap_count = (
+        sum(start > zont_anchor for start, _end in observability_gap_intervals) if zont_anchor is not None else 0
+    )
+    zont_continuity_uncertain = zont_continuity_gap_count > 0
     zont_online = zont_anchor is not None and zont_data_fresh
     if zont_anchor is not None:
         metrics.append(
@@ -491,6 +482,8 @@ def analyze_reliability(
                 anchor_at=zont_anchor.isoformat(),
                 basis=zont_basis,
                 lower_bound=zont_lower_bound,
+                continuity_uncertain=zont_continuity_uncertain,
+                continuity_gap_count=zont_continuity_gap_count,
                 last_seen_at=latest_zont_sample.isoformat() if latest_zont_sample else None,
                 sample_age_seconds=zont_sample_age_seconds,
                 maximum_sample_age_seconds=maximum_sample_age.total_seconds(),
@@ -517,22 +510,18 @@ def analyze_reliability(
     boiler_anchor = relevant_boiler_restore
     boiler_basis = "boiler_connection_restored"
     boiler_lower_bound = False
-    if open_incident is None:
-        # A controller reboot (including a firmware update) does not establish a
-        # boiler connection loss.  Keep the boiler's own restoration anchor in
-        # that case; only an observed telemetry gap can require a fresh boiler
-        # metric anchor when there is no later boiler restore event.
-        if (
-            zont_basis == "stable_metrics_after_gap"
-            and zont_anchor is not None
-            and (boiler_anchor is None or zont_anchor > boiler_anchor)
-        ):
-            boiler_anchor = _first_sustained_at(boiler_timestamps, after=zont_anchor)
-            boiler_basis = "stable_boiler_metrics_after_zont_recovery"
-        if boiler_anchor is None:
-            boiler_anchor = _first_sustained_at(boiler_timestamps)
-            boiler_basis = "first_sustained_boiler_metrics"
-            boiler_lower_bound = boiler_anchor is not None
+    # A controller reboot (including a firmware update) does not establish a
+    # boiler connection loss. A telemetry gap alone also does not prove a
+    # boiler restart, so it remains an observability exclusion rather than
+    # replacing a confirmed restoration or first-observed anchor.
+    if open_incident is None and boiler_anchor is None:
+        boiler_anchor = _first_sustained_at(boiler_timestamps)
+        boiler_basis = "first_sustained_boiler_metrics"
+        boiler_lower_bound = boiler_anchor is not None
+    boiler_continuity_gap_count = (
+        sum(start > boiler_anchor for start, _end in observability_gap_intervals) if boiler_anchor is not None else 0
+    )
+    boiler_continuity_uncertain = boiler_continuity_gap_count > 0
     boiler_online = (
         boiler_anchor is not None
         and open_incident is None
@@ -550,6 +539,8 @@ def analyze_reliability(
                 anchor_at=boiler_anchor.isoformat(),
                 basis=boiler_basis,
                 lower_bound=boiler_lower_bound,
+                continuity_uncertain=boiler_continuity_uncertain,
+                continuity_gap_count=boiler_continuity_gap_count,
                 last_seen_at=latest_boiler_sample.isoformat() if latest_boiler_sample else None,
                 sample_age_seconds=boiler_sample_age_seconds,
                 maximum_sample_age_seconds=maximum_sample_age.total_seconds(),
@@ -695,6 +686,8 @@ def analyze_reliability(
             "last_seen_at": latest_boiler_sample.isoformat() if latest_boiler_sample else None,
             "sample_age_seconds": boiler_sample_age_seconds,
             "data_fresh": boiler_data_fresh,
+            "continuity_uncertain": boiler_continuity_uncertain,
+            "continuity_gap_count": boiler_continuity_gap_count,
             "completed_connection_incidents": sum(item.restored_at is not None for item in incidents),
             "intrinsic_failures": sum(item.cause == "boiler_or_adapter" for item in service_failures),
             "confirmed_service_failures": len(service_failures),
@@ -711,6 +704,8 @@ def analyze_reliability(
             "uptime_anchor": zont_anchor.isoformat() if zont_anchor else None,
             "uptime_basis": zont_basis,
             "lower_bound": zont_lower_bound,
+            "continuity_uncertain": zont_continuity_uncertain,
+            "continuity_gap_count": zont_continuity_gap_count,
             "last_seen_at": latest_zont_sample.isoformat() if latest_zont_sample else None,
             "sample_age_seconds": zont_sample_age_seconds,
             "data_fresh": zont_data_fresh,

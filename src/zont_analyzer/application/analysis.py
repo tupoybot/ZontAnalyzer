@@ -54,7 +54,7 @@ from zont_analyzer.reports import render_text
 logger = logging.getLogger(__name__)
 
 
-CALCULATION_VERSION = "stage8-v1"
+CALCULATION_VERSION = "stage9-reliability-v1"
 
 
 def _select_control_temperature_series(

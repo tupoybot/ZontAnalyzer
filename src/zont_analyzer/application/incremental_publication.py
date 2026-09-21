@@ -332,8 +332,12 @@ def _run(
     latest_href = latest_row["href"] if latest_row else ""
     if latest_row and _meta(cache, "latest_stamp") != _stamp(output / "latest.html"):
         _enqueue(cache, RENDER, now, "href=?", (latest_href,))
+    # A newly calculated week/month must become visible before maintenance of
+    # already published history. Keep latest daily first and the batch bounded.
     queue = cache.execute("""SELECT * FROM items WHERE dirty!=0
-        ORDER BY CASE WHEN href=? THEN 0 ELSE 1 END,queued,rowid LIMIT ?""", (latest_href, batch_size)).fetchall()
+        ORDER BY CASE WHEN href=? THEN 0 WHEN entry IS NULL THEN 1 ELSE 2 END,
+                 CASE WHEN entry IS NULL THEN start END DESC,queued,rowid LIMIT ?""",
+                          (latest_href, batch_size)).fetchall()
     service = GasService(runtime.db, runtime.config) if any(r["dirty"] & (GAS | COST) for r in queue) else None
     tariffs = GasTariffStore(runtime.db).history() if queue else []
 

@@ -93,6 +93,28 @@ def test_publication_failure_leaves_pending_work_for_retry(tmp_path: Path, monke
     assert result["rendered_reports"] == 1
 
 
+def test_new_week_is_published_before_old_archive_maintenance(tmp_path: Path) -> None:
+    import json
+
+    from zont_analyzer.adapters.sqlite.publication_journal import record_change
+
+    runtime = _runtime(tmp_path)
+    daily = _daily_reports(runtime, 12, start=date(2026, 9, 9))
+    publication.publish_reports(runtime, batch_size=100)
+    record_change(runtime.db, "global", "gas")
+    # Leave an older backlog before the newly completed week enters the queue.
+    publication.publish_reports(runtime, batch_size=1)
+    weekly = runtime.analysis(no_ai=True).analyze_week(2026, 38, use_ai=False)
+    result = publication.publish_reports(runtime, batch_size=2)
+    manifest = json.loads(Path(result["manifest"]).read_text())
+    assert any(item["href"] == "weekly/2026-09-14.html" for item in manifest["reports"])
+    html, exported = publication.archive_paths(Path(result["manifest"]).parent, weekly)
+    assert html.is_file() and exported.is_file()
+    assert result["rendered_reports"] == 2
+    assert result["pending_reports"] > 0
+    assert result["latest_report_id"] == daily[-1].id
+
+
 def test_global_gas_change_is_bounded_and_latest_is_first(tmp_path: Path) -> None:
     from zont_analyzer.application.owner_context import OwnerContextStore
     from zont_analyzer.application.pilot import reports_directory
