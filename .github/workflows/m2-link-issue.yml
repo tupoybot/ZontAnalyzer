@@ -1,0 +1,21 @@
+name: Link M2 to its parent milestone
+on:
+  push:
+    branches: ['stageM2/cloud-runtime']
+    paths: ['.github/workflows/m2-link-issue.yml']
+permissions:
+  contents: read
+  issues: write
+jobs:
+  link:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set and verify the parent issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          issue_id=$(gh api "repos/$GH_REPO/issues/11" --jq .id)
+          gh api --method POST "repos/$GH_REPO/issues/1/sub_issues" -F sub_issue_id="$issue_id" --silent
+          gh api "repos/$GH_REPO/issues/11/parent" --jq .number | grep -x 1
