@@ -371,7 +371,13 @@ class CloudHandler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def _log_job(self, job_id: str, status: str, error_type: str | None = None) -> None:
-        payload: dict[str, str] = {"event": "cloud_job", "job_id": job_id, "status": status}
+        payload: dict[str, str] = {
+            "level": "INFO" if status == "ok" else "ERROR",
+            "message": "cloud job",
+            "event": "cloud_job",
+            "job_id": job_id,
+            "status": status,
+        }
         if error_type is not None:
             payload["error_type"] = error_type
         logger.info(json.dumps(payload, separators=(",", ":")))
@@ -383,7 +389,14 @@ class CloudHandler(BaseHTTPRequestHandler):
             self.server.telemetry.send(success, duration)
         except Exception as exc:  # noqa: BLE001 - telemetry cannot alter a completed job response
             logger.info(json.dumps(
-                {"event": "telemetry", "status": "failed", "error_type": type(exc).__name__}, separators=(",", ":")
+                {
+                    "level": "ERROR",
+                    "message": "telemetry export failed",
+                    "event": "telemetry",
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                },
+                separators=(",", ":"),
             ))
 
     def log_message(self, _format: str, *_args: Any) -> None:
@@ -428,5 +441,8 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:  # noqa: BLE001 - startup values can contain secret configuration
-        print("cloud runtime startup failed", flush=True)
+        logger.error(json.dumps(
+            {"level": "ERROR", "message": "cloud runtime startup failed", "event": "cloud_runtime_startup"},
+            separators=(",", ":"),
+        ))
         raise SystemExit(1) from None

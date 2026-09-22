@@ -121,7 +121,9 @@ def test_all_routes_require_basic_auth_and_ready_is_local(server: Any) -> None:
     assert body["counters"] == {"successes": 0, "failures": 0, "timeouts": 0}
 
 
-def test_analytics_job_is_repeatable_and_rejects_malformed_input(server: Any) -> None:
+def test_analytics_job_is_repeatable_and_rejects_malformed_input(
+    server: Any, caplog: pytest.LogCaptureFixture
+) -> None:
     instance, credentials = server
     first_status, first = _request(instance, credentials, "POST", "/jobs/analytics", _payload())
     second_status, second = _request(instance, credentials, "POST", "/jobs/analytics", _payload())
@@ -129,9 +131,20 @@ def test_analytics_job_is_repeatable_and_rejects_malformed_input(server: Any) ->
     assert first_status == second_status == 200
     assert first["job_id"] != second["job_id"]
     assert first["result"]["quality"] == second["result"]["quality"]
-    status, body = _request(instance, credentials, "POST", "/jobs/analytics", {"private": "secret-value"})
+    with caplog.at_level("INFO"):
+        status, body = _request(instance, credentials, "POST", "/jobs/analytics", {"private": "secret-value"})
     assert status == 400
     assert body["error_type"] == "JobValidationError"
+    entry = json.loads(caplog.records[-1].message)
+    assert entry == {
+        "level": "ERROR",
+        "message": "cloud job",
+        "event": "cloud_job",
+        "job_id": body["job_id"],
+        "status": "invalid",
+        "error_type": "JobValidationError",
+    }
+    assert "secret-value" not in caplog.text
     status, body = _request(instance, credentials, "POST", "/jobs/analytics", _payload(), content_type="text/plain")
     assert (status, body) == (415, {"error": "json_content_type_required"})
 
@@ -149,7 +162,21 @@ def test_telemetry_failure_does_not_replace_completed_result(server: Any, caplog
     assert status == 200
     assert "result" in body
     assert "private telemetry token" not in caplog.text
-    assert '"event":"telemetry"' in caplog.text
+    entries = [json.loads(record.message) for record in caplog.records]
+    assert {
+        "level": "INFO",
+        "message": "cloud job",
+        "event": "cloud_job",
+        "job_id": body["job_id"],
+        "status": "ok",
+    } in entries
+    assert {
+        "level": "ERROR",
+        "message": "telemetry export failed",
+        "event": "telemetry",
+        "status": "failed",
+        "error_type": "RuntimeError",
+    } in entries
 
 
 def test_unready_xray_blocks_jobs_but_not_diagnostics(server: Any) -> None:
