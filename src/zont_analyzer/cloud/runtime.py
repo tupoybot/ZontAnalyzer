@@ -115,9 +115,13 @@ def run_bounded(
     receiver, sender = context.Pipe(duplex=False)
     process = context.Process(target=_child_entry, args=(sender, callable_, payload))
     started = time.monotonic()
-    process.start()
-    sender.close()
+    process_started = False
+    sender_closed = False
     try:
+        process.start()
+        process_started = True
+        sender.close()
+        sender_closed = True
         while True:
             if cancelled is not None and cancelled.is_set():
                 raise JobTimeoutError()
@@ -148,12 +152,20 @@ def run_bounded(
             raise JobFailureError("InvalidChildResult")
         return result
     finally:
-        if process.is_alive():
-            process.terminate()
+        if not sender_closed:
+            sender.close()
+        if process_started:
+            if process.is_alive():
+                process.terminate()
             process.join(1)
             if process.is_alive():  # pragma: no cover - defensive platform fallback
                 process.kill()
                 process.join(1)
+            if not process.is_alive():
+                process.close()
+        else:
+            with contextlib.suppress(ValueError):
+                process.close()
         receiver.close()
 
 

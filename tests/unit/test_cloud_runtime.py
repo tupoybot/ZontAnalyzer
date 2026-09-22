@@ -241,3 +241,51 @@ def test_pipe_returns_large_output_and_fails_when_child_exits_without_a_result()
     with pytest.raises(JobFailureError):
         run_bounded(_die, {}, 2)
     assert time.monotonic() - started < 1
+
+
+def test_repeated_jobs_close_each_parent_process_handle(monkeypatch: pytest.MonkeyPatch) -> None:
+    base_context = multiprocessing.get_context("spawn")
+    processes: list[Any] = []
+
+    class TrackingProcess:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.process = base_context.Process(*args, **kwargs)
+            self.closed = False
+
+        @property
+        def exitcode(self) -> int | None:
+            return self.process.exitcode
+
+        def start(self) -> None:
+            self.process.start()
+
+        def is_alive(self) -> bool:
+            return self.process.is_alive()
+
+        def join(self, timeout: float | None = None) -> None:
+            self.process.join(timeout)
+
+        def terminate(self) -> None:
+            self.process.terminate()
+
+        def kill(self) -> None:
+            self.process.kill()
+
+        def close(self) -> None:
+            self.closed = True
+            self.process.close()
+
+    class TrackingContext:
+        def Pipe(self, *, duplex: bool) -> tuple[Any, Any]:  # noqa: N802 - multiprocessing API spelling
+            return base_context.Pipe(duplex=duplex)
+
+        def Process(self, *args: Any, **kwargs: Any) -> TrackingProcess:  # noqa: N802 - multiprocessing API spelling
+            process = TrackingProcess(*args, **kwargs)
+            processes.append(process)
+            return process
+
+    monkeypatch.setattr("zont_analyzer.cloud.runtime.multiprocessing.get_context", lambda _method: TrackingContext())
+    for _ in range(3):
+        assert run_bounded(_large_result, {}, 2)["data"]
+    assert len(processes) == 3
+    assert all(process.closed for process in processes)
