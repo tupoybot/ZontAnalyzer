@@ -24,7 +24,7 @@ class CloudError(ValueError):
         self.body = body
 
 
-def revision_request(revision, container_id, inputs):
+def revision_request(revision, container_id, inputs, image_key="probe_image"):
     if revision.get("containerId") != container_id or revision.get("status") != "ACTIVE":
         raise ValueError("revision does not match active deployment")
     if set(revision) - COPY_FIELDS - READ_ONLY:
@@ -32,9 +32,9 @@ def revision_request(revision, container_id, inputs):
     if revision.get("serviceAccountId") != inputs["runtime_service_account_id"]:
         raise ValueError("runtime identity mismatch")
     image = copy.deepcopy(revision["image"])
-    if image.get("imageUrl") != inputs["probe_image"]:
+    if image.get("imageUrl") != inputs[image_key]:
         raise ValueError("runtime image mismatch")
-    if image.pop("imageDigest", None) != inputs["probe_image"].split("@", 1)[1]:
+    if image.pop("imageDigest", None) != inputs[image_key].split("@", 1)[1]:
         raise ValueError("runtime digest mismatch")
     request = {key: copy.deepcopy(value) for key, value in revision.items() if key in COPY_FIELDS}
     # The API returns both compatibility representations for Object Storage mounts.
@@ -82,7 +82,7 @@ def request(token, host, path, payload=None):
         connection.close()
 
 
-def wait_operation(token, private, operation):
+def wait_operation(token, private, operation, prefix=""):
     operation_id = identifier(operation["id"])
     deadline = time.monotonic() + 240
     while not operation.get("done"):
@@ -90,13 +90,13 @@ def wait_operation(token, private, operation):
             raise TimeoutError("scaling operation still pending; inspect its saved handle")
         time.sleep(3)
         operation = request(token, "operation.api.cloud.yandex.net", f"/operations/{operation_id}")
-        (private / "scaling-operation.json").write_text(json.dumps(operation))
+        (private / (prefix + "scaling-operation.json")).write_text(json.dumps(operation))
     if operation.get("error"):
         raise ValueError("scaling deployment failed; inspect private operation evidence")
     return operation
 
 
-def run(private):
+def run(private, application=False):
     scope = json.loads((private / "scope.json").read_text())
     inputs = json.loads((private / "cloud-work/inputs.tfvars.json").read_text())
     outputs = json.loads((private / "cloud-outputs.json").read_text())
@@ -105,40 +105,42 @@ def run(private):
     folder = request(token, "resource-manager.api.cloud.yandex.net", f"/resource-manager/v1/folders/{folder_id}")
     if folder.get("cloudId") != scope["allowed_cloud_id"]:
         raise ValueError("folder outside authorized cloud")
-    container_id = identifier(outputs["container_id"]["value"])
+    prefix = "application_" if application else ""
+    image_key = "application_image" if application else "probe_image"
+    container_id = identifier(outputs[prefix + "container_id"]["value"])
     container = request(token, HOST, f"/containers/v1/containers/{container_id}")
     if container.get("folderId") != folder_id:
         raise ValueError("container outside authorized folder")
-    saved_operation = private / "scaling-operation.json"
+    saved_operation = private / (prefix + "scaling-operation.json")
     if saved_operation.exists():
         operation = json.loads(saved_operation.read_text())
         if not operation.get("done"):
-            wait_operation(token, private, operation)
+            wait_operation(token, private, operation, prefix)
     revisions = request(token, HOST, f"/containers/v1/revisions?containerId={container_id}"
                         "&filter=status%3D%22ACTIVE%22&pageSize=2")
     active = revisions.get("revisions", [])
     if len(active) != 1 or revisions.get("nextPageToken"):
         raise ValueError("exactly one active revision required")
     revision = active[0]
-    payload = revision_request(revision, container_id, inputs)
+    payload = revision_request(revision, container_id, inputs, image_key)
     if not bounded(revision):
         operation = request(token, HOST, "/containers/v1/revisions:deploy", payload)
         # Record before polling so an interrupted observation can resume the same operation.
-        (private / "scaling-operation.json").write_text(json.dumps(operation))
-        operation = wait_operation(token, private, operation)
+        saved_operation.write_text(json.dumps(operation))
+        operation = wait_operation(token, private, operation, prefix)
         revision_id = identifier(operation["response"]["id"])
         revision = request(token, HOST, f"/containers/v1/revisions/{revision_id}")
-    revision_request(revision, container_id, inputs)
+    revision_request(revision, container_id, inputs, image_key)
     if not bounded(revision):
         raise ValueError("scaling limits not applied")
-    (private / "bounded-revision.json").write_text(json.dumps(revision))
+    (private / (prefix + "bounded-revision.json")).write_text(json.dumps(revision))
     print("Active revision scaling verified: one instance and request per zone")
 
 
 if __name__ == "__main__":
     private_path = Path(sys.argv[1])
     try:
-        run(private_path)
+        run(private_path, application=len(sys.argv) == 3 and sys.argv[2] == "application")
     except CloudError as error:
         (private_path / "scaling-error.json").write_bytes(error.body)
         sys.exit(str(error))

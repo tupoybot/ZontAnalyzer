@@ -62,12 +62,14 @@ docker run --rm --user "$(id -u):$(id -g)" \
         exit 0
       fi
       python /scripts/bound_revision.py /private > /private/scaling.log 2>&1
+      python /scripts/bound_revision.py /private application > /private/application_scaling.log 2>&1
       terraform plan -refresh-only -input=false -no-color -lock-timeout=30s \
         -var-file=inputs.tfvars.json -out=scaling-refresh.tfplan > /private/scaling-refresh.log 2>&1
       terraform apply -input=false -no-color -lock-timeout=30s \
         scaling-refresh.tfplan >> /private/scaling-refresh.log 2>&1
       terraform output -json > /private/cloud-outputs.json
       python /scripts/runtime_smoke.py /private > /private/runtime-smoke.log 2>&1
+      python /scripts/application_smoke.py /private > /private/application-smoke.log 2>&1
     fi
   '
 printf 'Terraform %s completed; evidence is in the private directory.\n' "$ACTION"

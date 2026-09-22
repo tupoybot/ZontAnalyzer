@@ -2,13 +2,14 @@ name: Deploy isolated cloud infrastructure
 
 on:
   push:
-    branches: ['stageM1/cloud-foundation', 'architecture/cloud-first-serverless']
+    branches: ['main', 'stageM[0-9]*/**']
+    paths: ['infra/**', '.github/workflows/infrastructure-deploy.yml']
   workflow_dispatch:
     inputs:
       application_image:
-        description: Accepted GHCR application image with sha256 digest
+        description: Verified cloud candidate digest (empty selects private configuration)
         type: string
-        required: true
+        required: false
       apply:
         description: Apply the reviewed infrastructure configuration
         type: boolean
@@ -23,7 +24,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/architecture/cloud-first-serverless' || github.ref == 'refs/heads/stageM1/cloud-foundation'
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/stageM'))
     runs-on: ubuntu-latest
     environment: cloud-dev
     permissions:
@@ -33,6 +34,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+      - name: Verify trusted stage branch
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" == main || "$GITHUB_REF_NAME" =~ ^stageM[0-9]+/[a-z0-9/-]+$ ]]
+          git merge-base --is-ancestor origin/main HEAD
       - name: Prepare private environment configuration
         id: configuration
         env:
@@ -107,40 +113,53 @@ jobs:
             --data-urlencode 'subject_token_type=urn:ietf:params:oauth:token-type:id_token' \
             https://auth.yandex.cloud/oauth/token > "$private/exchange.json"
           jq -er .access_token "$private/exchange.json" > "$private/deploy-token"
-      - name: Verify and copy the accepted application digest
+      - name: Verify and copy the tested cloud candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           private="$RUNNER_TEMP/m1"
-          APPLICATION_IMAGE=$(jq -er .application_image "$private/cloud-work/inputs.tfvars.json")
-          expected="ghcr.io/${GITHUB_REPOSITORY,,}@sha256:"
-          [[ "$APPLICATION_IMAGE" == "$expected"* ]]
-          digest="${APPLICATION_IMAGE##*@}"
+          source=$(jq -er .application_image "$private/cloud-work/inputs.tfvars.json")
+          digest="${source##*@}"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          printf '%s' "$APPLICATION_IMAGE" > "$private/application-source"
+          registry=$(jq -er .allowed_registry_id "$private/scope.json")
+          expected="ghcr.io/${GITHUB_REPOSITORY,,}@sha256:"
+          [[ "$source" == "$expected"* || "$source" == "cr.yandex/$registry/application@sha256:"* ]]
+          printf '%s' "$source" > "$private/application-source"
           docker run --rm --user "$(id -u):$(id -g)" \
             --mount "type=bind,src=$private,dst=/private" zont-m1-tools:local sh -c '
               set -eu
+              skopeo login --authfile /private/registry-auth.json -u iam \
+                --password-stdin cr.yandex < /private/deploy-token > /private/registry-login.log 2>&1
               source=$(cat /private/application-source)
-              skopeo inspect "docker://$source" > /private/application-source-inspect.json
+              skopeo inspect --authfile /private/registry-auth.json "docker://$source" > /private/application-source-inspect.json
             '
           commit=$(jq -er '.Labels["org.opencontainers.image.revision"]' "$private/application-source-inspect.json")
           [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
-          git merge-base --is-ancestor "$commit" origin/main
+          test "$(jq -er '.Labels["org.zont.runtime"]' "$private/application-source-inspect.json")" = cloud
+          git merge-base --is-ancestor "$commit" HEAD
+          git diff --exit-code "$commit" HEAD -- src Dockerfile pyproject.toml >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/application-release.yml/runs?head_sha=$commit&status=success" \
+            --jq '.workflow_runs | any(.event == "push" or .event == "workflow_dispatch")' | grep -x true >/dev/null
           docker run --rm --user "$(id -u):$(id -g)" \
             --mount "type=bind,src=$private,dst=/private" zont-m1-tools:local sh -c '
               set -eu
               source=$(cat /private/application-source)
               registry=$(jq -er .allowed_registry_id /private/scope.json)
-              skopeo login --authfile /private/registry-auth.json -u iam \
-                --password-stdin cr.yandex < /private/deploy-token > /private/registry-login.log 2>&1
-              skopeo copy --all --preserve-digests --dest-authfile /private/registry-auth.json \
-                "docker://$source" "docker://cr.yandex/$registry/application:selected" \
-                > /private/application-copy.log 2>&1
+              if [ "$source" != "cr.yandex/$registry/application@${source##*@}" ]; then
+                skopeo copy --all --preserve-digests --authfile /private/registry-auth.json \
+                  "docker://$source" "docker://cr.yandex/$registry/application:selected" \
+                  > /private/application-copy.log 2>&1
+              fi
             '
+          jq --arg image "cr.yandex/$registry/application@$digest" --arg commit "$commit" \
+            '.application_image=$image | .application_revision=$commit' \
+            "$private/cloud-work/inputs.tfvars.json" > "$private/candidate.json"
+          mv "$private/candidate.json" "$private/cloud-work/inputs.tfvars.json"
       - name: Plan infrastructure without publishing its private output
         run: infra/deploy.sh plan "$RUNNER_TEMP/m1"
       - name: Apply the selected artifact and environment
-        if: inputs.apply || (github.event_name == 'push' && startsWith(github.event.head_commit.message, '[m1-apply] '))
+        if: inputs.apply || (github.event_name == 'push' && startsWith(github.event.head_commit.message, '[m2-apply] '))
         run: infra/deploy.sh apply "$RUNNER_TEMP/m1"
       - name: Preserve private deployment evidence
         if: always() && steps.configuration.outcome == 'success'

@@ -28,7 +28,7 @@ jobs:
       - run: pip install --force-reinstall --no-deps dist/*.whl
       - run: python -c "from zont_analyzer.cli import app; from zont_analyzer.reports import render_html"
       - run: zont-analyzer --data-dir "$(mktemp -d)" init
-      - run: docker build -t zont-analyzer:test .
+      - run: docker build --target legacy -t zont-analyzer:test .
       - run: docker build --target test -t zont-analyzer:feedback-e2e .
       - run: docker run --rm zont-analyzer:feedback-e2e
       - run: sh tests/integration/test_nginx_basic_auth.sh

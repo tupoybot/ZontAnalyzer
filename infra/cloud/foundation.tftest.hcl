@@ -18,7 +18,9 @@ variables {
   environment                = "dev"
   publication_bucket_name    = "test-publication"
   probe_image                = "cr.yandex/test/probe@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  application_image          = "ghcr.io/example/application@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  application_image          = "cr.yandex/test/application@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  application_revision       = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  openai_smoke_model         = "gpt-5.2"
   secret_version_id          = "test-version"
 }
 
@@ -54,6 +56,26 @@ run "isolated_defaults" {
     condition     = yandex_serverless_container.probe.concurrency == 1 && yandex_serverless_container.probe.execution_timeout == "30s"
     error_message = "The initial probe must have bounded invocation resources."
   }
+  assert {
+    condition     = yandex_serverless_container.application.memory == 512 && yandex_serverless_container.application.cores == 1 && yandex_serverless_container.application.core_fraction == 100 && yandex_serverless_container.application.concurrency == 1 && yandex_serverless_container.application.execution_timeout == "30s"
+    error_message = "The application must have the bounded M2 runtime budget."
+  }
+  assert {
+    condition     = length(yandex_serverless_container.application.mounts) == 0
+    error_message = "M2 application must not mount storage or SQLite state."
+  }
+  assert {
+    condition     = !var.openai_access_confirmed && yandex_serverless_container.application.image[0].environment.CLOUD_OPENAI_ACCESS_CONFIRMED == "false" && yandex_serverless_container.application.image[0].environment.CLOUD_JOB_TIMEOUT_SECONDS == "15"
+    error_message = "OpenAI access must remain disabled by default and jobs must be bounded."
+  }
+  assert {
+    condition     = length([for trigger in yandex_function_trigger.timer : trigger if trigger.container[0].id == yandex_serverless_container.application.id]) == 0
+    error_message = "M2 application must not have a scheduler."
+  }
+  assert {
+    condition     = alltrue([for expected in ["xray_config", "web_credentials", "zont_token", "zont_client_email", "openai_api_key"] : contains([for secret in yandex_serverless_container.application.secrets : secret.key], expected)])
+    error_message = "The application must receive all required Lockbox references."
+  }
 }
 
 run "reject_floating_probe" {
@@ -67,9 +89,58 @@ run "reject_floating_probe" {
 run "reject_floating_application" {
   command = plan
   variables {
-    application_image = "ghcr.io/example/application:latest"
+    application_image = "cr.yandex/test/application:latest"
   }
   expect_failures = [var.application_image]
+}
+
+run "reject_non_registry_application" {
+  command = plan
+  variables {
+    application_image = "ghcr.io/example/application@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+  expect_failures = [var.application_image]
+}
+
+run "reject_short_application_revision" {
+  command = plan
+  variables {
+    application_revision = "bbbbbbbb"
+  }
+  expect_failures = [var.application_revision]
+}
+
+run "gateway_routes_use_the_correct_container" {
+  command = plan
+
+  override_resource {
+    target          = yandex_serverless_container.probe
+    override_during = plan
+    values = {
+      id = "probe-container"
+    }
+  }
+
+  override_resource {
+    target          = yandex_serverless_container.application
+    override_during = plan
+    values = {
+      id = "application-container"
+    }
+  }
+
+  assert {
+    condition     = alltrue([for path in ["/api/probe", "/private/probe.txt"] : yamldecode(yandex_api_gateway.probe.spec).paths[path]["get"]["x-yc-apigateway-integration"].container_id == "probe-container"])
+    error_message = "Existing probe routes must continue to invoke the probe container."
+  }
+  assert {
+    condition     = alltrue([for path in ["/ready", "/diagnostics"] : yamldecode(yandex_api_gateway.probe.spec).paths[path]["get"]["x-yc-apigateway-integration"].container_id == "application-container"])
+    error_message = "Application readiness and diagnostics routes must invoke the application container."
+  }
+  assert {
+    condition     = alltrue([for path in ["/jobs/analytics", "/jobs/integrations"] : yamldecode(yandex_api_gateway.probe.spec).paths[path]["post"]["x-yc-apigateway-integration"].container_id == "application-container"])
+    error_message = "Application job routes must invoke the application container."
+  }
 }
 
 run "reject_production" {
@@ -101,6 +172,10 @@ run "monitored_timer" {
   assert {
     condition     = anytrue([for secret in yandex_serverless_container.probe.secrets : secret.key == "grafana_otlp_config" && secret.environment_variable == "GRAFANA_OTLP_CONFIG"])
     error_message = "The runtime must receive Grafana credentials by secret reference."
+  }
+  assert {
+    condition     = anytrue([for secret in yandex_serverless_container.application.secrets : secret.key == "grafana_otlp_config" && secret.environment_variable == "GRAFANA_OTLP_CONFIG"])
+    error_message = "The application must receive Grafana credentials by secret reference."
   }
 }
 

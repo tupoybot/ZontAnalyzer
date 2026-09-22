@@ -22,6 +22,7 @@ compose() {
 }
 compose config --quiet
 compose pull worker
+"$release_dir/deploy/check-legacy-image.sh" "$image"
 
 # A running worker owns the live database. Use its SQLite online backup API.
 # First installation is handled by OPERATIONS.md after directory preparation.

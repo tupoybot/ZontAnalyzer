@@ -1,9 +1,9 @@
-name: Accepted main application release
+name: Verified cloud application candidate
 
 on:
   push:
-    branches:
-      - main
+    branches: ['main', 'stageM[0-9]*/**']
+    paths: ['src/**', 'tests/**', 'Dockerfile', 'pyproject.toml', 'deploy/check-local.sh', '.github/workflows/application-release.yml']
   workflow_dispatch:
 
 permissions:
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/stageM'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,9 +24,15 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
-      - name: Check accepted source in Docker
+          fetch-depth: 0
+      - name: Verify candidate branch and accepted base
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" == main || "$GITHUB_REF_NAME" =~ ^stageM[0-9]+/[a-z0-9/-]+$ ]]
+          git merge-base --is-ancestor origin/main HEAD
+      - name: Check candidate source in Docker
         run: deploy/check-local.sh all
-      - name: Build and verify the production artifact
+      - name: Build, smoke and publish the immutable cloud artifact
         env:
           COMMIT: ${{ github.sha }}
           REPOSITORY: ${{ github.repository }}
@@ -35,22 +41,23 @@ jobs:
         run: |
           set -euo pipefail
           image="ghcr.io/${REPOSITORY,,}"
+          tag="$image:cloud-sha-$COMMIT"
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-          if docker manifest inspect "$image:sha-$COMMIT" >/dev/null 2>&1; then
-            docker pull "$image:sha-$COMMIT"
+          if docker manifest inspect "$tag" >/dev/null 2>&1; then
+            docker pull "$tag"
           else
-            docker build --target production --provenance=false \
+            docker build --target production --provenance=false --build-arg "REVISION=$COMMIT" \
               --label "org.opencontainers.image.source=https://github.com/$REPOSITORY" \
-              --label "org.opencontainers.image.revision=$COMMIT" \
-              -t "$image:sha-$COMMIT" .
+              --label "org.opencontainers.image.revision=$COMMIT" -t "$tag" .
           fi
-          docker run --rm --network none --tmpfs /data:uid=10001,gid=10001 \
-            "$image:sha-$COMMIT" init
-          docker push "$image:sha-$COMMIT"
-          digest=$(docker image inspect "$image:sha-$COMMIT" --format '{{index .RepoDigests 0}}')
-          jq -n --arg commit "$COMMIT" --arg image "$digest" \
+          test "$(docker image inspect "$tag" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$COMMIT"
+          test "$(docker image inspect "$tag" --format '{{index .Config.Labels "org.zont.runtime"}}')" = cloud
+          deploy/smoke-cloud-local.sh "$tag"
+          docker push "$tag"
+          digest=$(docker image inspect "$tag" --format '{{index .RepoDigests 0}}')
+          jq -n --arg commit "$COMMIT" --arg image "$digest" --arg ref "$GITHUB_REF_NAME" \
             --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            '{commit:$commit,image:$image,workflow_run:$run,checks:"passed",source_ref:"main"}' \
+            '{commit:$commit,image:$image,workflow_run:$run,checks:"passed",source_ref:$ref,runtime:"cloud"}' \
             > application-provenance.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

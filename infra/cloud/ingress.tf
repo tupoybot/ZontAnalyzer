@@ -13,19 +13,45 @@ resource "yandex_api_gateway" "probe" {
   name      = "${local.name}-web"
   spec = yamlencode({
     openapi = "3.0.0"
-    info    = { title = "Isolated M1 probe", version = "1.0" }
-    paths = {
-      for path in ["/api/probe", "/private/probe.txt"] : path => {
-        get = {
-          responses = { "200" = { description = "Authenticated probe" } }
-          "x-yc-apigateway-integration" = {
-            type               = "serverless_containers"
-            container_id       = yandex_serverless_container.probe.id
-            service_account_id = var.timer_service_account_id
+    info    = { title = "Isolated M1 probe and M2 application", version = "2.0" }
+    paths = merge(
+      {
+        for path in ["/api/probe", "/private/probe.txt"] : path => {
+          get = {
+            responses = { "200" = { description = "Authenticated probe" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.probe.id
+              service_account_id = var.timer_service_account_id
+            }
           }
         }
-      }
-    }
+      },
+      {
+        for path in ["/ready", "/diagnostics"] : path => {
+          get = {
+            responses = { "200" = { description = "Application readiness or diagnostics" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+      },
+      {
+        for path in ["/jobs/analytics", "/jobs/integrations"] : path => {
+          post = {
+            responses = { "200" = { description = "Bounded application job completed" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+      },
+    )
   })
   dynamic "custom_domains" {
     for_each = var.attach_domain ? [true] : []
@@ -38,7 +64,10 @@ resource "yandex_api_gateway" "probe" {
     log_group_id = yandex_logging_group.runtime.id
     min_level    = "WARN"
   }
-  depends_on = [yandex_serverless_container_iam_binding.timer]
+  depends_on = [
+    yandex_serverless_container_iam_binding.timer,
+    yandex_serverless_container_iam_binding.application_invoker,
+  ]
 }
 
 output "certificate_challenges" {
