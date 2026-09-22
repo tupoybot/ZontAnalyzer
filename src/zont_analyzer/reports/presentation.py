@@ -712,6 +712,16 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
     )
 
 
+def zont_connection_label(context: Mapping[str, Any]) -> str | None:
+    if context.get("probable_battery_depletion") is True:
+        return "вероятное отключение: разряд резервного питания"
+    return {
+        "pending": "связь потеряна; ожидаем восстановления",
+        "lost": "устройство потеряно: нет связи более 2 ч",
+        "awaiting_telemetry": "связь восстановлена; ожидаем телеметрию",
+    }.get(str(context.get("connection_state")))
+
+
 def reliability(report: Report) -> str:
     statuses = []
     by_name = {metric.name: metric for metric in report.metrics}
@@ -719,15 +729,25 @@ def reliability(report: Report) -> str:
         metric = by_name.get(key)
         if metric is None:
             label = "ZONT" if key.startswith("zont") else "Котёл"
+            zont_context = report.context.get("reliability", {}).get("zont", {})
+            connection_label = zont_connection_label(zont_context) if key.startswith("zont") else None
             statuses.append(
                 '<span class="uptime-unknown"><i class="uptime-dot"></i>'
-                f'{label} · статус неизвестен · аптайм: нет данных</span>'
+                f'{label} · {esc(connection_label or "статус неизвестен")} · аптайм: нет данных</span>'
             )
             continue
         name = "ZONT" if metric.name.startswith("zont") else "Котёл"
         online = metric.context.get("online")
         status = "на связи" if online is True else "не на связи" if online is False else "статус неизвестен"
         status_class = "uptime-online" if online is True else "uptime-offline" if online is False else "uptime-unknown"
+        data_missing = metric.context.get("data_fresh") is False
+        if data_missing:
+            status = "нет свежих данных"
+            status_class = "uptime-unknown"
+        connection_label = zont_connection_label(metric.context) if key.startswith("zont") else None
+        if connection_label:
+            status = connection_label
+            status_class = "uptime-unknown"
         seconds = metric.value
         duration = (
             f"{int(seconds // 86400)} дн."
@@ -736,9 +756,16 @@ def reliability(report: Report) -> str:
             if seconds >= 3600
             else f"{int(seconds // 60)} мин"
         )
+        if data_missing or connection_label:
+            duration = "нет данных"
+        continuity_note = (
+            "; непрерывность не подтверждена из-за пропуска телеметрии"
+            if metric.context.get("continuity_uncertain") is True
+            else ""
+        )
         statuses.append(
             f'<span class="{status_class}"><i class="uptime-dot"></i>{esc(name)} · {esc(status)} · '
-            f'аптайм {esc(duration)}</span>'
+            f'аптайм {esc(duration)}{esc(continuity_note)}</span>'
             + debug(metric.model_dump(), "Основание аптайма")
         )
     return '<footer class="kpi-uptime-row" aria-label="Статус и аптаймы">' + "".join(statuses) + "</footer>"
@@ -858,29 +885,39 @@ def metric_groups(report: Report, missing_mttr: str | None) -> str:
 
 
 def timeline(report: Report) -> str:
+    from .event_highlights import is_routine, rank_events
     from .renderers import _event_label
 
     significant: list[str] = []
     routine: list[str] = []
-    for e in sorted(report.events, key=lambda e: e.started_at):
+    for ranked in rank_events(report.events, period_kind=report.kind):
+        e = ranked.event
         time = e.started_at.astimezone(ZoneInfo(report.timezone)).strftime(
             "%H:%M" if report.kind == "daily" else "%d.%m %H:%M"
         )
-        duration = f" · {number((e.ended_at - e.started_at).total_seconds() / 60, 'мин')}" if e.ended_at else ""
+        duration = f" · {number(ranked.total_duration_minutes, 'мин')}" if ranked.total_duration_minutes else ""
+        repetitions = (
+            (" суммарно" if duration else "") + f" · Эпизодов: {ranked.count}"
+            if ranked.count > 1 else ""
+        )
         row = (
             f"<li><time>{time}</time><div><strong>{esc(_event_label(e.kind))}</strong>"
-            f'<span>{esc(duration)}</span><span class="event-severity">'
+            f'<span>{esc(duration + repetitions)}</span><span class="event-severity">'
             f"{ {'info': '', 'warning': 'Требует внимания', 'critical': 'Критическое событие'}[e.severity] }</span>"
-            + debug(e.model_dump(), "Событие / evidence")
+            + debug(
+                [item.model_dump() for item in ranked.events] if ranked.count > 1 else e.model_dump(),
+                "События группы / evidence" if ranked.count > 1 else "Событие / evidence",
+            )
             + "</div></li>"
         )
-        (
-            routine if e.kind in {"burner_cycle", "unconfirmed_burner_pulse"} and e.severity == "info" else significant
-        ).append(row)
+        (routine if is_routine(ranked) else significant).append(row)
     visible = "".join(significant[:8])
     more = significant[8:]
     return (
-        '<section id="events"><h2>Значимые события</h2><ol class="timeline">'
+        '<section id="events"><h2>Значимые события</h2>'
+        '<p class="chart-note">По важности: сбои, предупреждения и длительные отклонения.'
+        + (" Повторы объединены; дата — наиболее значимый эпизод." if report.kind in {"weekly", "monthly"} else "")
+        + '</p><ol class="timeline">'
         + (visible or "<li>Значимые события за период не зарегистрированы.</li>")
         + "</ol>"
         + (
@@ -890,7 +927,7 @@ def timeline(report: Report) -> str:
             else ""
         )
         + (
-            f'<details class="technical-events"><summary>Показать ещё {len(routine)} технических событий</summary>'
+            '<details class="technical-events"><summary>Остальные события и штатные эпизоды</summary>'
             f'<ol class="timeline">{"".join(routine)}</ol></details>'
             if routine
             else ""

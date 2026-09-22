@@ -79,7 +79,7 @@ def test_debug_metadata_is_preserved_but_outside_normal_reading_flow():
     assert "Отклонено" in normal
     assert 'id="debug-toggle" type="checkbox"' in page
     assert "localStorage" in page and "get('debug')" in page
-    assert "Показать ещё 60 технических событий" in normal
+    assert "Остальные события и штатные эпизоды" in normal
     assert report.model_dump_json() == before
 
 
@@ -131,6 +131,24 @@ def test_detailed_metrics_follow_physical_scope_in_every_report_kind():
         report.metrics[-1].context["activity_scope"] = "space_heating_only"
         scoped = metric_groups(report, None).split('<details class="metric-group">')[1]
         assert "Запуски горелки на отопление" in scoped
+
+
+def test_uptime_gap_is_visible_as_continuity_uncertainty() -> None:
+    from zont_analyzer.reports.presentation import kpis
+    from zont_analyzer.reports.renderers import _metric_label
+
+    metric = MetricValue(
+        id="zont-uptime",
+        name="zont_uptime_seconds",
+        value=86400,
+        unit="s",
+        context={"online": True, "continuity_uncertain": True},
+    )
+    report = fixture_report()
+    report.metrics = [metric]
+
+    assert _metric_label(metric.name, metric.context) == "Аптайм ZONT (непрерывность не подтверждена)"
+    assert "непрерывность не подтверждена из-за пропуска телеметрии" in kpis(report)
 
 
 def test_recalculated_setpoints_do_not_claim_ai_was_regenerated():

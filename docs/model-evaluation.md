@@ -36,3 +36,11 @@ model's `completed_case_ids`, normalized `scores` for `factual`, `advice`, and
 `uncertainty`, and measured `parameters`/token/latency fields. The loader accepts
 only a complete current artifact; a missing case, stale packet hash, or omitted
 manual rationale leaves the candidate marked as requiring evaluation.
+
+Recommendations require assessments of both the current model and the candidate
+on the same complete case set, dataset SHA, prompt, schema and reasoning parameters.
+The candidate must not score lower on factual accuracy, advice or uncertainty;
+only then can lower price or improved quality justify a proposal. Missing scores
+mean that quality has not been established. Saved price-only proposals are retired
+locally when settings/report state is read, without waiting for the next review.
+Deprecation remains a separate reason to propose a replacement requiring evaluation.

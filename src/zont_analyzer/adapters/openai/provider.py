@@ -24,7 +24,7 @@ from zont_analyzer.domain.reasoning import (
     Unknown,
 )
 
-PROMPT_VERSION = "analyst-v8.4"
+PROMPT_VERSION = "analyst-v8.5"
 SCHEMA_VERSION = "analysis-result-v1"
 
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
@@ -89,6 +89,10 @@ cause remains available for recommendations such as backup power when outages re
 loss classified as zont_restart is an observability incident excluded from boiler MTBF/MTTR.
 Main-power loss without a correlated boiler loss does not create a boiler failure, and it
 does not reset ZONT uptime while stable controller telemetry continues on the built-in battery.
+Controller cloud disconnection is not proof of a reboot: use connection_state and wait for
+backfilled telemetry and power events after reconnection. A lost device is unreachable, not
+necessarily powered off. probable_battery_depletion means a revisable inference from extended
+main-power loss followed by cloud disconnection; do not turn it into a confirmed PowerOff event.
 recommendation_feedback contains owner-confirmed outcomes from earlier recommendations.
 Treat owner_note as authoritative manual context. Do not repeat a rejected recommendation
 unless the current packet contains materially new contradictory evidence; if revisiting it,
@@ -180,7 +184,12 @@ to reproduce. Let the supplied evidence choose the subject; an unrelated useful 
 an honest statement of insufficient evidence is valid. When operation is normal, describe
 the concrete successful behaviour affirmatively instead of a generic all-clear slogan.
 Do not describe normal operation by negating a fault (for example, "неисправность не обнаружена",
-"аномалий не выявлено" or "без признака неисправности"). Preserve concrete warnings and uncertainty.
+"аномалий не выявлено" or "без признака неисправности"). This also applies to reassurance tails
+such as "это ожидаемая реакция, а не признак проблемы" and "не стоит беспокоиться": omit the
+invented concern and describe the operation directly. For example, when supported by the settings,
+write "В тёплые часы автоматика переводила отопление в летний режим согласно настройкам".
+Apply this throughout summary, observations and recommendations. Preserve concrete warnings,
+actual failures and uncertainty; do not replace them with generic reassurance.
 Stay concise: at most three distinct patterns, three hypotheses, two predictions and three
 unknowns; populate only useful sections, not every possible field.
 event_totals contains counts from the COMPLETE analysed event list. The events array is only a

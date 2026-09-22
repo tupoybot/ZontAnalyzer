@@ -54,7 +54,7 @@ from zont_analyzer.reports import render_text
 logger = logging.getLogger(__name__)
 
 
-CALCULATION_VERSION = "stage8-v1"
+CALCULATION_VERSION = "stage9-reliability-v2"
 
 
 def _select_control_temperature_series(
@@ -274,10 +274,6 @@ class AnalysisService:
         zont_status_series = next(
             (item for item in series if item["source_type"] == "ztc_state" and item["metric_key"] == "status_flags"),
             None,
-        )
-        zont_heartbeat_series = next(
-            (item for item in series if item["source_type"] == "ztc_state" and item["metric_key"] == "voltage"),
-            zont_status_series,
         )
         target_series = next((item for item in series if item["role"] == "target_temperature"), None)
         temperature_series = _select_control_temperature_series(series, devices, target_series)
@@ -548,7 +544,7 @@ class AnalysisService:
         events.extend(control_events)
         history_start = self.db.earliest_sample_time() or context_start
         reliability_device_id = str(
-            (boiler_state_series or burner_series or zont_status_series or {}).get("device_id", "")
+            (boiler_state_series or burner_series or zont_status_series or next(iter(series), {})).get("device_id", "")
         )
         source_events = [
             item
@@ -589,8 +585,8 @@ class AnalysisService:
             self.db.fetch_samples(int(zont_status_series["id"]), history_start, end) if zont_status_series else []
         )
         zont_metric_timestamps = (
-            self.db.fetch_sample_timestamps(int(zont_heartbeat_series["id"]), history_start, end)
-            if zont_heartbeat_series
+            self.db.fetch_device_sample_timestamps(reliability_device_id, history_start, end)
+            if reliability_device_id
             else []
         )
         reliability = analyze_reliability(
@@ -728,7 +724,9 @@ class AnalysisService:
 
         if include_comparisons or self._gas_service is None:
             self._gas_service = GasService(self.db, self.config)
-        control_context["gas"] = self._gas_service.context(start, end, complete=period.complete)
+        control_context["gas"] = self._gas_service.context(
+            start, end, complete=period.complete, include_daily=kind in {"weekly", "monthly"},
+        )
         if include_comparisons:
             control_context["gas_savings"] = self._gas_service.savings(end)
         control_context["season_boundaries"] = self.season_boundaries()[0].model_dump()
@@ -741,6 +739,7 @@ class AnalysisService:
                                                        sort_keys=True).encode()).hexdigest(),
             "observed_end": end.isoformat(),
             "telemetry": self.db.period_data_revision(start, end),
+            "reliability_events": self.db.source_event_revision(end),
             "prompt_version": PROMPT_VERSION,
             "refresh": ("Automatic once per completed period; current season weekly; "
                         "explicit regeneration for corrections"),

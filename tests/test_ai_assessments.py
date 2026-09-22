@@ -4,6 +4,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from zont_analyzer.adapters.openai.model_catalog import CatalogSnapshot, ModelFact
 from zont_analyzer.adapters.openai.provider import PROMPT_VERSION, SCHEMA_VERSION
 from zont_analyzer.application.ai_maintenance import local_assessments
@@ -34,7 +36,9 @@ def test_only_complete_matching_local_assessments_are_used(tmp_path: Path) -> No
                           responses_supported=True, structured_outputs_supported=True)
                 for model, cost_in, cost_out in (("gpt-5.6-luna", "0.2", "1.2"), ("gpt-5.6-terra", "2", "12"))
             ))
-    review = ModelReviewStore(runtime.db, Catalog(), assessments={"gpt-5.6-luna": entry})
+    review = ModelReviewStore(runtime.db, Catalog(), assessments={
+        "gpt-5.6-luna": entry, "gpt-5.6-terra": entry,
+    })
     review.run_if_due(AISettingsStore(runtime.db, runtime.config).snapshot())
     recommendation = review.state()["proposals"][0]["recommendation"]
     assert not recommendation["requires_evaluation"]
@@ -46,3 +50,40 @@ def test_only_complete_matching_local_assessments_are_used(tmp_path: Path) -> No
         assert local_assessments(runtime) == {}
     artifact.write_text("not json")
     assert local_assessments(runtime) == {}
+
+
+@pytest.mark.parametrize("scores,expected", [
+    ({"factual": 0.9, "advice": 0.8, "uncertainty": 0.9}, "proposal"),
+    ({"factual": 1.0, "advice": 0.7, "uncertainty": 1.0}, "no_change"),
+    ({"factual": 0.8, "advice": 1.0, "uncertainty": 1.0}, "no_change"),
+    ({"factual": 1.0, "advice": 1.0, "uncertainty": 0.8}, "no_change"),
+])
+def test_lower_price_never_outweighs_a_quality_regression(tmp_path: Path, scores, expected) -> None:
+    runtime = build_runtime(None, tmp_path)
+    cases = build_dataset()
+    entry = {
+        "dataset_sha256": dataset_sha(cases), "prompt_id": PROMPT_VERSION, "schema_id": SCHEMA_VERSION,
+        "assessor": "owner", "date": "2026-09-21", "rationale": "All evidence checked",
+        "completed_case_ids": [case["id"] for case in cases],
+        "scores": {"factual": 0.9, "advice": 0.8, "uncertainty": 0.9},
+        "measurements": {"parameters": {"reasoning_effort": "medium"}},
+    }
+
+    class Catalog:
+        def fetch(self, now=None, model_ids=()):
+            return CatalogSnapshot(datetime.now(UTC), (), tuple(
+                ModelFact(model, cost_in, cost_out, reasoning_efforts=("medium",),
+                          responses_supported=True, structured_outputs_supported=True)
+                for model, cost_in, cost_out in (("gpt-5.6-luna", "0.2", "1.2"), ("gpt-5.6-terra", "2", "12"))
+            ))
+
+    review = ModelReviewStore(runtime.db, Catalog(), assessments={
+        "gpt-5.6-luna": entry | {"scores": scores}, "gpt-5.6-terra": entry,
+    })
+    settings = AISettingsStore(runtime.db, runtime.config).snapshot()
+    result = review.run_if_due(settings)
+    assert result["status"] == expected
+    proposals = review.state(settings)["proposals"]
+    assert bool(proposals) == (expected == "proposal")
+    if proposals:
+        assert proposals[0]["recommendation"]["current_evaluation"]["scores"] == entry["scores"]

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.period_schedule import run_period_schedule, schedule_signature
-from zont_analyzer.domain import TelemetryPoint
+from zont_analyzer.domain import SourceEvent, TelemetryPoint
 from zont_analyzer.domain.periods import calendar_period
 from zont_analyzer.runtime import build_runtime
 
@@ -80,3 +80,46 @@ def test_schedule_adopts_legacy_signature_without_reanalysis_and_respects_exact_
         "observed_end": period.observed_end.isoformat(),
         "ai_used": True,
     }]
+
+
+def test_schedule_reanalyzes_when_late_prior_event_changes_reliability_revision(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = build_runtime(None, tmp_path)
+    analysis = AnalysisService(runtime.db, runtime.config)
+    period = calendar_period("weekly", date(2026, 8, 31), runtime.config.home.effective_timezone)
+    runtime.db.upsert_samples([_point(period.start + timedelta(hours=1), 21.0)], {"room": "room_temperature"})
+    original = analysis.analyze_period(period, use_ai=False)
+    original.context["schedule_signature"] = schedule_signature(analysis, period)
+    runtime.db.save_report(original, "saved")
+    runtime.db.upsert_source_events(
+        [
+            SourceEvent(
+                id="late-power-on",
+                device_id="1",
+                event_type="PowerOn",
+                timestamp_utc=period.start - timedelta(days=1),
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        "zont_analyzer.application.period_schedule.scheduled_periods",
+        lambda _analysis, _first, _today: [period],
+    )
+    calls = 0
+
+    def updated_analysis(_period, *, use_ai: bool = True):
+        nonlocal calls
+        calls += 1
+        return analysis._analyze(  # noqa: SLF001 - exercise the real revision payload
+            period.start,
+            period.observed_end,
+            kind=period.kind,
+            use_ai=False,
+            period=period,
+        )
+
+    monkeypatch.setattr(analysis, "analyze_period", updated_analysis)
+
+    assert run_period_schedule(runtime, analysis, date(2026, 9, 8))
+    assert calls == 1

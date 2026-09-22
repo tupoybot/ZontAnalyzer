@@ -649,6 +649,64 @@ class Database:
             ))
             return revision
 
+    def source_event_revision(self, end: datetime) -> str:
+        """Fingerprint all retained source events that can anchor reliability before ``end``."""
+        digest = hashlib.sha256()
+        with self.session() as session:
+            rows = session.execute(
+                select(
+                    SourceEventRow.id,
+                    SourceEventRow.device_id,
+                    SourceEventRow.event_type,
+                    SourceEventRow.timestamp_utc,
+                    SourceEventRow.duration_seconds,
+                    SourceEventRow.details_json,
+                    SourceEventRow.important,
+                )
+                .where(SourceEventRow.timestamp_utc < int(end.timestamp()))
+                .order_by(SourceEventRow.timestamp_utc, SourceEventRow.id)
+            )
+            for row in rows:
+                digest.update(
+                    json.dumps(list(row), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                )
+                digest.update(b"\n")
+        return f"source-events-v1:{digest.hexdigest()}"
+
+    def seed_source_event_report_baselines(self) -> int:
+        """Persist pre-ingestion event snapshots for legacy reports once, without loading report JSON."""
+        completion_key = "source-event-report-baselines:v1:complete"
+        prefix = "source-event-report-baseline:v1"
+        if self.get_app_meta(completion_key) == "1":
+            return 0
+        with self.session() as session:
+            report_rows = list(session.execute(select(ReportRow.id, ReportRow.period_end)))
+            existing = set(
+                session.scalars(
+                    select(AppMetaRow.key).where(AppMetaRow.key.startswith(f"{prefix}:"))
+                )
+            )
+        missing = [
+            (str(report_id), int(period_end))
+            for report_id, period_end in report_rows
+            if f"{prefix}:{report_id}" not in existing
+        ]
+        revisions_by_end: dict[int, str] = {}
+        values: list[dict[str, str]] = []
+        for report_id, period_end in missing:
+            revision = revisions_by_end.get(period_end)
+            if revision is None:
+                revision = self.source_event_revision(datetime.fromtimestamp(period_end, UTC))
+                revisions_by_end[period_end] = revision
+            values.append({"key": f"{prefix}:{report_id}", "value": revision})
+        with self.session() as session:
+            if values:
+                session.execute(
+                    sqlite_insert(AppMetaRow).values(values).on_conflict_do_nothing(index_elements=["key"])
+                )
+            session.merge(AppMetaRow(key=completion_key, value="1"))
+        return len(values)
+
     @staticmethod
     def _period_revision_cache_key(start: datetime, end: datetime) -> str:
         start_utc = start.astimezone(UTC).isoformat(timespec="microseconds")
@@ -778,6 +836,23 @@ class Database:
                     TelemetrySampleRow.timestamp_utc < int(end.timestamp()),
                     TelemetrySampleRow.quality == "valid",
                 )
+                .order_by(TelemetrySampleRow.timestamp_utc)
+            )
+            return [datetime.fromtimestamp(ts, UTC) for (ts,) in session.execute(query).all()]
+
+    def fetch_device_sample_timestamps(self, device_id: str, start: datetime, end: datetime) -> list[datetime]:
+        """Observe a controller through all its valid telemetry, not one sensor."""
+        with self.session() as session:
+            query = (
+                select(TelemetrySampleRow.timestamp_utc)
+                .join(TelemetrySeriesRow, TelemetrySampleRow.series_id == TelemetrySeriesRow.id)
+                .where(
+                    TelemetrySeriesRow.device_id == device_id,
+                    TelemetrySampleRow.timestamp_utc >= int(start.timestamp()),
+                    TelemetrySampleRow.timestamp_utc < int(end.timestamp()),
+                    TelemetrySampleRow.quality == "valid",
+                )
+                .distinct()
                 .order_by(TelemetrySampleRow.timestamp_utc)
             )
             return [datetime.fromtimestamp(ts, UTC) for (ts,) in session.execute(query).all()]

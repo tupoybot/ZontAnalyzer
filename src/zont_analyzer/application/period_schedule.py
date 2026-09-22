@@ -64,6 +64,7 @@ def scheduled_periods(analysis: AnalysisService, first: date, today: date) -> li
 
 def schedule_signature(
     analysis: AnalysisService, period: Period, *, legacy_revision: bool = False, legacy_ai_config: bool = False,
+    legacy_source_events: bool = False,
 ) -> str:
     period_payload = period.model_dump(mode="json")
     previous = analysis.db.report(analysis.report_id_for(period.kind, period.start))
@@ -96,6 +97,8 @@ def schedule_signature(
             else analysis.db.period_data_revision(period.start, period.observed_end)
         ),
     }
+    if not legacy_source_events:
+        payload["source_event_revision"] = analysis.db.source_event_revision(period.observed_end)
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -125,12 +128,36 @@ def run_period_schedule(
         identifier = analysis.report_id_for(period.kind, period.start)
         signature = schedule_signature(analysis, period)
         previous = runtime.db.report(identifier)
+        if previous is not None:
+            from zont_analyzer.application.pilot import _report_source_event_revision
+
+            stored_event_revision = _report_source_event_revision(runtime.db, previous)
+            event_revision_unchanged = (
+                stored_event_revision == runtime.db.source_event_revision(period.observed_end)
+            )
+        else:
+            event_revision_unchanged = False
         if (
             previous is not None and not _already_current(previous, period, signature)
+            and event_revision_unchanged
             and previous.context.get("schedule_signature") in {
                 schedule_signature(analysis, period, legacy_revision=True),
                 schedule_signature(analysis, period, legacy_ai_config=True),
                 schedule_signature(analysis, period, legacy_revision=True, legacy_ai_config=True),
+                schedule_signature(analysis, period, legacy_source_events=True),
+                schedule_signature(
+                    analysis, period, legacy_revision=True, legacy_source_events=True
+                ),
+                schedule_signature(
+                    analysis, period, legacy_ai_config=True, legacy_source_events=True
+                ),
+                schedule_signature(
+                    analysis,
+                    period,
+                    legacy_revision=True,
+                    legacy_ai_config=True,
+                    legacy_source_events=True,
+                ),
             }
         ):
             # Changing revision format must not purchase another AI interpretation.
