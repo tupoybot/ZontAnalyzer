@@ -14,6 +14,7 @@ FILES = (
     "application-source-inspect.json", "application-copy.log",
     "application-smoke.json", "application-smoke.log", "application_scaling.log",
     "application_bounded-revision.json", "application_scaling-operation.json",
+    "application_scaling-error.json",
 )
 
 

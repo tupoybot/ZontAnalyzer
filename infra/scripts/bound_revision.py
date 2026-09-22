@@ -142,5 +142,6 @@ if __name__ == "__main__":
     try:
         run(private_path, application=len(sys.argv) == 3 and sys.argv[2] == "application")
     except CloudError as error:
-        (private_path / "scaling-error.json").write_bytes(error.body)
+        prefix = "application_" if len(sys.argv) == 3 and sys.argv[2] == "application" else ""
+        (private_path / (prefix + "scaling-error.json")).write_bytes(error.body)
         sys.exit(str(error))
