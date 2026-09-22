@@ -14,7 +14,8 @@ output "probe_url" {
 }
 
 output "application_image" {
-  value = var.application_image
+  value     = var.application_image
+  sensitive = true
 }
 
 output "application_revision" {

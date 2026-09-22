@@ -60,6 +60,7 @@ variable "probe_image" {
 variable "application_image" {
   description = "Accepted M2 application artifact in Yandex Container Registry, selected by immutable digest."
   type        = string
+  sensitive   = true
   validation {
     condition     = can(regex("^cr\\.yandex/[^@]+@sha256:[0-9a-f]{64}$", var.application_image))
     error_message = "Select an immutable Yandex Registry application image by digest."
