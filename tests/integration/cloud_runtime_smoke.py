@@ -35,4 +35,7 @@ assert first[1]['job_id'] != second[1]['job_id']
 assert request('/diagnostics')[1]['boot_id'] == first_boot
 assert request('/diagnostics')[1]['counters']['successes'] == 2
 assert request('/jobs/integrations', {'service': 'forbidden'})[0] == 400
-print('Cloud artifact: authorization, readiness, warm repeated analytics and validation passed')
+# Xray listens locally but its synthetic upstream is closed and the container has no network.
+assert request('/jobs/integrations', {'service': 'openai_tls'})[0] == 502
+assert request('/jobs/analytics', PAYLOAD)[0] == 200
+print('Cloud artifact: auth, warm analytics, validation and recovery after proxy failure passed')

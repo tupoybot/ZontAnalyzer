@@ -4,7 +4,7 @@ set -eu
 
 image=${1:?Usage: release.sh ghcr.io/owner/image@sha256:DIGEST [env-file]}
 env_file=${2:-/opt/zont-analyzer/.env}
-release_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+release_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
 # Require a digest, so rollback and deployment select the exact same artifact.
 python3 - "$image" <<'PY'

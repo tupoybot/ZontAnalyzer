@@ -16,6 +16,10 @@ def _fake_docker(tmp_path: Path) -> tuple[Path, Path]:
         """#!/bin/sh
 set -eu
 printf '%s\\n' \"$*\" >> \"$FAKE_DOCKER_LOG\"
+case \"$*\" in
+  *org.opencontainers.image.revision*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; exit 0 ;;
+  *org.zont.runtime*) echo \"${FAKE_RUNTIME:-}\"; exit 0 ;;
+esac
 case \"${FAKE_DOCKER_FAIL_ON:-}\" in
   pull) case \"$*\" in *\" pull worker\") exit 31;; esac ;;
   backup) case \"$*\" in *\" db backup\") exit 32;; esac ;;
@@ -24,17 +28,21 @@ esac
         encoding="utf-8",
     )
     executable.chmod(0o755)
+    curl = tmp_path / "curl"
+    curl.write_text('#!/bin/sh\nprintf \'{"status":"identical"}\\n\'\n', encoding="utf-8")
+    curl.chmod(0o755)
     return executable, log
 
 
 def _run_release(
-    tmp_path: Path, env_file: Path, image: str = DIGEST, *, fail_on: str = ""
+    tmp_path: Path, env_file: Path, image: str = DIGEST, *, fail_on: str = "", runtime: str = ""
 ) -> subprocess.CompletedProcess[str]:
     fake_docker, log = _fake_docker(tmp_path)
     environment = os.environ | {
         "PATH": f"{fake_docker.parent}:{os.environ['PATH']}",
         "FAKE_DOCKER_LOG": str(log),
         "FAKE_DOCKER_FAIL_ON": fail_on,
+        "FAKE_RUNTIME": runtime,
     }
     return subprocess.run(
         [str(RELEASE_SCRIPT), image, str(env_file)],
@@ -95,6 +103,16 @@ def test_release_backup_failure_leaves_env_untouched_without_up(tmp_path: Path) 
     assert any(command.endswith(" pull worker") for command in commands)
     assert any(" db backup" in command for command in commands)
     assert not any(" up -d " in command for command in commands)
+
+
+def test_release_cloud_artifact_cannot_reach_backup_or_deployment(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    original = "ZONT_ANALYZER_IMAGE=old\n"
+    env_file.write_text(original)
+    result = _run_release(tmp_path, env_file, runtime="cloud")
+    assert result.returncode != 0
+    assert env_file.read_text() == original
+    assert not any(" db backup" in command or " up -d " in command for command in _commands(tmp_path))
 
 
 def test_release_pulls_backs_up_then_deploys_with_only_bounded_health_checks(tmp_path: Path) -> None:

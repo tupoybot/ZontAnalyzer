@@ -188,6 +188,7 @@ def test_job_rejects_concurrency_and_recovers_after_timeout(server: Any, monkeyp
     status, body = _request(instance, credentials, "POST", "/jobs/analytics", _payload())
     assert status == 504
     assert body["error"] == "job_timeout"
+    instance.config = replace(instance.config, job_timeout_seconds=3)
     monkeypatch.setitem(DISPATCHERS, "analytics", _dispatch_analytics)
     assert _request(instance, credentials, "POST", "/jobs/analytics", _payload())[0] == 200
 
