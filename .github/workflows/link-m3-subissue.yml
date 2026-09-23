@@ -1,0 +1,22 @@
+name: Link M3 sub-issue
+
+on:
+  push:
+    branches: [stageM3/ydb-storage]
+    paths: [.github/workflows/link-m3-subissue.yml]
+
+permissions:
+  issues: write
+
+jobs:
+  link:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Attach issue 13 to milestone issue 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST \
+            repos/${{ github.repository }}/issues/1/sub_issues \
+            -f sub_issue_id=5557441792 \
+            --silent
