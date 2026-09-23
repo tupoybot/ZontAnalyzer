@@ -209,7 +209,7 @@ jobs:
               '- this is Codex Cloud: do not use Docker; validate with deploy/check-codex-cloud.sh and focused tests from the prepared Codex venv;',
               '- run the relevant validation suite;',
               `- remove \`${dispatchFile}\` before finishing;`,
-              '- push the completed fix to this PR branch;',
+              '- apply the completed changes to this existing pull request using the Codex GitHub integration; do not rely on a local git remote being configured;',
               '- do not merge the PR and do not close the issue; leave both for human review.',
             ].join('\n');
 
