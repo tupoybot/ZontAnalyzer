@@ -19,6 +19,7 @@ dependencies = [
   "PyYAML>=6,<7",
   "SQLAlchemy>=2.0,<3",
   "typer>=0.12,<1",
+  "ydb==3.32.0",
 ]
 
 [project.optional-dependencies]
