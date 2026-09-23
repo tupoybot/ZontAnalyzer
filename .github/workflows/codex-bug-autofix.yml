@@ -191,6 +191,7 @@ jobs:
               '- implement the smallest correct fix;',
               '- add or update a regression test when practical;',
               '- follow AGENTS.md and repository-specific instructions;',
+              '- write GitHub comments, progress updates, and the final human-facing summary in Russian; keep code identifiers, commands, and literal error text unchanged where appropriate;',
               '- this is Codex Cloud: do not use Docker; validate with deploy/check-codex-cloud.sh and focused tests from the prepared Codex venv;',
               '- run the relevant validation suite;',
               `- remove \`${dispatchFile}\` before finishing;`,
