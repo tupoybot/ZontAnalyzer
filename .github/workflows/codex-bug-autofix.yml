@@ -3,21 +3,30 @@ name: Dispatch my bug issues to Codex Cloud
 on:
   issues:
     types: [opened, labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Existing GitHub issue number to dispatch
+        required: true
+        type: number
 
 permissions:
   contents: read
 
 concurrency:
-  group: codex-bug-${{ github.event.issue.number }}
+  group: codex-bug-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
   dispatch:
     if: >-
-      github.event.issue.user.login == 'tupoybot' &&
+      github.event_name == 'workflow_dispatch' ||
       (
-        (github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'bug')) ||
-        (github.event.action == 'labeled' && github.event.label.name == 'bug')
+        github.event.issue.user.login == 'tupoybot' &&
+        (
+          (github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'bug')) ||
+          (github.event.action == 'labeled' && github.event.label.name == 'bug')
+        )
       )
     runs-on: ubuntu-latest
     steps:
@@ -28,8 +37,15 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const issue = context.payload.issue;
-            const issueNumber = issue.number;
+            const issueNumber = context.eventName === 'workflow_dispatch'
+              ? Number(context.payload.inputs.issue_number)
+              : context.payload.issue.number;
+
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed('issue_number must be a positive integer.');
+              return;
+            }
+
             const marker = `<!-- codex-bug-autofix:${issueNumber} -->`;
             const branch = `codex/issue-${issueNumber}`;
             const dispatchFile = `.codex/dispatch/issue-${issueNumber}.md`;
@@ -42,7 +58,6 @@ jobs:
               return;
             }
 
-            // Re-read current issue state so opened/labeled events cannot race each other.
             const { data: currentIssue } = await github.rest.issues.get({
               owner, repo, issue_number: issueNumber,
             });
@@ -50,8 +65,15 @@ jobs:
               typeof label === 'string' ? label : label.name
             );
 
+            if (currentIssue.pull_request) {
+              core.setFailed(`#${issueNumber} is a pull request, not an issue.`);
+              return;
+            }
+
             if (currentIssue.user?.login !== 'tupoybot' || !labels.includes('bug')) {
-              core.info('Issue no longer matches author+bug dispatch policy.');
+              core.setFailed(
+                `Issue #${issueNumber} does not match dispatch policy: author must be tupoybot and label bug must be present.`
+              );
               return;
             }
 
