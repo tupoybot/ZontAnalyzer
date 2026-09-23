@@ -1,0 +1,236 @@
+name: Dispatch my bug issues to Codex Cloud
+
+on:
+  issues:
+    types: [opened, labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Existing GitHub issue number to dispatch
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-bug-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.issue.user.login == 'tupoybot' &&
+        (
+          (github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'bug')) ||
+          (github.event.action == 'labeled' && github.event.label.name == 'bug')
+        )
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create Codex work PR and dispatch cloud task
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CODEX_GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issueNumber = context.eventName === 'workflow_dispatch'
+              ? Number(context.payload.inputs.issue_number)
+              : context.payload.issue.number;
+
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed('issue_number must be a positive integer.');
+              return;
+            }
+
+            const marker = `<!-- codex-bug-autofix:${issueNumber} -->`;
+            const branch = `codex/issue-${issueNumber}`;
+            const dispatchFile = `.codex/dispatch/issue-${issueNumber}.md`;
+
+            if (!process.env.CODEX_GITHUB_TOKEN_PRESENT) {
+              core.setFailed(
+                'Missing repository secret CODEX_GITHUB_TOKEN. ' +
+                'Use a fine-grained PAT owned by tupoybot with Contents, Pull requests, and Issues read/write.'
+              );
+              return;
+            }
+
+            const { data: currentIssue } = await github.rest.issues.get({
+              owner, repo, issue_number: issueNumber,
+            });
+            const labels = currentIssue.labels.map((label) =>
+              typeof label === 'string' ? label : label.name
+            );
+
+            if (currentIssue.pull_request) {
+              core.setFailed(`#${issueNumber} is a pull request, not an issue.`);
+              return;
+            }
+
+            if (currentIssue.user?.login !== 'tupoybot' || !labels.includes('bug')) {
+              core.setFailed(
+                `Issue #${issueNumber} does not match dispatch policy: author must be tupoybot and label bug must be present.`
+              );
+              return;
+            }
+
+            // Automatic issue events are idempotent. Manual workflow_dispatch is an explicit retry:
+            // it reuses the existing work PR and posts a fresh @codex task comment.
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: issueNumber, per_page: 100,
+            });
+            const alreadyDispatched = comments.some((comment) => comment.body?.includes(marker));
+            const manualRetry = context.eventName === 'workflow_dispatch';
+            if (alreadyDispatched && !manualRetry) {
+              core.info('Codex already dispatched for this issue.');
+              return;
+            }
+
+            const { data: repository } = await github.rest.repos.get({ owner, repo });
+            const baseBranch = repository.default_branch;
+            const { data: base } = await github.rest.repos.getBranch({
+              owner, repo, branch: baseBranch,
+            });
+
+            let branchExists = true;
+            try {
+              await github.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              branchExists = false;
+            }
+
+            if (!branchExists) {
+              await github.rest.git.createRef({
+                owner,
+                repo,
+                ref: `refs/heads/${branch}`,
+                sha: base.commit.sha,
+              });
+            }
+
+            const body = currentIssue.body?.trim() || '_Описание отсутствует._';
+            const issueSnapshot = [
+              `# Bug #${issueNumber}: ${currentIssue.title}`,
+              '',
+              `Source: ${currentIssue.html_url}`,
+              `Author: @${currentIssue.user.login}`,
+              '',
+              '## Issue body',
+              '',
+              body,
+              '',
+              '---',
+              '',
+              'This file is an automation handoff artifact. Remove it before the fix is complete.',
+              '',
+            ].join('\n');
+
+            let fileExists = false;
+            try {
+              await github.rest.repos.getContent({
+                owner, repo, path: dispatchFile, ref: branch,
+              });
+              fileExists = true;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
+            if (!fileExists) {
+              await github.rest.repos.createOrUpdateFileContents({
+                owner,
+                repo,
+                path: dispatchFile,
+                branch,
+                message: `chore: dispatch bug #${issueNumber} to Codex`,
+                content: Buffer.from(issueSnapshot, 'utf8').toString('base64'),
+              });
+            }
+
+            const existingPulls = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'all',
+              head: `${owner}:${branch}`,
+              base: baseBranch,
+              per_page: 10,
+            });
+
+            let pr = existingPulls.data.find((item) => item.state === 'open');
+            if (pr && manualRetry) {
+              try {
+                await github.rest.pulls.updateBranch({
+                  owner,
+                  repo,
+                  pull_number: pr.number,
+                });
+                core.info('Updated existing Codex work PR branch from current base before retry.');
+              } catch (error) {
+                core.warning(
+                  `Could not update PR #${pr.number} from base before retry: ${error.message}. The new Codex task will still be dispatched; resolve branch drift manually if needed.`
+                );
+              }
+            }
+            if (!pr) {
+              const created = await github.rest.pulls.create({
+                owner,
+                repo,
+                head: branch,
+                base: baseBranch,
+                draft: true,
+                title: `Codex: fix #${issueNumber} — ${currentIssue.title}`,
+                body: [
+                  `Automated Codex Cloud work PR for #${issueNumber}.`,
+                  '',
+                  `Issue: ${currentIssue.html_url}`,
+                  '',
+                  'This PR is created only as a GitHub context/branch for Codex Cloud.',
+                  'Human review is required before merge.',
+                ].join('\n'),
+              });
+              pr = created.data;
+            }
+
+            const codexPrompt = [
+              '@codex Fix the bug described in the linked issue.',
+              '',
+              `Issue: #${issueNumber} — ${currentIssue.title}`,
+              `Read \`${dispatchFile}\` first; it contains the issue snapshot.`,
+              '',
+              'Requirements:',
+              '- reproduce or establish the bug from repository evidence before changing code;',
+              '- implement the smallest correct fix;',
+              '- add or update a regression test when practical;',
+              '- follow AGENTS.md and repository-specific instructions;',
+              '- write GitHub comments, progress updates, and the final human-facing summary in Russian; keep code identifiers, commands, and literal error text unchanged where appropriate;',
+              '- this is Codex Cloud: do not use Docker; validate with deploy/check-codex-cloud.sh and focused tests from the prepared Codex venv;',
+              '- run the relevant validation suite;',
+              `- remove \`${dispatchFile}\` before finishing;`,
+              '- apply the completed changes to this existing pull request using the Codex GitHub integration; do not rely on a local git remote being configured;',
+              '- do not merge the PR and do not close the issue; leave both for human review.',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pr.number,
+              body: codexPrompt,
+            });
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: issueNumber,
+              body: [
+                marker,
+                manualRetry ? `🔁 Codex Cloud re-dispatched: #${pr.number}` : `🤖 Codex Cloud dispatched: #${pr.number}`,
+                pr.html_url,
+              ].join('\n'),
+            });
+
+            core.notice(`Dispatched issue #${issueNumber} to Codex via PR #${pr.number}`);
+        env:
+          CODEX_GITHUB_TOKEN_PRESENT: ${{ secrets.CODEX_GITHUB_TOKEN != '' }}
