@@ -1,8 +1,8 @@
 # M2 — облачный запуск и внешние API
 
-Статус: реализация и технические проверки завершены. Приложение проверено
-локально и в облачном dev-контуре, включая deployment из GitHub Actions.
-Этап готов к приёмке владельцем; слияние ещё не выполнено.
+Статус: принят владельцем 2026-09-23 и слит в `main` через PR #12
+(`2c4a60b`). Приложение проверено локально и в облачном dev-контуре,
+включая deployment из GitHub Actions.
 Задача: [sub-issue #11](https://github.com/tupoybot/ZontAnalyzer/issues/11).
 Критерии: [план M2](./cloud_first_milestone.md#m2--облачный-запуск-и-внешние-api).
 
@@ -152,6 +152,6 @@ deploy/smoke-cloud-local.sh zont-analyzer:cloud-check
 `cloud-dev` настроен на `No restriction`, закрытая конфигурация обновлена.
 Ручное добавление каждой новой ветки этапа не требуется. Технических блокеров
 М2 не осталось. [PR #12](https://github.com/tupoybot/ZontAnalyzer/pull/12)
-и [sub-issue #11](https://github.com/tupoybot/ZontAnalyzer/issues/11) остаются
-открытыми до явной приёмки владельцем и последующего слияния. М3 начинается
-от обновлённого `main` после приёмки М2.
+слит, [sub-issue #11](https://github.com/tupoybot/ZontAnalyzer/issues/11)
+закрыта. M3 подготовлен отдельной веткой и sub-issue #13 от обновлённого `main`;
+его реализация требует отдельного запуска работ.
