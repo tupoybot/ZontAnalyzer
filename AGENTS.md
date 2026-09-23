@@ -83,6 +83,16 @@ For substantial implementation tasks:
 - Keep source mounts read-only and temporary databases/caches in containers or
   explicitly isolated artifact directories. Production-host load limits still apply.
 
+## Codex Cloud tasks
+
+- Codex Cloud runs in its own container. Run `deploy/setup-codex-cloud.sh` in the
+  environment setup and maintenance steps, then use `deploy/check-codex-cloud.sh`
+  for Python checks inside that container. For targeted tests, use the Python and
+  pytest binaries in `$HOME/.cache/zont-analyzer-codex/venv/bin`.
+- Cloud task checks do not replace local Docker release checks, isolated
+  acceptance, a tested immutable image, or bounded production smoke.
+- Keep private cloud and production credentials out of the Codex task environment.
+
 ## Production host: keep load minimal
 
 - Never build images, packages, or application artifacts on the production host.
