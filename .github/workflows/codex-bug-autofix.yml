@@ -77,11 +77,14 @@ jobs:
               return;
             }
 
-            // Idempotency: if this issue has already been dispatched, do nothing.
+            // Automatic issue events are idempotent. Manual workflow_dispatch is an explicit retry:
+            // it reuses the existing work PR and posts a fresh @codex task comment.
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number: issueNumber, per_page: 100,
             });
-            if (comments.some((comment) => comment.body?.includes(marker))) {
+            const alreadyDispatched = comments.some((comment) => comment.body?.includes(marker));
+            const manualRetry = context.eventName === 'workflow_dispatch';
+            if (alreadyDispatched && !manualRetry) {
               core.info('Codex already dispatched for this issue.');
               return;
             }
@@ -188,6 +191,7 @@ jobs:
               '- implement the smallest correct fix;',
               '- add or update a regression test when practical;',
               '- follow AGENTS.md and repository-specific instructions;',
+              '- this is Codex Cloud: do not use Docker; validate with deploy/check-codex-cloud.sh and focused tests from the prepared Codex venv;',
               '- run the relevant validation suite;',
               `- remove \`${dispatchFile}\` before finishing;`,
               '- push the completed fix to this PR branch;',
@@ -207,7 +211,7 @@ jobs:
               issue_number: issueNumber,
               body: [
                 marker,
-                `🤖 Codex Cloud dispatched: #${pr.number}`,
+                manualRetry ? `🔁 Codex Cloud re-dispatched: #${pr.number}` : `🤖 Codex Cloud dispatched: #${pr.number}`,
                 pr.html_url,
               ].join('\n'),
             });
