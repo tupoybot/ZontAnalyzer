@@ -1,0 +1,27 @@
+name: Link cloud milestone sub-issues
+
+on:
+  push:
+    branches:
+      - stageM3/ydb-storage
+    paths:
+      - .github/workflows/link-cloud-subissues.yml
+
+permissions:
+  issues: write
+
+jobs:
+  link:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Attach remaining stages to issue 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for sub_issue_id in 5557578622 5557578778 5557578965 5557579111 5557579251; do
+            gh api \
+              --method POST \
+              "repos/${{ github.repository }}/issues/1/sub_issues" \
+              -F "sub_issue_id=${sub_issue_id}" \
+              --silent
+          done
