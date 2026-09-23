@@ -1,6 +1,6 @@
 # ZontAnalyzer — веха Cloud-first
 
-Статус: M0–M2 приняты; M3–M8 — план новой облачной версии<br>
+Статус: M0–M3 приняты; M4–M8 — план новой облачной версии<br>
 Архитектура: [`cloud_first_architecture.md`](./cloud_first_architecture.md)
 
 M0 принят; контракты сбора телеметрии от 2026-09-15:
