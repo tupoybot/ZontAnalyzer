@@ -160,6 +160,20 @@ jobs:
             });
 
             let pr = existingPulls.data.find((item) => item.state === 'open');
+            if (pr && manualRetry) {
+              try {
+                await github.rest.pulls.updateBranch({
+                  owner,
+                  repo,
+                  pull_number: pr.number,
+                });
+                core.info('Updated existing Codex work PR branch from current base before retry.');
+              } catch (error) {
+                core.warning(
+                  `Could not update PR #${pr.number} from base before retry: ${error.message}. The new Codex task will still be dispatched; resolve branch drift manually if needed.`
+                );
+              }
+            }
             if (!pr) {
               const created = await github.rest.pulls.create({
                 owner,
