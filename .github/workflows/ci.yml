@@ -38,6 +38,7 @@ jobs:
       - run: docker build --target legacy -t zont-analyzer:test .
       - run: docker build --target test -t zont-analyzer:feedback-e2e .
       - run: docker run --rm zont-analyzer:feedback-e2e
+      - run: ZONT_TEST_IMAGE=zont-analyzer:feedback-e2e deploy/check-ydb.sh
       - run: sh tests/integration/test_nginx_basic_auth.sh
       - run: docker tag zont-analyzer:test zont-analyzer:stage18-candidate
       - run: npm ci --prefix tests/integration/browser
