@@ -10,14 +10,23 @@ subscription-backed Codex Cloud.
 
 ## Политика запуска
 
-Workflow запускается только если одновременно выполняются условия:
+Автоматически workflow запускается только если одновременно выполняются условия:
 
 - автор issue — `tupoybot`;
 - у issue есть label `bug`;
 - событие — создание issue уже с label `bug` либо добавление label `bug`.
 
-Повторные события не создают второй PR: в issue сохраняется скрытый marker
-диспетчеризации, а workflow выполняется последовательно для одного issue.
+Также поддерживается ручной запуск через **Actions → Dispatch my bug issues to
+Codex Cloud → Run workflow**. В поле `issue_number` указывается номер уже
+существующего issue. Ручной запуск использует ту же политику безопасности:
+issue всё равно должен быть создан `tupoybot` и иметь label `bug`.
+
+Это позволяет запускать Codex для старого бага без снятия/повторного добавления
+label и без ручного создания PR.
+
+Повторные события и ручные запуски не создают второй PR: в issue сохраняется
+скрытый marker диспетчеризации, а workflow выполняется последовательно для
+одного issue.
 
 ## Что создаётся
 
@@ -67,7 +76,7 @@ integration также должна быть включена для репоз�
 
 Workflow: `.github/workflows/codex-bug-autofix.yml`.
 
-## Проверка
+## Проверка автоматического запуска
 
 После merge workflow в default branch:
 
@@ -79,3 +88,16 @@ Workflow: `.github/workflows/codex-bug-autofix.yml`.
 6. после работы Codex draft PR остаётся на human review.
 
 Issue другого автора с label `bug` не должен запускать workflow.
+
+## Запуск для уже существующего бага
+
+Если issue уже существовал до появления workflow:
+
+1. убедиться, что автор — `tupoybot`;
+2. убедиться, что label `bug` установлен;
+3. открыть **Actions → Dispatch my bug issues to Codex Cloud**;
+4. нажать **Run workflow**;
+5. указать только номер issue, например `42`.
+
+Снимать и заново ставить label `bug` не требуется. Draft PR вручную создавать
+тоже не требуется.
