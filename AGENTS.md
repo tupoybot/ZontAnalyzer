@@ -91,7 +91,10 @@ For substantial implementation tasks:
   pytest binaries in `$HOME/.cache/zont-analyzer-codex/venv/bin`.
 - Cloud task checks do not replace local Docker release checks, isolated
   acceptance, a tested immutable image, or bounded production smoke.
-- Keep private cloud and production credentials out of the Codex task environment.
+- Use the shared Codex Cloud environment for code and fixture-based checks.
+  Run live integration and deployment through the isolated dev environment and
+  its protected CI credentials. Any task-specific credential added to Codex
+  Cloud needs an explicit scope and must not be committed or printed.
 
 ## Production host: keep load minimal
 
