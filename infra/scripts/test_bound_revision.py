@@ -40,6 +40,14 @@ class RevisionTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             revision_request(self.revision, "container", self.inputs)
 
+    def test_application_uses_its_own_selected_digest(self):
+        self.inputs["application_image"] = self.image
+        self.inputs["probe_image"] = "cr.yandex/example/probe@sha256:" + "b" * 64
+        payload = revision_request(self.revision, "container", self.inputs, "application_image")
+        self.assertEqual(payload["imageSpec"]["imageUrl"], self.image)
+        with self.assertRaises(ValueError):
+            revision_request(self.revision, "container", self.inputs)
+
     def test_limits_must_both_match(self):
         self.assertFalse(bounded(self.revision))
         self.assertFalse(bounded({"scalingPolicy": {"zoneInstancesLimit": 1}}))

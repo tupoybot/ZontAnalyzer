@@ -14,14 +14,18 @@ output "probe_url" {
 }
 
 output "application_image" {
-  value = var.application_image
+  value     = var.application_image
+  sensitive = true
+}
+
+output "application_revision" {
+  value = var.application_revision
 }
 
 output "deployment_selection" {
   value = {
-    vps_image            = var.application_image
-    cloud_image          = "cr.yandex/${yandex_container_registry.project.id}/application@${split("@", var.application_image)[1]}"
-    active_cloud_runtime = "infrastructure-probe"
+    probe_image       = var.probe_image
+    application_image = var.application_image
   }
   sensitive = true
 }
@@ -38,5 +42,20 @@ output "container_id" {
 
 output "revision_id" {
   value     = yandex_serverless_container.probe.revision_id
+  sensitive = true
+}
+
+output "application_url" {
+  value     = yandex_serverless_container.application.url
+  sensitive = true
+}
+
+output "application_container_id" {
+  value     = yandex_serverless_container.application.id
+  sensitive = true
+}
+
+output "application_revision_id" {
+  value     = yandex_serverless_container.application.revision_id
   sensitive = true
 }

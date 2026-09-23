@@ -58,12 +58,37 @@ variable "probe_image" {
 }
 
 variable "application_image" {
-  description = "Accepted main artifact for subsequent compatibility work; not executed by the M1 probe."
+  description = "Accepted M2 application artifact in Yandex Container Registry, selected by immutable digest."
+  type        = string
+  sensitive   = true
+  validation {
+    condition     = can(regex("^cr\\.yandex/[^@]+@sha256:[0-9a-f]{64}$", var.application_image))
+    error_message = "Select an immutable Yandex Registry application image by digest."
+  }
+}
+
+variable "application_revision" {
+  description = "Full Git revision that produced the selected application image."
   type        = string
   validation {
-    condition     = can(regex("^[^@]+@sha256:[0-9a-f]{64}$", var.application_image))
-    error_message = "Select an accepted application image by digest."
+    condition     = can(regex("^[0-9a-f]{40}$", var.application_revision))
+    error_message = "Provide the full 40-character lowercase Git revision."
   }
+}
+
+variable "openai_smoke_model" {
+  description = "Exact selected model used only by the bounded M2 OpenAI access check."
+  type        = string
+  validation {
+    condition     = length(trimspace(var.openai_smoke_model)) > 0
+    error_message = "Select the exact model for the bounded OpenAI access check."
+  }
+}
+
+variable "openai_access_confirmed" {
+  description = "Set privately only after the owner confirms the M0 OpenAI access decision."
+  type        = bool
+  default     = false
 }
 
 variable "enable_timer" {
