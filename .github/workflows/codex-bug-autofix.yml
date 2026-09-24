@@ -277,6 +277,7 @@ jobs:
               '',
               `Issue: ${currentIssue.html_url}`,
               `Type: ${issueKind}`,
+              `Closes #${issueNumber}`,
               '',
               'This PR is created only as a GitHub context/branch for Codex Cloud.',
               'Human review is required before merge.',
