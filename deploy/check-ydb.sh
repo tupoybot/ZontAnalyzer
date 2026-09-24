@@ -6,33 +6,45 @@ IMAGE=${ZONT_TEST_IMAGE:-zont-analyzer:test-local}
 YDB_IMAGE=ydbplatform/local-ydb@sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402
 PREFIX=${ZONT_CONTAINER_PREFIX:-zont-ydb-check-$$}
 case "$PREFIX" in
-    *[!a-zA-Z0-9_.-]*|'') echo "invalid ZONT_CONTAINER_PREFIX" >&2; exit 2 ;;
+    *[!a-zA-Z0-9_.-]* | '')
+        echo "invalid ZONT_CONTAINER_PREFIX" >&2
+        exit 2
+        ;;
 esac
 NAME="$PREFIX-ydb"
 TEST_NAME="$PREFIX-test"
 METRICS_DIR=${ZONT_METRICS_DIR:-}
 WORKERS=${ZONT_TEST_WORKERS:-2}
-case "$WORKERS" in 1|2) ;; *) echo "ZONT_TEST_WORKERS must be 1 or 2" >&2; exit 2 ;; esac
+case "$WORKERS" in 1 | 2) ;; *)
+    echo "ZONT_TEST_WORKERS must be 1 or 2" >&2
+    exit 2
+    ;;
+esac
 if [ -n "$METRICS_DIR" ]; then
-    case "$METRICS_DIR" in /*) ;; *) echo "ZONT_METRICS_DIR must be absolute" >&2; exit 2 ;; esac
+    case "$METRICS_DIR" in /*) ;; *)
+        echo "ZONT_METRICS_DIR must be absolute" >&2
+        exit 2
+        ;;
+    esac
     [ -d "$METRICS_DIR" ] && [ -w "$METRICS_DIR" ] || {
-        echo "ZONT_METRICS_DIR must be an existing writable directory" >&2; exit 2;
+        echo "ZONT_METRICS_DIR must be an existing writable directory" >&2
+        exit 2
     }
 fi
 stamp() {
     [ -n "$METRICS_DIR" ] || return 0
-    printf '{"phase":"%s","event":"%s","epoch_ms":%s}\n' "$1" "$2" "$(date +%s%3N)" >> "$METRICS_DIR/phases.jsonl"
+    printf '{"phase":"%s","event":"%s","epoch_ms":%s}\n' "$1" "$2" "$(date +%s%3N)" >>"$METRICS_DIR/phases.jsonl"
 }
 PHASE=
 cleanup() {
     status=$?
     if [ "$status" -ne 0 ] && [ -n "$PHASE" ]; then
         stamp "$PHASE" failed
-        if [ -n "$METRICS_DIR" ]; then printf '%s\n' "$status" > "$METRICS_DIR/exit-status.txt"; fi
+        if [ -n "$METRICS_DIR" ]; then printf '%s\n' "$status" >"$METRICS_DIR/exit-status.txt"; fi
     fi
     if [ -n "$METRICS_DIR" ]; then
         docker exec "$NAME" sh -c 'cat /sys/fs/cgroup/io.stat /sys/fs/cgroup/cpu.stat /sys/fs/cgroup/memory.events' \
-            > "$METRICS_DIR/ydb-cgroup-final.txt" 2>/dev/null || true
+            >"$METRICS_DIR/ydb-cgroup-final.txt" 2>/dev/null || true
     fi
     docker rm -f "$TEST_NAME" "$PREFIX-ready" "$PREFIX-cli" >/dev/null 2>&1 || true
     docker rm -f "$NAME" >/dev/null 2>&1 || true
@@ -64,7 +76,7 @@ while time.monotonic()<deadline:
 else: raise SystemExit("YDB did not become ready")
 ' "$NAME"
 if [ -n "$METRICS_DIR" ]; then
-    sh "$ROOT/deploy/assert-ydb-memory.sh" "$NAME" "$IMAGE" > "$METRICS_DIR/storage-mode.json"
+    sh "$ROOT/deploy/assert-ydb-memory.sh" "$NAME" "$IMAGE" >"$METRICS_DIR/storage-mode.json"
 else
     sh "$ROOT/deploy/assert-ydb-memory.sh" "$NAME" "$IMAGE"
 fi

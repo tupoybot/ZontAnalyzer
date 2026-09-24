@@ -5,13 +5,16 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 IMAGE=${ZONT_TEST_IMAGE:-zont-analyzer:test-local}
 PREFIX=${ZONT_CONTAINER_PREFIX:-zont-check-$$}
 case "$PREFIX" in
-    *[!a-zA-Z0-9_.-]*|'') echo "invalid ZONT_CONTAINER_PREFIX" >&2; exit 2 ;;
+    *[!a-zA-Z0-9_.-]* | '')
+        echo "invalid ZONT_CONTAINER_PREFIX" >&2
+        exit 2
+        ;;
 esac
 METRICS_DIR=${ZONT_METRICS_DIR:-}
 [ "$#" -gt 0 ] || set -- tests
 stamp() {
     [ -n "$METRICS_DIR" ] || return 0
-    printf '{"phase":"pure_tests","event":"%s","epoch_ms":%s}\n' "$1" "$(date +%s%3N)" >> "$METRICS_DIR/phases.jsonl"
+    printf '{"phase":"pure_tests","event":"%s","epoch_ms":%s}\n' "$1" "$(date +%s%3N)" >>"$METRICS_DIR/phases.jsonl"
 }
 cleanup() {
     docker rm -f "$PREFIX-pure" "$PREFIX-test" "$PREFIX-ready" "$PREFIX-cli" "$PREFIX-ydb" \
@@ -23,7 +26,11 @@ trap 'exit 130' INT
 trap 'exit 143' HUP TERM
 TEST_MOUNT=
 if [ -n "$METRICS_DIR" ]; then
-    case "$METRICS_DIR" in /*) ;; *) echo "ZONT_METRICS_DIR must be absolute" >&2; exit 2 ;; esac
+    case "$METRICS_DIR" in /*) ;; *)
+        echo "ZONT_METRICS_DIR must be absolute" >&2
+        exit 2
+        ;;
+    esac
     [ -d "$METRICS_DIR" ] && [ -w "$METRICS_DIR" ] || exit 2
     TEST_MOUNT="type=bind,src=$METRICS_DIR,dst=/metrics"
 fi

@@ -34,7 +34,7 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
     gh auth setup-git
     github_token=
 else
-    printf '%s\n'         'WARNING: Codex Cloud secret GITHUB_TOKEN is not configured; automated tasks can edit locally but cannot reliably push to GitHub.' >&2
+    printf '%s\n' 'WARNING: Codex Cloud secret GITHUB_TOKEN is not configured; automated tasks can edit locally but cannot reliably push to GitHub.' >&2
 fi
 
 git -C "$ROOT" ls-remote origin HEAD >/dev/null
