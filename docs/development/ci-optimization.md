@@ -1,5 +1,7 @@
 # Оптимизация CI
 
+`#for-human`
+
 Отдельный технический этап после принятого М4: [issue #32](https://github.com/tupoybot/ZontAnalyzer/issues/32).
 М5 не начат. Изменения проходят в ветке `stage9/ci-optimization` от `ce5f904`.
 [PR #31](https://github.com/tupoybot/ZontAnalyzer/pull/31) уже слит: план

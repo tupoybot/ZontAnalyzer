@@ -1,5 +1,7 @@
 # М3 — хранение в YDB
 
+`#for-human`
+
 Статус: М3 принят 2026-09-24 в рамках делегированной владельцем приёмки.
 Задача: [#13](https://github.com/tupoybot/ZontAnalyzer/issues/13).
 Изменение: [PR #27](https://github.com/tupoybot/ZontAnalyzer/pull/27).

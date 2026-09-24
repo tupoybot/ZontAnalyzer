@@ -1,5 +1,7 @@
 # Manual test deployment
 
+`#for-human`
+
 This deployment is intentionally isolated under the Compose project
 `zont-analyzer`. It publishes the narrow feedback API only on host loopback and
 declares no external Docker network. nginx protects the complete `/za/` perimeter

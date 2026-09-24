@@ -1,5 +1,7 @@
 # М4 — перенос данных и рабочий цикл на YDB
 
+`#for-human`
+
 Статус: принят владельцем 2026-09-24 и слит в `main` через
 [PR #28](https://github.com/tupoybot/ZontAnalyzer/pull/28), commit `5b3f75c`.
 М3 принят и слит через

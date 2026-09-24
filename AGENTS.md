@@ -1,3 +1,7 @@
+# Agent instructions
+
+`#for-agents`
+
 # Public repository and privacy
 
 - This GitHub repository is public. Before writing documentation, staging changes,
@@ -53,41 +57,43 @@
 - Stage 9 is ongoing pilot production operation and improvements. Stages 10 (multi-room)
   and 11 (control) are optional and deferred; do not start them automatically.
 
-# GitHub Issues: сообщения о результате
+# GitHub Issues: report outcomes
 
-- Описание issue содержит цель, границы и критерии; меняйте его при изменении плана.
-  Не превращайте описание или комментарии в журнал работы агента.
-- По умолчанию оставляйте один итоговый комментарий при передаче результата:
-  что изменилось для автора задачи, проверено ли это, ссылка на PR и что осталось.
-  Обычно достаточно 3–5 коротких пунктов или одного абзаца.
-- Промежуточный комментарий нужен лишь при препятствии, требующем решения автора,
-  существенном изменении объёма/сроков или открытии, меняющем ожидаемый результат.
-  Устранение такого препятствия также можно сообщить, если автор ждёт ответа.
-- Не публикуйте отдельные сообщения о начале работы, каждом коммите, запуске/повторе
-  CI, пройденной группе тестов или обычном промежуточном выводе. Собирайте проверки
-  в итог; подробные логи и измерения оставляйте в CI, PR или профильном документе.
-- Перед публикацией прочитайте последние комментарии: не повторяйте уже сообщённое.
-  В родительском issue обновляйте ссылки и состояние этапов, не дублируйте итоги
-  дочернего. После принятия и merge достаточно закрыть issue со ссылкой на результат;
-  повторный подробный отчёт не нужен. Условия приёмки и закрытия не меняются.
+- Keep the goal, scope, and acceptance criteria in the issue description; update it
+  when the plan changes. Do not turn descriptions or comments into an agent work log.
+- By default, post one final comment at handoff: what changed for the reporter,
+  whether it was verified, the PR link, and what remains. Usually one paragraph
+  or 3–5 short bullets is enough.
+- Post an interim comment only for a blocker requiring the reporter's decision,
+  a material scope/schedule change, or a finding that changes the expected outcome.
+  Report resolution of such a blocker if the reporter is waiting for an answer.
+- Do not post separate updates for starting work, each commit, CI runs/retries,
+  passing test groups, or routine findings. Summarize checks in the final comment;
+  keep detailed logs and measurements in CI, the PR, or the topic document.
+- Read recent comments before posting; do not repeat existing information.
+  Update stage links and state in the parent issue without duplicating child issue
+  summaries. After acceptance and merge, close the issue with a link to the result;
+  no repeated detailed report is needed. Acceptance and closure gates still apply.
 
-# Понятная документация
+# Clear documentation
 
-- Пишите документацию для человека, который не участвовал в обсуждении и не знает
-  внутреннего устройства кода. Читатель должен с первого прочтения понимать,
-  что работает сейчас, что предлагается изменить, зачем и как проверить результат.
-- Используйте простые русские предложения. Не смешивайте русский текст с цепочками
-  английских терминов, сокращений и названий архитектурных шаблонов. Необходимый
-  технический термин объясняйте при первом употреблении.
-- Названия параметров, классов и API оставляйте точными, когда они помогают найти
-  настройку или код. Сначала объясняйте смысл действия, затем приводите идентификатор;
-  перечисление внутренних компонентов не заменяет объяснения.
-- Явно различайте текущее поведение, запланированное изменение и ещё не проверенное
-  предположение. Не упрощайте текст за счёт потери важных условий и ограничений.
-- Перед сохранением перечитайте изменённый фрагмент как пользователь: если для
-  понимания приходится расшифровывать жаргон или восстанавливать контекст беседы,
-  перепишите его. Для ссылок на файлы используйте относительные пути репозитория,
-  а не адреса редактора или локального окружения.
+- Write for a reader who did not follow the discussion and does not know the code.
+  On first reading, they should understand what works now, what is proposed,
+  why it matters, and how to verify the result.
+- Use English for agent-only instructions marked `#for-agents`. Write human-facing
+  and shared documents in plain Russian and mark them `#for-human`. Do not duplicate
+  documents in both languages. Audience tags do not change the task-based reading rules:
+  agents still read relevant human-facing contracts, and tags do not require loading files.
+- In Russian documentation, avoid strings of English terms, abbreviations, and
+  architecture pattern names. Explain necessary technical terms on first use.
+- Keep parameter, class, and API names exact when they help locate code or settings.
+  Explain the action before naming its identifier; component lists do not replace
+  an explanation.
+- Distinguish current behavior, planned changes, and unverified assumptions.
+  Do not simplify away important conditions or limits.
+- Before saving, reread the changed passage as a user. Rewrite it if understanding
+  requires decoding jargon or reconstructing the conversation. Use repository-relative
+  file links, not editor URLs or local environment paths.
 
 # Development workflow
 

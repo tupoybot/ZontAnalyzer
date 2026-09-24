@@ -1,5 +1,7 @@
 # ZontAnalyzer — веха Cloud-first
 
+`#for-human`
+
 Статус: M0–M3 приняты; M4–M8 — план новой облачной версии<br>
 Архитектура: [`cloud_first_architecture.md`](./cloud_first_architecture.md)
 
