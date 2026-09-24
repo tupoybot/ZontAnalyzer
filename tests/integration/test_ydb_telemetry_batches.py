@@ -1,5 +1,6 @@
 """Bounded canonical event writes against a real disposable YDB namespace."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -8,6 +9,25 @@ import pytest
 from tests.ydb_support import make_database
 from zont_analyzer.adapters.ydb.database import Transaction
 from zont_analyzer.domain import SourceEvent, TelemetryPoint
+
+
+def test_imported_event_replay_ignores_json_order_and_equivalent_utc_spelling(tmp_path: Path) -> None:
+    db = make_database(tmp_path)
+    db.save_devices([{"id": "fixture"}])
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    event = SourceEvent(id="imported", device_id="fixture", event_type="PowerOn", timestamp_utc=start,
+                        details={"second": 2, "first": 1})
+    source = event.model_dump(mode="json")
+    source["timestamp_utc"] = start.isoformat()
+    db.storage.execute(
+        "DECLARE $at AS Int64; DECLARE $payload AS Utf8; "
+        "UPSERT INTO source_events (device_id,timestamp_utc,id,payload) VALUES ('fixture',$at,'imported',$payload);",
+        {"$at": int(start.timestamp()), "$payload": json.dumps(source, sort_keys=True)},
+    )
+    db.telemetry.write_window(device_id="fixture", data_type="raw_events", start=start,
+                              end=start + timedelta(minutes=30), events=[event])
+    assert db.get_app_meta("telemetry-day:2026-01-01") is None
+    assert db.list_source_events(start, start + timedelta(days=1)) == [event]
 
 
 def test_sparse_sample_replay_reads_only_requested_keys(

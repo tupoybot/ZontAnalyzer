@@ -270,7 +270,7 @@ class TelemetryRepository:
                 for event_id, event in by_id.items():
                     payload = event.model_dump_json()
                     previous = old_by_id.get(event_id, [])
-                    if previous and previous[0].payload == payload:
+                    if previous and SourceEvent.model_validate_json(previous[0].payload) == event:
                         continue
                     for old in previous:
                         old_keys.append({"device_id": str(old.device_id),
