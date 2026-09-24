@@ -3,6 +3,8 @@ name: Dispatch my issues to Codex Cloud
 on:
   issues:
     types: [opened, labeled]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       issue_number:
@@ -383,6 +385,8 @@ jobs:
               '- if an external capability unavailable in Codex Cloud blocks only part of validation, complete and test everything else and report the remaining validation explicitly;',
               `- after successful triage and implementation, remove \`${dispatchFile}\` before the implementation is complete;`,
               '- apply the completed changes to this existing pull request using the Codex GitHub integration; do not rely on a local git remote being configured;',
+              '- before claiming success, verify the GitHub-side PR state: the PR head SHA must reflect the published work and Files changed must contain the intended non-.codex changes;',
+              '- if you cannot publish or verify the changes in the existing PR, say so explicitly in the PR instead of reporting completion;',
               '- leave the pull request as draft for human review; do not merge it and do not close the source issue.',
             ];
 
@@ -413,3 +417,178 @@ jobs:
             );
         env:
           CODEX_GITHUB_TOKEN_PRESENT: ${{ secrets.CODEX_GITHUB_TOKEN != '' }}
+
+
+  publish_guard:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.user.login, 'chatgpt-codex-connector')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Codex published work to the existing PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CODEX_GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const prNumber = context.payload.issue.number;
+            const botComment = context.payload.comment.body || '';
+
+            if (!botComment.includes('View task')) {
+              core.info('Codex comment is not a final task summary.');
+              return;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: prNumber,
+            });
+
+            if (!pr.head?.ref?.startsWith('codex/issue-')) {
+              core.info('Not an automated Codex issue PR.');
+              return;
+            }
+
+            const issueNumber = Number(pr.head.ref.replace('codex/issue-', ''));
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.warning('Could not derive source issue from head branch ' + pr.head.ref + '.');
+              return;
+            }
+
+            const sourceComments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: issueNumber,
+              per_page: 100,
+            });
+
+            const triageStopped = sourceComments.some((comment) => {
+              if (!comment.user?.login?.startsWith('chatgpt-codex-connector')) return false;
+              const body = comment.body || '';
+              return (
+                body.includes('Тип задачи указан неверно') ||
+                body.includes('Поменяйте label') ||
+                (body.includes('не удалось') && body.toLowerCase().includes('тип'))
+              );
+            });
+
+            if (triageStopped) {
+              core.info('Codex intentionally stopped at task-type triage.');
+              return;
+            }
+
+            const changedFiles = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: prNumber,
+              per_page: 100,
+            });
+
+            const realFiles = changedFiles.filter(
+              (file) => !file.filename.startsWith('.codex/dispatch/')
+            );
+            const dispatchFiles = changedFiles.filter(
+              (file) => file.filename.startsWith('.codex/dispatch/')
+            );
+
+            if (realFiles.length > 0) {
+              core.notice(
+                'Codex work is visible in PR #' + prNumber + ': ' +
+                realFiles.length + ' non-dispatch file(s), head ' + pr.head.sha + '.'
+              );
+
+              for (const file of dispatchFiles) {
+                try {
+                  const response = await github.rest.repos.getContent({
+                    owner,
+                    repo,
+                    path: file.filename,
+                    ref: pr.head.ref,
+                  });
+                  if (!Array.isArray(response.data)) {
+                    await github.rest.repos.deleteFile({
+                      owner,
+                      repo,
+                      path: file.filename,
+                      branch: pr.head.ref,
+                      sha: response.data.sha,
+                      message: 'chore: remove Codex dispatch artifact for #' + issueNumber,
+                    });
+                    core.info('Removed stale dispatch artifact ' + file.filename + '.');
+                  }
+                } catch (error) {
+                  core.warning(
+                    'Could not remove dispatch artifact ' + file.filename + ': ' + error.message
+                  );
+                }
+              }
+              return;
+            }
+
+            const prComments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+
+            const retryMarker = '<!-- codex-publish-retry:1 -->';
+            const failedMarker = '<!-- codex-publish-failed -->';
+            const alreadyRetried = prComments.some(
+              (comment) => comment.body?.includes(retryMarker)
+            );
+            const alreadyFailed = prComments.some(
+              (comment) => comment.body?.includes(failedMarker)
+            );
+
+            if (!alreadyRetried) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body: [
+                  retryMarker,
+                  '@codex Предыдущая cloud-задача завершилась, но её результат не опубликован в этом PR.',
+                  '',
+                  'GitHub сейчас видит head ' + pr.head.ref + ' @ ' + pr.head.sha +
+                    ' и ни одного изменённого файла кроме служебного .codex/dispatch/.',
+                  '',
+                  'Восстанови или повтори выполненную работу из контекста issue и текущего PR и примени её именно к существующему PR. Новый PR не создавай.',
+                  '',
+                  'Перед финальным ответом обязательно проверь через GitHub integration:',
+                  '1. head SHA этого PR изменился после публикации;',
+                  '2. Files changed содержит реальные изменённые файлы проекта, а не только .codex/dispatch/.;',
+                  '3. .codex/dispatch/ удалён.',
+                  '',
+                  'Если публикация в существующий PR технически невозможна, напиши это явно и не сообщай, что работа успешно применена.',
+                ].join('\n'),
+              });
+              core.warning(
+                'Codex reported completion but PR #' + prNumber +
+                ' has no published work; one recovery task was dispatched.'
+              );
+              return;
+            }
+
+            if (!alreadyFailed) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body: [
+                  failedMarker,
+                  '⚠️ Codex Cloud повторно отчитался о завершении, но GitHub по-прежнему не видит реальных изменений в этом PR.',
+                  '',
+                  'Текущий head: ' + pr.head.ref + ' @ ' + pr.head.sha + '.',
+                  'Автоматические повторы остановлены, чтобы не зациклить Cloud tasks. Нужна ручная проверка/перезапуск.',
+                ].join('\n'),
+              });
+            }
+
+            core.setFailed(
+              'Codex work was not published to PR #' + prNumber +
+              ' after one automatic recovery attempt.'
+            );
