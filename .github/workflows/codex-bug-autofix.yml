@@ -463,6 +463,73 @@ jobs:
               return;
             }
 
+            const prComments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+
+            const finalCommentAt = new Date(context.payload.comment.created_at);
+            const latestOwnerCodexComment = prComments
+              .filter((comment) =>
+                comment.user?.login === 'tupoybot' &&
+                comment.body?.includes('@codex') &&
+                comment.created_at &&
+                new Date(comment.created_at) < finalCommentAt
+              )
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+
+            const claimsPublishedWork =
+              /закоммич|git push|изменения (?:опубликованы|внесены|исправлены)|commit `?[0-9a-f]{7,40}/i
+                .test(botComment);
+            const claimsNewFollowupBranch =
+              /нов(?:ой|ую) ветк|review-followup|нов(?:ый|ого) PR|second pull request/i
+                .test(botComment);
+
+            if (latestOwnerCodexComment && claimsPublishedWork) {
+              const { data: headCommit } = await github.rest.repos.getCommit({
+                owner,
+                repo,
+                ref: pr.head.sha,
+              });
+              const headCommittedAt = new Date(
+                headCommit.commit.committer?.date || headCommit.commit.author?.date
+              );
+              const triggerAt = new Date(latestOwnerCodexComment.created_at);
+
+              if (claimsNewFollowupBranch || !(headCommittedAt > triggerAt)) {
+                const failedMarker =
+                  '<!-- codex-followup-publish-failed:' + latestOwnerCodexComment.id + ' -->';
+                const alreadyReported = prComments.some(
+                  (comment) => comment.body?.includes(failedMarker)
+                );
+
+                if (!alreadyReported) {
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: prNumber,
+                    body: [
+                      failedMarker,
+                      '⚠️ Codex follow-up не опубликован в текущий PR.',
+                      '',
+                      'Последний @codex комментарий: ' + latestOwnerCodexComment.created_at + '.',
+                      'Текущий head ' + pr.head.ref + ' остался на ' + pr.head.sha + ' (' +
+                        headCommittedAt.toISOString() + ').',
+                      '',
+                      'Follow-up должен продолжать текущий PR и пушить commit в ту же head-ветку. Новая ветка/новый PR для review follow-up не считаются результатом.',
+                    ].join('\n'),
+                  });
+                }
+
+                core.setFailed(
+                  'Codex follow-up claimed published work, but the existing PR head did not advance.'
+                );
+                return;
+              }
+            }
+
             const changedFiles = await github.paginate(github.rest.pulls.listFiles, {
               owner,
               repo,
@@ -511,12 +578,6 @@ jobs:
               return;
             }
 
-            const prComments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo,
-              issue_number: prNumber,
-              per_page: 100,
-            });
 
             const failedMarker = '<!-- codex-publish-failed -->';
             const alreadyFailed = prComments.some(
