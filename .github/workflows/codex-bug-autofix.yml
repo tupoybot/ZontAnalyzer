@@ -96,7 +96,10 @@ jobs:
             // If an issue has both bug and feature labels, treat it as a bug.
             const issueKind = isBug ? 'bug' : 'feature';
             const issueKindTitle = issueKind === 'bug' ? 'Bug' : 'Feature';
-            const marker = `<!-- codex-issue-dispatch:${issueNumber} -->`;
+            const marker = `<!-- codex-issue-dispatch:${issueNumber}:${issueKind} -->`;
+            const otherKind = issueKind === 'bug' ? 'feature' : 'bug';
+            const otherKindMarker = `<!-- codex-issue-dispatch:${issueNumber}:${otherKind} -->`;
+            const legacyGenericMarker = `<!-- codex-issue-dispatch:${issueNumber} -->`;
             const legacyBugMarker = `<!-- codex-bug-autofix:${issueNumber} -->`;
 
             // Automatic issue events are idempotent. Manual workflow_dispatch is an explicit retry:
@@ -105,7 +108,8 @@ jobs:
               owner, repo, issue_number: issueNumber, per_page: 100,
             });
             const alreadyDispatched = issueComments.some((comment) =>
-              comment.body?.includes(marker) || comment.body?.includes(legacyBugMarker)
+              comment.body?.includes(marker) ||
+              (issueKind === 'bug' && comment.body?.includes(legacyBugMarker))
             );
             const manualRetry = context.eventName === 'workflow_dispatch';
             if (alreadyDispatched && !manualRetry) {
@@ -141,6 +145,8 @@ jobs:
               .filter((comment) =>
                 comment.user?.login === 'tupoybot' &&
                 !comment.body?.includes(marker) &&
+                !comment.body?.includes(otherKindMarker) &&
+                !comment.body?.includes(legacyGenericMarker) &&
                 !comment.body?.includes(legacyBugMarker)
               )
               .map((comment) => comment.body?.trim())
@@ -226,26 +232,42 @@ jobs:
             });
 
             let pr = existingPulls.data.find((item) => item.state === 'open');
-            if (pr && manualRetry) {
+            const prTitle = issueKind === 'bug'
+              ? `Codex: fix #${issueNumber} — ${currentIssue.title}`
+              : `Codex: implement #${issueNumber} — ${currentIssue.title}`;
+            const prBody = [
+              `Automated Codex Cloud work PR for #${issueNumber}.`,
+              '',
+              `Issue: ${currentIssue.html_url}`,
+              `Type: ${issueKind}`,
+              '',
+              'This PR is created only as a GitHub context/branch for Codex Cloud.',
+              'Human review is required before merge.',
+            ].join('\n');
+
+            if (pr) {
               try {
                 await github.rest.pulls.updateBranch({
                   owner,
                   repo,
                   pull_number: pr.number,
                 });
-                core.info('Updated existing Codex work PR branch from current base before retry.');
+                core.info('Updated existing Codex work PR branch from current base.');
               } catch (error) {
                 core.warning(
-                  `Could not update PR #${pr.number} from base before retry: ${error.message}. The new Codex task will still be dispatched; resolve branch drift manually if needed.`
+                  `Could not update PR #${pr.number} from base: ${error.message}. The new Codex task will still be dispatched; resolve branch drift manually if needed.`
                 );
               }
-            }
 
-            if (!pr) {
-              const prTitle = issueKind === 'bug'
-                ? `Codex: fix #${issueNumber} — ${currentIssue.title}`
-                : `Codex: implement #${issueNumber} — ${currentIssue.title}`;
-
+              const updated = await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number: pr.number,
+                title: prTitle,
+                body: prBody,
+              });
+              pr = updated.data;
+            } else {
               const created = await github.rest.pulls.create({
                 owner,
                 repo,
@@ -253,15 +275,7 @@ jobs:
                 base: baseBranch,
                 draft: true,
                 title: prTitle,
-                body: [
-                  `Automated Codex Cloud work PR for #${issueNumber}.`,
-                  '',
-                  `Issue: ${currentIssue.html_url}`,
-                  `Type: ${issueKind}`,
-                  '',
-                  'This PR is created only as a GitHub context/branch for Codex Cloud.',
-                  'Human review is required before merge.',
-                ].join('\n'),
+                body: prBody,
               });
               pr = created.data;
             }
@@ -322,7 +336,7 @@ jobs:
               '- validate application changes with deploy/check-codex-cloud.sh plus focused tests from the prepared Codex venv when useful;',
               '- run the relevant validation for every changed area and report exactly what passed, failed, or could not be run;',
               '- if an external capability unavailable in Codex Cloud blocks only part of validation, complete and test everything else and report the remaining validation explicitly;',
-              `- remove \`${dispatchFile}\` before the implementation is complete;`,
+              `- after successful triage and implementation, remove \`${dispatchFile}\` before the implementation is complete;`,
               '- apply the completed changes to this existing pull request using the Codex GitHub integration; do not rely on a local git remote being configured;',
               '- leave the pull request as draft for human review; do not merge it and do not close the source issue.',
             ];
