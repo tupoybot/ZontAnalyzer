@@ -123,6 +123,25 @@ For substantial implementation tasks:
 
 ## Codex Cloud tasks
 
+### Follow-ups in an existing Codex pull request
+
+- When a task comes from an `@codex` comment inside an existing pull request whose
+  head branch is `codex/issue-N`, that pull request and its current head branch are
+  the authoritative continuation context.
+- Continue from the current remote PR head, not from `main` and not from a new branch.
+  Resolve the PR head with GitHub, fetch it, and base the work on that exact SHA before
+  editing.
+- Never create a `*-review-followup`, `*-fixup`, or other follow-up branch. Never
+  create a second pull request for review feedback or a conversational follow-up.
+- Publish any required follow-up commit directly back to the same existing
+  `codex/issue-N` branch with a normal non-force push.
+- Do not use `make_pr` or merely prepare PR metadata for a follow-up. A local commit
+  is not published work.
+- Before reporting a follow-up change as complete, verify that the existing PR head SHA
+  moved to the new commit and that the intended files are visible in that same PR.
+- If the follow-up only asks a question and no code/document change is needed, answer
+  without creating a commit or branch.
+
 - Codex Cloud runs inside its own prepared container and does not provide a Docker daemon.
   Do not run `docker`, `docker compose`, `deploy/check-local.sh`, image builds, or
   `docker system prune` from a Codex Cloud task.
