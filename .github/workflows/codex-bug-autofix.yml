@@ -1,4 +1,4 @@
-name: Dispatch my bug issues to Codex Cloud
+name: Dispatch my issues to Codex Cloud
 
 on:
   issues:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: codex-bug-${{ github.event.issue.number || inputs.issue_number }}
+  group: codex-issue-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
@@ -24,8 +24,22 @@ jobs:
       (
         github.event.issue.user.login == 'tupoybot' &&
         (
-          (github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'bug')) ||
-          (github.event.action == 'labeled' && github.event.label.name == 'bug')
+          (
+            github.event.action == 'opened' &&
+            (
+              contains(github.event.issue.labels.*.name, 'bug') ||
+              contains(github.event.issue.labels.*.name, 'feature') ||
+              contains(github.event.issue.labels.*.name, 'enhancement')
+            )
+          ) ||
+          (
+            github.event.action == 'labeled' &&
+            (
+              github.event.label.name == 'bug' ||
+              github.event.label.name == 'feature' ||
+              github.event.label.name == 'enhancement'
+            )
+          )
         )
       )
     runs-on: ubuntu-latest
@@ -46,7 +60,6 @@ jobs:
               return;
             }
 
-            const marker = `<!-- codex-bug-autofix:${issueNumber} -->`;
             const branch = `codex/issue-${issueNumber}`;
             const dispatchFile = `.codex/dispatch/issue-${issueNumber}.md`;
 
@@ -70,19 +83,30 @@ jobs:
               return;
             }
 
-            if (currentIssue.user?.login !== 'tupoybot' || !labels.includes('bug')) {
+            const isBug = labels.includes('bug');
+            const isFeature = labels.includes('feature') || labels.includes('enhancement');
+
+            if (currentIssue.user?.login !== 'tupoybot' || (!isBug && !isFeature)) {
               core.setFailed(
-                `Issue #${issueNumber} does not match dispatch policy: author must be tupoybot and label bug must be present.`
+                `Issue #${issueNumber} does not match dispatch policy: author must be tupoybot and one of labels bug, feature, enhancement must be present.`
               );
               return;
             }
+
+            // If an issue has both bug and feature labels, treat it as a bug.
+            const issueKind = isBug ? 'bug' : 'feature';
+            const issueKindTitle = issueKind === 'bug' ? 'Bug' : 'Feature';
+            const marker = `<!-- codex-issue-dispatch:${issueNumber} -->`;
+            const legacyBugMarker = `<!-- codex-bug-autofix:${issueNumber} -->`;
 
             // Automatic issue events are idempotent. Manual workflow_dispatch is an explicit retry:
             // it reuses the existing work PR and posts a fresh @codex task comment.
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number: issueNumber, per_page: 100,
             });
-            const alreadyDispatched = comments.some((comment) => comment.body?.includes(marker));
+            const alreadyDispatched = comments.some((comment) =>
+              comment.body?.includes(marker) || comment.body?.includes(legacyBugMarker)
+            );
             const manualRetry = context.eventName === 'workflow_dispatch';
             if (alreadyDispatched && !manualRetry) {
               core.info('Codex already dispatched for this issue.');
@@ -114,10 +138,11 @@ jobs:
 
             const body = currentIssue.body?.trim() || '_Описание отсутствует._';
             const issueSnapshot = [
-              `# Bug #${issueNumber}: ${currentIssue.title}`,
+              `# ${issueKindTitle} #${issueNumber}: ${currentIssue.title}`,
               '',
               `Source: ${currentIssue.html_url}`,
               `Author: @${currentIssue.user.login}`,
+              `Type: ${issueKind}`,
               '',
               '## Issue body',
               '',
@@ -125,7 +150,7 @@ jobs:
               '',
               '---',
               '',
-              'This file is an automation handoff artifact. Remove it before the fix is complete.',
+              'This file is an automation handoff artifact. Remove it before the task is complete.',
               '',
             ].join('\n');
 
@@ -145,7 +170,7 @@ jobs:
                 repo,
                 path: dispatchFile,
                 branch,
-                message: `chore: dispatch bug #${issueNumber} to Codex`,
+                message: `chore: dispatch ${issueKind} #${issueNumber} to Codex`,
                 content: Buffer.from(issueSnapshot, 'utf8').toString('base64'),
               });
             }
@@ -174,18 +199,24 @@ jobs:
                 );
               }
             }
+
             if (!pr) {
+              const prTitle = issueKind === 'bug'
+                ? `Codex: fix #${issueNumber} — ${currentIssue.title}`
+                : `Codex: implement #${issueNumber} — ${currentIssue.title}`;
+
               const created = await github.rest.pulls.create({
                 owner,
                 repo,
                 head: branch,
                 base: baseBranch,
                 draft: true,
-                title: `Codex: fix #${issueNumber} — ${currentIssue.title}`,
+                title: prTitle,
                 body: [
                   `Automated Codex Cloud work PR for #${issueNumber}.`,
                   '',
                   `Issue: ${currentIssue.html_url}`,
+                  `Type: ${issueKind}`,
                   '',
                   'This PR is created only as a GitHub context/branch for Codex Cloud.',
                   'Human review is required before merge.',
@@ -194,16 +225,32 @@ jobs:
               pr = created.data;
             }
 
-            const codexPrompt = [
-              '@codex Fix the bug described in the linked issue.',
+            // Keep bug and feature prompts separate so they can evolve independently.
+            const taskPrompt = issueKind === 'bug'
+              ? [
+                  '@codex Fix the bug described in the linked issue.',
+                  '',
+                  'Bug-specific requirements:',
+                  '- reproduce or establish the bug from repository evidence before changing code;',
+                  '- implement the smallest correct fix;',
+                  '- add or update a regression test when practical;',
+                ]
+              : [
+                  '@codex Implement the feature described in the linked issue.',
+                  '',
+                  'Feature-specific requirements:',
+                  '- establish the requested behavior and acceptance criteria from the issue and repository evidence before changing code;',
+                  '- implement the feature completely rather than stopping after a plan;',
+                  '- preserve existing behavior unless the issue explicitly requires changing it;',
+                  '- add or update tests for the new behavior when practical;',
+                ];
+
+            const sharedPrompt = [
               '',
               `Issue: #${issueNumber} — ${currentIssue.title}`,
               `Read \`${dispatchFile}\` first; it contains the issue snapshot.`,
               '',
-              'Requirements:',
-              '- reproduce or establish the bug from repository evidence before changing code;',
-              '- implement the smallest correct fix;',
-              '- add or update a regression test when practical;',
+              'Shared requirements:',
               '- follow AGENTS.md and repository-specific instructions;',
               '- write GitHub comments, progress updates, and the final human-facing summary in Russian; keep code identifiers, commands, and literal error text unchanged where appropriate;',
               '- this is Codex Cloud: do not use Docker; validate with deploy/check-codex-cloud.sh and focused tests from the prepared Codex venv;',
@@ -211,7 +258,9 @@ jobs:
               `- remove \`${dispatchFile}\` before finishing;`,
               '- apply the completed changes to this existing pull request using the Codex GitHub integration; do not rely on a local git remote being configured;',
               '- do not merge the PR and do not close the issue; leave both for human review.',
-            ].join('\n');
+            ];
+
+            const codexPrompt = [...taskPrompt, ...sharedPrompt].join('\n');
 
             await github.rest.issues.createComment({
               owner,
@@ -226,11 +275,15 @@ jobs:
               issue_number: issueNumber,
               body: [
                 marker,
-                manualRetry ? `🔁 Codex Cloud re-dispatched: #${pr.number}` : `🤖 Codex Cloud dispatched: #${pr.number}`,
+                manualRetry
+                  ? `🔁 Codex Cloud re-dispatched: #${pr.number}`
+                  : `🤖 Codex Cloud dispatched: #${pr.number}`,
                 pr.html_url,
               ].join('\n'),
             });
 
-            core.notice(`Dispatched issue #${issueNumber} to Codex via PR #${pr.number}`);
+            core.notice(
+              `Dispatched ${issueKind} issue #${issueNumber} to Codex via PR #${pr.number}`
+            );
         env:
           CODEX_GITHUB_TOKEN_PRESENT: ${{ secrets.CODEX_GITHUB_TOKEN != '' }}
