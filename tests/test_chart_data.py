@@ -34,6 +34,7 @@ def _report(context: dict) -> Report:
     )
 
 
+@pytest.mark.ydb
 def test_chart_data_reuses_report_selected_series_and_keeps_observed_gap(tmp_path) -> None:
     db: Database = make_database(tmp_path)
     start = datetime(2026, 9, 1, tzinfo=UTC)
@@ -73,6 +74,7 @@ def test_chart_data_reuses_report_selected_series_and_keeps_observed_gap(tmp_pat
     assert any(item.get("gap_before") is True for item in points)
 
 
+@pytest.mark.ydb
 def test_chart_data_exposes_explicit_ch_dhw_and_concurrent_state_bands(tmp_path) -> None:
     db: Database = make_database(tmp_path)
     start = datetime(2026, 9, 1, tzinfo=UTC)
@@ -127,6 +129,7 @@ def test_decimation_keeps_both_edges_of_setpoint_change() -> None:
     assert start + timedelta(minutes=500) in timestamps
 
 
+@pytest.mark.ydb
 def test_publication_passes_chart_packet_to_archive_renderer(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     start = datetime(2026, 9, 1, tzinfo=UTC)
@@ -149,6 +152,7 @@ def test_publication_passes_chart_packet_to_archive_renderer(tmp_path) -> None:
     assert "Контрольная температура" in rendered
 
 
+@pytest.mark.ydb
 def test_chart_data_cache_reuses_canonical_report_and_invalidates_on_change(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -188,6 +192,7 @@ def test_chart_data_cache_reuses_canonical_report_and_invalidates_on_change(
     assert db.get_app_meta(_cache_key(report)[0])
 
 
+@pytest.mark.ydb
 def test_held_setpoint_spans_report_but_stops_at_explicit_unknown(tmp_path):
     db: Database = make_database(tmp_path)
     report = _report({})

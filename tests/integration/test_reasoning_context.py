@@ -1,6 +1,8 @@
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from tests.ydb_support import make_runtime
 from zont_analyzer.adapters.openai.provider import (
     _StructuredAnalysisResult,
@@ -12,6 +14,7 @@ from zont_analyzer.domain import DetectedEvent, QualityResult, Report
 from zont_analyzer.domain.reasoning import Hypothesis, TimeInterval
 
 
+@pytest.mark.ydb
 def test_history_excludes_overlapping_and_future_reports_and_keeps_epistemic_scope(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     start = datetime(2026, 8, 4, tzinfo=UTC)

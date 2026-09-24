@@ -46,6 +46,7 @@ def _manual(fields: dict[str, object], effective_from: str | None = None) -> dic
     return payload
 
 
+@pytest.mark.ydb
 def test_auto_provenance_is_not_the_auto_source_and_repeated_discovery_is_idempotent(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     facts = {"coordinates": {"value": {"latitude": 48.25, "longitude": 12.5}, "source": "zont:loc"}}
@@ -56,6 +57,7 @@ def test_auto_provenance_is_not_the_auto_source_and_repeated_discovery_is_idempo
     assert len(again["history"]) == 1
 
 
+@pytest.mark.ydb
 def test_manual_override_survives_later_auto_discovery_until_reset(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     store.observe_auto("device", {"boiler_model": {"value": "Auto A", "source": "zont:a"}})
@@ -64,6 +66,7 @@ def test_manual_override_survives_later_auto_discovery_until_reset(tmp_path: Pat
     assert store.profile("device")["fields"]["boiler_model"]["value"] == "Owner model"
 
 
+@pytest.mark.ydb
 def test_reset_returns_latest_auto_and_future_auto_updates_continue(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     store.observe_auto("device", {"boiler_model": {"value": "A", "source": "zont:a"}})
@@ -75,6 +78,7 @@ def test_reset_returns_latest_auto_and_future_auto_updates_continue(tmp_path: Pa
     assert store.profile("device")["fields"]["boiler_model"]["value"] == "C"
 
 
+@pytest.mark.ydb
 def test_future_effective_manual_value_does_not_rewrite_default_history(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     store.observe_auto("device", {"auto_adapt": {"value": True, "source": "zont:auto"}}, "2026-01-01T00:00:00Z")
@@ -83,6 +87,7 @@ def test_future_effective_manual_value_does_not_rewrite_default_history(tmp_path
     assert store.profile("device", "2030-01-01T01:00:00Z")["fields"]["auto_adapt"]["value"] is False
 
 
+@pytest.mark.ydb
 def test_profile_history_and_field_timestamps_are_utc_iso(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     result = store.update_profile("device", _manual({"auto_adapt": None}, "2026-01-01T03:00:00+03:00"))
@@ -100,6 +105,7 @@ def test_profile_history_and_field_timestamps_are_utc_iso(tmp_path: Path) -> Non
         {"fields": {"missing": {"value": True}}},
     ],
 )
+@pytest.mark.ydb
 def test_profile_payload_shape_is_strict(tmp_path: Path, payload: dict[str, object]) -> None:
     _, store = _store(tmp_path)
     with pytest.raises(ValueError):
@@ -107,12 +113,14 @@ def test_profile_payload_shape_is_strict(tmp_path: Path, payload: dict[str, obje
 
 
 @pytest.mark.parametrize("value", ["x", 1, [], {}])
+@pytest.mark.ydb
 def test_tristates_reject_non_tristate_values(tmp_path: Path, value: object) -> None:
     _, store = _store(tmp_path)
     with pytest.raises(ValueError, match="auto_adapt"):
         store.update_profile("device", _manual({"auto_adapt": value}))
 
 
+@pytest.mark.ydb
 def test_coordinates_require_exact_object_scalars_and_geographic_bounds(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     ok = store.update_profile("device", _manual({"coordinates": {"latitude": 48.25, "longitude": 12.5}}))
@@ -126,6 +134,7 @@ def test_coordinates_require_exact_object_scalars_and_geographic_bounds(tmp_path
     ("latitude", "longitude"),
     [("48,25", "12,5"), ("48.25", "12.5"), (-48.25, "+12,5")],
 )
+@pytest.mark.ydb
 def test_coordinates_accept_signed_numbers_with_comma_or_point(
     tmp_path: Path,
     latitude: object,
@@ -140,6 +149,7 @@ def test_coordinates_accept_signed_numbers_with_comma_or_point(
     assert coordinates == {"latitude": float(str(latitude).replace(",", ".")), "longitude": 12.5}
 
 
+@pytest.mark.ydb
 def test_profile_numbers_and_gas_bounds_are_validated(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     with pytest.raises(ValueError, match="positive finite"):
@@ -151,6 +161,7 @@ def test_profile_numbers_and_gas_bounds_are_validated(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("value", ["2,69", "2.69", 2.69])
+@pytest.mark.ydb
 def test_profile_numbers_accept_comma_or_point(tmp_path: Path, value: object) -> None:
     _, store = _store(tmp_path)
     result = store.update_profile("device", _manual({"gas_max_m3h": value}))
@@ -158,6 +169,7 @@ def test_profile_numbers_accept_comma_or_point(tmp_path: Path, value: object) ->
 
 
 @pytest.mark.parametrize("value", ["2,6.9", "--2", "NaN", "Infinity", "-1", "0", True, ""])
+@pytest.mark.ydb
 def test_invalid_profile_number_does_not_change_existing_data(tmp_path: Path, value: object) -> None:
     _, store = _store(tmp_path)
     original = store.update_profile("device", _manual({"gas_max_m3h": "2,69"}))
@@ -171,6 +183,7 @@ def test_invalid_profile_number_does_not_change_existing_data(tmp_path: Path, va
     assert after["history"] == original["history"]
 
 
+@pytest.mark.ydb
 def test_profile_units_source_applicability_and_dhw_enum_are_strict(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     result = store.update_profile(
@@ -193,6 +206,7 @@ def test_profile_units_source_applicability_and_dhw_enum_are_strict(tmp_path: Pa
         store.update_profile("device", _manual({"dhw_type": "boiler"}))
 
 
+@pytest.mark.ydb
 def test_empty_profile_update_is_an_optional_noop_and_null_is_explicit_unknown(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     assert store.update_profile("device", {"fields": {}})["history"] == []
@@ -202,6 +216,7 @@ def test_empty_profile_update_is_an_optional_noop_and_null_is_explicit_unknown(t
         store.profile("missing")
 
 
+@pytest.mark.ydb
 def test_concurrent_profile_writes_preserve_one_manual_revision(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
 
@@ -213,6 +228,7 @@ def test_concurrent_profile_writes_preserve_one_manual_revision(tmp_path: Path) 
     assert len(store.profile("device")["history"]) == 1
 
 
+@pytest.mark.ydb
 def test_gas_is_daily_and_day_is_server_authoritative(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "weekly", kind="weekly")
@@ -222,6 +238,7 @@ def test_gas_is_daily_and_day_is_server_authoritative(tmp_path: Path) -> None:
         store.update_gas("missing", {"value_m3": "1"})
 
 
+@pytest.mark.ydb
 def test_gas_aliases_for_same_daily_day_share_one_reading(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -232,6 +249,7 @@ def test_gas_aliases_for_same_daily_day_share_one_reading(tmp_path: Path) -> Non
     assert alias["time_precision"] == "day"
 
 
+@pytest.mark.ydb
 def test_gas_selected_day_does_not_need_a_report_and_exposes_report_metadata(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "older", day=86400 * 20)
@@ -247,6 +265,7 @@ def test_gas_selected_day_does_not_need_a_report_and_exposes_report_metadata(tmp
     assert latest["reading"]["id"] == saved["reading"]["id"]
 
 
+@pytest.mark.ydb
 def test_gas_explicit_reading_id_moves_atomically_and_audit_is_visible_from_both_days(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -260,6 +279,7 @@ def test_gas_explicit_reading_id_moves_atomically_and_audit_is_visible_from_both
     assert store.gas("r1", "1970-01-20")["audit"][-1]["action"] == "move"
 
 
+@pytest.mark.ydb
 def test_gas_move_rejects_occupied_target_and_monotonic_neighbors_without_changing_state(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -272,6 +292,7 @@ def test_gas_move_rejects_occupied_target_and_monotonic_neighbors_without_changi
     assert store.gas("r1", "1970-01-20")["reading"]["value_m3"] == "10"
 
 
+@pytest.mark.ydb
 def test_gas_explicit_null_reading_id_is_create_only_and_reset_boundary_cannot_move(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -285,6 +306,7 @@ def test_gas_explicit_null_reading_id_is_create_only_and_reset_boundary_cannot_m
 
 
 @pytest.mark.parametrize("day", ["1970-1-20", "1970-01-32", "1970-01-20T00:00:00", 19700120])
+@pytest.mark.ydb
 def test_gas_selected_day_is_strict(tmp_path: Path, day: object) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -292,6 +314,7 @@ def test_gas_selected_day_is_strict(tmp_path: Path, day: object) -> None:
         store.update_gas("r1", {"day": day, "value_m3": 10})
 
 
+@pytest.mark.ydb
 def test_gas_state_is_idempotent_without_an_idempotency_key(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -301,6 +324,7 @@ def test_gas_state_is_idempotent_without_an_idempotency_key(tmp_path: Path) -> N
     assert len(again["audit"]) == 1
 
 
+@pytest.mark.ydb
 def test_gas_payload_is_strict_and_decimal_exponents_are_bounded(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -313,6 +337,7 @@ def test_gas_payload_is_strict_and_decimal_exponents_are_bounded(tmp_path: Path)
 
 
 @pytest.mark.parametrize("value", ["10,250001", "10.250001"])
+@pytest.mark.ydb
 def test_gas_reading_accepts_comma_or_point_with_exact_precision(tmp_path: Path, value: str) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -321,6 +346,7 @@ def test_gas_reading_accepts_comma_or_point_with_exact_precision(tmp_path: Path,
 
 
 @pytest.mark.parametrize("value", ["1,2.3", "1.2,3", "NaN", "-1", True])
+@pytest.mark.ydb
 def test_invalid_gas_reading_does_not_change_existing_data(tmp_path: Path, value: object) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -330,6 +356,7 @@ def test_invalid_gas_reading_does_not_change_existing_data(tmp_path: Path, value
     assert store.gas("r1") == original
 
 
+@pytest.mark.ydb
 def test_gas_monotonicity_is_checked_inside_server_meter_segment(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -340,6 +367,7 @@ def test_gas_monotonicity_is_checked_inside_server_meter_segment(tmp_path: Path)
     store.update_gas("r2", {"value_m3": 11})
 
 
+@pytest.mark.ydb
 def test_reset_boundary_persists_and_applies_to_out_of_order_days(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -352,6 +380,7 @@ def test_reset_boundary_persists_and_applies_to_out_of_order_days(tmp_path: Path
     assert store.gas("r3")["reading"]["meter_segment"] == reset["reading"]["meter_segment"]
 
 
+@pytest.mark.ydb
 def test_correction_does_not_erase_existing_reset_boundary(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -362,6 +391,7 @@ def test_correction_does_not_erase_existing_reset_boundary(tmp_path: Path) -> No
     assert corrected["reading"] is not None and corrected["reading"]["meter_segment"].startswith("reset:")
 
 
+@pytest.mark.ydb
 def test_delete_preserves_reset_boundary_and_returns_deleted_audit(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -373,6 +403,7 @@ def test_delete_preserves_reset_boundary_and_returns_deleted_audit(tmp_path: Pat
     assert store.gas("r2")["reading"]["meter_segment"].startswith("reset:")
 
 
+@pytest.mark.ydb
 def test_gas_plausibility_is_explicitly_unknown_without_profile_data(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -381,6 +412,7 @@ def test_gas_plausibility_is_explicitly_unknown_without_profile_data(tmp_path: P
     assert "время горения" not in result["plausibility"]["reason"]
 
 
+@pytest.mark.ydb
 def test_gas_plausibility_warns_only_against_historical_known_maximum(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -401,6 +433,7 @@ def test_gas_plausibility_warns_only_against_historical_known_maximum(tmp_path: 
     assert result["plausibility"]["warnings"]
 
 
+@pytest.mark.ydb
 def test_current_passport_value_is_visible_but_not_applied_before_its_effective_time(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
@@ -420,6 +453,7 @@ def test_current_passport_value_is_visible_but_not_applied_before_its_effective_
     assert "на всём интервале" in plausibility["reason"]
 
 
+@pytest.mark.ydb
 def test_default_profile_time_is_refreshed_after_waiting_for_writer(tmp_path: Path, monkeypatch) -> None:
     from datetime import UTC, datetime
 

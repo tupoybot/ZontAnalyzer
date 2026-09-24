@@ -12,6 +12,7 @@ from zont_analyzer.application.feedback import publish_feedback_report
 from zont_analyzer.application.pilot import reports_directory
 
 
+@pytest.mark.ydb
 def test_only_completed_existing_periods_are_published_and_latest_stays_daily(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     analysis = runtime.analysis(no_ai=True)
@@ -46,6 +47,7 @@ def test_only_completed_existing_periods_are_published_and_latest_stays_daily(tm
     assert month.id != day.id
 
 
+@pytest.mark.ydb
 def test_empty_archive_and_incomplete_or_corrupt_exports_do_not_get_links(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     output = reports_directory(runtime)
@@ -58,6 +60,7 @@ def test_empty_archive_and_incomplete_or_corrupt_exports_do_not_get_links(tmp_pa
     assert not (output / "latest.html").exists()
 
 
+@pytest.mark.ydb
 def test_failed_publication_keeps_manifest_and_latest_complete(tmp_path: Path, monkeypatch) -> None:
     runtime = make_runtime(tmp_path)
     runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -84,6 +87,7 @@ def test_failed_publication_keeps_manifest_and_latest_complete(tmp_path: Path, m
     assert not list(output.rglob("*.tmp"))
 
 
+@pytest.mark.ydb
 def test_report_calculated_before_period_end_is_not_completed(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     report = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -91,6 +95,7 @@ def test_report_calculated_before_period_end_is_not_completed(tmp_path: Path) ->
     assert runtime.db.completed_reports(datetime(2026, 9, 1, tzinfo=UTC)) == []
 
 
+@pytest.mark.ydb
 def test_feedback_publication_refreshes_only_requested_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = make_runtime(tmp_path)
     analysis = runtime.analysis(no_ai=True)
@@ -116,6 +121,7 @@ def test_feedback_publication_refreshes_only_requested_report(tmp_path: Path, mo
     assert daily.id != weekly.id
 
 
+@pytest.mark.ydb
 def test_feedback_can_create_first_calendar_publication(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     analysis = runtime.analysis(no_ai=True)
@@ -129,6 +135,7 @@ def test_feedback_can_create_first_calendar_publication(tmp_path: Path) -> None:
     assert latest.recommendations[0].id not in (output / "latest.html").read_text(encoding="utf-8")
 
 
+@pytest.mark.ydb
 def test_feedback_publication_does_not_overwrite_newer_same_period_snapshot(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     report = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 3), use_ai=False)
@@ -145,6 +152,7 @@ def test_feedback_publication_does_not_overwrite_newer_same_period_snapshot(tmp_
 
 
 @pytest.mark.parametrize("manifest_state", ["valid", "missing", "corrupt"])
+@pytest.mark.ydb
 def test_old_day_feedback_preserves_latest_and_archive_index(tmp_path: Path, manifest_state: str) -> None:
     runtime = make_runtime(tmp_path)
     old = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -172,6 +180,7 @@ def test_old_day_feedback_preserves_latest_and_archive_index(tmp_path: Path, man
     assert "Latest comment" in (output / "latest.html").read_text()
 
 
+@pytest.mark.ydb
 def test_feedback_on_superseded_report_or_initial_does_not_replace_archive(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     old = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 3), use_ai=False)

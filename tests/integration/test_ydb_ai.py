@@ -11,6 +11,7 @@ import pytest
 from zont_analyzer.adapters.ydb.ai import AiResponseCache, ModelReviewRunRepository
 
 
+@pytest.mark.ydb
 def test_success_cache_is_immutable_and_keeps_unknown_model(ydb_database: object) -> None:
     cache = AiResponseCache(ydb_database, clock=lambda: 42)  # type: ignore[arg-type]
     fingerprint = uuid4().hex
@@ -25,6 +26,7 @@ def test_success_cache_is_immutable_and_keeps_unknown_model(ydb_database: object
     assert cache.get(fingerprint).model == "historical-unknown-model"  # type: ignore[union-attr]
 
 
+@pytest.mark.ydb
 def test_concurrent_cache_collision_has_one_immutable_winner(ydb_database: object) -> None:
     cache = AiResponseCache(ydb_database)  # type: ignore[arg-type]
     fingerprint = uuid4().hex
@@ -43,6 +45,7 @@ def test_concurrent_cache_collision_has_one_immutable_winner(ydb_database: objec
     assert cache.get(fingerprint) is not None
 
 
+@pytest.mark.ydb
 def test_model_review_run_and_state_commit_together(ydb_database: object) -> None:
     repo = ModelReviewRunRepository(ydb_database)  # type: ignore[arg-type]
     scope = uuid4().hex

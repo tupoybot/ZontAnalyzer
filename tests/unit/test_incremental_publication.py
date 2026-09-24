@@ -39,6 +39,7 @@ def _record_change(db, scope: str, identifier: str) -> None:
     db.storage.transaction(write)
 
 
+@pytest.mark.ydb
 def test_noop_does_not_recalculate_or_walk_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = _runtime(tmp_path)
     _daily_reports(runtime, 1)
@@ -56,6 +57,7 @@ def test_noop_does_not_recalculate_or_walk_database(tmp_path: Path, monkeypatch:
     assert result["pending_reports"] == 0
 
 
+@pytest.mark.ydb
 def test_changed_stored_summary_refreshes_one_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = _runtime(tmp_path)
     report = _daily_reports(runtime, 2)
@@ -78,6 +80,7 @@ def test_changed_stored_summary_refreshes_one_report(tmp_path: Path, monkeypatch
     assert result["rendered_reports"] == 1
 
 
+@pytest.mark.ydb
 def test_initial_publish_is_bounded_and_restart_can_drain_with_daily_latest(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     daily = _daily_reports(runtime, 3)
@@ -99,6 +102,7 @@ def test_initial_publish_is_bounded_and_restart_can_drain_with_daily_latest(tmp_
     assert sum(item["rendered_reports"] for item in results) >= 4
 
 
+@pytest.mark.ydb
 def test_publication_failure_leaves_pending_work_for_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = _runtime(tmp_path)
     _daily_reports(runtime, 1)
@@ -120,6 +124,7 @@ def test_publication_failure_leaves_pending_work_for_retry(tmp_path: Path, monke
     assert result["rendered_reports"] == 1
 
 
+@pytest.mark.ydb
 def test_new_week_is_published_before_old_archive_maintenance(tmp_path: Path) -> None:
     import json
 
@@ -140,6 +145,7 @@ def test_new_week_is_published_before_old_archive_maintenance(tmp_path: Path) ->
     assert result["latest_report_id"] == daily[-1].id
 
 
+@pytest.mark.ydb
 def test_global_gas_change_is_bounded_and_latest_is_first(tmp_path: Path) -> None:
     from zont_analyzer.application.owner_context import OwnerContextStore
     from zont_analyzer.application.pilot import reports_directory
@@ -156,6 +162,7 @@ def test_global_gas_change_is_bounded_and_latest_is_first(tmp_path: Path) -> Non
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
+@pytest.mark.ydb
 def test_tariff_change_recalculates_cost_without_gas_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from zont_analyzer.application.gas_tariffs import GasTariffStore
 
@@ -168,6 +175,7 @@ def test_tariff_change_recalculates_cost_without_gas_model(tmp_path: Path, monke
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
+@pytest.mark.ydb
 def test_exact_tariff_marker_recalculates_only_affected_period(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     _daily_reports(runtime, 2)
@@ -177,6 +185,7 @@ def test_exact_tariff_marker_recalculates_only_affected_period(tmp_path: Path) -
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
+@pytest.mark.ydb
 def test_telemetry_outside_archive_is_idle_and_late_hour_is_targeted(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     reports = _daily_reports(runtime, 3)
@@ -189,6 +198,7 @@ def test_telemetry_outside_archive_is_idle_and_late_hour_is_targeted(tmp_path: P
     assert reports[0].id != reports[-1].id
 
 
+@pytest.mark.ydb
 def test_calibration_telemetry_invalidates_reports_outside_sample_window(tmp_path: Path) -> None:
     from zont_analyzer.application.owner_context import OwnerContextStore
 
@@ -204,6 +214,7 @@ def test_calibration_telemetry_invalidates_reports_outside_sample_window(tmp_pat
     assert result["pending_reports"] == 3
 
 
+@pytest.mark.ydb
 def test_change_during_publication_remains_pending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from zont_analyzer.application.owner_context import OwnerContextStore
     from zont_analyzer.application.pilot import reports_directory
@@ -228,6 +239,7 @@ def test_change_during_publication_remains_pending(tmp_path: Path, monkeypatch: 
 
 
 @pytest.mark.parametrize("damage", ["missing_manifest", "missing_html", "corrupt_json", "missing_latest", "rebuild"])
+@pytest.mark.ydb
 def test_durable_index_and_artifact_recovery(tmp_path: Path, damage: str) -> None:
     from zont_analyzer.application.pilot import reports_directory
 
@@ -249,6 +261,7 @@ def test_durable_index_and_artifact_recovery(tmp_path: Path, damage: str) -> Non
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
+@pytest.mark.ydb
 def test_local_artifact_loss_recovers_from_canonical_ydb(tmp_path: Path) -> None:
     import shutil
 
@@ -268,6 +281,7 @@ def test_local_artifact_loss_recovers_from_canonical_ydb(tmp_path: Path) -> None
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
+@pytest.mark.ydb
 def test_comparison_is_requeued_when_its_source_finishes_in_later_batch(tmp_path: Path, monkeypatch) -> None:
 
     runtime = _runtime(tmp_path)

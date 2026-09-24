@@ -1,0 +1,272 @@
+{
+  "commit": "468fd2959d2769a84e585f55287e1c082ee208c7",
+  "working_tree_dirty": false,
+  "test_image_id": "sha256:e98920e064c4e01d4d25a13e57c5bc7734bbddf87e70e2d4f85ef641909f932e",
+  "test_image_fingerprint": "sha256:0eb5661b1a6eea1e0aec9aaadf7d706e32999b7dbdd9b17d8bf3bf92a46d7bc4",
+  "ydb_image_digest": "sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402",
+  "tests_tree_sha256": "4a917be9faeeac7e36e4ed74fdedb3b85a3f515eb043a977c5a1e3875c4f5a3b",
+  "command": "deploy/check-tests.sh",
+  "args": [
+    "tests",
+    "--durations=0",
+    "--durations-min=0"
+  ],
+  "ydb_workers": 2,
+  "exit_status": 0,
+  "measured_wall_seconds": 176.442,
+  "phases": {
+    "pure_tests": 22.201,
+    "preparation": 0.047,
+    "ydb_startup": 7.402,
+    "ydb_readiness": 1.653,
+    "pytest": 141.576,
+    "cli_smoke": 3.043
+  },
+  "test_count": 864,
+  "phase_seconds": {
+    "setup": 6.057309363999991,
+    "call": 138.82902211400022,
+    "teardown": 136.47316867600006
+  },
+  "failures": [],
+  "skipped": [],
+  "host": {
+    "cpu_count": 4,
+    "memory_total_bytes": 16766414848
+  },
+  "docker_daemon": {
+    "cpu_count": 4,
+    "memory_total_bytes": 16766414848
+  },
+  "container_limits": {
+    "pure": {
+      "nano_cpus": 2000000000,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 1073741824,
+      "memory_swap_bytes": 1073741824,
+      "pids_limit": null
+    },
+    "ydb": {
+      "nano_cpus": 2000000000,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 5368709120,
+      "memory_swap_bytes": 5368709120,
+      "pids_limit": null
+    },
+    "test": {
+      "nano_cpus": 2000000000,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 1073741824,
+      "memory_swap_bytes": 1073741824,
+      "pids_limit": null
+    }
+  },
+  "resources": {
+    "pure": {
+      "samples": 11,
+      "cpu_percent_peak": 111.76,
+      "memory_bytes_peak": 141452902.4,
+      "block_read_bytes": 0,
+      "block_write_bytes": 0,
+      "cpu_percent_mean": 89.55272727272728
+    },
+    "ydb": {
+      "samples": 72,
+      "cpu_percent_peak": 222.07,
+      "memory_bytes_peak": 1394790629.376,
+      "block_read_bytes": 8490000,
+      "block_write_bytes": 676000,
+      "cpu_percent_mean": 103.27819444444445
+    },
+    "test": {
+      "samples": 71,
+      "cpu_percent_peak": 203.98,
+      "memory_bytes_peak": 295069286.4,
+      "block_read_bytes": 0,
+      "block_write_bytes": 0,
+      "cpu_percent_mean": 66.09098591549296
+    }
+  },
+  "schema_pool": {
+    "schema_creations": 12,
+    "schema_reuses": 396,
+    "schema_resets": 400,
+    "schema_quarantines": 5
+  },
+  "sampling_errors": 1,
+  "slowest": [
+    {
+      "nodeid": "tests/integration/test_stage8_savings_workflow.py::test_manual_intervention_prediction_is_frozen_then_checked_by_later_meter_readings",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.000876226000002589,
+      "call": 5.752756247999997,
+      "teardown": 0.2131962050000027,
+      "total": 5.9668286790000025,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_tariff_forms.py::test_tariff_audit_is_script_safe_and_client_renders_it_as_text",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0013722629999506353,
+      "call": 0.06562309599996752,
+      "teardown": 4.515399169000034,
+      "total": 4.582394527999952,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_historical_gas_recalibrates_outside_interval_preserves_ai_feedback_and_versions",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.0008403180000016164,
+      "call": 4.246789809999996,
+      "teardown": 0.212765375999993,
+      "total": 4.46039550399999,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_incremental_publication.py::test_new_week_is_published_before_old_archive_maintenance",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0011472719999972014,
+      "call": 3.512214,
+      "teardown": 0.21422521299999175,
+      "total": 3.727586484999989,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_publication.py::test_only_completed_existing_periods_are_published_and_latest_stays_daily",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.0012315499999999702,
+      "call": 3.401401973999981,
+      "teardown": 0.21710478299999636,
+      "total": 3.6197383069999773,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_target_aggregation.py::test_late_single_snapshot_cannot_become_whole_period_mean",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.0010818210000138606,
+      "call": 0.32084701799999493,
+      "teardown": 2.5471012969999833,
+      "total": 2.869030135999992,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.0009046000000125787,
+      "call": 2.493082743000002,
+      "teardown": 0.21308244499999773,
+      "total": 2.7070697880000125,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_cloud_runtime.py::test_job_rejects_concurrency_and_recovers_after_timeout",
+      "group": "pure",
+      "worker": "main",
+      "setup": 0.0006931249999979627,
+      "call": 2.26541478499999,
+      "teardown": 0.36930768200001296,
+      "total": 2.635415592000001,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_persisted_gas_context_is_equal_after_json_roundtrip",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.0015197689999979502,
+      "call": 2.236867907000004,
+      "teardown": 0.21193711300000473,
+      "total": 2.450324789000007,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_ci_ydb_isolation.py::test_background_drain_timeout_quarantines_every_lease[regenerate-blocked-isolation]",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0009537710000131483,
+      "call": 1.8579671539999936,
+      "teardown": 0.5871739359999992,
+      "total": 2.446094861000006,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_meter_intervals_follow_selected_days_without_reports_and_recalibrate_after_move",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.0008434549999947194,
+      "call": 2.220671194000005,
+      "teardown": 0.21255808299997625,
+      "total": 2.4340727319999758,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_cloud_runtime.py::test_analytics_job_is_repeatable_and_rejects_malformed_input",
+      "group": "pure",
+      "worker": "main",
+      "setup": 0.0007401120000025685,
+      "call": 1.9319572620000116,
+      "teardown": 0.4999801179999963,
+      "total": 2.4326774920000105,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_owner_http.py::test_owner_roundtrip_is_daily_scoped_idempotent_and_preserves_feedback",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.9771096339999872,
+      "call": 0.766222737000021,
+      "teardown": 0.6886309889999893,
+      "total": 2.4319633599999975,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_frozen_calibration_version_does_not_depend_on_subsequent_meter_readings",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.001075348000000531,
+      "call": 2.1374031439999897,
+      "teardown": 0.2164264630000048,
+      "total": 2.354904954999995,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_full_accounting_interval_is_measured_with_day_precision_not_daily_interpolation",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.002092070000003332,
+      "call": 2.1069077840000148,
+      "teardown": 0.21290233799999214,
+      "total": 2.3219021920000102,
+      "outcomes": "passed/passed/passed"
+    }
+  ],
+  "ydb_final_cgroup": {
+    "read_bytes": 8491008,
+    "written_bytes": 716800,
+    "write_operations": 29,
+    "cpu_usage_usec": 133836184,
+    "cpu_throttled_usec": 1727264,
+    "periods": 1464,
+    "throttled_periods": 60,
+    "memory_max_events": 0,
+    "oom_events": 0,
+    "oom_kills": 0
+  },
+  "storage_mode": {
+    "in_memory": true,
+    "pdisk_count": 1
+  },
+  "groups": {
+    "ydb": 394,
+    "pure": 470
+  }
+}

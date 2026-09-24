@@ -1,0 +1,233 @@
+{
+  "commit": "dbdde91bdc79c29cf6abcf8709dd2116a435b495",
+  "working_tree_dirty": null,
+  "test_image_id": "sha256:e3e5b3cab2e5cc288c74e186315632f5d60b8ae48053f15b0e858aa802b300c0",
+  "test_image_fingerprint": null,
+  "ydb_image_digest": "sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402",
+  "tests_tree_sha256": "91eccd0f7e4aa16b34c8ea9f60d3fc655f50cf3201440ed3ef0064fd7246cd55",
+  "command": "deploy/check-ydb.sh",
+  "args": [
+    "tests",
+    "--durations=0",
+    "--durations-min=0",
+    "-p",
+    "tools.pytest_metrics",
+    "--junitxml=/metrics/junit.xml"
+  ],
+  "ydb_workers": 1,
+  "exit_status": 0,
+  "measured_wall_seconds": 926.244,
+  "phases": {
+    "preparation": 0.078,
+    "ydb_startup": 11.269,
+    "ydb_readiness": 1.349,
+    "pytest": 909.563,
+    "cli_smoke": 3.513
+  },
+  "test_count": 849,
+  "phase_seconds": {
+    "setup": 80.34252818800084,
+    "call": 513.3226211109979,
+    "teardown": 311.39646884600256
+  },
+  "failures": [],
+  "skipped": [],
+  "host": {
+    "cpu_count": 4,
+    "memory_total_bytes": 16766414848
+  },
+  "docker_daemon": {
+    "cpu_count": 4,
+    "memory_total_bytes": 16766414848
+  },
+  "container_limits": {
+    "ydb": {
+      "nano_cpus": 0,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 5368709120,
+      "memory_swap_bytes": 10737418240,
+      "pids_limit": null
+    },
+    "test": {
+      "nano_cpus": 0,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 0,
+      "memory_swap_bytes": 0,
+      "pids_limit": null
+    }
+  },
+  "resources": {
+    "ydb": {
+      "samples": 454,
+      "cpu_percent_peak": 121.07,
+      "memory_bytes_peak": 1194000908.288,
+      "block_read_bytes": null,
+      "block_write_bytes": null,
+      "cpu_percent_mean": 68.87431718061677
+    },
+    "test": {
+      "samples": 452,
+      "cpu_percent_peak": 101.15,
+      "memory_bytes_peak": 173853900.8,
+      "block_read_bytes": null,
+      "block_write_bytes": null,
+      "cpu_percent_mean": 10.03440265486726
+    }
+  },
+  "schema_pool": {},
+  "sampling_errors": null,
+  "slowest": [
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007265300000085517,
+      "call": 6.0047177980000015,
+      "teardown": 2.6882132140000294,
+      "total": 8.69365754200004,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_savings_workflow.py::test_manual_intervention_prediction_is_frozen_then_checked_by_later_meter_readings",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007687339999620235,
+      "call": 8.139392860999976,
+      "teardown": 0.548858795000001,
+      "total": 8.68902038999994,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_historical_gas_recalibrates_outside_interval_preserves_ai_feedback_and_versions",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007546929999762142,
+      "call": 6.578974259999995,
+      "teardown": 0.777665963000004,
+      "total": 7.357394915999976,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_cloud_report_jobs.py::test_long_period_reuses_archive_and_fetches_only_gaps[payload1]",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0006294630000240886,
+      "call": 3.9839280040000062,
+      "teardown": 2.094766241000002,
+      "total": 6.079323708000032,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_cloud_report_jobs.py::test_daily_job_collects_bounded_gaps_resumes_and_reuses_completed_report",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0005587859999991451,
+      "call": 4.649377829000002,
+      "teardown": 1.1478860279999878,
+      "total": 5.797822642999989,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_incremental_publication.py::test_new_week_is_published_before_old_archive_maintenance",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0008218950000582481,
+      "call": 4.587086224000018,
+      "teardown": 0.49079962799999066,
+      "total": 5.078707747000067,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_meter_intervals_follow_selected_days_without_reports_and_recalibrate_after_move",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007138519999898563,
+      "call": 3.5239595790000067,
+      "teardown": 1.4836124409999911,
+      "total": 5.008285871999988,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/test_ai_settings.py::test_yaml_legacy_model_stays_usable_and_unrelated_settings_can_change",
+      "group": "combined",
+      "worker": "main",
+      "setup": 1.0357995489999894,
+      "call": 0.07829700499996761,
+      "teardown": 3.6265126050000163,
+      "total": 4.740609158999973,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_ydb_reports.py::test_feedback_audit_keeps_each_decision_and_pages_by_id",
+      "group": "combined",
+      "worker": "main",
+      "setup": 2.4213260950000404,
+      "call": 0.23964709400001993,
+      "teardown": 1.9007038620000003,
+      "total": 4.561677051000061,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_publication.py::test_only_completed_existing_periods_are_published_and_latest_stays_daily",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0006395890000021609,
+      "call": 3.662900079999986,
+      "teardown": 0.8744669530000238,
+      "total": 4.538006622000012,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_incremental_publication.py::test_global_gas_change_is_bounded_and_latest_is_first",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007856600000195613,
+      "call": 3.3620933150000383,
+      "teardown": 0.9997780780000767,
+      "total": 4.3626570530001345,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_publication.py::test_old_day_feedback_preserves_latest_and_archive_index[valid]",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0009969700001875026,
+      "call": 3.261653423000098,
+      "teardown": 1.0948033459999351,
+      "total": 4.357453739000221,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_new_regeneration_candidate_is_published_before_database_commit",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.000801604999992378,
+      "call": 3.6734047290000262,
+      "teardown": 0.6659073779999858,
+      "total": 4.340113712000004,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_cloud_report_jobs.py::test_import_reuse_requires_exact_identity_bounds_and_canonical_content",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007977180000011685,
+      "call": 2.3905072420000124,
+      "teardown": 1.9487636070000178,
+      "total": 4.340068567000031,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_ydb_reports.py::test_growing_season_moves_one_report_with_revision_cas",
+      "group": "combined",
+      "worker": "main",
+      "setup": 1.9754395840000143,
+      "call": 0.24424020300000393,
+      "teardown": 2.0896832959999756,
+      "total": 4.309363082999994,
+      "outcomes": "passed/passed/passed"
+    }
+  ]
+}

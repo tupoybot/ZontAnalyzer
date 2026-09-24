@@ -1,6 +1,8 @@
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from tests.ydb_support import make_runtime
 from zont_analyzer.application.period_schedule import schedule_signature, scheduled_periods
 from zont_analyzer.domain import QualityResult, Report
@@ -8,6 +10,7 @@ from zont_analyzer.domain.periods import calendar_period
 from zont_analyzer.reports import render_html, render_text
 
 
+@pytest.mark.ydb
 def test_equivalent_zont_offset_does_not_schedule_existing_week_again(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     analysis = runtime.analysis(no_ai=True)

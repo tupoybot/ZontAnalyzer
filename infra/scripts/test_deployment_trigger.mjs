@@ -30,7 +30,10 @@ test('release paths match the application workflow trigger contract', () => {
   assert.deepEqual([...releasePaths].sort(), actualPatterns.sort());
   for (const path of ['src/app.py', 'tests/test_app.py', 'tools/import.py', 'Dockerfile',
     '.dockerignore', 'pyproject.toml', 'README.md', 'deploy/check-local.sh',
-    'deploy/check-ydb.sh', 'deploy/smoke-cloud-local.sh',
+    'deploy/check-ydb.sh', 'deploy/check-tests.sh', 'deploy/assert-ydb-memory.sh',
+    'deploy/smoke-cloud-local.sh', 'deploy/compose.yaml', 'deploy/compose.test.yaml',
+    'deploy/compose.local.yaml', 'deploy/env.example', 'deploy/nginx-zont-analyzer.conf',
+    'deploy/nginx-zont-analyzer-root.conf', '.github/workflows/ci.yml',
     '.github/workflows/application-release.yml']) {
     assert.equal(isReleasePath(path), true, path);
   }
@@ -43,6 +46,8 @@ test('release paths match the application workflow trigger contract', () => {
 
 test('mixed source and infrastructure push waits; infrastructure-only push enters immediately', () => {
   assert.equal(route('push', push, {changedPaths: ['src/app.py', 'infra/cloud/main.tf']}).deploy, false);
+  assert.equal(route('push', push, {changedPaths: ['.github/workflows/ci.yml', 'infra/cloud/main.tf']}).deploy, false);
+  assert.equal(route('push', push, {changedPaths: ['deploy/check-tests.sh', 'infra/cloud/main.tf']}).deploy, false);
   assert.deepEqual(route('push', push, {changedPaths: ['infra/cloud/main.tf']}),
     {deploy: true, branch, head, apply: false, releaseRunId: ''});
   assert.equal(route('push', push, {changedPaths: ['infra/cloud/main.tf'],

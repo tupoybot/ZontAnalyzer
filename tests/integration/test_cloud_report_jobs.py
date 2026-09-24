@@ -100,6 +100,7 @@ def _seed_imported_report(db, runner, payload: dict, *, state: str = "complete")
     return report.id
 
 
+@pytest.mark.ydb
 def test_daily_job_collects_bounded_gaps_resumes_and_reuses_completed_report(tmp_path: Path) -> None:
     db, runner, client = _runner(tmp_path)
     payload = {"kind": "daily", "date": "2026-09-23", "max_requests": 2, "use_ai": False}
@@ -129,6 +130,7 @@ def test_daily_job_collects_bounded_gaps_resumes_and_reuses_completed_report(tmp
     assert len(db.storage.execute("SELECT id FROM reports;")[0].rows) == 1
 
 
+@pytest.mark.ydb
 def test_failed_window_is_retried_from_coverage_without_restarting_completed_archive(tmp_path: Path) -> None:
     db, runner, client = _runner(tmp_path)
     payload = {"kind": "daily", "date": "2026-09-23", "max_requests": 2, "use_ai": False}
@@ -144,6 +146,7 @@ def test_failed_window_is_retried_from_coverage_without_restarting_completed_arc
     assert client.history_calls == 3 and client.event_calls == 2
 
 
+@pytest.mark.ydb
 def test_report_request_calendar_validation_and_not_due(tmp_path: Path) -> None:
     _db, runner, client = _runner(tmp_path)
     deterministic = runner.period(ReportRequest.model_validate(
@@ -172,6 +175,7 @@ def test_report_request_calendar_validation_and_not_due(tmp_path: Path) -> None:
     {"kind": "weekly", "year": 2026, "week": 38, "max_requests": 2, "use_ai": False},
     {"kind": "monthly", "year": 2026, "month": 8, "max_requests": 2, "use_ai": False},
 ])
+@pytest.mark.ydb
 def test_long_period_reuses_archive_and_fetches_only_gaps(tmp_path: Path, payload: dict) -> None:
     db, runner, client = _runner(tmp_path)
     _seed_archive(db, runner, payload)
@@ -184,6 +188,7 @@ def test_long_period_reuses_archive_and_fetches_only_gaps(tmp_path: Path, payloa
     assert runner.run(payload)["reused"] is True
 
 
+@pytest.mark.ydb
 def test_saved_checkpoint_resumes_after_interrupted_completion_without_reanalysis(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -216,6 +221,7 @@ def test_saved_checkpoint_resumes_after_interrupted_completion_without_reanalysi
     assert result["report_id"] == report_rows[0]["id"]
 
 
+@pytest.mark.ydb
 def test_completed_job_reopens_after_source_change(tmp_path: Path) -> None:
     db, runner, _client = _runner(tmp_path)
     payload = {"kind": "daily", "date": "2026-09-23", "use_ai": False}
@@ -235,6 +241,7 @@ def test_completed_job_reopens_after_source_change(tmp_path: Path) -> None:
     assert runner.run(payload)["reused"] is True
 
 
+@pytest.mark.ydb
 def test_unknown_ai_request_leaves_job_pending_for_reconciliation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -254,6 +261,7 @@ def test_unknown_ai_request_leaves_job_pending_for_reconciliation(
     assert job is not None and job.state != "done"
 
 
+@pytest.mark.ydb
 def test_complete_import_reuses_exact_report_without_source_or_analysis(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -278,6 +286,7 @@ def test_complete_import_reuses_exact_report_without_source_or_analysis(
     assert db.storage.execute("SELECT device_id FROM coverage;")[0].rows == []
 
 
+@pytest.mark.ydb
 def test_incomplete_import_cannot_be_adopted_and_refresh_starts_collection(tmp_path: Path) -> None:
     db, runner, client = _runner(tmp_path)
     payload = {"kind": "daily", "date": "2026-09-23", "use_ai": False, "max_requests": 2}
@@ -296,6 +305,7 @@ def test_incomplete_import_cannot_be_adopted_and_refresh_starts_collection(tmp_p
     assert client.history_calls + client.event_calls == 2
 
 
+@pytest.mark.ydb
 def test_import_reuse_requires_exact_identity_bounds_and_canonical_content(tmp_path: Path) -> None:
     db, runner, client = _runner(tmp_path)
     payload = {"kind": "daily", "date": "2026-09-23", "use_ai": False, "max_requests": 2}
@@ -332,6 +342,7 @@ def test_import_reuse_requires_exact_identity_bounds_and_canonical_content(tmp_p
     assert client.history_calls + client.event_calls == 2
 
 
+@pytest.mark.ydb
 def test_import_reuse_requires_matching_completion_attestation(tmp_path: Path) -> None:
     db, runner, _client = _runner(tmp_path)
     payload = {"kind": "daily", "date": "2026-09-23", "use_ai": False}
@@ -346,6 +357,7 @@ def test_import_reuse_requires_matching_completion_attestation(tmp_path: Path) -
     assert runner._imported_artifact(period, refresh=False) is None
 
 
+@pytest.mark.ydb
 def test_import_reuse_rejects_corrupted_source_manifest(tmp_path: Path) -> None:
     db, runner, _client = _runner(tmp_path)
     payload = {"kind": "daily", "date": "2026-09-23", "use_ai": False}

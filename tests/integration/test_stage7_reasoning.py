@@ -9,6 +9,7 @@ from zont_analyzer.domain import AnalysisResult, Prediction
 from zont_analyzer.reports import render_html, render_text
 
 
+@pytest.mark.ydb
 def test_counterfactual_reaches_ai_and_roundtrips_without_changing_old_report(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.config.openai.enabled = True
@@ -38,6 +39,7 @@ def test_counterfactual_reaches_ai_and_roundtrips_without_changing_old_report(tm
     assert runtime.db.report(original.id).predictions == candidate.predictions
 
 
+@pytest.mark.ydb
 def test_question_requires_ai_and_invalid_question_cannot_call_analyst(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     service = AnalysisService(runtime.db, runtime.config)
@@ -49,6 +51,7 @@ def test_question_requires_ai_and_invalid_question_cannot_call_analyst(tmp_path:
         service.regenerate(report, question="я" * 501)
 
 
+@pytest.mark.ydb
 def test_dense_heating_windows_are_used_before_general_packet_size_reduction(tmp_path: Path) -> None:
     from datetime import UTC, datetime, timedelta
 

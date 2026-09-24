@@ -36,6 +36,7 @@ def _report(day: int = 1, *, report_id: str | None = None) -> Report:
     )
 
 
+@pytest.mark.ydb
 def test_report_atomic_save_idempotence_feedback_and_publication(
     ydb_database: object,
 ) -> None:
@@ -86,6 +87,7 @@ def test_report_atomic_save_idempotence_feedback_and_publication(
     assert row.period_end == int(report.period_end.timestamp())
 
 
+@pytest.mark.ydb
 def test_report_rolls_back_on_recommendation_collision_and_stale_telemetry(
     ydb_database: object,
 ) -> None:
@@ -109,6 +111,7 @@ def test_report_rolls_back_on_recommendation_collision_and_stale_telemetry(
     assert repo.report(second.id) is None
 
 
+@pytest.mark.ydb
 def test_growing_season_moves_one_report_with_revision_cas(ydb_database: object) -> None:
     repo = ReportRepository(ydb_database)  # type: ignore[arg-type]
     first = _report().model_copy(update={"kind": "seasonal"})
@@ -127,6 +130,7 @@ def test_growing_season_moves_one_report_with_revision_cas(ydb_database: object)
     assert len(ydb_database.execute("SELECT id FROM reports;")[0].rows) == 1  # type: ignore[attr-defined]
 
 
+@pytest.mark.ydb
 def test_season_move_preserves_period_and_id_collision_guards(ydb_database: object) -> None:
     repo = ReportRepository(ydb_database)  # type: ignore[arg-type]
     first = _report().model_copy(update={"kind": "seasonal"})
@@ -149,6 +153,7 @@ def test_season_move_preserves_period_and_id_collision_guards(ydb_database: obje
     assert len(ydb_database.execute("SELECT id FROM reports;")[0].rows) == 3  # type: ignore[attr-defined]
 
 
+@pytest.mark.ydb
 def test_feedback_audit_keeps_each_decision_and_pages_by_id(ydb_database: object) -> None:
     repo = ReportRepository(ydb_database, clock=lambda: 500)  # type: ignore[arg-type]
     report = _report()
@@ -176,6 +181,7 @@ def test_feedback_audit_keeps_each_decision_and_pages_by_id(ydb_database: object
     assert repo.feedback_audit(limit=0) == []
 
 
+@pytest.mark.ydb
 def test_concurrent_cas_and_ordered_bounded_history(ydb_database: object) -> None:
     repo = ReportRepository(ydb_database)  # type: ignore[arg-type]
     reports = [_report(day) for day in (1, 2, 3)]
@@ -203,6 +209,7 @@ def test_concurrent_cas_and_ordered_bounded_history(ydb_database: object) -> Non
     assert repo.report(reports[0].id).summary in {"revision 1", "revision 2"}  # type: ignore[union-attr]
 
 
+@pytest.mark.ydb
 def test_report_rejects_changed_source_revision(ydb_database: object) -> None:
     from zont_analyzer.adapters.ydb.application import Database
 
@@ -217,6 +224,7 @@ def test_report_rejects_changed_source_revision(ydb_database: object) -> None:
     assert db.report(report.id) is not None
 
 
+@pytest.mark.ydb
 def test_report_commit_rejects_expired_job_attempt(ydb_database: object) -> None:
     from zont_analyzer.adapters.ydb.jobs import JobLeaseRepository
 

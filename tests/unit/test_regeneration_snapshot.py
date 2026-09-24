@@ -3,11 +3,14 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from tests.ydb_support import make_runtime
 from zont_analyzer.application import publication, regeneration
 from zont_analyzer.application.pilot import reports_directory
 
 
+@pytest.mark.ydb
 def test_regeneration_snapshot_reads_only_candidate_and_index_files(tmp_path: Path, monkeypatch) -> None:
     runtime = make_runtime(tmp_path)
     report = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -33,6 +36,7 @@ def test_regeneration_snapshot_reads_only_candidate_and_index_files(tmp_path: Pa
     assert unrelated.read_text() == "must not be touched"
 
 
+@pytest.mark.ydb
 def test_regeneration_restore_restores_candidate_and_preserves_unrelated_files(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     report = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)

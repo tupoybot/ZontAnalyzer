@@ -83,6 +83,7 @@ def test_same_second_connection_events_apply_disconnect_before_restore() -> None
     assert state["pending_restore_at"] == timestamp
 
 
+@pytest.mark.ydb
 def test_explicit_backfill_uses_requested_interval_and_bounded_calls(tmp_path: Path) -> None:
     db, service, client = _service(tmp_path)
     db.save_devices(client.discover_devices())
@@ -101,6 +102,7 @@ def test_explicit_backfill_uses_requested_interval_and_bounded_calls(tmp_path: P
                for call in client.history_calls + client.event_calls)
 
 
+@pytest.mark.ydb
 def test_history_failure_keeps_event_coverage_and_retries_without_duplicates(tmp_path: Path) -> None:
     db, service, client = _service(tmp_path)
     client.fail_history_once = True
@@ -116,6 +118,7 @@ def test_history_failure_keeps_event_coverage_and_retries_without_duplicates(tmp
     assert len(db.fetch_samples(db.list_series()[0]["id"], NOW - timedelta(hours=1), NOW)) == 1
 
 
+@pytest.mark.ydb
 def test_normal_sync_replays_late_history_and_events_with_two_hour_overlap(tmp_path: Path) -> None:
     db, service, client = _service(tmp_path)
     db.save_devices(client.discover_devices())
@@ -135,6 +138,7 @@ def test_normal_sync_replays_late_history_and_events_with_two_hour_overlap(tmp_p
     assert len(db.list_source_events(start, NOW)) == 1
 
 
+@pytest.mark.ydb
 def test_reconnect_state_requires_recovered_sample_and_survives_retry(tmp_path: Path) -> None:
     db, service, client = _service(tmp_path)
     disconnected = NOW - timedelta(hours=5)
@@ -174,6 +178,7 @@ def test_reconnect_state_requires_recovered_sample_and_survives_retry(tmp_path: 
     assert recovery == {"handled_restore_at": restored.isoformat()}
 
 
+@pytest.mark.ydb
 def test_reconnect_rereads_completed_history_to_capture_late_buffered_sample(tmp_path: Path) -> None:
     db, service, client = _service(tmp_path)
     disconnected = NOW - timedelta(hours=5)
@@ -209,6 +214,7 @@ def test_reconnect_rereads_completed_history_to_capture_late_buffered_sample(tmp
     assert json.loads(db.get_app_meta("connection_recovery:1") or "{}")["pending_replay_start"]
 
 
+@pytest.mark.ydb
 def test_new_restore_waits_for_separate_replay_before_marking_handled(tmp_path: Path) -> None:
     db, service, client = _service(tmp_path)
     disconnected = NOW - timedelta(minutes=100)
@@ -233,6 +239,7 @@ def test_new_restore_waits_for_separate_replay_before_marking_handled(tmp_path: 
     assert "handled_restore_at" not in state
 
 
+@pytest.mark.ydb
 def test_empty_bootstrap_has_no_invented_observation_bounds(tmp_path: Path) -> None:
     db, service, client = _service(tmp_path)
     client.normalize_history = lambda _response: ([], {})  # type: ignore[method-assign]
@@ -242,6 +249,7 @@ def test_empty_bootstrap_has_no_invented_observation_bounds(tmp_path: Path) -> N
     assert db.get_cursor("1", "temperature") == NOW
 
 
+@pytest.mark.ydb
 def test_oversized_source_response_is_split_before_storage(tmp_path: Path) -> None:
     db, service, client = _service(tmp_path)
     start = NOW - timedelta(minutes=30)
@@ -329,6 +337,7 @@ def test_anonymized_live_contract_reproduces_sensor_links_and_return_identity() 
 
 
 @pytest.mark.parametrize("sensor_order", [["101", "102", "103", "104"], ["104", "103", "102", "101"]])
+@pytest.mark.ydb
 def test_sensor_roles_follow_config_link_not_import_order(tmp_path: Path, sensor_order: list[str]) -> None:
     raw_device = {
         "device_id": 1,
@@ -433,6 +442,7 @@ def test_sensor_roles_follow_config_link_not_import_order(tmp_path: Path, sensor
     )
 
 
+@pytest.mark.ydb
 def test_user_override_can_select_new_primary_without_reclassifying_radio_humidity(tmp_path: Path) -> None:
     raw_device = {
         "device_id": 1,

@@ -4,6 +4,8 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from tests.ydb_support import make_database, seed_samples
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.config import AppConfig
@@ -26,6 +28,7 @@ def _room_points(start: datetime) -> list[TelemetryPoint]:
     ]
 
 
+@pytest.mark.ydb
 def test_recommendation_feedback_contains_rejection_and_latest_applied_note(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     service = AnalysisService(db, AppConfig())
@@ -51,6 +54,7 @@ def test_recommendation_feedback_contains_rejection_and_latest_applied_note(tmp_
     assert feedback[rejected.id]["hypothesis"] == rejected.hypothesis
 
 
+@pytest.mark.ydb
 def test_identical_applied_feedback_is_idempotent(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -68,6 +72,7 @@ def test_identical_applied_feedback_is_idempotent(tmp_path: Path) -> None:
     assert count == 1
 
 
+@pytest.mark.ydb
 def test_stale_new_recommendation_becomes_ignored_idempotently_and_can_receive_late_feedback(
     tmp_path: Path,
 ) -> None:
@@ -115,6 +120,7 @@ def test_stale_new_recommendation_becomes_ignored_idempotently_and_can_receive_l
     assert db.recommendation_feedback()[0]["recommendation_id"] == old_id
 
 
+@pytest.mark.ydb
 def test_next_openai_packet_includes_owner_recommendation_feedback(tmp_path: Path) -> None:
     class CapturingAnalyst:
         def __init__(self) -> None:

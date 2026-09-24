@@ -1,0 +1,252 @@
+{
+  "commit": "861069efa3f87af5ae43dca8e28b01d0947e533e",
+  "working_tree_dirty": false,
+  "test_image_id": "sha256:9e0001654399ca12610aaf57cc746ee73f4f89987aa0a84c300949749572e057",
+  "test_image_fingerprint": "sha256:468e02d52f9240c81649780aadac50cc5fd17057d47f0268b3cd363205329291",
+  "ydb_image_digest": "sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402",
+  "tests_tree_sha256": "09125065259ae2e864bc8287b28704afe5a025a1d612dbf5d1f74f00451c2120",
+  "command": "deploy/check-tests.sh",
+  "args": [
+    "tests",
+    "--durations=0",
+    "--durations-min=0"
+  ],
+  "ydb_workers": 2,
+  "exit_status": 0,
+  "measured_wall_seconds": 156.355,
+  "phases": {
+    "pure_tests": 17.44,
+    "preparation": 0.381,
+    "ydb_startup": 0.502,
+    "ydb_readiness": 2.338,
+    "pytest": 131.278,
+    "cli_smoke": 3.072
+  },
+  "test_count": 862,
+  "phase_seconds": {
+    "setup": 5.0903520203137305,
+    "call": 124.61758376372745,
+    "teardown": 129.66807669348782
+  },
+  "failures": [],
+  "skipped": [],
+  "host": {
+    "cpu_count": 16,
+    "memory_total_bytes": 16720224256
+  },
+  "docker_daemon": {
+    "cpu_count": 16,
+    "memory_total_bytes": 16720224256
+  },
+  "container_limits": {
+    "pure": {
+      "nano_cpus": 0,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 0,
+      "memory_swap_bytes": 0,
+      "pids_limit": null
+    },
+    "ydb": {
+      "nano_cpus": 0,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 5368709120,
+      "memory_swap_bytes": 10737418240,
+      "pids_limit": null
+    },
+    "test": {
+      "nano_cpus": 0,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 0,
+      "memory_swap_bytes": 0,
+      "pids_limit": null
+    }
+  },
+  "resources": {
+    "pure": {
+      "samples": 8,
+      "cpu_percent_peak": 100.32,
+      "memory_bytes_peak": 144598630.4,
+      "block_read_bytes": 0,
+      "block_write_bytes": 0,
+      "cpu_percent_mean": 69.0625
+    },
+    "ydb": {
+      "samples": 67,
+      "cpu_percent_peak": 169.33,
+      "memory_bytes_peak": 1117765238.784,
+      "block_read_bytes": 0,
+      "block_write_bytes": 463000,
+      "cpu_percent_mean": 99.57179104477609
+    },
+    "test": {
+      "samples": 64,
+      "cpu_percent_peak": 196.36,
+      "memory_bytes_peak": 310483353.6,
+      "block_read_bytes": 0,
+      "block_write_bytes": 0,
+      "cpu_percent_mean": 61.56718750000001
+    }
+  },
+  "schema_pool": {
+    "schema_creations": 7,
+    "schema_reuses": 393,
+    "schema_resets": 396,
+    "schema_quarantines": 1
+  },
+  "sampling_errors": 3,
+  "slowest": [
+    {
+      "nodeid": "tests/integration/test_stage8_savings_workflow.py::test_manual_intervention_prediction_is_frozen_then_checked_by_later_meter_readings",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0006842490111012012,
+      "call": 5.360664711013669,
+      "teardown": 0.21180131298024207,
+      "total": 5.573150273005012,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_historical_gas_recalibrates_outside_interval_preserves_ai_feedback_and_versions",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0007244079897645861,
+      "call": 4.379119959980017,
+      "teardown": 0.21177545198588632,
+      "total": 4.5916198199556675,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_incremental_publication.py::test_new_week_is_published_before_old_archive_maintenance",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.0009020959842018783,
+      "call": 3.7678014539997093,
+      "teardown": 0.21100666400161572,
+      "total": 3.979710213985527,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_tariff_forms.py::test_tariff_audit_is_script_safe_and_client_renders_it_as_text",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0008748930122237653,
+      "call": 0.06036547099938616,
+      "teardown": 3.508333105011843,
+      "total": 3.569573469023453,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_publication.py::test_only_completed_existing_periods_are_published_and_latest_stays_daily",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0008584870083723217,
+      "call": 2.5339656400028616,
+      "teardown": 0.21209651901153848,
+      "total": 2.7469206460227724,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0006773660134058446,
+      "call": 2.4029227959981654,
+      "teardown": 0.21058172298944555,
+      "total": 2.614181885001017,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_meter_intervals_follow_selected_days_without_reports_and_recalibrate_after_move",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0006099989986978471,
+      "call": 2.1463886499986984,
+      "teardown": 0.21107824399950914,
+      "total": 2.3580768929969054,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_owner_http.py::test_monthly_tariff_api_audit_and_selective_publication",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.6742032910115086,
+      "call": 0.8094400840054732,
+      "teardown": 0.7039074529893696,
+      "total": 2.1875508280063514,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_full_accounting_interval_is_measured_with_day_precision_not_daily_interpolation",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0006545050127897412,
+      "call": 1.903643284982536,
+      "teardown": 0.21038741900702007,
+      "total": 2.114685209002346,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_persisted_gas_context_is_equal_after_json_roundtrip",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0015180979971773922,
+      "call": 1.8762078559957445,
+      "teardown": 0.21052148897433653,
+      "total": 2.0882474429672584,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_owner_http.py::test_owner_roundtrip_is_daily_scoped_idempotent_and_preserves_feedback",
+      "group": "ydb",
+      "worker": "gw1",
+      "setup": 0.7518935830157716,
+      "call": 0.6331799949984998,
+      "teardown": 0.6737363459833432,
+      "total": 2.0588099239976145,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_frozen_calibration_version_does_not_depend_on_subsequent_meter_readings",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0005862750113010406,
+      "call": 1.8170497280079871,
+      "teardown": 0.21171682301792316,
+      "total": 2.0293528260372113,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_cloud_runtime.py::test_job_rejects_concurrency_and_recovers_after_timeout",
+      "group": "pure",
+      "worker": "main",
+      "setup": 0.0013985770056024194,
+      "call": 1.9587942140060477,
+      "teardown": 0.033326393022434786,
+      "total": 1.993519184034085,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_reset_boundary_prevents_subtraction_and_profile_alone_is_not_gas_measurement",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0005823159881401807,
+      "call": 1.7050859479932114,
+      "teardown": 0.21147210599156097,
+      "total": 1.9171403699729126,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_cloud_runtime.py::test_analytics_job_is_repeatable_and_rejects_malformed_input",
+      "group": "pure",
+      "worker": "main",
+      "setup": 0.001362006994895637,
+      "call": 1.4077119329886045,
+      "teardown": 0.5001058280176949,
+      "total": 1.909179768001195,
+      "outcomes": "passed/passed/passed"
+    }
+  ]
+}

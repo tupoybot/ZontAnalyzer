@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from pathlib import Path
 
+import pytest
+
 from tests.ydb_support import make_runtime, seed_events, seed_samples
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.period_schedule import run_period_schedule, schedule_signature
@@ -22,6 +24,7 @@ def _point(timestamp, value: float) -> TelemetryPoint:
     )
 
 
+@pytest.mark.ydb
 def test_schedule_adopts_legacy_signature_without_reanalysis_and_respects_exact_period_bounds(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -82,6 +85,7 @@ def test_schedule_adopts_legacy_signature_without_reanalysis_and_respects_exact_
     }]
 
 
+@pytest.mark.ydb
 def test_schedule_reanalyzes_when_late_prior_event_changes_reliability_revision(
     tmp_path: Path, monkeypatch
 ) -> None:

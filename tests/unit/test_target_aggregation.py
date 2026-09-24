@@ -12,6 +12,7 @@ from zont_analyzer.reports.presentation import kpis, period_target
 
 
 @pytest.mark.parametrize("kind", ["weekly", "monthly", "seasonal"])
+@pytest.mark.ydb
 def test_period_mean_uses_historical_duration_not_last_snapshot_or_present_override(
     tmp_path: Path, kind: str,
 ) -> None:
@@ -41,6 +42,7 @@ def test_period_mean_uses_historical_duration_not_last_snapshot_or_present_overr
     assert "Средняя целевая температура за период" in render_text(report)
 
 
+@pytest.mark.ydb
 def test_late_single_snapshot_cannot_become_whole_period_mean(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.config.home.timezone = "UTC"

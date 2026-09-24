@@ -56,6 +56,7 @@ def _settings(enabled: bool = True) -> dict[str, object]:
     }
 
 
+@pytest.mark.ydb
 def test_missing_current_capability_is_not_a_successful_review(tmp_path: Path) -> None:
     catalog = Catalog(_snapshot(_fact("gpt-5.6-terra", "2", "12", responses_supported=None)))
     store = ModelReviewStore(_db(tmp_path), catalog)
@@ -77,6 +78,7 @@ def test_date_first_deprecation_table_never_marks_replacement_across_rows() -> N
 
 
 @pytest.mark.parametrize("missing", ["current", "candidate"])
+@pytest.mark.ydb
 def test_unknown_price_is_unverified_not_current_optimal(tmp_path: Path, missing: str) -> None:
     current = _fact("gpt-5.6-terra", None if missing == "current" else "2", "12")
     candidate = _fact("gpt-5.6-luna", None if missing == "candidate" else "0.2", "1.2")
@@ -102,6 +104,7 @@ def _assessment(*, model: str = "candidate", effort: str = "medium", cases: list
     }
 
 
+@pytest.mark.ydb
 def test_cheaper_candidate_is_not_recommended_without_comparable_quality(tmp_path: Path) -> None:
     current = _fact("gpt-5.6-terra", "2", "12")
     candidate = _fact("gpt-5.6-luna", "0.2", "1.2")
@@ -111,6 +114,7 @@ def test_cheaper_candidate_is_not_recommended_without_comparable_quality(tmp_pat
     assert store.state()["proposals"] == []
 
 
+@pytest.mark.ydb
 def test_quality_must_be_comparable_before_cheaper_candidate_is_proposed(tmp_path: Path) -> None:
     current = _fact("gpt-5.6-terra", "2", "12")
     candidate = _fact("gpt-5.6-luna", "0.2", "1.2")
@@ -124,6 +128,7 @@ def test_quality_must_be_comparable_before_cheaper_candidate_is_proposed(tmp_pat
     assert store.state()["proposals"] == []
 
 
+@pytest.mark.ydb
 def test_state_retires_persisted_price_only_proposal_without_network(tmp_path: Path) -> None:
     db = _db(tmp_path)
     storage = ModelSettingsStorage(db.storage)
@@ -149,6 +154,7 @@ def test_state_retires_persisted_price_only_proposal_without_network(tmp_path: P
     assert storage.transaction(lambda tx: tx.proposal("legacy-price-only"))["status"] == "superseded"
 
 
+@pytest.mark.ydb
 def test_malformed_catalog_retries_three_times_without_success(tmp_path: Path) -> None:
     catalog = Catalog(_snapshot(incomplete=True, error="official models page contained no recognised model cards"))
     store = ModelReviewStore(_db(tmp_path), catalog)
@@ -160,6 +166,7 @@ def test_malformed_catalog_retries_three_times_without_success(tmp_path: Path) -
     assert store.run_if_due(_settings(), NOW + timedelta(hours=13)) is None
 
 
+@pytest.mark.ydb
 def test_disabled_manual_and_concurrent_claims_fetch_once(tmp_path: Path) -> None:
     catalog = Catalog(_snapshot(_fact("gpt-5.6-terra", "2", "12")))
     store = ModelReviewStore(_db(tmp_path), catalog)
@@ -169,6 +176,7 @@ def test_disabled_manual_and_concurrent_claims_fetch_once(tmp_path: Path) -> Non
     assert ModelReviewStore(store.db, catalog)._claim(_settings(), NOW + timedelta(days=2), "manual") is None
 
 
+@pytest.mark.ydb
 def test_restart_reclaims_expired_lease_and_marks_interruption(tmp_path: Path) -> None:
     catalog = Catalog(_snapshot(_fact("gpt-5.6-terra", "2", "12")))
     store = ModelReviewStore(_db(tmp_path), catalog)
@@ -178,6 +186,7 @@ def test_restart_reclaims_expired_lease_and_marks_interruption(tmp_path: Path) -
     assert any(run["status"] == "interrupted" for run in restarted.state()["runs"])
 
 
+@pytest.mark.ydb
 def test_accept_real_settings_and_stale_version_guard(tmp_path: Path) -> None:
     config = AppConfig(openai=OpenAIConfig(daily_model="gpt-5.6-terra", review_model="gpt-5.6-terra"))
     db, settings = _db(tmp_path), None
@@ -195,6 +204,7 @@ def test_accept_real_settings_and_stale_version_guard(tmp_path: Path) -> None:
         store.decide(proposal["id"], "accept", proposal["version"], settings, now=NOW)
 
 
+@pytest.mark.ydb
 def test_defer_deduplicates_notice(tmp_path: Path) -> None:
     db = _db(tmp_path)
     facts = (_fact("gpt-5.6-terra", "2", "12", deprecated=True), _fact("gpt-5.6-luna", "0.2", "1.2"))
@@ -208,6 +218,7 @@ def test_defer_deduplicates_notice(tmp_path: Path) -> None:
     assert matching == [deferred]
 
 
+@pytest.mark.ydb
 def test_accept_rechecks_candidate_effort_before_saving(tmp_path: Path) -> None:
     db = _db(tmp_path)
     settings = AISettingsStore(db, AppConfig())

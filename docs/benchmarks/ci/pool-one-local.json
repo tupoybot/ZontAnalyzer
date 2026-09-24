@@ -1,0 +1,252 @@
+{
+  "commit": "861069efa3f87af5ae43dca8e28b01d0947e533e",
+  "working_tree_dirty": false,
+  "test_image_id": "sha256:9e0001654399ca12610aaf57cc746ee73f4f89987aa0a84c300949749572e057",
+  "test_image_fingerprint": "sha256:468e02d52f9240c81649780aadac50cc5fd17057d47f0268b3cd363205329291",
+  "ydb_image_digest": "sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402",
+  "tests_tree_sha256": "09125065259ae2e864bc8287b28704afe5a025a1d612dbf5d1f74f00451c2120",
+  "command": "deploy/check-tests.sh",
+  "args": [
+    "tests",
+    "--durations=0",
+    "--durations-min=0"
+  ],
+  "ydb_workers": 1,
+  "exit_status": 0,
+  "measured_wall_seconds": 273.174,
+  "phases": {
+    "pure_tests": 17.478,
+    "preparation": 0.387,
+    "ydb_startup": 0.514,
+    "ydb_readiness": 2.365,
+    "pytest": 247.863,
+    "cli_smoke": 3.158
+  },
+  "test_count": 862,
+  "phase_seconds": {
+    "setup": 4.829613040579716,
+    "call": 119.64436440679128,
+    "teardown": 129.84139490994858
+  },
+  "failures": [],
+  "skipped": [],
+  "host": {
+    "cpu_count": 16,
+    "memory_total_bytes": 16720224256
+  },
+  "docker_daemon": {
+    "cpu_count": 16,
+    "memory_total_bytes": 16720224256
+  },
+  "container_limits": {
+    "pure": {
+      "nano_cpus": 0,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 0,
+      "memory_swap_bytes": 0,
+      "pids_limit": null
+    },
+    "ydb": {
+      "nano_cpus": 0,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 5368709120,
+      "memory_swap_bytes": 10737418240,
+      "pids_limit": null
+    },
+    "test": {
+      "nano_cpus": 0,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 0,
+      "memory_swap_bytes": 0,
+      "pids_limit": null
+    }
+  },
+  "resources": {
+    "pure": {
+      "samples": 8,
+      "cpu_percent_peak": 100.22,
+      "memory_bytes_peak": 141348044.8,
+      "block_read_bytes": 0,
+      "block_write_bytes": 0,
+      "cpu_percent_mean": 69.7475
+    },
+    "ydb": {
+      "samples": 125,
+      "cpu_percent_peak": 167.77,
+      "memory_bytes_peak": 1101659111.424,
+      "block_read_bytes": 0,
+      "block_write_bytes": 442000,
+      "cpu_percent_mean": 60.62352
+    },
+    "test": {
+      "samples": 122,
+      "cpu_percent_peak": 98.56,
+      "memory_bytes_peak": 206150041.6,
+      "block_read_bytes": 0,
+      "block_write_bytes": 0,
+      "cpu_percent_mean": 28.986147540983605
+    }
+  },
+  "schema_pool": {
+    "schema_creations": 6,
+    "schema_reuses": 394,
+    "schema_resets": 396,
+    "schema_quarantines": 1
+  },
+  "sampling_errors": 3,
+  "slowest": [
+    {
+      "nodeid": "tests/integration/test_stage8_savings_workflow.py::test_manual_intervention_prediction_is_frozen_then_checked_by_later_meter_readings",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0006074060220271349,
+      "call": 5.2367948059982155,
+      "teardown": 0.21067456499440596,
+      "total": 5.4480767770146485,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_incremental_publication.py::test_new_week_is_published_before_old_archive_maintenance",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0007464570226147771,
+      "call": 3.7715492690040264,
+      "teardown": 0.21129026502603665,
+      "total": 3.983585991052678,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_historical_gas_recalibrates_outside_interval_preserves_ai_feedback_and_versions",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0006038430146872997,
+      "call": 3.7293287480133586,
+      "teardown": 0.2100524329871405,
+      "total": 3.9399850240151864,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_tariff_forms.py::test_tariff_audit_is_script_safe_and_client_renders_it_as_text",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0012828250182792544,
+      "call": 0.050713959004497156,
+      "teardown": 3.5450141319888644,
+      "total": 3.597010916011641,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_publication.py::test_only_completed_existing_periods_are_published_and_latest_stays_daily",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0008478680101688951,
+      "call": 2.772927860991331,
+      "teardown": 0.21086169400950894,
+      "total": 2.9846374230110087,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0006760200194548815,
+      "call": 2.324011615011841,
+      "teardown": 0.20959819000563584,
+      "total": 2.534285825036932,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_meter_intervals_follow_selected_days_without_reports_and_recalibrate_after_move",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0006212669832166284,
+      "call": 2.0086373100057244,
+      "teardown": 0.21157354398746975,
+      "total": 2.220832120976411,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_persisted_gas_context_is_equal_after_json_roundtrip",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0006246310076676309,
+      "call": 1.923349625983974,
+      "teardown": 0.2102804189780727,
+      "total": 2.1342546759697143,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_full_accounting_interval_is_measured_with_day_precision_not_daily_interpolation",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0006248129939194769,
+      "call": 1.8224210879998282,
+      "teardown": 0.21047577299759723,
+      "total": 2.033521673991345,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_cloud_runtime.py::test_job_rejects_concurrency_and_recovers_after_timeout",
+      "group": "pure",
+      "worker": "main",
+      "setup": 0.0015893130039330572,
+      "call": 1.9537275040056556,
+      "teardown": 0.043387493991758674,
+      "total": 1.9987043110013474,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_owner_http.py::test_monthly_tariff_api_audit_and_selective_publication",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.5810570559988264,
+      "call": 0.7096798490092624,
+      "teardown": 0.7029346709896345,
+      "total": 1.9936715759977233,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_owner_http.py::test_owner_roundtrip_is_daily_scoped_idempotent_and_preserves_feedback",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.6806236459815409,
+      "call": 0.6150736389972735,
+      "teardown": 0.6869917669973802,
+      "total": 1.9826890519761946,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_frozen_calibration_version_does_not_depend_on_subsequent_meter_readings",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0007068419945426285,
+      "call": 1.7608413450070657,
+      "teardown": 0.21057501502218656,
+      "total": 1.9721232020237949,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_cloud_runtime.py::test_analytics_job_is_repeatable_and_rejects_malformed_input",
+      "group": "pure",
+      "worker": "main",
+      "setup": 0.0014503190177492797,
+      "call": 1.398529405996669,
+      "teardown": 0.5000867620110512,
+      "total": 1.9000664870254695,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_new_regeneration_candidate_is_published_before_database_commit",
+      "group": "ydb",
+      "worker": "gw0",
+      "setup": 0.0007847429951652884,
+      "call": 1.5345928510068916,
+      "teardown": 0.21055691200308502,
+      "total": 1.7459345060051419,
+      "outcomes": "passed/passed/passed"
+    }
+  ]
+}

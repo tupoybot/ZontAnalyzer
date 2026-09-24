@@ -2,10 +2,15 @@ name: Infrastructure checks
 
 on:
   push:
-    paths: ['infra/**', '.github/workflows/infrastructure-check.yml']
+    branches: ['main', 'stageM[0-9]*/**']
+    paths: ['infra/**', '.github/workflows/infrastructure-check.yml', '.github/workflows/infrastructure-deploy.yml', '.github/workflows/application-release.yml', '.github/workflows/ci.yml', 'deploy/check-local.sh', 'deploy/check-ydb.sh', 'deploy/check-tests.sh', 'deploy/assert-ydb-memory.sh', 'deploy/smoke-cloud-local.sh']
   pull_request:
-    paths: ['infra/**', '.github/workflows/infrastructure-check.yml']
+    paths: ['infra/**', '.github/workflows/infrastructure-check.yml', '.github/workflows/infrastructure-deploy.yml', '.github/workflows/application-release.yml', '.github/workflows/ci.yml', 'deploy/check-local.sh', 'deploy/check-ydb.sh', 'deploy/check-tests.sh', 'deploy/assert-ydb-memory.sh', 'deploy/smoke-cloud-local.sh']
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('infrastructure-check-pr-{0}', github.event.pull_request.number) || format('infrastructure-check-run-{0}-{1}', github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -13,6 +18,7 @@ permissions:
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
@@ -26,6 +32,7 @@ jobs:
       - run: terraform -chdir=infra/cloud test
   probe:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: docker build -t m1-tools infra/tools

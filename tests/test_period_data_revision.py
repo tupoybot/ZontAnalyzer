@@ -40,6 +40,7 @@ def _report(report_id: str, end: datetime, *, context: dict | None = None) -> Re
     )
 
 
+@pytest.mark.ydb
 def test_period_revision_is_exact_at_utc_boundaries_and_keeps_empty_sentinel(tmp_path: Path) -> None:
     database = _database(tmp_path)
     # September 7 local day in Samara (UTC+4).
@@ -63,6 +64,7 @@ def test_period_revision_is_exact_at_utc_boundaries_and_keeps_empty_sentinel(tmp
     assert database.period_data_revision(start, end) != revision
 
 
+@pytest.mark.ydb
 def test_warm_revision_cache_does_not_scan_telemetry_and_ignores_identical_upsert(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -77,6 +79,7 @@ def test_warm_revision_cache_does_not_scan_telemetry_and_ignores_identical_upser
     assert database.period_data_revision(start, end) == expected
 
 
+@pytest.mark.ydb
 def test_period_revision_includes_all_sample_content_and_deletions(tmp_path: Path) -> None:
     database = _database(tmp_path)
     start = datetime(2026, 9, 1, tzinfo=UTC)
@@ -99,6 +102,7 @@ def test_period_revision_includes_all_sample_content_and_deletions(tmp_path: Pat
     assert database.period_data_revision(start, end) != with_text_and_quality
 
 
+@pytest.mark.ydb
 def test_legacy_period_revision_remains_available_for_lazy_rollout(tmp_path: Path) -> None:
     database = _database(tmp_path)
     start = datetime(2026, 9, 1, tzinfo=UTC)
@@ -109,6 +113,7 @@ def test_legacy_period_revision_remains_available_for_lazy_rollout(tmp_path: Pat
     assert database.legacy_period_data_revision(start, end) != before
 
 
+@pytest.mark.ydb
 def test_source_event_revision_includes_all_prior_semantic_content(tmp_path: Path) -> None:
     database = _database(tmp_path)
     boundary = datetime(2026, 9, 2, tzinfo=UTC)
@@ -129,6 +134,7 @@ def test_source_event_revision_includes_all_prior_semantic_content(tmp_path: Pat
     assert database.source_event_revision(boundary) != changed
 
 
+@pytest.mark.ydb
 def test_legacy_event_baselines_seed_from_report_metadata_without_loading_json(tmp_path: Path) -> None:
     database = _database(tmp_path)
     period_end = datetime(2026, 9, 2, tzinfo=UTC)
@@ -142,6 +148,7 @@ def test_legacy_event_baselines_seed_from_report_metadata_without_loading_json(t
     assert database.seed_source_event_report_baselines() == 0
 
 
+@pytest.mark.ydb
 def test_upgrade_report_telemetry_revision_is_compare_and_swap_metadata_only(tmp_path: Path) -> None:
     database = _database(tmp_path)
     generated_at = datetime(2026, 9, 2, tzinfo=UTC)

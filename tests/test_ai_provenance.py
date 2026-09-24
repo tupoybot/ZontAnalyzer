@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from zont_analyzer.application.ai_provenance import recover_historical_provenance
 from zont_analyzer.application.reasoning_context import reuse_ai_interpretation
 from zont_analyzer.domain import QualityResult, Report
@@ -79,6 +81,7 @@ def test_historical_recovery_rejects_wrong_report_and_later_regeneration_log() -
     assert "ai_provenance" not in recover_historical_provenance(report, [later]).context
 
 
+@pytest.mark.ydb
 def test_provider_persists_response_metadata_and_returns_it_from_cache(tmp_path) -> None:
     from tests.ydb_support import make_database
     from zont_analyzer.adapters.openai.provider import OpenAIAnalyst, _StructuredAnalysisResult
@@ -108,6 +111,7 @@ def test_provider_persists_response_metadata_and_returns_it_from_cache(tmp_path)
     assert first.provenance["ai_log_id"].startswith("llm:")
 
 
+@pytest.mark.ydb
 def test_provider_reuses_pre92_ledger_entry_without_a_request(tmp_path) -> None:
     from tests.ydb_support import make_database
     from zont_analyzer.adapters.openai.provider import PROMPT_VERSION, OpenAIAnalyst
@@ -133,6 +137,7 @@ def test_provider_reuses_pre92_ledger_entry_without_a_request(tmp_path) -> None:
     assert result.provenance is None
 
 
+@pytest.mark.ydb
 def test_ai_budget_reservations_are_atomic_and_unknown_calls_are_not_reused(tmp_path) -> None:
     from tests.ydb_support import make_database
     from zont_analyzer.adapters.ydb.ai_usage import AiUsageRepository
@@ -161,6 +166,7 @@ def test_ai_budget_reservations_are_atomic_and_unknown_calls_are_not_reused(tmp_
     assert not ledger.mark_sent(key)
 
 
+@pytest.mark.ydb
 def test_cached_ai_response_survives_budget_exhaustion(tmp_path) -> None:
     from tests.ydb_support import make_database
     from zont_analyzer.adapters.ydb.ai_usage import AiUsageRepository
@@ -179,6 +185,7 @@ def test_cached_ai_response_survives_budget_exhaustion(tmp_path) -> None:
                           billing_month="2026-09")["result"] == result
 
 
+@pytest.mark.ydb
 def test_provider_never_retries_a_request_with_unknown_outcome(tmp_path) -> None:
     import pytest
 

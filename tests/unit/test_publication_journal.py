@@ -52,6 +52,7 @@ def _report() -> Report:
     )
 
 
+@pytest.mark.ydb
 def test_journal_coalesces_keys_and_keeps_monotonic_high_water_mark(tmp_path: Path) -> None:
     db = _database(tmp_path)
     _record_change(db, "render", "report-1")
@@ -67,6 +68,7 @@ def test_journal_coalesces_keys_and_keeps_monotonic_high_water_mark(tmp_path: Pa
     assert _changes(db, second) == (second, [])
 
 
+@pytest.mark.ydb
 def test_journal_range_and_rollback(tmp_path: Path) -> None:
     db = _database(tmp_path)
     _record_change(db, "render", "a")
@@ -90,6 +92,7 @@ def test_journal_range_and_rollback(tmp_path: Path) -> None:
     assert _changes(db, end) == (end, [])
 
 
+@pytest.mark.ydb
 def test_representative_writes_mark_report_feedback_gas_device_and_telemetry(tmp_path: Path) -> None:
     db = _database(tmp_path)
     db.save_devices([{"id": "device", "name": "Device"}])
@@ -114,6 +117,7 @@ def test_representative_writes_mark_report_feedback_gas_device_and_telemetry(tmp
     assert ("global", "gas") not in scopes
 
 
+@pytest.mark.ydb
 def test_noop_feedback_is_ignored_and_status_reversal_is_audited(tmp_path: Path) -> None:
     db = _database(tmp_path)
     report = _report()

@@ -1,0 +1,233 @@
+{
+  "commit": "dbdde91bdc79c29cf6abcf8709dd2116a435b495",
+  "working_tree_dirty": null,
+  "test_image_id": "sha256:cc947dc2d4d5ca3d6f3cf6d32a049389c20a51d2edc29b9b07e11448d70fc86c",
+  "test_image_fingerprint": null,
+  "ydb_image_digest": "sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402",
+  "tests_tree_sha256": "91eccd0f7e4aa16b34c8ea9f60d3fc655f50cf3201440ed3ef0064fd7246cd55",
+  "command": "deploy/check-ydb.sh",
+  "args": [
+    "tests",
+    "--durations=0",
+    "--durations-min=0",
+    "-p",
+    "tools.pytest_metrics",
+    "--junitxml=/metrics/junit.xml"
+  ],
+  "ydb_workers": 1,
+  "exit_status": 0,
+  "measured_wall_seconds": 3227.562,
+  "phases": {
+    "preparation": 0.393,
+    "ydb_startup": 0.496,
+    "ydb_readiness": 1.855,
+    "pytest": 3216.534,
+    "cli_smoke": 6.957
+  },
+  "test_count": 849,
+  "phase_seconds": {
+    "setup": 265.19053580609034,
+    "call": 1578.7909802360518,
+    "teardown": 1367.6283872459899
+  },
+  "failures": [],
+  "skipped": [],
+  "host": {
+    "cpu_count": 16,
+    "memory_total_bytes": 16720224256
+  },
+  "docker_daemon": {
+    "cpu_count": 16,
+    "memory_total_bytes": 16720224256
+  },
+  "container_limits": {
+    "ydb": {
+      "nano_cpus": 0,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 5368709120,
+      "memory_swap_bytes": 10737418240,
+      "pids_limit": null
+    },
+    "test": {
+      "nano_cpus": 0,
+      "cpu_quota_us": 0,
+      "cpu_period_us": 0,
+      "memory_bytes": 0,
+      "memory_swap_bytes": 0,
+      "pids_limit": null
+    }
+  },
+  "resources": {
+    "ydb": {
+      "samples": 1605,
+      "cpu_percent_peak": 140.95,
+      "memory_bytes_peak": 1117765238.784,
+      "block_read_bytes": null,
+      "block_write_bytes": null,
+      "cpu_percent_mean": 33.67495327102802
+    },
+    "test": {
+      "samples": 1600,
+      "cpu_percent_peak": 99.39,
+      "memory_bytes_peak": 186017382.4,
+      "block_read_bytes": null,
+      "block_write_bytes": null,
+      "cpu_percent_mean": 3.7590187500000023
+    }
+  },
+  "schema_pool": {},
+  "sampling_errors": null,
+  "slowest": [
+    {
+      "nodeid": "tests/unit/test_long_periods.py::test_long_period_target_is_duration_weighted_and_unknown_without_coverage",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007769980002194643,
+      "call": 8.49461414499092,
+      "teardown": 7.627530811005272,
+      "total": 16.12292195399641,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_publication.py::test_only_completed_existing_periods_are_published_and_latest_stays_daily",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0008114179945550859,
+      "call": 10.593723259982653,
+      "teardown": 4.8518912860017736,
+      "total": 15.446425963978982,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_savings_workflow.py::test_manual_intervention_prediction_is_frozen_then_checked_by_later_meter_readings",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007835600117687136,
+      "call": 10.08855763298925,
+      "teardown": 2.647959522990277,
+      "total": 12.737300715991296,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_incremental_publication.py::test_durable_index_and_artifact_recovery[missing_latest]",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0008675499993842095,
+      "call": 6.859450666001067,
+      "teardown": 5.265067154017743,
+      "total": 12.125385370018193,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_incremental_publication.py::test_comparison_is_requeued_when_its_source_finishes_in_later_batch",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0008513049979228526,
+      "call": 7.495234434987651,
+      "teardown": 4.58706219799933,
+      "total": 12.083147937984904,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/test_ai_schedule.py::test_ai_setting_signature_upgrade_preserves_history_but_telemetry_reanalyses",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007127770222723484,
+      "call": 7.149617252027383,
+      "teardown": 4.91143723600544,
+      "total": 12.061767265055096,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/integration/test_stage8_gas.py::test_historical_gas_recalibrates_outside_interval_preserves_ai_feedback_and_versions",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007453720027115196,
+      "call": 9.330033686972456,
+      "teardown": 2.7305921929946635,
+      "total": 12.061371251969831,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_incremental_publication.py::test_durable_index_and_artifact_recovery[rebuild]",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007924179953988642,
+      "call": 6.794456684001489,
+      "teardown": 5.204198168008588,
+      "total": 11.999447270005476,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_incremental_publication.py::test_local_artifact_loss_recovers_from_canonical_ydb",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0008450090244878083,
+      "call": 6.973630624997895,
+      "teardown": 4.989556526008528,
+      "total": 11.96403216003091,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_incremental_publication.py::test_durable_index_and_artifact_recovery[missing_html]",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0008437850046902895,
+      "call": 6.902921984990826,
+      "teardown": 4.935892630979652,
+      "total": 11.839658400975168,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/test_schedule_revision_upgrade.py::test_schedule_adopts_legacy_signature_without_reanalysis_and_respects_exact_period_bounds",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0006367700116243213,
+      "call": 7.0615491359785665,
+      "teardown": 4.659373960981611,
+      "total": 11.721559866971802,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/test_zont_timezone.py::test_runtime_uses_persisted_zont_timezone_for_windows_and_reports",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007194580102805048,
+      "call": 6.553806334006367,
+      "teardown": 5.144088953995379,
+      "total": 11.698614746012026,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_ingestion.py::test_normal_sync_replays_late_history_and_events_with_two_hour_overlap",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.000738223985536024,
+      "call": 6.994637947995216,
+      "teardown": 4.600379893003264,
+      "total": 11.595756064984016,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_ingestion.py::test_history_failure_keeps_event_coverage_and_retries_without_duplicates",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0007566380081698298,
+      "call": 6.673465258005308,
+      "teardown": 4.899783141998341,
+      "total": 11.57400503801182,
+      "outcomes": "passed/passed/passed"
+    },
+    {
+      "nodeid": "tests/unit/test_ingestion.py::test_reconnect_state_requires_recovered_sample_and_survives_retry",
+      "group": "combined",
+      "worker": "main",
+      "setup": 0.0008159319986589253,
+      "call": 7.488179895008216,
+      "teardown": 3.8816858420032077,
+      "total": 11.370681669010082,
+      "outcomes": "passed/passed/passed"
+    }
+  ]
+}

@@ -59,6 +59,7 @@ def _rows(db: YdbDatabase, query: str) -> list[object]:
     return list(db.execute(query)[0].rows)
 
 
+@pytest.mark.ydb
 def test_import_repeat_delta_and_audit(tmp_path: Path, ydb_database: YdbDatabase) -> None:
     backup = tmp_path / "online-backup.sqlite"
     _source(backup)
@@ -130,6 +131,7 @@ def test_import_repeat_delta_and_audit(tmp_path: Path, ydb_database: YdbDatabase
     assert all(value == 0 for value in import_backup(backup, ydb_database, batch_size=2).values())
 
 
+@pytest.mark.ydb
 def test_telemetry_pages_resume_and_repair_target(tmp_path: Path, ydb_database: YdbDatabase) -> None:
     backup = tmp_path / "paged.sqlite"
     _source(backup)
@@ -154,6 +156,7 @@ def test_telemetry_pages_resume_and_repair_target(tmp_path: Path, ydb_database: 
     assert _rows(ydb_database, "SELECT COUNT(*) AS n FROM telemetry_samples;")[0].n == 502
 
 
+@pytest.mark.ydb
 def test_unmapped_source_table_fails_before_writes(tmp_path: Path, ydb_database: YdbDatabase) -> None:
     backup = tmp_path / "bad.sqlite"
     with sqlite3.connect(backup) as connection:
@@ -163,6 +166,7 @@ def test_unmapped_source_table_fails_before_writes(tmp_path: Path, ydb_database:
     assert _rows(ydb_database, "SELECT * FROM migration_records;") == []
 
 
+@pytest.mark.ydb
 def test_broken_source_foreign_key_fails_before_writes(tmp_path: Path, ydb_database: YdbDatabase) -> None:
     backup = tmp_path / "broken.sqlite"
     with sqlite3.connect(backup) as connection:
@@ -176,6 +180,7 @@ def test_broken_source_foreign_key_fails_before_writes(tmp_path: Path, ydb_datab
     assert _rows(ydb_database, "SELECT * FROM migration_records;") == []
 
 
+@pytest.mark.ydb
 def test_corrupt_backup_fails_before_writes(tmp_path: Path, ydb_database: YdbDatabase) -> None:
     backup = tmp_path / "corrupt.sqlite"
     backup.write_bytes(b"not a SQLite backup")
@@ -184,6 +189,7 @@ def test_corrupt_backup_fails_before_writes(tmp_path: Path, ydb_database: YdbDat
     assert _rows(ydb_database, "SELECT * FROM migration_records;") == []
 
 
+@pytest.mark.ydb
 def test_report_text_and_model_review_history(tmp_path: Path, ydb_database: YdbDatabase) -> None:
     backup = tmp_path / "history.sqlite"
     with sqlite3.connect(backup) as connection:
@@ -238,6 +244,7 @@ def test_report_text_and_model_review_history(tmp_path: Path, ydb_database: YdbD
     assert proposal["decided_at"] is None
 
 
+@pytest.mark.ydb
 def test_optional_chart_cache_bundle_preserves_matching_packet(tmp_path: Path, ydb_database: YdbDatabase) -> None:
     start = datetime(2025, 1, 1, tzinfo=UTC)
     report = Report(
@@ -285,6 +292,7 @@ def test_optional_chart_cache_bundle_preserves_matching_packet(tmp_path: Path, y
     assert _rows(ydb_database, f"SELECT value FROM app_meta WHERE key='{key}';") == []
 
 
+@pytest.mark.ydb
 def test_optional_ai_ledger_preserves_results_reservations_and_delta(
     tmp_path: Path, ydb_database: YdbDatabase,
 ) -> None:
@@ -331,6 +339,7 @@ def test_optional_ai_ledger_preserves_results_reservations_and_delta(
     assert _rows(ydb_database, "SELECT * FROM llm_calls WHERE call_key='" + keys[2] + "';") == []
 
 
+@pytest.mark.ydb
 def test_ai_ledger_rejects_invalid_entry_before_bundle_writes(
     tmp_path: Path, ydb_database: YdbDatabase,
 ) -> None:

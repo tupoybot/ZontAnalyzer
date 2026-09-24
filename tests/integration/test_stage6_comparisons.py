@@ -2,6 +2,8 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import MethodType
 
+import pytest
+
 from tests.ydb_support import make_database, seed_samples
 from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.application.analysis import AnalysisService
@@ -146,6 +148,7 @@ def _season_report(start: datetime, end: datetime, *, year: int, season: str) ->
     )
 
 
+@pytest.mark.ydb
 def test_season_pairs_house_context_and_missing_history_are_explicit(tmp_path: Path) -> None:
     db = _db(tmp_path)
     for day in (
@@ -172,6 +175,7 @@ def test_season_pairs_house_context_and_missing_history_are_explicit(tmp_path: P
     assert any(item["label"] == "Предыдущая осень" for item in missing["period_comparisons"])
 
 
+@pytest.mark.ydb
 def test_daily_comparison_context_excludes_persisted_current_report(tmp_path: Path) -> None:
     db = _db(tmp_path)
     start = datetime(2026, 9, 2, tzinfo=UTC)
@@ -194,6 +198,7 @@ def test_daily_comparison_context_excludes_persisted_current_report(tmp_path: Pa
     assert current.id not in after["house_context"]["source_report_ids"]
 
 
+@pytest.mark.ydb
 def test_firmware_outcome_preserves_prediction_and_second_intervention_blocks_isolation(tmp_path: Path) -> None:
     db = _db(tmp_path)
     current_start = datetime(2026, 10, 1, tzinfo=UTC)
@@ -260,6 +265,7 @@ def test_excluded_windows_do_not_contribute_room_or_delta_t_facts(tmp_path: Path
     assert delta_t.value == 10
 
 
+@pytest.mark.ydb
 def test_telemetry_revision_changes_only_for_new_or_corrected_data_and_invalidates_signature(
     tmp_path: Path,
 ) -> None:

@@ -15,6 +15,7 @@ def _store(tmp_path: Path, timezone: str = "Europe/Moscow") -> tuple[Database, G
     return db, GasTariffStore(db, timezone)
 
 
+@pytest.mark.ydb
 def test_create_accepts_comma_decimal_and_month_start_uses_local_timezone(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
 
@@ -31,6 +32,7 @@ def test_create_accepts_comma_decimal_and_month_start_uses_local_timezone(tmp_pa
     assert result["tariff"]["corrections"] == []
 
 
+@pytest.mark.ydb
 def test_omitted_month_uses_first_day_of_next_local_month(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, store = _store(tmp_path, "Asia/Almaty")
     monkeypatch.setattr("zont_analyzer.application.gas_tariffs.utcnow", lambda: datetime(2026, 12, 31, 19, tzinfo=UTC))
@@ -41,6 +43,7 @@ def test_omitted_month_uses_first_day_of_next_local_month(tmp_path: Path, monkey
     assert result["affected_start"] == "2027-01-31T19:00:00+00:00"
 
 
+@pytest.mark.ydb
 def test_history_is_chronological_and_affected_range_ends_at_next_tariff(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     later = store.save({"price": "9", "currency": "RUB", "effective_month": "2026-11"})
@@ -53,6 +56,7 @@ def test_history_is_chronological_and_affected_range_ends_at_next_tariff(tmp_pat
     assert later["affected_end"] is None
 
 
+@pytest.mark.ydb
 def test_changed_historical_month_requires_explicit_correction_and_audits_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -83,6 +87,7 @@ def test_changed_historical_month_requires_explicit_correction_and_audits_it(
     assert correction["reason"] == "Исправление квитанции"
 
 
+@pytest.mark.ydb
 def test_last_normal_save_wins_for_same_planned_month_and_is_audited(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -99,6 +104,7 @@ def test_last_normal_save_wins_for_same_planned_month_and_is_audited(
     assert latest["tariff"]["corrections"][0]["reason"] is None
 
 
+@pytest.mark.ydb
 def test_exact_repeated_create_and_correction_are_idempotent(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     payload = {"price": "8.010", "currency": "RUB", "effective_month": "2026-10"}
@@ -119,6 +125,7 @@ def test_exact_repeated_create_and_correction_are_idempotent(tmp_path: Path) -> 
     assert len(store.history()[0]["corrections"]) == 1
 
 
+@pytest.mark.ydb
 def test_latest_of_multiple_explicit_corrections_is_active(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     created = store.save({"price": "8", "currency": "RUB", "effective_month": "2026-08"})
@@ -139,6 +146,7 @@ def test_latest_of_multiple_explicit_corrections_is_active(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize("price", [None, True, "", "nan", "inf", "-0.01", "1e999999", "0.0000001"])
+@pytest.mark.ydb
 def test_price_validation_rejects_unsafe_values(tmp_path: Path, price: object) -> None:
     _, store = _store(tmp_path)
     with pytest.raises(ValueError, match="price"):
@@ -146,6 +154,7 @@ def test_price_validation_rejects_unsafe_values(tmp_path: Path, price: object) -
 
 
 @pytest.mark.parametrize("currency", [None, "", "BTC", 1])
+@pytest.mark.ydb
 def test_only_supported_currencies_are_accepted(tmp_path: Path, currency: object) -> None:
     _, store = _store(tmp_path)
     with pytest.raises(ValueError, match="currency"):
@@ -154,18 +163,21 @@ def test_only_supported_currencies_are_accepted(tmp_path: Path, currency: object
 
 
 @pytest.mark.parametrize("month", ["2026-1", "2026-13", "01-2026", "2026-10-01", 202610])
+@pytest.mark.ydb
 def test_effective_month_is_strict(tmp_path: Path, month: object) -> None:
     _, store = _store(tmp_path)
     with pytest.raises(ValueError, match="effective_month"):
         store.save({"price": 8, "currency": "RUB", "effective_month": month})
 
 
+@pytest.mark.ydb
 def test_effective_month_timezone_conversion_overflow_is_a_validation_error(tmp_path: Path) -> None:
     _, store = _store(tmp_path, "Etc/GMT-14")
     with pytest.raises(ValueError, match="timezone range"):
         store.save({"price": 8, "currency": "RUB", "effective_month": "0001-01"})
 
 
+@pytest.mark.ydb
 def test_correction_requires_reason_and_cannot_move_month(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     created = store.save({"price": 8, "currency": "RUB", "effective_month": "2026-10"})
@@ -184,6 +196,7 @@ def test_correction_requires_reason_and_cannot_move_month(tmp_path: Path) -> Non
         )
 
 
+@pytest.mark.ydb
 def test_scopes_are_isolated_and_correction_cannot_cross_scope(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     created = store.save({"price": 8, "currency": "RUB", "effective_month": "2026-10"})
@@ -204,6 +217,7 @@ def test_scopes_are_isolated_and_correction_cannot_cross_scope(tmp_path: Path) -
         )
 
 
+@pytest.mark.ydb
 def test_invalid_payload_timezone_and_missing_id_are_rejected(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     with pytest.raises(ValueError, match="object"):

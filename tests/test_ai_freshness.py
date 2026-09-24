@@ -173,6 +173,7 @@ def test_legacy_digest_upgrades_only_after_exact_evidence_match() -> None:
     assert reuse_ai_interpretation(repaired, fresh).context['pilot_ai_reuse']['facts_changed'] is False
 
 
+@pytest.mark.ydb
 def test_completed_daily_analysis_is_stable_after_persistence(tmp_path) -> None:
     from datetime import date
 

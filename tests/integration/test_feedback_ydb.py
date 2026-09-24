@@ -46,6 +46,7 @@ def _setup(tmp_path: Path, *, clock: int = 1_000_000):
     return db, repo
 
 
+@pytest.mark.ydb
 def test_feedback_lifecycle_snapshots_prediction_audit_and_render_queue(tmp_path: Path) -> None:
     db, feedback = _setup(tmp_path)
     report = _report(0)
@@ -100,6 +101,7 @@ def test_feedback_lifecycle_snapshots_prediction_audit_and_render_queue(tmp_path
     assert delivered[0].state == "delivered" and delivered[0].attempts == 1
 
 
+@pytest.mark.ydb
 def test_stale_recommendation_expiry_and_late_rejection_are_idempotent(tmp_path: Path) -> None:
     created = int(START.timestamp()) * 1_000_000
     db, feedback = _setup(tmp_path, clock=created)
@@ -122,6 +124,7 @@ def test_stale_recommendation_expiry_and_late_rejection_are_idempotent(tmp_path:
     assert len(db.storage.execute("SELECT id FROM recommendation_audit;")[0].rows) == 1
 
 
+@pytest.mark.ydb
 def test_invalid_feedback_does_not_mutate_state(tmp_path: Path) -> None:
     db, feedback = _setup(tmp_path)
     report = _report(0)
@@ -145,6 +148,7 @@ def test_invalid_feedback_does_not_mutate_state(tmp_path: Path) -> None:
     {"parameter": "x" * 201},
     {"before": "x" * 501},
 ])
+@pytest.mark.ydb
 def test_experiment_contract_rejects_invalid_values(tmp_path: Path, experiment: dict[str, object]) -> None:
     db, feedback = _setup(tmp_path)
     report = _report(0)
@@ -154,6 +158,7 @@ def test_experiment_contract_rejects_invalid_values(tmp_path: Path, experiment: 
     assert feedback.recommendation_status_counts()["new"] == 1
 
 
+@pytest.mark.ydb
 def test_feedback_keeps_latest_note_and_explicit_temporal_boundaries(tmp_path: Path) -> None:
     db, feedback = _setup(tmp_path)
     first, second = _report(0), _report(1)
@@ -179,6 +184,7 @@ def test_feedback_keeps_latest_note_and_explicit_temporal_boundaries(tmp_path: P
     assert feedback.intervention_history(limit=0) == []
 
 
+@pytest.mark.ydb
 def test_report_regeneration_keeps_owner_state_and_original_expiry_time(tmp_path: Path) -> None:
     created = int(START.timestamp()) * 1_000_000
     db, feedback = _setup(tmp_path, clock=created)
@@ -195,6 +201,7 @@ def test_report_regeneration_keeps_owner_state_and_original_expiry_time(tmp_path
     assert feedback.expire_stale_recommendations(now=START + timedelta(days=10))["ignored"] == 0
 
 
+@pytest.mark.ydb
 def test_imported_intervention_and_experiment_keep_historical_snapshot(tmp_path: Path) -> None:
     db, feedback = _setup(tmp_path)
     report = _report(0)
@@ -228,6 +235,7 @@ def test_imported_intervention_and_experiment_keep_historical_snapshot(tmp_path:
     assert feedback.intervention_history()[0]["experiment"] == view["experiment"]
 
 
+@pytest.mark.ydb
 def test_next_analysis_packet_includes_owner_feedback_from_ydb(tmp_path: Path) -> None:
     db, _feedback = _setup(tmp_path)
     prior = _report(0)
@@ -259,6 +267,7 @@ def test_next_analysis_packet_includes_owner_feedback_from_ydb(tmp_path: Path) -
     assert context[0]["owner_note"] == "Sensor checked; close this hypothesis"
 
 
+@pytest.mark.ydb
 def test_feedback_http_round_trip_uses_ydb_and_refreshes_report(tmp_path: Path) -> None:
     db, _feedback = _setup(tmp_path)
     report = _report(0)
