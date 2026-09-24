@@ -104,9 +104,19 @@ Codex Cloud setup should configure the `origin` remote and GitHub credentials. D
 treat an internal sandbox commit, `make_pr` metadata, or a clean local working tree as
 proof that GitHub received the work.
 
-Before editing, make sure the target branch is reachable from `origin`. Before final
-publication, remove the matching `.codex/dispatch/issue-N.md`, commit the completed
-changes, and push the local commit directly to the existing target branch:
+Before editing, verify both remote access and write permission. Fetch the target branch,
+then run a non-destructive push check against that same branch:
+
+`git fetch origin codex/issue-N`
+
+`git push --dry-run origin HEAD:refs/heads/codex/issue-N`
+
+If this fails because authentication or write permission is unavailable, report the
+publication blocker in the PR and stop before doing implementation work. If it fails
+because the branch moved, reconcile the remote branch first.
+
+Before final publication, remove the matching `.codex/dispatch/issue-N.md`, commit the
+completed changes, and push the local commit directly to the existing target branch:
 
 `git push origin HEAD:refs/heads/codex/issue-N`
 
