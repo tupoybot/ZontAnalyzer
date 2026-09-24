@@ -455,36 +455,10 @@ jobs:
               per_page: 100,
             });
 
-            const retryMarker = '<!-- codex-publish-retry:1 -->';
             const failedMarker = '<!-- codex-publish-failed -->';
-            const alreadyRetried = prComments.some(
-              (comment) => comment.body?.includes(retryMarker)
-            );
             const alreadyFailed = prComments.some(
               (comment) => comment.body?.includes(failedMarker)
             );
-
-            if (!alreadyRetried) {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number: prNumber,
-                body: [
-                  retryMarker,
-                  '@codex Результат предыдущей cloud-задачи не попал в этот PR.',
-                  '',
-                  'Сначала прочитай `AGENTS.md`, `.github/codex/issue-agent.md` и `.codex/dispatch/issue-' + issueNumber + '.md`.',
-                  'Повтори необходимую работу и опубликуй commit обычным `git push origin HEAD:refs/heads/' + pr.head.ref + '`.',
-                  'Новый PR не создавай. Перед финальным ответом проверь remote SHA и реальные Files changed на GitHub.',
-                  'Если push технически невозможен, сообщи об этом явно и не заявляй об успешном завершении.',
-                ].join('\n'),
-              });
-              core.warning(
-                'Codex reported completion but PR #' + prNumber +
-                ' has no published work; one recovery task was dispatched.'
-              );
-              return;
-            }
 
             if (!alreadyFailed) {
               await github.rest.issues.createComment({
@@ -493,15 +467,16 @@ jobs:
                 issue_number: prNumber,
                 body: [
                   failedMarker,
-                  '⚠️ Codex Cloud повторно отчитался о завершении, но GitHub по-прежнему не видит реальных изменений в этом PR.',
+                  '⚠️ Codex Cloud сообщил о завершении, но GitHub не видит реальных изменений в этом PR.',
                   '',
                   'Текущий head: ' + pr.head.ref + ' @ ' + pr.head.sha + '.',
-                  'Автоматические повторы остановлены, чтобы не зациклить Cloud tasks. Нужна ручная проверка/перезапуск.',
+                  'Задача не считается успешно опубликованной.',
+                  '',
+                  'Проверь Codex Environment: secret GITHUB_TOKEN, доступ к github.com/api.github.com и настройку origin. После исправления перезапусти issue через workflow_dispatch.',
                 ].join('\n'),
               });
             }
 
             core.setFailed(
-              'Codex work was not published to PR #' + prNumber +
-              ' after one automatic recovery attempt.'
+              'Codex work was not published to PR #' + prNumber + '.'
             );
