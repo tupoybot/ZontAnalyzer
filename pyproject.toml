@@ -16,6 +16,8 @@ dependencies = [
   "pydantic>=2.7,<3",
   "pydantic-settings>=2.2,<3",
   "PyYAML>=6,<7",
+  # YDB metadata credentials require requests at runtime in Serverless Containers.
+  "requests>=2.32,<3",
   "typer>=0.12,<1",
   "ydb==3.32.0",
 ]

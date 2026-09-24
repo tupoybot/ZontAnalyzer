@@ -22,4 +22,5 @@ until docker exec "$name" curl -fsS -u smoke:synthetic http://127.0.0.1:8080/rea
 done
 docker exec "$name" sh -c 'test ! -e /data && test ! -e /publish; rm -f /tmp/zont-xray-*.json'
 docker exec -i "$name" python - < "$root/tests/integration/cloud_runtime_smoke.py"
+docker exec -i "$name" python - < "$root/tests/integration/cloud_metadata_credentials_smoke.py"
 docker exec "$name" python -c 'import sys; from zont_analyzer.cloud import analytics, runtime; assert "sqlite3" not in sys.modules; assert "sqlalchemy" not in sys.modules'
