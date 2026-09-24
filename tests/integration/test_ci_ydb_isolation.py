@@ -107,6 +107,43 @@ def test_failed_reset_quarantines_slot(tmp_path: Path, monkeypatch: pytest.Monke
     assert ydb_support.pool_statistics()["schema_quarantines"] == before + 1
 
 
+@pytest.mark.parametrize("thread_name", ["regenerate-blocked-isolation", "unregistered-writer"])
+@pytest.mark.ydb
+def test_background_drain_timeout_quarantines_every_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, thread_name: str,
+) -> None:
+    first = ydb_support.make_database(tmp_path)
+    second = ydb_support.make_database(tmp_path)
+    old_namespaces = {first.storage.path, second.storage.path}
+    assert len(old_namespaces) == 2
+    quarantines_before = ydb_support.pool_statistics()["schema_quarantines"]
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_job() -> None:
+        entered.set()
+        release.wait()
+
+    thread = threading.Thread(target=blocked_job, name=thread_name, daemon=True)
+    thread.start()
+    try:
+        assert entered.wait(1)
+        with monkeypatch.context() as patch:
+            patch.setattr(ydb_support, "_DRAIN_SECONDS", 0.02)
+            with pytest.raises(RuntimeError, match="cleanup failed") as failure:
+                ydb_support.cleanup_databases()
+        assert isinstance(failure.value.__cause__, TimeoutError)
+        expected_phase = "known app" if thread_name.startswith("regenerate-") else "new test"
+        assert expected_phase in str(failure.value.__cause__)
+        assert ydb_support.pool_statistics()["schema_quarantines"] == quarantines_before + 2
+    finally:
+        release.set()
+        thread.join(timeout=1)
+    assert not thread.is_alive()
+    replacements = [ydb_support.make_database(tmp_path) for _ in range(2)]
+    assert all(db.storage.path not in old_namespaces for db in replacements)
+
+
 @pytest.mark.ydb
 def test_late_named_writer_finishes_before_reset(tmp_path: Path) -> None:
     first = ydb_support.make_database(tmp_path)

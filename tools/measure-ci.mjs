@@ -48,7 +48,7 @@ const metadata = {
   command: 'deploy/check-tests.sh',
   args,
   pytest_common_args: ['-ra', '-p', 'no:cacheprovider', ...args],
-  ydb_workers: Number(process.env.ZONT_TEST_WORKERS || 1),
+  ydb_workers: Number(process.env.ZONT_TEST_WORKERS || 2),
   groups: { pure: { marker: 'not ydb', network: 'none' }, ydb: { marker: 'ydb', network: 'disposable' } },
   cpu_count: os.cpus().length,
   memory_total_bytes: os.totalmem(),

@@ -1,0 +1,9 @@
+{
+  "run_id": 36036100844,
+  "manifest_digest": "sha256:cc947dc2d4d5ca3d6f3cf6d32a049389c20a51d2edc29b9b07e11448d70fc86c",
+  "config_digest": "sha256:e3e5b3cab2e5cc288c74e186315632f5d60b8ae48053f15b0e858aa802b300c0",
+  "config_matches_actions_image_id": true,
+  "manifest_matches_loaded_image_id": true,
+  "layers_match": true,
+  "layer_count": 14
+}

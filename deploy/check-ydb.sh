@@ -11,7 +11,7 @@ esac
 NAME="$PREFIX-ydb"
 TEST_NAME="$PREFIX-test"
 METRICS_DIR=${ZONT_METRICS_DIR:-}
-WORKERS=${ZONT_TEST_WORKERS:-1}
+WORKERS=${ZONT_TEST_WORKERS:-2}
 case "$WORKERS" in 1|2) ;; *) echo "ZONT_TEST_WORKERS must be 1 or 2" >&2; exit 2 ;; esac
 if [ -n "$METRICS_DIR" ]; then
     case "$METRICS_DIR" in /*) ;; *) echo "ZONT_METRICS_DIR must be absolute" >&2; exit 2 ;; esac
@@ -34,7 +34,7 @@ cleanup() {
         docker exec "$NAME" sh -c 'cat /sys/fs/cgroup/io.stat /sys/fs/cgroup/cpu.stat /sys/fs/cgroup/memory.events' \
             > "$METRICS_DIR/ydb-cgroup-final.txt" 2>/dev/null || true
     fi
-    docker rm -f "$TEST_NAME" >/dev/null 2>&1 || true
+    docker rm -f "$TEST_NAME" "$PREFIX-ready" "$PREFIX-cli" >/dev/null 2>&1 || true
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     docker network rm "$NAME" >/dev/null 2>&1 || true
 }
@@ -47,14 +47,14 @@ docker network create "$NAME" >/dev/null
 stamp preparation end
 PHASE=ydb_startup
 stamp ydb_startup start
-docker run -d --name "$NAME" --hostname "$NAME" --network "$NAME" --memory 5g \
+docker run -d --name "$NAME" --hostname "$NAME" --network "$NAME" --memory 5g --memory-swap 5g --cpus 2 \
     -e GRPC_PORT=2136 -e MON_PORT=8765 -e YDB_USE_IN_MEMORY_PDISKS=true \
     -e YDB_DEFAULT_LOG_LEVEL=WARN "$YDB_IMAGE" >/dev/null
 stamp ydb_startup end
 PHASE=ydb_readiness
 stamp ydb_readiness start
 # Readiness is checked from the test image; no host Python or dependencies.
-docker run --rm --network "$NAME" --entrypoint python "$IMAGE" -c '
+docker run --rm --name "$PREFIX-ready" --network "$NAME" --entrypoint python "$IMAGE" -c '
 import socket,sys,time
 deadline=time.monotonic()+90
 while time.monotonic()<deadline:
@@ -75,7 +75,8 @@ TEST_MOUNT=
 if [ -n "$METRICS_DIR" ]; then
     TEST_MOUNT="type=bind,src=$METRICS_DIR,dst=/metrics"
 fi
-docker run --rm --name "$TEST_NAME" --network "$NAME" --user "$(id -u):$(id -g)" --workdir /workspace \
+docker run --rm --name "$TEST_NAME" --network "$NAME" --cpus 2 --memory 1g --memory-swap 1g \
+    --user "$(id -u):$(id -g)" --workdir /workspace \
     --mount "type=bind,src=$ROOT,dst=/workspace,readonly" \
     --tmpfs /tmp:rw,exec,nosuid,nodev,size=1g \
     ${TEST_MOUNT:+--mount "$TEST_MOUNT"} \
@@ -88,7 +89,7 @@ stamp pytest end
 PHASE=cli_smoke
 stamp cli_smoke start
 # Exercise the installed CLI in a clean working directory and a disposable schema.
-docker run --rm --network "$NAME" --workdir /tmp \
+docker run --rm --name "$PREFIX-cli" --network "$NAME" --workdir /tmp \
     -e "YDB_ENDPOINT=grpc://$NAME:2136" -e YDB_DATABASE=/local \
     -e YDB_NAMESPACE=cli_smoke -e YDB_ANONYMOUS_CREDENTIALS=1 \
     --entrypoint zont-analyzer "$IMAGE" --data-dir /tmp/cli-data init

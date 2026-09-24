@@ -4,13 +4,20 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 IMAGE=${ZONT_TEST_IMAGE:-zont-analyzer:test-local}
 PREFIX=${ZONT_CONTAINER_PREFIX:-zont-check-$$}
+case "$PREFIX" in
+    *[!a-zA-Z0-9_.-]*|'') echo "invalid ZONT_CONTAINER_PREFIX" >&2; exit 2 ;;
+esac
 METRICS_DIR=${ZONT_METRICS_DIR:-}
 [ "$#" -gt 0 ] || set -- tests
 stamp() {
     [ -n "$METRICS_DIR" ] || return 0
     printf '{"phase":"pure_tests","event":"%s","epoch_ms":%s}\n' "$1" "$(date +%s%3N)" >> "$METRICS_DIR/phases.jsonl"
 }
-cleanup() { docker rm -f "$PREFIX-pure" >/dev/null 2>&1 || true; }
+cleanup() {
+    docker rm -f "$PREFIX-pure" "$PREFIX-test" "$PREFIX-ready" "$PREFIX-cli" "$PREFIX-ydb" \
+        >/dev/null 2>&1 || true
+    docker network rm "$PREFIX-ydb" >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' HUP TERM
@@ -22,6 +29,7 @@ if [ -n "$METRICS_DIR" ]; then
 fi
 stamp start
 docker run --rm --name "$PREFIX-pure" --network none \
+    --cpus 2 --memory 1g --memory-swap 1g \
     --user "$(id -u):$(id -g)" --workdir /workspace \
     --mount "type=bind,src=$ROOT,dst=/workspace,readonly" \
     --tmpfs /tmp:rw,exec,nosuid,nodev,size=1g \

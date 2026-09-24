@@ -43,6 +43,7 @@ packages = ["src/zont_analyzer"]
 addopts = "-q"
 testpaths = ["tests"]
 markers = ["ydb: queries, transactions or storage verified against isolated real YDB"]
+filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]
 
 [tool.ruff]
 line-length = 120

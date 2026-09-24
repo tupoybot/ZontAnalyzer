@@ -20,6 +20,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -35,7 +36,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci-benchmark')
         with:
-          name: ci-test-image
+          name: ci-test-image-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-test-image.tar.gz
           retention-days: 7
           compression-level: 0
@@ -46,7 +47,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: ci-metrics
+          name: ci-metrics-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-metrics
           retention-days: 14
       - run: docker build --target cli -t zont-analyzer:test .

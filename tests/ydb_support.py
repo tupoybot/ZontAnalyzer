@@ -36,6 +36,7 @@ _leases: list[_Slot] = []
 _clients: list[YdbDatabase] = []
 _closed_clients: set[int] = set()
 _tracking_clients = False
+_threads_at_start: set[threading.Thread] = set()
 _runtime_databases: dict[Path, Database] = {}
 _active_test: str | None = None
 _ydb_allowed = False
@@ -46,12 +47,13 @@ _DRAIN_SECONDS = 10.0
 
 
 def begin_test(nodeid: str, *, ydb_allowed: bool, monkeypatch: pytest.MonkeyPatch) -> None:
-    global _active_test, _ydb_allowed, _tracking_clients
+    global _active_test, _ydb_allowed, _tracking_clients, _threads_at_start
     if _active_test is not None:
         raise RuntimeError(f"YDB fixture still active for {_active_test}")
     _active_test = nodeid
     _ydb_allowed = ydb_allowed
     _tracking_clients = ydb_allowed
+    _threads_at_start = set(threading.enumerate())
     if ydb_allowed:
         original_init = YdbDatabase.__init__
         original_close = YdbDatabase.close
@@ -152,19 +154,21 @@ def _test_thread(thread: threading.Thread) -> bool:
     )
 
 
-def _drain_background_threads() -> None:
-    deadline = time.monotonic() + _DRAIN_SECONDS
+def _join_threads(deadline: float, *, known_only: bool) -> None:
     while True:
+        current = threading.current_thread()
         threads = [thread for thread in threading.enumerate()
-                   if thread is not threading.current_thread() and _test_thread(thread)]
+                   if thread is not current and
+                   (_test_thread(thread) if known_only else thread not in _threads_at_start)]
         if not threads:
             return
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError("YDB fixture background threads did not stop before reset: "
+            phase = "known app" if known_only else "new test"
+            raise TimeoutError(f"YDB fixture {phase} threads did not stop before reset: "
                                + ", ".join(sorted({thread.name for thread in threads})))
         for thread in threads:
-            thread.join(min(remaining, 0.2))
+            thread.join(min(max(0.0, deadline - time.monotonic()), 0.2))
 
 
 def _metadata(client: YdbDatabase) -> dict[str, str]:
@@ -202,10 +206,11 @@ def cleanup_databases() -> None:
     """Release this test's leases, or quarantine them on any cleanup failure."""
     global _tracking_clients
     errors: list[BaseException] = []
+    deadline = time.monotonic() + _DRAIN_SECONDS
     try:
         if _leases:
             try:
-                _drain_background_threads()
+                _join_threads(deadline, known_only=True)
             except BaseException as exc:
                 errors.append(exc)
                 for slot in _leases:
@@ -216,6 +221,13 @@ def cleanup_databases() -> None:
                 continue
             try:
                 client.close()
+            except BaseException as exc:
+                errors.append(exc)
+                for slot in _leases:
+                    _quarantine(slot)
+        if _leases:
+            try:
+                _join_threads(deadline, known_only=False)
             except BaseException as exc:
                 errors.append(exc)
                 for slot in _leases:
@@ -243,13 +255,14 @@ def cleanup_databases() -> None:
 
 
 def end_test() -> None:
-    global _active_test, _ydb_allowed, _tracking_clients
+    global _active_test, _ydb_allowed, _tracking_clients, _threads_at_start
     try:
         cleanup_databases()
     finally:
         _active_test = None
         _ydb_allowed = False
         _tracking_clients = False
+        _threads_at_start = set()
 
 
 def _drop_slot(slot: _Slot) -> None:
