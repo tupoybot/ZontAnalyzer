@@ -66,6 +66,10 @@ run "isolated_defaults" {
     error_message = "M2 application must not mount storage or SQLite state."
   }
   assert {
+    condition     = yandex_serverless_container.application.metadata_options[0].gce_http_endpoint == 1 && yandex_serverless_container.application.metadata_options[0].aws_v1_http_endpoint == 2
+    error_message = "YDB credentials require the GCE metadata endpoint; AWS IMDSv1 must remain disabled."
+  }
+  assert {
     condition     = !var.openai_access_confirmed && yandex_serverless_container.application.image[0].environment.CLOUD_OPENAI_ACCESS_CONFIRMED == "false" && yandex_serverless_container.application.image[0].environment.CLOUD_JOB_TIMEOUT_SECONDS == "15"
     error_message = "OpenAI access must remain disabled by default and jobs must be bounded."
   }

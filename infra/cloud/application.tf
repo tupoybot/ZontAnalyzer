@@ -8,6 +8,11 @@ resource "yandex_serverless_container" "application" {
   execution_timeout  = "210s"
   service_account_id = var.runtime_service_account_id
 
+  metadata_options {
+    gce_http_endpoint    = 1
+    aws_v1_http_endpoint = 2
+  }
+
   runtime {
     type = "http"
   }
