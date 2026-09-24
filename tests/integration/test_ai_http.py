@@ -28,6 +28,7 @@ def ai_server(tmp_path: Path):
         thread.join(timeout=5)
 
 
+@pytest.mark.ydb
 def test_ai_settings_get_put_reset_and_write_guards_are_local(ai_server, monkeypatch) -> None:
     runtime, client = ai_server
     import zont_analyzer.adapters.openai.model_catalog as catalog
@@ -56,6 +57,7 @@ def test_ai_settings_get_put_reset_and_write_guards_are_local(ai_server, monkeyp
         assert response.status_code in {403, 422}
 
 
+@pytest.mark.ydb
 def test_manual_review_is_async_and_has_no_live_catalog_call(ai_server, monkeypatch) -> None:
     runtime, client = ai_server
     import zont_analyzer.application.ai_maintenance as maintenance
@@ -80,6 +82,7 @@ def test_manual_review_is_async_and_has_no_live_catalog_call(ai_server, monkeypa
     assert client.get("/ai").json()["review"]["running"] is False
 
 
+@pytest.mark.ydb
 def test_review_decisions_require_integer_version_and_existing_proposal(ai_server) -> None:
     _, client = ai_server
     for payload in (

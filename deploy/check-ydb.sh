@@ -11,6 +11,8 @@ esac
 NAME="$PREFIX-ydb"
 TEST_NAME="$PREFIX-test"
 METRICS_DIR=${ZONT_METRICS_DIR:-}
+WORKERS=${ZONT_TEST_WORKERS:-1}
+case "$WORKERS" in 1|2) ;; *) echo "ZONT_TEST_WORKERS must be 1 or 2" >&2; exit 2 ;; esac
 if [ -n "$METRICS_DIR" ]; then
     case "$METRICS_DIR" in /*) ;; *) echo "ZONT_METRICS_DIR must be absolute" >&2; exit 2 ;; esac
     [ -d "$METRICS_DIR" ] && [ -w "$METRICS_DIR" ] || {
@@ -28,11 +30,17 @@ cleanup() {
         stamp "$PHASE" failed
         if [ -n "$METRICS_DIR" ]; then printf '%s\n' "$status" > "$METRICS_DIR/exit-status.txt"; fi
     fi
+    if [ -n "$METRICS_DIR" ]; then
+        docker exec "$NAME" sh -c 'cat /sys/fs/cgroup/io.stat /sys/fs/cgroup/cpu.stat /sys/fs/cgroup/memory.events' \
+            > "$METRICS_DIR/ydb-cgroup-final.txt" 2>/dev/null || true
+    fi
     docker rm -f "$TEST_NAME" >/dev/null 2>&1 || true
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     docker network rm "$NAME" >/dev/null 2>&1 || true
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' HUP TERM
 PHASE=preparation
 stamp preparation start
 docker network create "$NAME" >/dev/null
@@ -71,9 +79,11 @@ docker run --rm --name "$TEST_NAME" --network "$NAME" --user "$(id -u):$(id -g)"
     --mount "type=bind,src=$ROOT,dst=/workspace,readonly" \
     --tmpfs /tmp:rw,exec,nosuid,nodev,size=1g \
     ${TEST_MOUNT:+--mount "$TEST_MOUNT"} \
-    ${METRICS_DIR:+-e ZONT_PYTEST_METRICS=/metrics/tests.json} \
+    ${METRICS_DIR:+-e ZONT_PYTEST_METRICS=/metrics/ydb-tests.json} \
     -e PYTHONPATH=/workspace/src:/workspace -e "YDB_TEST_ENDPOINT=grpc://$NAME:2136" \
-    --entrypoint pytest "$IMAGE" -ra -p no:cacheprovider "${@:-tests}"
+    --entrypoint pytest "$IMAGE" -ra -p no:cacheprovider -n "$WORKERS" --dist load \
+    --max-worker-restart=0 "${@:-tests}" \
+    ${METRICS_DIR:+-p tools.pytest_metrics --junitxml=/metrics/ydb-junit.xml}
 stamp pytest end
 PHASE=cli_smoke
 stamp cli_smoke start

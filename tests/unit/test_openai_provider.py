@@ -2,6 +2,8 @@ import copy
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from zont_analyzer.adapters.openai.provider import (
     ANALYSIS_PACKET_MAX_BYTES,
     _StructuredAnalysisResult,
@@ -275,6 +277,7 @@ def test_weekly_allocator_keeps_new_context_metrics_and_representative_dhw_event
     )
 
 
+@pytest.mark.ydb
 def test_reasoning_provider_preserves_budget_privacy_and_records_actual_prompt(tmp_path) -> None:
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -308,6 +311,7 @@ def test_reasoning_provider_preserves_budget_privacy_and_records_actual_prompt(t
     assert parse.call_count == 1
 
 
+@pytest.mark.ydb
 def test_reasoning_provider_reuses_successful_result_without_second_api_call(tmp_path) -> None:
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -332,6 +336,7 @@ def test_reasoning_provider_reuses_successful_result_without_second_api_call(tmp
     assert analyst.ledger.token_usage_this_month() == 18
 
 
+@pytest.mark.ydb
 def test_reasoning_provider_accounts_usage_when_structured_output_is_invalid(tmp_path) -> None:
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -357,6 +362,7 @@ def test_reasoning_provider_accounts_usage_when_structured_output_is_invalid(tmp
     assert parse.call_count == 1
 
 
+@pytest.mark.ydb
 def test_ai_ledger_serializes_pending_reservations(tmp_path) -> None:
     from tests.ydb_support import make_database
     from zont_analyzer.adapters.ydb.ai_usage import AiUsageRepository
@@ -370,6 +376,7 @@ def test_ai_ledger_serializes_pending_reservations(tmp_path) -> None:
         second.reserve("other", "job", {}, budget=100, estimate=30, billing_month="2026-09")
 
 
+@pytest.mark.ydb
 def test_request_fingerprint_changes_for_nonce_and_model(tmp_path) -> None:
     import json
     from types import SimpleNamespace
@@ -395,6 +402,7 @@ def test_request_fingerprint_changes_for_nonce_and_model(tmp_path) -> None:
     assert all(int(json.loads(entry.payload)["charged_tokens"]) > 0 for entry in ledger_entries)
 
 
+@pytest.mark.ydb
 def test_budget_reservation_includes_prompt_and_schema_bytes(tmp_path) -> None:
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -417,6 +425,7 @@ def test_budget_reservation_includes_prompt_and_schema_bytes(tmp_path) -> None:
     parse.assert_not_called()
 
 
+@pytest.mark.ydb
 def test_ai_ledger_keeps_old_pending_fingerprint_but_scopes_budget_by_month(tmp_path) -> None:
     from tests.ydb_support import make_database
     from zont_analyzer.adapters.ydb.ai_usage import AiUsageRepository
@@ -431,6 +440,7 @@ def test_ai_ledger_keeps_old_pending_fingerprint_but_scopes_budget_by_month(tmp_
     assert later.mark_sent("stuck") is False
 
 
+@pytest.mark.ydb
 def test_ai_ledger_fails_closed_on_corruption_and_unknown_usage_stays_charged(tmp_path) -> None:
     import pytest
 
@@ -451,6 +461,7 @@ def test_ai_ledger_fails_closed_on_corruption_and_unknown_usage_stays_charged(tm
     assert ledger.mark_sent("ambiguous") is False
 
 
+@pytest.mark.ydb
 def test_prepared_reservation_resumes_after_crash_without_double_dispatch(tmp_path, monkeypatch) -> None:
     from types import SimpleNamespace
     from unittest.mock import Mock

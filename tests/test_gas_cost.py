@@ -168,6 +168,7 @@ def test_invalid_period_is_rejected() -> None:
         calculate_gas_cost(START, START, 1, [], timezone="UTC")
 
 
+@pytest.mark.ydb
 def test_refresh_cost_reads_stored_baseline_inside_database_session(tmp_path) -> None:
     from zont_analyzer.application.gas import GasService
     from zont_analyzer.application.gas_tariffs import GasTariffStore
@@ -228,6 +229,7 @@ def test_refresh_cost_reads_stored_baseline_inside_database_session(tmp_path) ->
     assert GasService(runtime.db, runtime.config).refresh_cost(refreshed).context == refreshed.context
 
 
+@pytest.mark.ydb
 def test_refresh_cost_preserves_gas_and_ai_and_does_not_scan_without_tariffs(tmp_path, monkeypatch) -> None:
     from zont_analyzer.application.gas import GasService
 
@@ -261,6 +263,7 @@ def test_refresh_cost_preserves_gas_and_ai_and_does_not_scan_without_tariffs(tmp
     assert refreshed.context["gas"]["cost"]["status"] == "unknown"
 
 
+@pytest.mark.ydb
 def test_currency_change_suppresses_comparable_window_money_effect(tmp_path) -> None:
     from zont_analyzer.application.gas import GasService
     from zont_analyzer.application.gas_tariffs import GasTariffStore

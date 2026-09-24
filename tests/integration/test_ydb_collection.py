@@ -2,11 +2,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
+
 from tests.ydb_support import make_database
 from zont_analyzer.application.collection import CollectionService
 from zont_analyzer.config import AppConfig
 
 
+@pytest.mark.ydb
 def test_empty_coverage_resume_and_source_failure_are_independent(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     db.save_devices([{"id": "fixture"}])
@@ -35,6 +38,7 @@ def test_empty_coverage_resume_and_source_failure_are_independent(tmp_path: Path
     assert db.get_cursor("fixture", "raw_events") == end + timedelta(minutes=30)
 
 
+@pytest.mark.ydb
 def test_unavailable_archive_gap_does_not_call_source(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     db.save_devices([{"id": "fixture"}])
@@ -49,6 +53,7 @@ def test_unavailable_archive_gap_does_not_call_source(tmp_path: Path) -> None:
     client.load_events.assert_not_called()
 
 
+@pytest.mark.ydb
 def test_oversized_response_learns_bound_across_invocations(tmp_path: Path) -> None:
     from zont_analyzer.domain import TelemetryPoint
 
@@ -79,6 +84,7 @@ def test_oversized_response_learns_bound_across_invocations(tmp_path: Path) -> N
     assert db.get_cursor("fixture", "temperature") == start + timedelta(minutes=15)
 
 
+@pytest.mark.ydb
 def test_small_budget_preserves_source_fairness_across_restart(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     db.save_devices([{"id": "fixture"}])

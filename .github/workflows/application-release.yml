@@ -3,7 +3,7 @@ name: Verified cloud application candidate
 on:
   push:
     branches: ['main', 'stageM[0-9]*/**']
-    paths: ['src/**', 'tests/**', 'tools/**', 'Dockerfile', '.dockerignore', 'pyproject.toml', 'README.md', 'deploy/check-local.sh', 'deploy/check-ydb.sh', 'deploy/smoke-cloud-local.sh', '.github/workflows/application-release.yml']
+    paths: ['src/**', 'tests/**', 'tools/**', 'Dockerfile', '.dockerignore', 'pyproject.toml', 'README.md', 'deploy/check-local.sh', 'deploy/check-ydb.sh', 'deploy/check-tests.sh', 'deploy/assert-ydb-memory.sh', 'deploy/smoke-cloud-local.sh', 'deploy/compose.yaml', 'deploy/compose.test.yaml', 'deploy/compose.local.yaml', 'deploy/env.example', 'deploy/nginx-zont-analyzer.conf', 'deploy/nginx-zont-analyzer-root.conf', '.github/workflows/ci.yml', '.github/workflows/application-release.yml']
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/stageM'))
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      build_release_candidate: true
   release:
+    needs: verify
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/stageM'))
     runs-on: ubuntu-latest
     permissions:
@@ -30,9 +38,8 @@ jobs:
           set -euo pipefail
           [[ "$GITHUB_REF_NAME" == main || "$GITHUB_REF_NAME" =~ ^stageM[0-9]+/[a-z0-9/-]+$ ]]
           git merge-base --is-ancestor origin/main HEAD
-      - name: Check candidate source in Docker
-        run: deploy/check-local.sh all
-      - name: Build, smoke and publish the immutable cloud artifact
+      - name: Find an existing immutable tag
+        id: existing
         env:
           COMMIT: ${{ github.sha }}
           REPOSITORY: ${{ github.repository }}
@@ -44,16 +51,46 @@ jobs:
           tag="$image:cloud-sha-$COMMIT"
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
           if docker manifest inspect "$tag" >/dev/null 2>&1; then
+            printf 'published=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'published=false\n' >> "$GITHUB_OUTPUT"
+          fi
+      # This artifact was uploaded by verify in the same workflow run, after full CI and smoke.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: steps.existing.outputs.published != 'true'
+        with:
+          name: application-candidate
+          path: ${{ runner.temp }}/application-candidate
+      - name: Smoke and publish the verified cloud candidate
+        env:
+          COMMIT: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          PUBLISHED: ${{ steps.existing.outputs.published }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${REPOSITORY,,}"
+          tag="$image:cloud-sha-$COMMIT"
+          if [[ "$PUBLISHED" == true ]]; then
+            # Preserve the existing same-SHA tag; a rerun still checks and smokes its bytes.
             docker pull "$tag"
           else
-            docker build --target production --provenance=false --build-arg "REVISION=$COMMIT" \
-              --label "org.opencontainers.image.source=https://github.com/$REPOSITORY" \
-              --label "org.opencontainers.image.revision=$COMMIT" -t "$tag" .
+            cd "$RUNNER_TEMP/application-candidate"
+            sha256sum -c application-candidate.tar.gz.sha256
+            docker load -i application-candidate.tar.gz
           fi
+          cd "$GITHUB_WORKSPACE"
           test "$(docker image inspect "$tag" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$COMMIT"
+          test "$(docker image inspect "$tag" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/$REPOSITORY"
           test "$(docker image inspect "$tag" --format '{{index .Config.Labels "org.zont.runtime"}}')" = cloud
           deploy/smoke-cloud-local.sh "$tag"
-          docker push "$tag"
+          if [[ "$PUBLISHED" != true ]]; then
+            # A tag created after the first check must never be overwritten.
+            if docker manifest inspect "$tag" >/dev/null 2>&1; then
+              echo '::error::Candidate tag appeared during publication; retry the release.' >&2
+              exit 1
+            fi
+            docker push "$tag"
+          fi
           digest=$(docker image inspect "$tag" --format '{{index .RepoDigests 0}}')
           jq -n --arg commit "$COMMIT" --arg image "$digest" --arg ref "$GITHUB_REF_NAME" \
             --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \

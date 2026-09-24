@@ -56,6 +56,7 @@ def test_no_setpoint_is_invented_before_first_known_state():
     assert _statistic(target, START, START + timedelta(hours=2)).coverage_pct == 50
 
 
+@pytest.mark.ydb
 def test_database_keeps_unknown_state_and_previous_command(tmp_path):
     db: Database = make_database(tmp_path)
     seed_samples(db, [

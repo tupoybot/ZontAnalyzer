@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 
 from tests.ydb_support import make_database, seed_samples
 from zont_analyzer.application.analysis import AnalysisService
@@ -39,6 +40,7 @@ def _room_points(start: datetime) -> list[TelemetryPoint]:
     ]
 
 
+@pytest.mark.ydb
 def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch) -> None:
     runtime = _runtime(tmp_path)
     runtime.loaded.config.feedback.listen_port = 0
@@ -144,6 +146,7 @@ def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch
     assert feedback[0]["owner_note"] == payload["owner_note"]
 
 
+@pytest.mark.ydb
 def test_worker_health_checks_heartbeat_without_database(tmp_path: Path, monkeypatch) -> None:
     import json
 

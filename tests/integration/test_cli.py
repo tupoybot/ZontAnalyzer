@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from tests.ydb_support import make_database
 from zont_analyzer.cli import app
 
 
+@pytest.mark.ydb
 def test_cli_registers_all_commands_and_initializes(tmp_path: Path, monkeypatch) -> None:
     root_logger = logging.getLogger()
     monkeypatch.setattr(root_logger, "handlers", list(root_logger.handlers))

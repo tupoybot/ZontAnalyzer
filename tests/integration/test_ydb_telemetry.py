@@ -15,6 +15,7 @@ def point(seconds: int = 0, value: float | None = 20, text: str | None = None) -
                           timestamp_utc=START + timedelta(seconds=seconds), value_num=value, value_text=text)
 
 
+@pytest.mark.ydb
 def test_window_repeat_boundaries_and_precision(ydb_database: YdbDatabase) -> None:
     repo = TelemetryRepository(ydb_database)
     args = dict(device_id="fixture", data_type="history", start=START, end=START + timedelta(hours=1))
@@ -40,6 +41,7 @@ def test_window_repeat_boundaries_and_precision(ydb_database: YdbDatabase) -> No
     assert len(repo.read_samples(series, START, START + timedelta(hours=1))) == 3
 
 
+@pytest.mark.ydb
 def test_coverage_empty_errors_and_source_horizon(ydb_database: YdbDatabase) -> None:
     repo = TelemetryRepository(ydb_database)
     for hour, state in [(0, "empty"), (1, "failed"), (2, "complete")]:
@@ -56,6 +58,7 @@ def test_coverage_empty_errors_and_source_horizon(ydb_database: YdbDatabase) -> 
     assert repo.coverage("fixture", "history", START, START + timedelta(hours=1))[0]["state"] == "empty"
 
 
+@pytest.mark.ydb
 def test_concurrent_series_identity_and_late_data(ydb_database: YdbDatabase) -> None:
     repo = TelemetryRepository(ydb_database)
 
@@ -73,6 +76,7 @@ def test_concurrent_series_identity_and_late_data(ydb_database: YdbDatabase) -> 
     assert repo.read_samples(series, START, START + timedelta(hours=1))[1]["value_num"] == 25
 
 
+@pytest.mark.ydb
 def test_catalogue_snapshot_deduplication(ydb_database: YdbDatabase) -> None:
     repo = TelemetryRepository(ydb_database)
     device = {"id": "fixture", "name": "Обезличенное устройство", "configured": False}
@@ -88,6 +92,7 @@ def test_catalogue_snapshot_deduplication(ydb_database: YdbDatabase) -> None:
     assert repo.list_entities("fixture")[0]["external_id"] == "1"
 
 
+@pytest.mark.ydb
 def test_late_event_revision_and_archive_survive_source_horizon(ydb_database: YdbDatabase) -> None:
     repo = TelemetryRepository(ydb_database)
     event = SourceEvent(id="source-event", device_id="fixture", event_type="restart", timestamp_utc=START)
@@ -103,6 +108,7 @@ def test_late_event_revision_and_archive_survive_source_horizon(ydb_database: Yd
                                      now=START + timedelta(days=180))
 
 
+@pytest.mark.ydb
 def test_period_snapshot_never_mixes_concurrent_windows(ydb_database: YdbDatabase) -> None:
     repo = TelemetryRepository(ydb_database)
 
@@ -122,6 +128,7 @@ def test_period_snapshot_never_mixes_concurrent_windows(ydb_database: YdbDatabas
         writer.result()
 
 
+@pytest.mark.ydb
 def test_long_period_pages_reuse_archive_and_reject_mid_scan_change(ydb_database: YdbDatabase) -> None:
     repo = TelemetryRepository(ydb_database)
     args = dict(device_id="fixture", data_type="history", start=START, end=START + timedelta(hours=1))
@@ -135,6 +142,7 @@ def test_long_period_pages_reuse_archive_and_reject_mid_scan_change(ydb_database
         next(scan)
 
 
+@pytest.mark.ydb
 def test_coverage_pagination_keeps_same_start_intervals(ydb_database: YdbDatabase) -> None:
     repo = TelemetryRepository(ydb_database)
     for seconds in (10, 20, 30):

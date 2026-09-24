@@ -17,6 +17,7 @@ def _key() -> str:
     return uuid4().hex
 
 
+@pytest.mark.ydb
 def test_competing_workers_and_expired_fencing(ydb_database: object) -> None:
     now = [1_000_000]
     repo = JobLeaseRepository(ydb_database, clock=lambda: now[0])  # type: ignore[arg-type]
@@ -52,6 +53,7 @@ def test_competing_workers_and_expired_fencing(ydb_database: object) -> None:
     assert repo.acquire(job_key, "third", 10) is None
 
 
+@pytest.mark.ydb
 def test_lease_renewal_cannot_revive_expired_attempt(ydb_database: object) -> None:
     now = [2_000_000]
     repo = JobLeaseRepository(ydb_database, clock=lambda: now[0])  # type: ignore[arg-type]
@@ -67,6 +69,7 @@ def test_lease_renewal_cannot_revive_expired_attempt(ydb_database: object) -> No
     assert not repo.checkpoint(job_key, "a", first.attempt, "late")
 
 
+@pytest.mark.ydb
 def test_reusable_lease_release_preserves_fencing(ydb_database: object) -> None:
     now = [2_000_000]
     repo = JobLeaseRepository(ydb_database, clock=lambda: now[0])  # type: ignore[arg-type]
@@ -82,6 +85,7 @@ def test_reusable_lease_release_preserves_fencing(ydb_database: object) -> None:
     assert repo.get(job_key) == second
 
 
+@pytest.mark.ydb
 def test_lease_rechecks_clock_when_transaction_starts(ydb_database: object) -> None:
     now = [3_000_000]
     job_key = _key()
@@ -99,6 +103,7 @@ def test_lease_rechecks_clock_when_transaction_starts(ydb_database: object) -> N
     assert delayed_repo.renew(job_key, "a", lease.attempt, 5) is None
 
 
+@pytest.mark.ydb
 def test_llm_dispatch_is_single_winner_and_unknown_is_not_redispatched(
     ydb_database: object,
 ) -> None:
@@ -131,6 +136,7 @@ def test_llm_dispatch_is_single_winner_and_unknown_is_not_redispatched(
         ledger.mark_error(call_key, "different terminal result")
 
 
+@pytest.mark.ydb
 def test_llm_call_cannot_be_resolved_before_send(ydb_database: object) -> None:
     ledger = UsageLedger(ydb_database)  # type: ignore[arg-type]
     call_key = _key()
@@ -142,6 +148,7 @@ def test_llm_call_cannot_be_resolved_before_send(ydb_database: object) -> None:
     assert not ledger.mark_sent(call_key)
 
 
+@pytest.mark.ydb
 def test_usage_window_aggregates_structured_successes_without_silent_truncation(
     ydb_database: object,
 ) -> None:
@@ -166,6 +173,7 @@ def test_usage_window_aggregates_structured_successes_without_silent_truncation(
     assert ledger.usage_totals(100, 102, limit=1).truncated
 
 
+@pytest.mark.ydb
 def test_usage_month_remains_first_dispatch_month_after_later_reconciliation(
     ydb_database: object,
 ) -> None:

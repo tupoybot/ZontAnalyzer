@@ -117,6 +117,7 @@ def _save(db: Database, report: Report) -> None:
     db.save_report(report, report.summary)
 
 
+@pytest.mark.ydb
 def test_aggregates_known_totals_weighted_means_and_denominator_rates(tmp_path: Path) -> None:
     db = _db(tmp_path)
     start = datetime(2026, 3, 1, tzinfo=UTC)
@@ -145,6 +146,7 @@ def test_aggregates_known_totals_weighted_means_and_denominator_rates(tmp_path: 
     assert report.ai_used is False
 
 
+@pytest.mark.ydb
 def test_missing_days_reduce_coverage_without_adding_fake_zero(tmp_path: Path) -> None:
     db = _db(tmp_path)
     start = datetime(2026, 4, 1, tzinfo=UTC)
@@ -161,6 +163,7 @@ def test_missing_days_reduce_coverage_without_adding_fake_zero(tmp_path: Path) -
     assert "missing_daily_reports" in report.quality.flags
 
 
+@pytest.mark.ydb
 def test_expected_duration_uses_real_dst_local_days_and_windows_are_bounded(tmp_path: Path) -> None:
     db = _db(tmp_path)
     start = datetime(2026, 3, 1, 5, tzinfo=UTC)
@@ -182,6 +185,7 @@ def test_expected_duration_uses_real_dst_local_days_and_windows_are_bounded(tmp_
     assert len(report.context["temporal_evidence"]["windows"]) == 12
 
 
+@pytest.mark.ydb
 def test_empty_period_is_explicit_and_contains_no_synthetic_metrics(tmp_path: Path) -> None:
     db = _db(tmp_path)
     start = datetime(2026, 5, 1, tzinfo=UTC)
@@ -198,6 +202,7 @@ def test_empty_period_is_explicit_and_contains_no_synthetic_metrics(tmp_path: Pa
     assert "no_completed_daily_reports" in report.quality.flags
 
 
+@pytest.mark.ydb
 def test_long_period_target_is_duration_weighted_and_unknown_without_coverage(tmp_path: Path) -> None:
     db = _db(tmp_path)
     start = datetime(2026, 6, 1, tzinfo=UTC)
@@ -217,6 +222,7 @@ def test_long_period_target_is_duration_weighted_and_unknown_without_coverage(tm
     assert empty.context["period_target_mean_c"] is None
 
 
+@pytest.mark.ydb
 def test_enriched_legacy_target_means_count_only_observed_days(tmp_path: Path) -> None:
     db = _db(tmp_path)
     start = datetime(2026, 6, 1, tzinfo=UTC)

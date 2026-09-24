@@ -16,6 +16,7 @@ def store(tmp_path: Path) -> AISettingsStore:
     return AISettingsStore(db, AppConfig())
 
 
+@pytest.mark.ydb
 def test_settings_override_reset_restart_and_config_changes(store: AISettingsStore) -> None:
     initial = store.snapshot()
     assert initial["effective"]["review_interval_days"] == 60
@@ -38,6 +39,7 @@ def test_settings_override_reset_restart_and_config_changes(store: AISettingsSto
     assert not config.openai.enabled
 
 
+@pytest.mark.ydb
 def test_settings_snapshot_is_fixed_for_entire_analysis(store: AISettingsStore) -> None:
     fixed = store.effective_config()
     store.save({"expected_version": store.snapshot()["version"], "values": {"daily_model": "gpt-5.6-sol"}})
@@ -46,6 +48,7 @@ def test_settings_snapshot_is_fixed_for_entire_analysis(store: AISettingsStore) 
     assert fixed.openai.settings_version != store.effective_config().openai.settings_version
 
 
+@pytest.mark.ydb
 def test_settings_concurrent_saves_cannot_overwrite_each_other(store: AISettingsStore) -> None:
     version = store.snapshot()["version"]
 
@@ -68,6 +71,7 @@ def test_settings_concurrent_saves_cannot_overwrite_each_other(store: AISettings
     {"daily_model": "gpt-nonexistent"}, {"daily_model": "gpt-6-astra", "daily_reasoning_effort": "none"},
     {"review_reasoning_effort": "invented"}, {"daily_model": "gpt-5-mini", "daily_reasoning_effort": "max"},
 ])
+@pytest.mark.ydb
 def test_invalid_settings_leave_audit_and_state_unchanged(store: AISettingsStore, values: dict) -> None:
     before = store.view()
     with pytest.raises(ValueError):
@@ -75,6 +79,7 @@ def test_invalid_settings_leave_audit_and_state_unchanged(store: AISettingsStore
     assert store.view() == before
 
 
+@pytest.mark.ydb
 def test_yaml_legacy_model_stays_usable_and_unrelated_settings_can_change(store: AISettingsStore) -> None:
     store.config.openai.daily_model = "custom-compatible-deployment"
     initial = store.snapshot()
@@ -82,6 +87,7 @@ def test_yaml_legacy_model_stays_usable_and_unrelated_settings_can_change(store:
     assert store.effective_config().openai.daily_model == "custom-compatible-deployment"
 
 
+@pytest.mark.ydb
 def test_repeated_identical_save_does_not_add_revision(store: AISettingsStore) -> None:
     first = store.save({"expected_version": store.snapshot()["version"], "values": {"enabled": True}})
     second = store.save({"expected_version": first["version"], "values": {"enabled": True}})

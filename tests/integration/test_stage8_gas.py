@@ -2,6 +2,8 @@ import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from tests.ydb_support import make_runtime, seed_samples
 from zont_analyzer.application.gas import GasService
 from zont_analyzer.application.owner_context import OwnerContextStore
@@ -30,6 +32,7 @@ def history(tmp_path: Path):
     return r, store, reports
 
 
+@pytest.mark.ydb
 def test_historical_gas_recalibrates_outside_interval_preserves_ai_feedback_and_versions(tmp_path: Path):
     r, store, reports = history(tmp_path)
     store.update_gas(reports[0].id, {'value_m3': 100})
@@ -72,6 +75,7 @@ def test_historical_gas_recalibrates_outside_interval_preserves_ai_feedback_and_
     assert len(GasService(r.db, r.config).readings) == 3
 
 
+@pytest.mark.ydb
 def test_reset_boundary_prevents_subtraction_and_profile_alone_is_not_gas_measurement(tmp_path: Path):
     r, store, reports = history(tmp_path)
     store.update_gas(reports[0].id, {'value_m3': 100})
@@ -85,6 +89,7 @@ def test_reset_boundary_prevents_subtraction_and_profile_alone_is_not_gas_measur
     assert gas['lower_m3'] <= 24 and gas['upper_m3'] >= 48
 
 
+@pytest.mark.ydb
 def test_meter_intervals_follow_selected_days_without_reports_and_recalibrate_after_move(tmp_path: Path):
     r, store, reports = history(tmp_path)
     source_report = reports[0]
@@ -110,6 +115,7 @@ def test_meter_intervals_follow_selected_days_without_reports_and_recalibrate_af
     assert store.gas(source_report.id, '2026-01-08')['reading'] is None
 
 
+@pytest.mark.ydb
 def test_missing_fl_is_not_reconstructed_from_modulation(tmp_path: Path):
     r = make_runtime(tmp_path)
     start = datetime(2026, 1, 1, tzinfo=UTC)
@@ -138,6 +144,7 @@ def test_gas_packet_keeps_amounts_and_provenance_despite_large_calibration_histo
     assert actual['interval_selection']['available'] == 100
 
 
+@pytest.mark.ydb
 def test_full_accounting_interval_is_measured_with_day_precision_not_daily_interpolation(tmp_path: Path):
     r, store, reports = history(tmp_path)
     store.update_gas(reports[0].id, {'value_m3': 100})
@@ -155,6 +162,7 @@ def test_full_accounting_interval_is_measured_with_day_precision_not_daily_inter
     assert len(service.readings) == 2
 
 
+@pytest.mark.ydb
 def test_gas_publication_does_not_overwrite_concurrent_ai_revision(tmp_path: Path):
     r, _store, reports = history(tmp_path)
     original = reports[-1]
@@ -166,6 +174,7 @@ def test_gas_publication_does_not_overwrite_concurrent_ai_revision(tmp_path: Pat
     assert r.db.report(original.id).summary == newer.summary
 
 
+@pytest.mark.ydb
 def test_frozen_calibration_version_does_not_depend_on_subsequent_meter_readings(tmp_path: Path):
     r, store, reports = history(tmp_path)
     store.update_gas(reports[0].id, {'value_m3':100})
@@ -178,6 +187,7 @@ def test_frozen_calibration_version_does_not_depend_on_subsequent_meter_readings
     assert first[1] == second[1]
 
 
+@pytest.mark.ydb
 def test_new_regeneration_candidate_is_published_before_database_commit(tmp_path: Path):
     from zont_analyzer.application.publication import _publish_locked, archive_paths
     r, _store, reports = history(tmp_path)
@@ -192,6 +202,7 @@ def test_new_regeneration_candidate_is_published_before_database_commit(tmp_path
     assert r.db.report(old.id).summary == old.summary
 
 
+@pytest.mark.ydb
 def test_persisted_gas_context_is_equal_after_json_roundtrip(tmp_path: Path):
     r, store, reports = history(tmp_path)
     store.update_gas(reports[0].id, {'value_m3': 100})
@@ -203,6 +214,7 @@ def test_persisted_gas_context_is_equal_after_json_roundtrip(tmp_path: Path):
     assert service.refresh(stored).context == stored.context
 
 
+@pytest.mark.ydb
 def test_reused_ai_cannot_appear_current_after_deterministic_reanalysis(tmp_path: Path):
     r, _store, reports = history(tmp_path)
     service = GasService(r.db, r.config)
@@ -214,6 +226,7 @@ def test_reused_ai_cannot_appear_current_after_deterministic_reanalysis(tmp_path
         assert service.refresh(candidate).context['gas']['ai_stale'] is True
 
 
+@pytest.mark.ydb
 def test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild(tmp_path: Path, monkeypatch):
     from zont_analyzer.reports import chart_data
     r, store, reports = history(tmp_path)
@@ -233,6 +246,7 @@ def test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild(tm
     assert publish_reports(r)['reports'] == len(reports)
 
 
+@pytest.mark.ydb
 def test_gas_context_holds_old_setpoint_until_explicit_unknown(tmp_path: Path):
     import pytest
 
@@ -249,6 +263,7 @@ def test_gas_context_holds_old_setpoint_until_explicit_unknown(tmp_path: Path):
     assert window['target_degree_hours'] == pytest.approx(46)
 
 
+@pytest.mark.ydb
 def test_publication_does_not_make_unchanged_ai_reuse_stale(tmp_path: Path):
     from zont_analyzer.application.reasoning_context import reuse_ai_interpretation
 

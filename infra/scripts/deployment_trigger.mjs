@@ -5,7 +5,11 @@ import {pathToFileURL} from 'node:url';
 
 const sourcePaths = ['src/', 'Dockerfile', '.dockerignore', 'pyproject.toml', 'README.md'];
 export const releasePaths = [...sourcePaths, 'tests/', 'tools/', 'deploy/check-local.sh',
-  'deploy/check-ydb.sh', 'deploy/smoke-cloud-local.sh', '.github/workflows/application-release.yml'];
+  'deploy/check-ydb.sh', 'deploy/check-tests.sh', 'deploy/assert-ydb-memory.sh',
+  'deploy/smoke-cloud-local.sh', 'deploy/compose.yaml', 'deploy/compose.test.yaml',
+  'deploy/compose.local.yaml', 'deploy/env.example', 'deploy/nginx-zont-analyzer.conf',
+  'deploy/nginx-zont-analyzer-root.conf', '.github/workflows/ci.yml',
+  '.github/workflows/application-release.yml'];
 
 function exactMatch(pattern, value) {
   return typeof value === 'string' && value.match(pattern)?.[0] === value;

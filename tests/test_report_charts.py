@@ -114,6 +114,7 @@ def test_requested_panel_can_be_rendered_independently() -> None:
     assert 'data-chart="thermal"' not in rendered
 
 
+@pytest.mark.ydb
 def test_rebind_chart_cache_reuses_packet_for_gas_only_refresh(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = make_database(tmp_path)
     original = _report()
@@ -133,6 +134,7 @@ def test_rebind_chart_cache_reuses_packet_for_gas_only_refresh(tmp_path, monkeyp
     assert chart_data.cached_chart_data(db, refreshed) == packet
 
 
+@pytest.mark.ydb
 def test_rebind_chart_cache_refuses_non_gas_changes(tmp_path) -> None:
     db = make_database(tmp_path)
     original = _report()
@@ -142,6 +144,7 @@ def test_rebind_chart_cache_refuses_non_gas_changes(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("cache_state", ["missing", "corrupt"])
+@pytest.mark.ydb
 def test_rebind_chart_cache_handles_missing_or_corrupt_cache(tmp_path, cache_state) -> None:
     db = make_database(tmp_path)
     original = _report()

@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from tests.ydb_support import make_runtime, seed_samples
 from zont_analyzer.application.gas import GasService
 from zont_analyzer.application.owner_context import OwnerContextStore
@@ -21,6 +23,7 @@ def _modeled_volume(temperature: float, *, saving_m3: float = 0.0) -> float:
     return hours + 0.05 * max(0.0, 18.0 - temperature) * hours - saving_m3
 
 
+@pytest.mark.ydb
 def test_manual_intervention_prediction_is_frozen_then_checked_by_later_meter_readings(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.config.home.timezone = "UTC"

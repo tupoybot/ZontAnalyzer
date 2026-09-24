@@ -11,6 +11,7 @@ from zont_analyzer.domain import AnalysisResult
 from zont_analyzer.domain.periods import SeasonBoundaries, midnight
 
 
+@pytest.mark.ydb
 def test_empty_database_schedule_is_deterministic_and_idempotent(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)
@@ -26,6 +27,7 @@ def test_empty_database_schedule_is_deterministic_and_idempotent(tmp_path: Path)
     assert all(item["observed_end"] for item in first)
 
 
+@pytest.mark.ydb
 def test_schedule_uses_custom_owner_boundaries_and_keeps_current_season_incomplete(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.config.home.seasons = SeasonBoundaries(
@@ -40,6 +42,7 @@ def test_schedule_uses_custom_owner_boundaries_and_keeps_current_season_incomple
     assert current.observed_end.astimezone(ZoneInfo(runtime.config.home.timezone)).date() == date(2026, 9, 7)
 
 
+@pytest.mark.ydb
 def test_period_schedule_respects_limit_and_releases_work_for_next_catchup(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)
@@ -53,6 +56,7 @@ def test_period_schedule_respects_limit_and_releases_work_for_next_catchup(tmp_p
     assert first[0]["id"] != second[0]["id"]
 
 
+@pytest.mark.ydb
 def test_regenerate_failure_keeps_stored_report_and_success_is_fresh_non_persisting(
     tmp_path: Path,
 ) -> None:
@@ -91,6 +95,7 @@ def test_regenerate_failure_keeps_stored_report_and_success_is_fresh_non_persist
     assert runtime.db.report(original.id).model_dump_json() == before
 
 
+@pytest.mark.ydb
 def test_current_season_checkpoint_stays_at_monday_until_next_completed_week(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)
@@ -105,6 +110,7 @@ def test_current_season_checkpoint_stays_at_monday_until_next_completed_week(tmp
     assert autumn.observed_end.astimezone(zone).date() == date(2026, 9, 14)
 
 
+@pytest.mark.ydb
 def test_season_ends_midweek_without_waiting_and_new_season_waits_for_first_monday(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)
@@ -115,6 +121,7 @@ def test_season_ends_midweek_without_waiting_and_new_season_waits_for_first_mond
     assert seasons[0].observed_end.astimezone(ZoneInfo(runtime.config.home.timezone)).date() == date(2026, 9, 1)
 
 
+@pytest.mark.ydb
 def test_season_ai_runs_once_per_week_despite_fresh_daily_telemetry(tmp_path: Path) -> None:
     from datetime import UTC, datetime
 
@@ -144,6 +151,7 @@ def test_season_ai_runs_once_per_week_despite_fresh_daily_telemetry(tmp_path: Pa
 
 
 @pytest.mark.parametrize("day", [7, 10])
+@pytest.mark.ydb
 def test_weekly_schedule_preserves_manual_season_result(tmp_path: Path, day: int) -> None:
     runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)

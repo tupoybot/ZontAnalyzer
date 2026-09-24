@@ -35,6 +35,7 @@ def _wait(runtime, report_id: str) -> dict:
     raise AssertionError("regeneration did not finish")
 
 
+@pytest.mark.ydb
 def test_duplicate_clicks_share_one_active_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime, report = _runtime(tmp_path)
     monkeypatch.setattr(regeneration, "_publish_locked", lambda *_args, **_kwargs: {})
@@ -62,6 +63,7 @@ def test_duplicate_clicks_share_one_active_job(tmp_path: Path, monkeypatch: pyte
     assert _wait(runtime, report.id)["status"] == "success"
 
 
+@pytest.mark.ydb
 def test_ai_or_budget_error_preserves_canonical_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime, report = _runtime(tmp_path)
     before = runtime.db.report(report.id).model_dump_json()
@@ -77,6 +79,7 @@ def test_ai_or_budget_error_preserves_canonical_report(tmp_path: Path, monkeypat
     assert runtime.db.report(report.id).model_dump_json() == before
 
 
+@pytest.mark.ydb
 def test_stale_running_state_is_recoverable_after_process_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -93,6 +96,7 @@ def test_stale_running_state_is_recoverable_after_process_restart(
     assert _wait(runtime, report.id)["status"] == "success"
 
 
+@pytest.mark.ydb
 def test_publication_failure_restores_canonical_and_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime, report = _runtime(tmp_path)
     recommendation = runtime.db.recommendations()[0]
@@ -120,6 +124,7 @@ def test_publication_failure_restores_canonical_and_files(tmp_path: Path, monkey
     assert preserved["owner_note"] == "Не менять"
 
 
+@pytest.mark.ydb
 def test_success_preserves_owner_feedback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime, report = _runtime(tmp_path)
     recommendation = runtime.db.recommendations()[0]
@@ -136,6 +141,7 @@ def test_success_preserves_owner_feedback(tmp_path: Path, monkeypatch: pytest.Mo
     assert after["owner_note"] == before["owner_note"] == "Оставить этот режим"
 
 
+@pytest.mark.ydb
 def test_success_commits_changed_report_metrics_events_and_recommendation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -167,6 +173,7 @@ def test_success_commits_changed_report_metrics_events_and_recommendation(
     assert runtime.db.recommendation(recommendation.id)["suggested_manual_action"] == "Новый шаг"
 
 
+@pytest.mark.ydb
 def test_save_report_failure_restores_files_after_override_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -202,6 +209,7 @@ def test_save_report_failure_restores_files_after_override_publication(
     assert runtime.db.report(report.id).model_dump_json() == before
 
 
+@pytest.mark.ydb
 def test_regeneration_api_rejects_cross_site_post(tmp_path: Path) -> None:
     runtime, report = _runtime(tmp_path)
     runtime.config.feedback.listen_port = 0
@@ -220,6 +228,7 @@ def test_regeneration_api_rejects_cross_site_post(tmp_path: Path) -> None:
         thread.join(timeout=2)
 
 
+@pytest.mark.ydb
 def test_regeneration_api_passes_counterfactual_question_and_rejects_invalid_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

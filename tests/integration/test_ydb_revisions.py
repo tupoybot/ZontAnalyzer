@@ -1,8 +1,11 @@
+import pytest
+
 from zont_analyzer.adapters.ydb.database import YdbDatabase
 from zont_analyzer.adapters.ydb.revisions import RevisionRepository
 from zont_analyzer.adapters.ydb.telemetry import bump_revision
 
 
+@pytest.mark.ydb
 def test_coalescing_keeps_concurrent_change_after_ack(ydb_database: YdbDatabase) -> None:
     repo = RevisionRepository(ydb_database)
     ydb_database.transaction(lambda tx: bump_revision(tx, "gas:fixture"))

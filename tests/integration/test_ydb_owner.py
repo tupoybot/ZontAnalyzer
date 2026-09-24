@@ -8,6 +8,7 @@ import pytest
 from zont_analyzer.adapters.ydb.owner import OwnerRepository
 
 
+@pytest.mark.ydb
 def test_gas_reading_move_is_unique_audited_and_compare_and_set(ydb_database: object) -> None:
     repo = OwnerRepository(ydb_database)  # type: ignore[arg-type]
     first = repo.save_gas_reading(
@@ -48,6 +49,7 @@ def test_gas_reading_move_is_unique_audited_and_compare_and_set(ydb_database: ob
     assert repo.gas_audit_history("device", limit=2, after_id=last_page[-1]["audit_id"]) == []
 
 
+@pytest.mark.ydb
 def test_profile_keeps_same_time_revisions_and_as_of_view(ydb_database: object) -> None:
     repo = OwnerRepository(ydb_database)  # type: ignore[arg-type]
     moment = datetime(2026, 9, 1, tzinfo=UTC)
@@ -84,6 +86,7 @@ def test_profile_keeps_same_time_revisions_and_as_of_view(ydb_database: object) 
         )
 
 
+@pytest.mark.ydb
 def test_tariff_exact_decimal_history_and_validation(ydb_database: object) -> None:
     repo = OwnerRepository(ydb_database)  # type: ignore[arg-type]
     first = repo.save_tariff(
@@ -111,6 +114,7 @@ def test_tariff_exact_decimal_history_and_validation(ydb_database: object) -> No
         repo.save_tariff("home", "2026-09", "NaN", "RUB")
 
 
+@pytest.mark.ydb
 def test_model_proposal_decision_and_settings_version_are_atomic(ydb_database: object) -> None:
     repo = OwnerRepository(ydb_database)  # type: ignore[arg-type]
     assert repo.save_ai_settings({"model": "old"}, expected_version=0) == 1
@@ -125,6 +129,7 @@ def test_model_proposal_decision_and_settings_version_are_atomic(ydb_database: o
         repo.decide_model_proposal("proposal", decision="rejected", expected_settings_version=2)
 
 
+@pytest.mark.ydb
 def test_meter_boundary_has_versioned_audit_and_decimal_rejects_negative(ydb_database: object) -> None:
     repo = OwnerRepository(ydb_database)  # type: ignore[arg-type]
     boundary = repo.save_meter_boundary("device", "2026-09-01", meter_id="meter-a", expected_version=0)
@@ -134,6 +139,7 @@ def test_meter_boundary_has_versioned_audit_and_decimal_rejects_negative(ydb_dat
         repo.save_gas_reading("device", "2026-09-03", "-0.1")
 
 
+@pytest.mark.ydb
 def test_competing_gas_updates_accept_only_one_compare_and_set(ydb_database: object) -> None:
     repo = OwnerRepository(ydb_database)  # type: ignore[arg-type]
     repo.save_gas_reading("device", "2026-09-01", "10")

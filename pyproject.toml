@@ -28,6 +28,7 @@ dev = [
   "mypy>=1.10,<2",
   "pytest>=8,<10",
   "pytest-cov>=5,<8",
+  "pytest-xdist>=3.6,<4",
   "ruff>=0.5,<1",
   "types-PyYAML>=6,<7",
 ]
@@ -41,6 +42,7 @@ packages = ["src/zont_analyzer"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+markers = ["ydb: queries, transactions or storage verified against isolated real YDB"]
 
 [tool.ruff]
 line-length = 120

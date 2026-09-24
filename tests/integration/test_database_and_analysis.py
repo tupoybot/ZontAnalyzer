@@ -26,6 +26,7 @@ def _points(start: datetime, values: list[float], *, entity: str, metric: str = 
         )
 
 
+@pytest.mark.ydb
 def test_upsert_is_idempotent_and_analysis_persists_report(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)  # local 2026-08-01 in Samara
@@ -50,6 +51,7 @@ def test_upsert_is_idempotent_and_analysis_persists_report(tmp_path: Path) -> No
     assert db.status()["reports"] == 1
 
 
+@pytest.mark.ydb
 def test_upsert_fills_unit_for_series_discovered_before_unit_was_known(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     timestamp = datetime(2026, 8, 1, tzinfo=UTC)
@@ -69,6 +71,7 @@ def test_upsert_fills_unit_for_series_discovered_before_unit_was_known(tmp_path:
 
 
 @pytest.mark.parametrize("control_first", [True, False])
+@pytest.mark.ydb
 def test_comfort_analysis_uses_only_control_sensor_regardless_of_series_order(
     tmp_path: Path, control_first: bool
 ) -> None:
@@ -95,6 +98,7 @@ def test_comfort_analysis_uses_only_control_sensor_regardless_of_series_order(
     assert [item["entity_id"] for item in sensors["room_temperatures"]] == ["bedroom"]
 
 
+@pytest.mark.ydb
 def test_report_renders_compact_sensor_identity_and_return_origins(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)
@@ -144,6 +148,7 @@ def test_report_renders_compact_sensor_identity_and_return_origins(tmp_path: Pat
     assert len(report.context["sensors"]["return_temperatures"]) == 2
 
 
+@pytest.mark.ydb
 def test_temperature_above_setpoint_is_not_attributed_to_inactive_heating(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)
@@ -166,6 +171,7 @@ def test_temperature_above_setpoint_is_not_attributed_to_inactive_heating(tmp_pa
     assert "не подтверждает перегрев от отопления" in report.summary
 
 
+@pytest.mark.ydb
 def test_low_quality_creates_observation_recommendation_and_lifecycle(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     config = AppConfig()
@@ -182,6 +188,7 @@ def test_low_quality_creates_observation_recommendation_and_lifecycle(tmp_path: 
     assert db.recommendation(recommendation_id)["status"] == "applied"
 
 
+@pytest.mark.ydb
 def test_html_escapes_report_content(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -199,6 +206,7 @@ def test_html_escapes_report_content(tmp_path: Path) -> None:
     assert "&lt;/textarea&gt;&lt;script&gt;alert(&quot;owner&quot;)&lt;/script&gt;" in rendered
 
 
+@pytest.mark.ydb
 def test_reliability_events_persist_and_uptime_is_prominent(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     start = datetime(2026, 7, 30, 20, tzinfo=UTC)
@@ -251,6 +259,7 @@ def test_reliability_events_persist_and_uptime_is_prominent(tmp_path: Path) -> N
     assert "01:22:00" in rendered_html
 
 
+@pytest.mark.ydb
 def test_stale_reliability_data_is_rendered_as_missing_fresh_data(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     telemetry_start = datetime(2026, 7, 20, 20, tzinfo=UTC)
@@ -297,6 +306,7 @@ def test_stale_reliability_data_is_rendered_as_missing_fresh_data(tmp_path: Path
 
 
 @pytest.mark.parametrize("same_device_has_fresh_temperature", [True, False])
+@pytest.mark.ydb
 def test_zont_freshness_uses_valid_telemetry_from_only_the_reliability_device(
     tmp_path: Path, same_device_has_fresh_temperature: bool
 ) -> None:
@@ -369,6 +379,7 @@ def test_zont_freshness_uses_valid_telemetry_from_only_the_reliability_device(
     assert report.context["reliability"]["zont"]["data_fresh"] is same_device_has_fresh_temperature  # type: ignore[index]
 
 
+@pytest.mark.ydb
 def test_uptime_renderer_does_not_wrap_days_after_99(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -408,6 +419,7 @@ def test_uptime_renderer_does_not_wrap_days_after_99(tmp_path: Path) -> None:
     assert "00:00:17" in html
 
 
+@pytest.mark.ydb
 def test_renderers_show_disabled_dhw_target_as_inactive(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -431,6 +443,7 @@ def test_renderers_show_disabled_dhw_target_as_inactive(tmp_path: Path) -> None:
     assert "прямого датчика насоса нет" in html
 
 
+@pytest.mark.ydb
 def test_initial_report_uses_latest_sample_and_stable_id(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     latest = datetime(2026, 5, 27, 12, tzinfo=UTC)
@@ -446,6 +459,7 @@ def test_initial_report_uses_latest_sample_and_stable_id(tmp_path: Path) -> None
     assert first.id in render_text(first)
 
 
+@pytest.mark.ydb
 def test_openai_failure_keeps_deterministic_report(tmp_path: Path) -> None:
     class FailingAnalyst:
         def analyze(self, _packet):
@@ -470,6 +484,7 @@ def test_openai_failure_keeps_deterministic_report(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("legacy_policy", [False, True])
+@pytest.mark.ydb
 def test_openai_refresh_failure_reuses_last_valid_interpretation(tmp_path: Path, legacy_policy: bool) -> None:
     class SuccessfulAnalyst:
         def analyze(self, _packet):
@@ -514,6 +529,7 @@ def test_openai_refresh_failure_reuses_last_valid_interpretation(tmp_path: Path,
 
 
 
+@pytest.mark.ydb
 def test_analysis_integrates_dhw_episode_and_heating_return(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)
@@ -604,6 +620,7 @@ def test_analysis_integrates_dhw_episode_and_heating_return(tmp_path: Path) -> N
     assert "ГВС ↔ отопление" in render_html(report)
 
 
+@pytest.mark.ydb
 def test_analysis_filters_only_short_flame_pulse_without_flow_response(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)
@@ -654,6 +671,7 @@ def test_analysis_filters_only_short_flame_pulse_without_flow_response(tmp_path:
     assert noise.severity == "info"
 
 
+@pytest.mark.ydb
 def test_partial_sync_does_not_advance_cursor(tmp_path: Path) -> None:
     class PartialClient:
         def discover_devices(self):

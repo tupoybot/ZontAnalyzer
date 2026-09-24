@@ -62,6 +62,7 @@ def test_home_timezone_remains_the_configured_fallback() -> None:
     assert config.home.timezone_provenance["source"] == "configuration_fallback"
 
 
+@pytest.mark.ydb
 def test_runtime_uses_persisted_zont_timezone_for_windows_and_reports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -101,6 +102,7 @@ class ChangingClient:
         return [{"device_id": "1", "timezone": self.offset}]
 
 
+@pytest.mark.ydb
 def test_discover_refreshes_timezone_and_invalid_data_falls_back(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     config = AppConfig.model_validate({"home": {"timezone": "UTC"}})

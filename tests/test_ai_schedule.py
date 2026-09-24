@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from pathlib import Path
 
+import pytest
+
 from tests.ydb_support import make_runtime, seed_samples
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.period_schedule import run_period_schedule, schedule_signature
@@ -15,6 +17,7 @@ def _point(timestamp, value: float) -> TelemetryPoint:
                           timestamp_utc=timestamp, value_num=value, unit="°C")
 
 
+@pytest.mark.ydb
 def test_ai_setting_signature_upgrade_preserves_history_but_telemetry_reanalyses(tmp_path: Path, monkeypatch) -> None:
     runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)

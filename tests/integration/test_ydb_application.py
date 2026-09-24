@@ -1,10 +1,13 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from tests.ydb_support import make_database
 from zont_analyzer.domain import TelemetryPoint
 
 
+@pytest.mark.ydb
 def test_daily_comparison_preserves_historical_algorithm_versions(tmp_path: Path) -> None:
     from tests.integration.test_ydb_reports import _report
     from zont_analyzer.application.comparison_context import daily_history
@@ -24,6 +27,7 @@ def test_daily_comparison_preserves_historical_algorithm_versions(tmp_path: Path
     ]
 
 
+@pytest.mark.ydb
 def test_application_observations_preserve_unknowns_and_previous(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     start = datetime(2026, 1, 1, tzinfo=UTC)
@@ -47,6 +51,7 @@ def test_application_observations_preserve_unknowns_and_previous(tmp_path: Path)
     assert db.period_data_revision(start, start + timedelta(hours=1)) == revision
 
 
+@pytest.mark.ydb
 def test_imported_markers_only_change_with_semantic_data(tmp_path: Path) -> None:
     from tests.integration.test_ydb_reports import _report
 
@@ -72,10 +77,9 @@ def test_imported_markers_only_change_with_semantic_data(tmp_path: Path) -> None
     assert db.seed_source_event_report_baselines() == 0
 
 
+@pytest.mark.ydb
 def test_incompatible_schema_version_is_rejected_before_creation(tmp_path: Path) -> None:
-    import pytest
-
-    db = make_database(tmp_path)
+    db = make_database(tmp_path, fresh_schema=True)
     db.storage.execute("DROP TABLE `data_gaps`;")
     db.storage.execute("UPSERT INTO metadata (name,value) VALUES ('schema_version','1');")
     with pytest.raises(ValueError, match="unsupported YDB schema version"):
@@ -84,10 +88,9 @@ def test_incompatible_schema_version_is_rejected_before_creation(tmp_path: Path)
     assert "data_gaps" not in tables
 
 
+@pytest.mark.ydb
 def test_incompatible_schema_hash_is_rejected_before_creation(tmp_path: Path) -> None:
-    import pytest
-
-    db = make_database(tmp_path)
+    db = make_database(tmp_path, fresh_schema=True)
     db.storage.execute("DROP TABLE `data_gaps`;")
     db.storage.execute("UPSERT INTO metadata (name,value) VALUES ('schema_hash','incompatible');")
     with pytest.raises(ValueError, match="explicit migration"):

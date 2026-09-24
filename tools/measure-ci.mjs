@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Measure the unchanged complete YDB-backed pytest and CLI smoke run.
+// Measure the complete Docker-only suite and its isolated YDB/CLI environment.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync, appendFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,19 +34,22 @@ if (readdirSync(actual).length) {
 const startMs = Date.now();
 const prefix = `zont-ci-${process.pid}-${startMs}`;
 const image = process.env.ZONT_TEST_IMAGE || 'zont-analyzer:test-local';
-const args = ['tests', '--durations=0', '--durations-min=0', '-p', 'tools.pytest_metrics', '--junitxml=/metrics/junit.xml'];
+const args = ['tests', '--durations=0', '--durations-min=0'];
 const metadata = {
   schema_version: 1,
   started_epoch_ms: startMs,
   commit: null,
+  working_tree_dirty: null,
   tests_tree_sha256: null,
   test_image: image,
   test_image_id: null,
   test_image_fingerprint: null,
   ydb_image_digest: null,
-  command: 'deploy/check-ydb.sh',
+  command: 'deploy/check-tests.sh',
   args,
-  pytest_args: ['-ra', '-p', 'no:cacheprovider', ...args],
+  pytest_common_args: ['-ra', '-p', 'no:cacheprovider', ...args],
+  ydb_workers: Number(process.env.ZONT_TEST_WORKERS || 1),
+  groups: { pure: { marker: 'not ydb', network: 'none' }, ydb: { marker: 'ydb', network: 'disposable' } },
   cpu_count: os.cpus().length,
   memory_total_bytes: os.totalmem(),
   docker_daemon: null,
@@ -71,7 +74,7 @@ function canonical(value) {
   return value;
 }
 function hashTests() {
-  const listed = spawnSync('git', ['ls-files', '-z', '--', 'tests'], { cwd: root });
+  const listed = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'tests'], { cwd: root });
   if (listed.status !== 0) throw new Error('git ls-files tests failed');
   const hash = createHash('sha256');
   for (const name of listed.stdout.toString('utf8').split('\0').filter(Boolean).sort()) {
@@ -90,6 +93,29 @@ function containerLimits(name) {
   return Object.fromEntries(keys.map((key, index) => [key, values[index] === '<nil>' ? null : Number(values[index])]));
 }
 
+function collectTests(exitCode) {
+  const groups = {};
+  const tests = new Map();
+  for (const group of ['pure', 'ydb']) {
+    const file = path.join(actual, `${group}-tests.json`);
+    if (!existsSync(file)) {
+      if (exitCode === 0) throw new Error(`Missing ${group} test measurements`);
+      continue;
+    }
+    const payload = JSON.parse(readFileSync(file));
+    const { tests: reports, ...summary } = payload;
+    groups[group] = summary;
+    if (exitCode === 0 && payload.exit_status !== 0) throw new Error(`${group} tests failed`);
+    for (const report of reports) {
+      if (tests.has(report.nodeid)) throw new Error(`Test ran in both groups: ${report.nodeid}`);
+      tests.set(report.nodeid, { ...report, group });
+    }
+  }
+  writeFileSync(path.join(actual, 'tests.json'), JSON.stringify({
+    exit_status: exitCode, groups, tests: [...tests.values()].sort((a, b) => a.nodeid.localeCompare(b.nodeid)),
+  }));
+}
+
 let sampling = false;
 let timer;
 let child;
@@ -98,9 +124,9 @@ async function sample() {
   sampling = true;
   try {
     const names = command('docker', ['ps', '--format', '{{.Names}}']).split('\n')
-      .filter((name) => name === `${prefix}-ydb` || name === `${prefix}-test`);
+      .filter((name) => ['ydb', 'test', 'pure'].some(role => name === `${prefix}-${role}`));
     for (const name of names) {
-      const role = name.endsWith('-ydb') ? 'ydb' : 'test';
+      const role = name.slice(prefix.length + 1);
       if (!metadata.container_limits[role]) {
         metadata.container_limits[role] = containerLimits(name);
         save();
@@ -112,9 +138,9 @@ async function sample() {
         if (!line) continue;
         const row = JSON.parse(line);
         const name = row.Name;
-        if (name !== `${prefix}-ydb` && name !== `${prefix}-test`) continue;
+        if (!['ydb', 'test', 'pure'].some(role => name === `${prefix}-${role}`)) continue;
         appendFileSync(path.join(actual, 'docker-stats.jsonl'), JSON.stringify({
-          epoch_ms: Date.now(), container: name.endsWith('-ydb') ? 'ydb' : 'test',
+          epoch_ms: Date.now(), container: name.slice(prefix.length + 1),
           cpu_percent: row.CPUPerc, memory_usage: row.MemUsage,
           memory_percent: row.MemPerc, pids: row.PIDs, block_io: row.BlockIO,
         }) + '\n');
@@ -130,6 +156,7 @@ async function sample() {
 
 try {
   metadata.commit = command('git', ['rev-parse', 'HEAD']);
+  metadata.working_tree_dirty = Boolean(command('git', ['status', '--porcelain']));
   metadata.tests_tree_sha256 = hashTests();
   const inspected = JSON.parse(command('docker', ['image', 'inspect', image]))[0];
   metadata.test_image_id = inspected.Id;
@@ -149,7 +176,7 @@ try {
   metadata.preparation_end_epoch_ms = Date.now();
   save();
   timer = setInterval(sample, 1000);
-  child = spawn(path.join(root, 'deploy/check-ydb.sh'), args, {
+  child = spawn(path.join(root, 'deploy/check-tests.sh'), args, {
     cwd: root, stdio: 'inherit', env: {
       ...process.env, ZONT_TEST_IMAGE: image, ZONT_METRICS_DIR: actual, ZONT_CONTAINER_PREFIX: prefix,
     },
@@ -163,9 +190,11 @@ try {
   while (sampling) await new Promise((resolve) => setTimeout(resolve, 50));
   metadata.finished_epoch_ms = Date.now();
   metadata.exit_status = result.code;
+  collectTests(result.code);
   if (result.error) metadata.error = result.error;
   if (result.signal) metadata.signal = result.signal;
   save();
+  command(process.execPath, [path.join(root, 'tools/summarize-ci.mjs'), actual]);
   console.error(`Measurement ${result.code === 0 ? 'complete' : 'failed'} (exit ${result.code}); results: ${actual}`);
   process.exitCode = result.code;
 } catch (error) {

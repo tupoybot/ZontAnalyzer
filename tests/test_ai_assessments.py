@@ -15,6 +15,7 @@ from zont_analyzer.application.model_review import ModelReviewStore
 from zont_analyzer.evaluation.dataset import build_dataset, dataset_sha
 
 
+@pytest.mark.ydb
 def test_only_complete_matching_local_assessments_are_used(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     runtime.config.openai.evaluation_results_file = "assessments.json"
@@ -58,6 +59,7 @@ def test_only_complete_matching_local_assessments_are_used(tmp_path: Path) -> No
     ({"factual": 0.8, "advice": 1.0, "uncertainty": 1.0}, "no_change"),
     ({"factual": 1.0, "advice": 1.0, "uncertainty": 0.8}, "no_change"),
 ])
+@pytest.mark.ydb
 def test_lower_price_never_outweighs_a_quality_regression(tmp_path: Path, scores, expected) -> None:
     runtime = make_runtime(tmp_path)
     cases = build_dataset()

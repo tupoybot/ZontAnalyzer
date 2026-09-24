@@ -11,6 +11,7 @@ from zont_analyzer.adapters.ydb.database import Transaction
 from zont_analyzer.domain import SourceEvent, TelemetryPoint
 
 
+@pytest.mark.ydb
 def test_imported_event_replay_ignores_json_order_and_equivalent_utc_spelling(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     db.save_devices([{"id": "fixture"}])
@@ -30,6 +31,7 @@ def test_imported_event_replay_ignores_json_order_and_equivalent_utc_spelling(tm
     assert db.list_source_events(start, start + timedelta(days=1)) == [event]
 
 
+@pytest.mark.ydb
 def test_sparse_sample_replay_reads_only_requested_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -57,6 +59,7 @@ def test_sparse_sample_replay_reads_only_requested_keys(
     assert db.get_app_meta("telemetry-day:2026-01-01") == before
 
 
+@pytest.mark.ydb
 def test_event_batch_is_atomic_idempotent_and_rekeys_changed_timestamps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

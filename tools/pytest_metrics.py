@@ -4,7 +4,15 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 _reports = {}
+_workers = {}
+
+
+def _snapshot():
+    from tests.ydb_support import pool_statistics
+    return {"resources": _resources(), "schema_pool": pool_statistics()}
 
 
 def _number(path):
@@ -55,14 +63,24 @@ def pytest_runtest_logreport(report):
             "duration_seconds": report.duration,
             "outcome": report.outcome,
         }
+        _reports[report.nodeid]["worker"] = getattr(report, "worker_id", "main")
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    _workers[node.gateway.id] = node.workeroutput.get("ci_metrics", {"error": str(error)})
 
 
 def pytest_sessionfinish(session, exitstatus):
+    if hasattr(session.config, "workerinput"):
+        session.config.workeroutput["ci_metrics"] = _snapshot()
+        return
     destination = os.environ.get("ZONT_PYTEST_METRICS")
     if destination:
         payload = {
             "exit_status": int(exitstatus),
-            "resources": _resources(),
+            **_snapshot(),
+            "workers": _workers,
             "tests": [{"nodeid": nodeid, **phases} for nodeid, phases in sorted(_reports.items())],
         }
         Path(destination).write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")

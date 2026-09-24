@@ -22,6 +22,7 @@ def _recommendation(db: Database) -> str:
     return recommendation_id
 
 
+@pytest.mark.ydb
 def test_structured_experiment_is_idempotent_and_note_edit_preserves_history(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     db.save_devices([{
@@ -63,12 +64,14 @@ def test_structured_experiment_is_idempotent_and_note_edit_preserves_history(tmp
         {"before": "x" * 501},
     ],
 )
+@pytest.mark.ydb
 def test_experiment_contract_rejects_invalid_values(tmp_path: Path, experiment: dict[str, object]) -> None:
     db = make_database(tmp_path)
     with pytest.raises(ValueError):
         db.set_recommendation_feedback(_recommendation(db), "applied", experiment=experiment)
 
 
+@pytest.mark.ydb
 def test_intervention_history_is_bounded_and_keeps_explicit_temporal_boundary(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     recommendation_id = _recommendation(db)
@@ -82,6 +85,7 @@ def test_intervention_history_is_bounded_and_keeps_explicit_temporal_boundary(tm
     assert db.intervention_history(before=datetime(2026, 8, 1, 8, tzinfo=UTC)) == []
 
 
+@pytest.mark.ydb
 def test_rejected_feedback_cannot_silently_record_an_experiment(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     with pytest.raises(ValueError, match="applied"):
@@ -90,6 +94,7 @@ def test_rejected_feedback_cannot_silently_record_an_experiment(tmp_path: Path) 
         )
 
 
+@pytest.mark.ydb
 def test_firmware_rollback_and_feedback_boundary_are_preserved(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     recommendation_id = _recommendation(db)

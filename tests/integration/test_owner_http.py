@@ -36,6 +36,7 @@ def owner_server(tmp_path: Path):
         thread.join(timeout=5)
 
 
+@pytest.mark.ydb
 def test_owner_roundtrip_is_daily_scoped_idempotent_and_preserves_feedback(owner_server) -> None:
     runtime, reports, client = owner_server
     feedback_before = runtime.db.recommendation_feedback()
@@ -62,6 +63,7 @@ def test_owner_roundtrip_is_daily_scoped_idempotent_and_preserves_feedback(owner
     assert runtime.db.token_usage_this_month() == 0
 
 
+@pytest.mark.ydb
 def test_gas_writes_do_not_wait_for_publication_and_survive_restart(owner_server, monkeypatch) -> None:
     runtime, reports, client = owner_server
     output = reports_directory(runtime)
@@ -100,6 +102,7 @@ def test_gas_writes_do_not_wait_for_publication_and_survive_restart(owner_server
     assert runtime.db.token_usage_this_month() == 0
 
 
+@pytest.mark.ydb
 def test_owner_api_accepts_selected_dates_and_rejects_spoofed_scope_and_cross_origin(owner_server) -> None:
     _, reports, client = owner_server
     url = f"/reports/{reports[0].id}/gas"
@@ -121,6 +124,7 @@ def test_owner_api_accepts_selected_dates_and_rejects_spoofed_scope_and_cross_or
     assert client.get(url).json()["reading"] is None
 
 
+@pytest.mark.ydb
 def test_monthly_tariff_api_audit_and_selective_publication(owner_server, monkeypatch) -> None:
     from zont_analyzer.application.gas import GasService
 
@@ -156,6 +160,7 @@ def test_monthly_tariff_api_audit_and_selective_publication(owner_server, monkey
     assert runtime.db.token_usage_this_month() == 0
 
 
+@pytest.mark.ydb
 def test_tariff_api_rejects_invalid_values_and_cross_origin(owner_server) -> None:
     _, _, client = owner_server
     payload = {"price": "8,01", "currency": "RUB", "effective_month": "2026-08"}

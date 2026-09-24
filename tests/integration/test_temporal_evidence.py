@@ -2,6 +2,8 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from tests.ydb_support import make_database, seed_samples
 from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.application.analysis import AnalysisService
@@ -18,6 +20,7 @@ class CaptureAnalyst:
         return AnalysisResult(summary="Проверены временные свидетельства.")
 
 
+@pytest.mark.ydb
 def test_daily_evidence_reaches_ai_storage_and_reports_with_historical_target(tmp_path: Path) -> None:
     db: Database = make_database(tmp_path)
     start = datetime(2026, 8, 1, tzinfo=UTC)

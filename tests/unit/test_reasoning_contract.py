@@ -110,6 +110,7 @@ def _report() -> Report:
     )
 
 
+@pytest.mark.ydb
 def test_reasoning_contract_round_trips_through_ydb_without_reference_rejection(tmp_path: Path) -> None:
     report = _report()
     db: Database = make_database(tmp_path)

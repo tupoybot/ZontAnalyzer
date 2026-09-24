@@ -72,7 +72,7 @@ check() {
     if [ -n "${ZONT_METRICS_DIR:-}" ]; then
         ZONT_TEST_IMAGE="$IMAGE" node "$ROOT/tools/measure-ci.mjs" "$ZONT_METRICS_DIR"
     else
-        ZONT_TEST_IMAGE="$IMAGE" "$ROOT/deploy/check-ydb.sh" tests
+        ZONT_TEST_IMAGE="$IMAGE" "$ROOT/deploy/check-tests.sh" tests
     fi
     build_package
 }
