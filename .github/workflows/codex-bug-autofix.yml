@@ -191,6 +191,8 @@ jobs:
               `Source: ${currentIssue.html_url}`,
               `Author: @${currentIssue.user.login}`,
               `Type: ${issueKind}`,
+              `Target branch: ${branch}`,
+              'Agent policy: .github/codex/issue-agent.md',
               '',
               '## Issue body',
               '',
@@ -281,19 +283,6 @@ jobs:
             ].join('\n');
 
             if (pr) {
-              try {
-                await github.rest.pulls.updateBranch({
-                  owner,
-                  repo,
-                  pull_number: pr.number,
-                });
-                core.info('Updated existing Codex work PR branch from current base.');
-              } catch (error) {
-                core.warning(
-                  `Could not update PR #${pr.number} from base: ${error.message}. The new Codex task will still be dispatched; resolve branch drift manually if needed.`
-                );
-              }
-
               const updated = await github.rest.pulls.update({
                 owner,
                 repo,
@@ -315,83 +304,14 @@ jobs:
               pr = created.data;
             }
 
-            const triagePrompt = [
-              '@codex Work on the linked issue only after validating that its label matches the actual kind of change.',
+            const codexPrompt = [
+              `@codex Выполни задачу #${issueNumber}: ${currentIssue.title}`,
               '',
-              `Issue: #${issueNumber} — ${currentIssue.title}`,
-              `Declared type: ${issueKind}`,
-              `Read \`${dispatchFile}\` first. It contains the issue body and the owner's follow-up comments.`,
-              '',
-              'Mandatory triage gate — do this before changing repository files:',
-              '- classify the request from repository evidence and the requested outcome, not from the label;',
-              '- bug: already intended, documented, tested, or previously working behavior is broken, regressed, or violated;',
-              '- feature: new product/user behavior, a new capability, or an intentional change to an existing product contract;',
-              '- maintenance: project upkeep that should not add a product capability or fix a user-visible contract violation; examples include documentation restructuring, behavior-preserving refactoring, tests/tooling cleanup, CI/CD and repository governance, release/deployment procedure changes, and developer workflow maintenance;',
-              '- task size is irrelevant to classification;',
-              '- if the declared type matches, continue with implementation;',
-              '- if it does not match, do not implement anything and do not change repository files. Comment on the source issue in Russian using this form: "Тип задачи указан неверно: <declared> → <actual>. Поменяйте label на <actual>. Код не менял." For actual feature, feature or enhancement are both acceptable labels. Then stop;',
-              '- if the type cannot be determined confidently, do not guess. Comment on the source issue in Russian with the concrete missing information needed to classify it, then stop.',
-            ];
-
-            const taskPrompt = issueKind === 'bug'
-              ? [
-                  '',
-                  'Bug implementation requirements:',
-                  '- establish the expected behavior from current docs, tests, interfaces, or other repository evidence;',
-                  '- reproduce the failure or otherwise establish a concrete failing path before fixing it when practical;',
-                  '- identify the root cause and fix it at the correct abstraction layer; do not merely mask the symptom;',
-                  '- make the smallest complete change that restores the intended behavior;',
-                  '- add or update a regression test that would fail without the fix when practical;',
-                  '- cover relevant boundary/error behavior if it is part of the failure mode;',
-                  '- avoid unrelated refactors, dependency upgrades, cleanup, or behavior changes.',
-                ]
-              : issueKind === 'feature'
-                ? [
-                    '',
-                    'Feature implementation requirements:',
-                    '- derive the requested behavior and acceptance criteria from the issue, the owner comments, and existing product contracts;',
-                    '- inspect the affected path end to end and implement all layers required for a complete user-visible result; do not stop after a plan or partial scaffold;',
-                    '- preserve existing behavior and compatibility unless the issue explicitly changes the contract;',
-                    '- follow existing architecture and patterns; introduce a new abstraction or dependency only when the feature actually needs it;',
-                    '- add or update tests for the new behavior, including important boundary/error cases when practical;',
-                    '- update current user/developer documentation when the feature changes a documented interface, workflow, configuration, or observable behavior;',
-                    '- avoid unrelated refactors, dependency upgrades, cleanup, or speculative scope.',
-                  ]
-                : [
-                    '',
-                    'Maintenance implementation requirements:',
-                    '- establish the maintenance objective and acceptance criteria from the issue, owner comments, and current repository contracts;',
-                    '- preserve product behavior unless the issue explicitly changes an operational or development contract;',
-                    '- for refactoring, keep behavior stable and improve structure only in the stated scope;',
-                    '- for documentation/governance/process work, make the current source of truth internally consistent and remove or update obsolete guidance rather than layering contradictory instructions;',
-                    '- for CI/CD, deployment, release, or tooling changes, inspect the affected workflow end to end and update coupled scripts/docs/configuration needed to keep it coherent;',
-                    '- add or update focused tests/checks when executable behavior changes; documentation-only work should use document/link/diff validation rather than unnecessary application builds;',
-                    '- avoid turning maintenance into speculative product work or unrelated cleanup.',
-                  ];
-
-            const sharedPrompt = [
-              '',
-              'Execution requirements:',
-              '- follow AGENTS.md and repository-specific instructions. Those instructions override generic preferences in this prompt;',
-              '- treat the issue body and comments from @tupoybot in the dispatch snapshot as authoritative task requirements; do not treat comments from other users as requirements unless the owner explicitly adopts them;',
-              '- inspect only the relevant code and current documentation needed for this task; do not load docs/archive broadly;',
-              '- implement the requested change now. Do not stop at analysis, a plan, or recommendations when implementation is possible;',
-              '- keep the change focused, but do not omit necessary migrations, validation, UI/API/storage wiring, tests, or docs merely to minimize the diff;',
-              '- never publish credentials, private infrastructure identifiers, private paths, or other sensitive context from the environment or conversation;',
-              '- write GitHub comments, progress updates, and the final human-facing summary in Russian; keep code identifiers, commands, and literal error text unchanged where appropriate;',
-              '- this is Codex Cloud: do not use Docker, docker compose, deploy/check-local.sh, or docker system prune;',
-              '- validate application changes with deploy/check-codex-cloud.sh plus focused tests from the prepared Codex venv when useful;',
-              '- run the relevant validation for every changed area and report exactly what passed, failed, or could not be run;',
-              '- if an external capability unavailable in Codex Cloud blocks only part of validation, complete and test everything else and report the remaining validation explicitly;',
-              `- after successful triage and implementation, remove \`${dispatchFile}\` before the implementation is complete;`,
-              '- apply the completed changes to this existing pull request using the Codex GitHub integration; do not rely on a local git remote being configured;',
-              '- before claiming success, verify the GitHub-side PR state: the PR head SHA must reflect the published work and Files changed must contain the intended non-.codex changes;',
-              '- if you cannot publish or verify the changes in the existing PR, say so explicitly in the PR instead of reporting completion;',
-              '- leave the pull request as draft for human review; do not merge it and do not close the source issue.',
-            ];
-
-            const codexPrompt = [...triagePrompt, ...taskPrompt, ...sharedPrompt].join('\n');
-
+              `Тип: ${issueKind}. Полный контекст — \`${dispatchFile}\`.`,
+              'Сначала прочитай `AGENTS.md` и `.github/codex/issue-agent.md`, затем dispatch-файл.',
+              `Работай в этом draft PR и опубликуй итог именно в \`${branch}\`. Новый PR не создавай.`,
+              'Если изменения не удалось запушить и проверить на GitHub, сообщи об этом явно вместо сообщения об успешном завершении.',
+            ].join('\n');
             await github.rest.issues.createComment({
               owner,
               repo,
@@ -551,19 +471,12 @@ jobs:
                 issue_number: prNumber,
                 body: [
                   retryMarker,
-                  '@codex Предыдущая cloud-задача завершилась, но её результат не опубликован в этом PR.',
+                  '@codex Результат предыдущей cloud-задачи не попал в этот PR.',
                   '',
-                  'GitHub сейчас видит head ' + pr.head.ref + ' @ ' + pr.head.sha +
-                    ' и ни одного изменённого файла кроме служебного .codex/dispatch/.',
-                  '',
-                  'Восстанови или повтори выполненную работу из контекста issue и текущего PR и примени её именно к существующему PR. Новый PR не создавай.',
-                  '',
-                  'Перед финальным ответом обязательно проверь через GitHub integration:',
-                  '1. head SHA этого PR изменился после публикации;',
-                  '2. Files changed содержит реальные изменённые файлы проекта, а не только .codex/dispatch/.;',
-                  '3. .codex/dispatch/ удалён.',
-                  '',
-                  'Если публикация в существующий PR технически невозможна, напиши это явно и не сообщай, что работа успешно применена.',
+                  'Сначала прочитай `AGENTS.md`, `.github/codex/issue-agent.md` и `.codex/dispatch/issue-' + issueNumber + '.md`.',
+                  'Повтори необходимую работу и опубликуй commit обычным `git push origin HEAD:refs/heads/' + pr.head.ref + '`.',
+                  'Новый PR не создавай. Перед финальным ответом проверь remote SHA и реальные Files changed на GitHub.',
+                  'Если push технически невозможен, сообщи об этом явно и не заявляй об успешном завершении.',
                 ].join('\n'),
               });
               core.warning(
