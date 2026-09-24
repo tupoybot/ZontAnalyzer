@@ -29,7 +29,8 @@ jobs:
             (
               contains(github.event.issue.labels.*.name, 'bug') ||
               contains(github.event.issue.labels.*.name, 'feature') ||
-              contains(github.event.issue.labels.*.name, 'enhancement')
+              contains(github.event.issue.labels.*.name, 'enhancement') ||
+              contains(github.event.issue.labels.*.name, 'maintenance')
             )
           ) ||
           (
@@ -37,7 +38,8 @@ jobs:
             (
               github.event.label.name == 'bug' ||
               github.event.label.name == 'feature' ||
-              github.event.label.name == 'enhancement'
+              github.event.label.name == 'enhancement' ||
+              github.event.label.name == 'maintenance'
             )
           )
         )
@@ -83,22 +85,52 @@ jobs:
               return;
             }
 
-            const isBug = labels.includes('bug');
-            const isFeature = labels.includes('feature') || labels.includes('enhancement');
-
-            if (currentIssue.user?.login !== 'tupoybot' || (!isBug && !isFeature)) {
+            if (currentIssue.user?.login !== 'tupoybot') {
               core.setFailed(
-                `Issue #${issueNumber} does not match dispatch policy: author must be tupoybot and one of labels bug, feature, enhancement must be present.`
+                `Issue #${issueNumber} does not match dispatch policy: author must be tupoybot.`
               );
               return;
             }
 
-            // If an issue has both bug and feature labels, treat it as a bug.
-            const issueKind = isBug ? 'bug' : 'feature';
-            const issueKindTitle = issueKind === 'bug' ? 'Bug' : 'Feature';
+            const matchedKinds = [
+              labels.includes('bug') ? 'bug' : null,
+              (labels.includes('feature') || labels.includes('enhancement')) ? 'feature' : null,
+              labels.includes('maintenance') ? 'maintenance' : null,
+            ].filter(Boolean);
+
+            if (matchedKinds.length === 0) {
+              core.setFailed(
+                `Issue #${issueNumber} does not match dispatch policy: one of labels bug, feature/enhancement, maintenance must be present.`
+              );
+              return;
+            }
+
+            if (matchedKinds.length > 1) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: [
+                  '🤖 Codex не запущен: у задачи одновременно указано несколько типов.',
+                  '',
+                  `Найдены: ${matchedKinds.join(', ')}.`,
+                  'Оставьте ровно один тип: `bug`, `feature`/\`enhancement\` или `maintenance`.',
+                ].join('\n'),
+              });
+              core.notice(
+                `Issue #${issueNumber} has ambiguous task type labels: ${matchedKinds.join(', ')}`
+              );
+              return;
+            }
+
+            const issueKind = matchedKinds[0];
+            const issueKindTitle = {
+              bug: 'Bug',
+              feature: 'Feature',
+              maintenance: 'Maintenance',
+            }[issueKind];
             const marker = `<!-- codex-issue-dispatch:${issueNumber}:${issueKind} -->`;
-            const otherKind = issueKind === 'bug' ? 'feature' : 'bug';
-            const otherKindMarker = `<!-- codex-issue-dispatch:${issueNumber}:${otherKind} -->`;
+            const anyTypedMarkerPrefix = `<!-- codex-issue-dispatch:${issueNumber}:`;
             const legacyGenericMarker = `<!-- codex-issue-dispatch:${issueNumber} -->`;
             const legacyBugMarker = `<!-- codex-bug-autofix:${issueNumber} -->`;
 
@@ -144,8 +176,7 @@ jobs:
             const trustedComments = issueComments
               .filter((comment) =>
                 comment.user?.login === 'tupoybot' &&
-                !comment.body?.includes(marker) &&
-                !comment.body?.includes(otherKindMarker) &&
+                !comment.body?.includes(anyTypedMarkerPrefix) &&
                 !comment.body?.includes(legacyGenericMarker) &&
                 !comment.body?.includes(legacyBugMarker)
               )
@@ -232,9 +263,11 @@ jobs:
             });
 
             let pr = existingPulls.data.find((item) => item.state === 'open');
-            const prTitle = issueKind === 'bug'
-              ? `Codex: fix #${issueNumber} — ${currentIssue.title}`
-              : `Codex: implement #${issueNumber} — ${currentIssue.title}`;
+            const prTitle = {
+              bug: `Codex: fix #${issueNumber} — ${currentIssue.title}`,
+              feature: `Codex: implement #${issueNumber} — ${currentIssue.title}`,
+              maintenance: `Codex: maintain #${issueNumber} — ${currentIssue.title}`,
+            }[issueKind];
             const prBody = [
               `Automated Codex Cloud work PR for #${issueNumber}.`,
               '',
@@ -281,21 +314,21 @@ jobs:
             }
 
             const triagePrompt = [
-              '@codex Work on the linked issue only after validating that its label matches the requested change.',
+              '@codex Work on the linked issue only after validating that its label matches the actual kind of change.',
               '',
               `Issue: #${issueNumber} — ${currentIssue.title}`,
               `Declared type: ${issueKind}`,
               `Read \`${dispatchFile}\` first. It contains the issue body and the owner's follow-up comments.`,
               '',
               'Mandatory triage gate — do this before changing repository files:',
-              '- classify the request from the current documented/tested behavior, not from the issue label;',
-              '- a bug means already intended or previously working behavior is broken, regressed, or contradicts an existing contract;',
-              '- a feature means new behavior, a new capability, or an intentional change to the existing contract;',
-              '- size is irrelevant: a large fix can still be a bug, and a tiny change can still be a feature;',
+              '- classify the request from repository evidence and the requested outcome, not from the label;',
+              '- bug: already intended, documented, tested, or previously working behavior is broken, regressed, or violated;',
+              '- feature: new product/user behavior, a new capability, or an intentional change to an existing product contract;',
+              '- maintenance: project upkeep that should not add a product capability or fix a user-visible contract violation; examples include documentation restructuring, behavior-preserving refactoring, tests/tooling cleanup, CI/CD and repository governance, release/deployment procedure changes, and developer workflow maintenance;',
+              '- task size is irrelevant to classification;',
               '- if the declared type matches, continue with implementation;',
-              '- if a bug-labelled issue is actually a feature, do not implement it and do not change repository files. Comment on the source issue in Russian: "Это не баг: здесь требуется новое или изменённое поведение. Поменяйте label на feature/enhancement или заведите отдельную feature issue. Код не менял." Then stop;',
-              '- if a feature/enhancement-labelled issue is actually a bug, do not implement it and do not change repository files. Comment on the source issue in Russian: "Это баг: описано нарушение уже ожидаемого поведения. Поменяйте label на bug. Код не менял." Then stop;',
-              '- if the type cannot be determined confidently from the issue and repository evidence, do not guess. Comment on the source issue in Russian with the concrete missing information needed to classify it, then stop.',
+              '- if it does not match, do not implement anything and do not change repository files. Comment on the source issue in Russian using this form: "Тип задачи указан неверно: <declared> → <actual>. Поменяйте label на <actual>. Код не менял." For actual feature, feature or enhancement are both acceptable labels. Then stop;',
+              '- if the type cannot be determined confidently, do not guess. Comment on the source issue in Russian with the concrete missing information needed to classify it, then stop.',
             ];
 
             const taskPrompt = issueKind === 'bug'
@@ -310,17 +343,29 @@ jobs:
                   '- cover relevant boundary/error behavior if it is part of the failure mode;',
                   '- avoid unrelated refactors, dependency upgrades, cleanup, or behavior changes.',
                 ]
-              : [
-                  '',
-                  'Feature implementation requirements:',
-                  '- derive the requested behavior and acceptance criteria from the issue, the owner comments, and existing product contracts;',
-                  '- inspect the affected path end to end and implement all layers required for a complete user-visible result; do not stop after a plan or partial scaffold;',
-                  '- preserve existing behavior and compatibility unless the issue explicitly changes the contract;',
-                  '- follow existing architecture and patterns; introduce a new abstraction or dependency only when the feature actually needs it;',
-                  '- add or update tests for the new behavior, including important boundary/error cases when practical;',
-                  '- update current user/developer documentation when the feature changes a documented interface, workflow, configuration, or observable behavior;',
-                  '- avoid unrelated refactors, dependency upgrades, cleanup, or speculative scope.',
-                ];
+              : issueKind === 'feature'
+                ? [
+                    '',
+                    'Feature implementation requirements:',
+                    '- derive the requested behavior and acceptance criteria from the issue, the owner comments, and existing product contracts;',
+                    '- inspect the affected path end to end and implement all layers required for a complete user-visible result; do not stop after a plan or partial scaffold;',
+                    '- preserve existing behavior and compatibility unless the issue explicitly changes the contract;',
+                    '- follow existing architecture and patterns; introduce a new abstraction or dependency only when the feature actually needs it;',
+                    '- add or update tests for the new behavior, including important boundary/error cases when practical;',
+                    '- update current user/developer documentation when the feature changes a documented interface, workflow, configuration, or observable behavior;',
+                    '- avoid unrelated refactors, dependency upgrades, cleanup, or speculative scope.',
+                  ]
+                : [
+                    '',
+                    'Maintenance implementation requirements:',
+                    '- establish the maintenance objective and acceptance criteria from the issue, owner comments, and current repository contracts;',
+                    '- preserve product behavior unless the issue explicitly changes an operational or development contract;',
+                    '- for refactoring, keep behavior stable and improve structure only in the stated scope;',
+                    '- for documentation/governance/process work, make the current source of truth internally consistent and remove or update obsolete guidance rather than layering contradictory instructions;',
+                    '- for CI/CD, deployment, release, or tooling changes, inspect the affected workflow end to end and update coupled scripts/docs/configuration needed to keep it coherent;',
+                    '- add or update focused tests/checks when executable behavior changes; documentation-only work should use document/link/diff validation rather than unnecessary application builds;',
+                    '- avoid turning maintenance into speculative product work or unrelated cleanup.',
+                  ];
 
             const sharedPrompt = [
               '',
