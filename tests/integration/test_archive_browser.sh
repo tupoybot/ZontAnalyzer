@@ -44,7 +44,7 @@ install -d "$fixture_dir/data" "$fixture_dir/publish"
 # The production image runs as the unprivileged zont UID; these are disposable
 # bind mounts shared with nginx and removed by cleanup.
 chmod 0777 "$fixture_dir/data" "$fixture_dir/publish"
-cat > "$fixture_dir/config.yaml" <<'EOF'
+cat >"$fixture_dir/config.yaml" <<'EOF'
 pilot:
   reports_dir: /publish
 feedback:
@@ -53,8 +53,8 @@ feedback:
   public_api_base_url: /za/api
 EOF
 password_hash=$(openssl passwd -6 'stage18-secret')
-printf 'stage18:%s\n' "$password_hash" > "$fixture_dir/zont-analyzer.htpasswd"
-cat > "$fixture_dir/default.conf" <<'EOF'
+printf 'stage18:%s\n' "$password_hash" >"$fixture_dir/zont-analyzer.htpasswd"
+cat >"$fixture_dir/default.conf" <<'EOF'
 server {
     listen 18086;
     server_name localhost;

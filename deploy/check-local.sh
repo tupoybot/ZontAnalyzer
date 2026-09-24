@@ -13,7 +13,7 @@ OUT_DIR=
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        all|build|check|check-prebuilt|export)
+        all | build | check | check-prebuilt | export)
             COMMAND=$1
             ;;
         --out-dir)
@@ -21,7 +21,7 @@ while [ "$#" -gt 0 ]; do
             OUT_DIR=$2
             shift
             ;;
-        -h|--help)
+        -h | --help)
             usage
             ;;
         *)
@@ -80,11 +80,14 @@ check() {
 validate_output() {
     case "$OUT_DIR" in
         /*) ;;
-        *) echo "--out-dir must be an absolute path" >&2; exit 2 ;;
+        *)
+            echo "--out-dir must be an absolute path" >&2
+            exit 2
+            ;;
     esac
     OUT_DIR=$(realpath -m -- "$OUT_DIR")
     case "$OUT_DIR" in
-        "$ROOT"|"$ROOT"/*)
+        "$ROOT" | "$ROOT"/*)
             echo "--out-dir must be outside the repository" >&2
             exit 2
             ;;

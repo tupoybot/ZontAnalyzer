@@ -16,7 +16,7 @@ install -d "$fixture_dir/www/za/daily"
 touch "$fixture_dir/www/za/index.html" "$fixture_dir/www/za/latest.html" \
     "$fixture_dir/www/za/daily/2026-09-05.html"
 password_hash=$(openssl passwd -6 'stage16-secret')
-printf 'stage16:%s\n' "$password_hash" > "$fixture_dir/zont-analyzer.htpasswd"
+printf 'stage16:%s\n' "$password_hash" >"$fixture_dir/zont-analyzer.htpasswd"
 
 docker run -d --rm --name "$proxy" -p 127.0.0.1:18086:18086 \
     -v "$project_root/tests/fixtures/nginx-basic-auth.conf:/etc/nginx/conf.d/default.conf:ro" \
