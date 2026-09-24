@@ -65,6 +65,7 @@ def test_home_timezone_remains_the_configured_fallback() -> None:
 def test_runtime_uses_persisted_zont_timezone_for_windows_and_reports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     fixture_db = make_database(tmp_path)
     settings = fixture_db.storage.config
     monkeypatch.setenv("YDB_ENDPOINT", settings.endpoint)
