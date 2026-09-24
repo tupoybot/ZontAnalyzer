@@ -282,6 +282,68 @@ jobs:
               'Human review is required before merge.',
             ].join('\n');
 
+            // Old work PRs may predate the current Codex Cloud setup. Refresh only
+            // automation support files, and only while the PR still has no real work.
+            // This avoids the old updateBranch behavior that merged unrelated main
+            // changes into a task branch and made them look like Codex output.
+            if (pr) {
+              const currentPrFiles = await github.paginate(github.rest.pulls.listFiles, {
+                owner,
+                repo,
+                pull_number: pr.number,
+                per_page: 100,
+              });
+              const hasRealWork = currentPrFiles.some(
+                (file) => !file.filename.startsWith('.codex/dispatch/')
+              );
+
+              if (!hasRealWork) {
+                const supportFiles = [
+                  'AGENTS.md',
+                  '.github/codex/issue-agent.md',
+                  'deploy/setup-codex-cloud.sh',
+                ];
+
+                for (const supportPath of supportFiles) {
+                  const baseFile = await github.rest.repos.getContent({
+                    owner,
+                    repo,
+                    path: supportPath,
+                    ref: baseBranch,
+                  });
+                  if (Array.isArray(baseFile.data)) {
+                    throw new Error(`Expected file at ${supportPath}, got directory.`);
+                  }
+
+                  let branchFile = null;
+                  try {
+                    const response = await github.rest.repos.getContent({
+                      owner,
+                      repo,
+                      path: supportPath,
+                      ref: branch,
+                    });
+                    if (!Array.isArray(response.data)) branchFile = response.data;
+                  } catch (error) {
+                    if (error.status !== 404) throw error;
+                  }
+
+                  if (branchFile?.sha === baseFile.data.sha) continue;
+
+                  await github.rest.repos.createOrUpdateFileContents({
+                    owner,
+                    repo,
+                    path: supportPath,
+                    branch,
+                    message: `chore: refresh Codex Cloud support for #${issueNumber}`,
+                    content: (baseFile.data.content || '').replace(/\n/g, ''),
+                    ...(branchFile ? { sha: branchFile.sha } : {}),
+                  });
+                  core.info(`Refreshed ${supportPath} on ${branch}.`);
+                }
+              }
+            }
+
             if (pr) {
               const updated = await github.rest.pulls.update({
                 owner,
