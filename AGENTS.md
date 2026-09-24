@@ -23,9 +23,23 @@
 
 # Documentation entrypoint and context budget
 
-- Start with `docs/status.md` and only the relevant section of `docs/implementation_plan.md`.
-- Use `docs/README.md` as the document map; read product requirements and architecture only
-  for contracts relevant to the task. Do not load every Markdown file or completed stage.
+- Start with the short `docs/status.md`, then select one task route in `docs/README.md`.
+- Read only the relevant section of the selected plan or contract. Find headings with
+  `rg -n '^#{1,3} ' <file>`, then read the required range. Do not concatenate whole
+  documents, glob Markdown files, or recursively follow every link.
+- Initial reading budget: status, document map, and one or two relevant sections.
+  This is a starting budget, not a hard limit: expand only to resolve a concrete
+  question, dependency, conflicting contract, or validation requirement.
+- For a local fix with a known target, inspect that code and its tests directly;
+  read plans only if scope or acceptance depends on them. Do not reread unchanged
+  documents during the same task. Give subagents file/section pointers, not a full
+  documentation bundle.
+- Search the selected topic directory first. If the route is unclear, search headings
+  or filenames across current docs, excluding `docs/archive/` and `docs/benchmarks/`.
+  Read benchmark artifacts only for a measurement task.
+- Use `docs/implementation_plan.md` for product work and the relevant milestone in
+  `docs/cloud/cloud_first_milestone.md` for cloud work. Completed milestones are not
+  prerequisite reading unless the task changes one of their contracts.
 - `docs/archive/` is historical evidence, not current instructions or backlog. Exclude it
   from broad searches. Open a specific archived section only for a concrete historical
   question that current docs and code cannot answer, or when the user explicitly asks.
@@ -38,6 +52,24 @@
   decisions and completed execution history. Reduce context through selective reading.
 - Stage 9 is ongoing pilot production operation and improvements. Stages 10 (multi-room)
   and 11 (control) are optional and deferred; do not start them automatically.
+
+# GitHub Issues: сообщения о результате
+
+- Описание issue содержит цель, границы и критерии; меняйте его при изменении плана.
+  Не превращайте описание или комментарии в журнал работы агента.
+- По умолчанию оставляйте один итоговый комментарий при передаче результата:
+  что изменилось для автора задачи, проверено ли это, ссылка на PR и что осталось.
+  Обычно достаточно 3–5 коротких пунктов или одного абзаца.
+- Промежуточный комментарий нужен лишь при препятствии, требующем решения автора,
+  существенном изменении объёма/сроков или открытии, меняющем ожидаемый результат.
+  Устранение такого препятствия также можно сообщить, если автор ждёт ответа.
+- Не публикуйте отдельные сообщения о начале работы, каждом коммите, запуске/повторе
+  CI, пройденной группе тестов или обычном промежуточном выводе. Собирайте проверки
+  в итог; подробные логи и измерения оставляйте в CI, PR или профильном документе.
+- Перед публикацией прочитайте последние комментарии: не повторяйте уже сообщённое.
+  В родительском issue обновляйте ссылки и состояние этапов, не дублируйте итоги
+  дочернего. После принятия и merge достаточно закрыть issue со ссылкой на результат;
+  повторный подробный отчёт не нужен. Условия приёмки и закрытия не меняются.
 
 # Понятная документация
 
@@ -79,7 +111,7 @@ For substantial implementation tasks:
 
 - Build packages, run Python checks/tests and prepare data inside Docker containers.
 - Do not install Python dependencies into the host Python or use the host `.venv`
-  for this workflow. Use `deploy/check-local.sh`; see `docs/container-development.md`.
+  for this workflow. Use `deploy/check-local.sh`; see `docs/development/container-development.md`.
 - Keep source mounts read-only and temporary databases/caches in containers or
   explicitly isolated artifact directories. Production-host load limits still apply.
 
@@ -175,7 +207,7 @@ Do not use a stronger model merely because it is available.
   do not merge it or start the next stage. After acceptance, merge and create the next
   stage branch from the updated `main`.
 - Follow the documentation entrypoint above; inspect only relevant source/tests.
-- Detailed release criteria are in `docs/release-process.md`; read them when preparing a release.
+- Detailed release criteria are in `docs/development/release-process.md`; read them when preparing a release.
 - A work portion includes implementation and related tests. Do not write tests for reversible, low-impact changes that mirror the implementation. If you do choose to verify your work with tests, make sure that the tests are meaningful and necessary to verify implementation. Run tests appropriate to the change and complete required checks. Once those pass, broaden or repeat testing only when new changes, failures, or unresolved concerns justify it; otherwise, continue toward completing the task. Keep a short handoff in
   `docs/status.md`: contracts, changed scope, validation, remaining work and next step.
 - Local checkpoints within a stage do not each require production deployment. A functional
