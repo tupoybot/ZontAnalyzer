@@ -23,7 +23,28 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
-      - run: deploy/check-local.sh all
+      - name: Build test environment
+        run: deploy/check-local.sh build
+      - name: Export identical benchmark environment
+        if: github.head_ref == 'stage9/ci-optimization'
+        run: docker save zont-analyzer:test-local | gzip -1 > "$RUNNER_TEMP/ci-test-image.tar.gz"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.head_ref == 'stage9/ci-optimization'
+        with:
+          name: ci-test-image
+          path: ${{ runner.temp }}/ci-test-image.tar.gz
+          retention-days: 7
+          compression-level: 0
+      - name: Check source in the measured environment
+        env:
+          ZONT_METRICS_DIR: ${{ runner.temp }}/ci-metrics
+        run: deploy/check-local.sh check-prebuilt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: ci-metrics
+          path: ${{ runner.temp }}/ci-metrics
+          retention-days: 14
       - run: docker build --target cli -t zont-analyzer:test .
       - run: sh tests/integration/test_nginx_basic_auth.sh
       - run: docker tag zont-analyzer:test zont-analyzer:stage18-candidate

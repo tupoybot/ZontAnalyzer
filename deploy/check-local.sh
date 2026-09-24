@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-    echo "Usage: $0 [all|build|check|export] [--out-dir DIR]" >&2
+    echo "Usage: $0 [all|build|check|check-prebuilt|export] [--out-dir DIR]" >&2
     exit 2
 }
 
@@ -13,7 +13,7 @@ OUT_DIR=
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        all|build|check|export)
+        all|build|check|check-prebuilt|export)
             COMMAND=$1
             ;;
         --out-dir)
@@ -69,7 +69,11 @@ build_package() {
 check() {
     run_in_image ruff check --no-cache /workspace/src /workspace/tests /workspace/tools
     run_in_image mypy --cache-dir /tmp/mypy /workspace/src/zont_analyzer
-    ZONT_TEST_IMAGE="$IMAGE" "$ROOT/deploy/check-ydb.sh" tests
+    if [ -n "${ZONT_METRICS_DIR:-}" ]; then
+        ZONT_TEST_IMAGE="$IMAGE" node "$ROOT/tools/measure-ci.mjs" "$ZONT_METRICS_DIR"
+    else
+        ZONT_TEST_IMAGE="$IMAGE" "$ROOT/deploy/check-ydb.sh" tests
+    fi
     build_package
 }
 
@@ -106,5 +110,9 @@ case "$COMMAND" in
     export)
         build_image
         run_export
+        ;;
+    check-prebuilt)
+        docker image inspect "$IMAGE" >/dev/null
+        check
         ;;
 esac
