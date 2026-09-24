@@ -3,7 +3,7 @@ name: Verified cloud application candidate
 on:
   push:
     branches: ['main', 'stageM[0-9]*/**']
-    paths: ['src/**', 'tests/**', 'migrations/**', 'Dockerfile', '.dockerignore', 'pyproject.toml', 'README.md', 'alembic.ini', 'deploy/check-local.sh', 'deploy/smoke-cloud-local.sh', '.github/workflows/application-release.yml']
+    paths: ['src/**', 'tests/**', 'tools/**', 'Dockerfile', '.dockerignore', 'pyproject.toml', 'README.md', 'deploy/check-local.sh', 'deploy/check-ydb.sh', 'deploy/smoke-cloud-local.sh', '.github/workflows/application-release.yml']
   workflow_dispatch:
 
 permissions:

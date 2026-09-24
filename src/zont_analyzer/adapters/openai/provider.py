@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import uuid
 from collections import Counter
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
@@ -10,8 +9,8 @@ from typing import Any, Literal, Protocol
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
-from zont_analyzer.adapters.sqlite import Database
-from zont_analyzer.application.ai_ledger import AILedger
+from zont_analyzer.adapters.ydb.ai_usage import AiUsageRepository
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.application.ai_settings import MODEL_EFFORTS, validate_profile
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, DetectedEvent, MetricValue
@@ -342,6 +341,14 @@ def _validate_structured_result(
     return validated
 
 
+class AIRequestPending(RuntimeError):
+    """An already dispatched request cannot be safely sent again."""
+
+    def __init__(self, request_key: str, status: str) -> None:
+        self.request_key, self.status = request_key, status
+        super().__init__("The OpenAI request has an unknown result or is in progress; reconciliation is required")
+
+
 class OpenAIAnalyst:
     def __init__(self, *, api_key: str, config: AppConfig, db: Database):
         # Keep construction lazy: importing the provider must remain usable in
@@ -350,7 +357,7 @@ class OpenAIAnalyst:
         self._api_key = api_key
         self.config = config
         self.db = db
-        self.ledger = AILedger(db.path)
+        self.ledger = AiUsageRepository(db.storage)
 
     def analyze(self, packet: dict[str, Any]) -> AnalysisResult:
         encoded = json.dumps(packet, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -377,8 +384,6 @@ class OpenAIAnalyst:
         request_key = hashlib.sha256(
             json.dumps({"config": config_fingerprint, "input": encoded}, ensure_ascii=False, sort_keys=True).encode()
         ).hexdigest()
-        if self.db.token_usage_this_month() >= self.config.openai.monthly_token_budget:
-            raise RuntimeError("Monthly OpenAI token budget is exhausted")
         schema_encoded = json.dumps(_StructuredAnalysisResult.model_json_schema(), ensure_ascii=False, sort_keys=True)
         # One token per UTF-8 byte is deliberately conservative. The schema is
         # sent by the structured-output request and therefore consumes input
@@ -400,21 +405,32 @@ class OpenAIAnalyst:
         reservation = self.ledger.cached(request_key)
         if reservation is None and legacy_request_key != request_key:
             reservation = self.ledger.cached(legacy_request_key)
+            if reservation is not None:
+                request_key = legacy_request_key
         if reservation is None:
             reservation = self.ledger.reserve(
-                request_key,
+                request_key, _report_id_from_packet(packet) or f"analysis:{digest}",
+                {"input_hash": digest, "prompt_version": PROMPT_VERSION,
+                 "model": model, "reasoning_effort": reasoning_effort,
+                 "settings_version": settings_version,
+                 "report_id": _report_id_from_packet(packet)},
                 budget=self.config.openai.monthly_token_budget,
-                used=self.db.token_usage_this_month,
                 estimate=estimated_input + 6000,
                 billing_month=datetime.now(UTC).strftime("%Y-%m"),
             )
         if reservation is not None:
             if reservation.get("status") == "success" and isinstance(reservation.get("result"), dict):
                 return AnalysisResult.model_validate(reservation["result"])
-            if reservation.get("status") == "failure":
+            if reservation.get("status") in ("failure", "error"):
                 detail = str(reservation.get("error") or "unknown failure")
                 raise RuntimeError(f"The same OpenAI request previously failed: {detail}")
-            raise RuntimeError("The same OpenAI request is already in progress")
+            if reservation.get("status") != "prepared":
+                raise AIRequestPending(request_key, str(reservation.get("status")))
+            # Prepared means no caller has crossed the durable dispatch gate.
+            # A retry after a crash may compete for that same gate without
+            # reserving budget again; exactly one caller can mark it sent.
+        if not self.ledger.mark_sent(request_key):
+            raise AIRequestPending(request_key, "sent")
 
         response: Any = None
         try:
@@ -435,30 +451,22 @@ class OpenAIAnalyst:
             if parsed is None:
                 raise RuntimeError("OpenAI response did not contain parsed output")
             result = _validate_structured_result(parsed, packet)
-            status = "success"
         except Exception as exc:
             usage = getattr(response, "usage", None)
             input_tokens, cached_tokens, output_tokens = _usage_values(usage)
-            self.db.save_llm_call(
-                id=f"llm:{uuid.uuid4()}", report_id=_report_id_from_packet(packet), input_hash=digest,
-                prompt_version=PROMPT_VERSION,
-                model=model, reasoning_effort=reasoning_effort,
-                input_tokens=input_tokens, cached_tokens=cached_tokens, output_tokens=output_tokens,
-                status="failure", request_id=getattr(response, "id", None),
-            )
-            self.ledger.finish(
-                request_key,
-                status="failure",
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                error=str(exc),
+            if response is None:
+                self.ledger.mark_unknown(request_key, str(exc))
+                raise AIRequestPending(request_key, "unknown") from exc
+            self.ledger.finish_error(
+                request_key, str(exc), input_tokens=input_tokens,
+                cached_tokens=cached_tokens, output_tokens=output_tokens,
                 charge_reserved=usage is None,
             )
             raise RuntimeError(_provider_error_message(exc)) from exc
 
         usage = getattr(response, "usage", None)
         input_tokens, cached_tokens, output_tokens = _usage_values(usage)
-        log_id = f"llm:{uuid.uuid4()}"
+        log_id = f"llm:{request_key}"
         result = result.model_copy(update={"provenance": {
             "requested_model": model,
             "response_model": getattr(response, "model", None),
@@ -469,19 +477,11 @@ class OpenAIAnalyst:
             "settings_version": settings_version,
             "ai_log_id": log_id,
         }})
-        self.db.save_llm_call(
-            id=log_id, report_id=_report_id_from_packet(packet), input_hash=digest, prompt_version=PROMPT_VERSION,
-            model=model, reasoning_effort=reasoning_effort,
-            input_tokens=input_tokens, cached_tokens=cached_tokens, output_tokens=output_tokens,
-            status=status, request_id=getattr(response, "id", None),
-        )
-        self.ledger.finish(
-            request_key,
-            status="success",
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            result=result.model_dump(mode="json"),
-            charge_reserved=usage is None,
+        self.ledger.finish_success(
+            request_key, result.model_dump(mode="json"), result.provenance or {},
+            settings_version=settings_version, model=model,
+            input_tokens=input_tokens, cached_tokens=cached_tokens,
+            output_tokens=output_tokens, charge_reserved=usage is None,
         )
         return result
 

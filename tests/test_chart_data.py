@@ -4,11 +4,17 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from zont_analyzer.adapters.sqlite import Database
+from tests.ydb_support import make_database, make_runtime, seed_samples
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.application import publication
 from zont_analyzer.domain import QualityResult, Report, TelemetryPoint
-from zont_analyzer.reports.chart_data import MAX_POINTS_PER_SERIES, _point_dicts, build_chart_data, cached_chart_data
-from zont_analyzer.runtime import build_runtime
+from zont_analyzer.reports.chart_data import (
+    MAX_POINTS_PER_SERIES,
+    _cache_key,
+    _point_dicts,
+    build_chart_data,
+    cached_chart_data,
+)
 
 
 def _report(context: dict) -> Report:
@@ -29,8 +35,7 @@ def _report(context: dict) -> Report:
 
 
 def test_chart_data_reuses_report_selected_series_and_keeps_observed_gap(tmp_path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db: Database = make_database(tmp_path)
     start = datetime(2026, 9, 1, tzinfo=UTC)
     selected = [
         TelemetryPoint(
@@ -47,7 +52,7 @@ def test_chart_data_reuses_report_selected_series_and_keeps_observed_gap(tmp_pat
         )
         for index in range(3)
     ]
-    db.upsert_samples(
+    seed_samples(db,
         [*selected, *other], {"room-a": "control_indoor_temperature", "room-b": "control_indoor_temperature"},
     )
     report = _report({"temporal_evidence": {"signals": {
@@ -69,10 +74,9 @@ def test_chart_data_reuses_report_selected_series_and_keeps_observed_gap(tmp_pat
 
 
 def test_chart_data_exposes_explicit_ch_dhw_and_concurrent_state_bands(tmp_path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db: Database = make_database(tmp_path)
     start = datetime(2026, 9, 1, tzinfo=UTC)
-    db.upsert_samples([
+    seed_samples(db, [
         TelemetryPoint(
             device_id="device", source_type="z3k_boiler_adapter", entity_id="boiler", metric_key="s",
             timestamp_utc=start, value_text="['ch', 'fl']",
@@ -124,9 +128,9 @@ def test_decimation_keeps_both_edges_of_setpoint_change() -> None:
 
 
 def test_publication_passes_chart_packet_to_archive_renderer(tmp_path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     start = datetime(2026, 9, 1, tzinfo=UTC)
-    runtime.db.upsert_samples([
+    seed_samples(runtime.db, [
         TelemetryPoint(
             device_id="device", source_type="sensor", entity_id="room", metric_key="temperature",
             timestamp_utc=start + timedelta(hours=index), value_num=20 + index / 10, unit="°C",
@@ -148,10 +152,9 @@ def test_publication_passes_chart_packet_to_archive_renderer(tmp_path) -> None:
 def test_chart_data_cache_reuses_canonical_report_and_invalidates_on_change(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db: Database = make_database(tmp_path)
     start = datetime(2026, 9, 1, tzinfo=UTC)
-    db.upsert_samples([
+    seed_samples(db, [
         TelemetryPoint(
             device_id="device", source_type="sensor", entity_id="room", metric_key="temperature",
             timestamp_utc=start + timedelta(hours=index), value_num=20 + index / 10, unit="°C",
@@ -174,17 +177,22 @@ def test_chart_data_cache_reuses_canonical_report_and_invalidates_on_change(
     assert len(calls) == 1
     assert cached_chart_data(db, report) is not None
     assert len(calls) == 1
+    db.save_report(report, report.summary)
+    stored = db.report(report.id)
+    assert stored is not None
+    assert _cache_key(stored) == _cache_key(report)
+    assert cached_chart_data(db, stored) is not None
+    assert len(calls) == 1
     assert cached_chart_data(db, report.model_copy(update={"summary": "Пересчитанный отчёт"})) is not None
     assert len(calls) == 2
-    assert len(list((tmp_path / "chart-data-cache").glob("*.json"))) == 1
+    assert db.get_app_meta(_cache_key(report)[0])
 
 
 def test_held_setpoint_spans_report_but_stops_at_explicit_unknown(tmp_path):
-    db = Database(tmp_path / 'state.sqlite3')
-    db.initialize()
+    db: Database = make_database(tmp_path)
     report = _report({})
     start = report.period_start
-    db.upsert_samples([
+    seed_samples(db, [
         TelemetryPoint(device_id='d', source_type='z3k_heating_circuit', entity_id='h', metric_key='target_temp',
                        timestamp_utc=start - timedelta(days=1), value_num=22),
     ], {'h': 'target_temperature'})
@@ -194,7 +202,7 @@ def test_held_setpoint_spans_report_but_stops_at_explicit_unknown(tmp_path):
     assert points[-1]['timestamp'] == report.period_end.isoformat()
     assert all(p['value'] == 22 for p in points)
     unknown = start + timedelta(hours=3)
-    db.upsert_samples([
+    seed_samples(db, [
         TelemetryPoint(device_id='d', source_type='z3k_heating_circuit', entity_id='h', metric_key='target_temp',
                        timestamp_utc=unknown, value_num=None, quality='invalid'),
     ])

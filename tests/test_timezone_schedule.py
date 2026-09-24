@@ -1,15 +1,15 @@
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from tests.ydb_support import make_runtime
 from zont_analyzer.application.period_schedule import schedule_signature, scheduled_periods
 from zont_analyzer.domain import QualityResult, Report
 from zont_analyzer.domain.periods import calendar_period
 from zont_analyzer.reports import render_html, render_text
-from zont_analyzer.runtime import build_runtime
 
 
 def test_equivalent_zont_offset_does_not_schedule_existing_week_again(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     analysis = runtime.analysis(no_ai=True)
     period = calendar_period('weekly', date(2026, 8, 31), 'Europe/Samara')
     signature = schedule_signature(analysis, period)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from typer.testing import CliRunner
 
@@ -25,7 +26,9 @@ class FailedWorker:
 
 
 def test_run_once_prints_success_and_returns_zero(tmp_path: Path, monkeypatch) -> None:
-    runtime = SimpleNamespace(config=SimpleNamespace(scheduler=SimpleNamespace(sync_every_minutes=5)))
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(scheduler=SimpleNamespace(sync_every_minutes=5)), db=Mock()
+    )
     monkeypatch.setattr("zont_analyzer.cli.build_runtime", lambda *_args: runtime)
     monkeypatch.setattr("zont_analyzer.cli.PilotService", SuccessfulWorker)
 
@@ -34,10 +37,13 @@ def test_run_once_prints_success_and_returns_zero(tmp_path: Path, monkeypatch) -
     assert result.exit_code == 0
     assert '"ok": true' in result.stdout
     assert "latest.html" in result.stdout
+    runtime.db.close.assert_called_once_with()
 
 
 def test_run_once_surfaces_cycle_failure_and_returns_nonzero(tmp_path: Path, monkeypatch) -> None:
-    runtime = SimpleNamespace(config=SimpleNamespace(scheduler=SimpleNamespace(sync_every_minutes=5)))
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(scheduler=SimpleNamespace(sync_every_minutes=5)), db=Mock()
+    )
     monkeypatch.setattr("zont_analyzer.cli.build_runtime", lambda *_args: runtime)
     monkeypatch.setattr("zont_analyzer.cli.PilotService", FailedWorker)
 
@@ -45,4 +51,4 @@ def test_run_once_surfaces_cycle_failure_and_returns_nonzero(tmp_path: Path, mon
 
     assert result.exit_code == 1
     assert "Worker cycle failed: RuntimeError: partial sync" in result.stderr
-
+    runtime.db.close.assert_called_once_with()

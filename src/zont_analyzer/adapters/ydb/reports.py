@@ -113,6 +113,15 @@ UPSERT INTO reports (kind, period_start, period_end, algorithm_version, id, payl
 VALUES ($kind, $start, $end, $version, $id, $payload, $revision);
 """
 
+_DELETE_REPORT = """
+DECLARE $kind AS Utf8;
+DECLARE $start AS Int64;
+DECLARE $end AS Int64;
+DECLARE $version AS Utf8;
+DELETE FROM reports WHERE kind = $kind AND period_start = $start
+  AND period_end = $end AND algorithm_version = $version;
+"""
+
 _GET_REVISION = """
 DECLARE $scope AS Utf8;
 SELECT revision FROM revisions WHERE scope = $scope;
@@ -151,8 +160,8 @@ _PUT_OUTBOX = """
 DECLARE $id AS Utf8;
 DECLARE $report_id AS Utf8;
 DECLARE $payload AS Utf8;
-UPSERT INTO notification_outbox (id, report_id, payload, state)
-VALUES ($id, $report_id, $payload, 'pending');
+UPSERT INTO notification_outbox (id, report_id, channel, payload, state, attempts)
+VALUES ($id, $report_id, 'log', $payload, 'pending', 0);
 """
 
 _PUT_PUBLICATION = """
@@ -188,6 +197,8 @@ class ReportRepository:
         expected_revision: int = 0,
         telemetry_scope: str | None = None,
         telemetry_revision: int | None = None,
+        source_revision: int | None = None,
+        job_fence: tuple[str, str, int] | None = None,
     ) -> int:
         if expected_revision < 0:
             raise ValueError("expected_revision must be non-negative")
@@ -212,8 +223,48 @@ class ReportRepository:
         now = self.clock()
 
         def save(tx: Transaction) -> int:
+            job_checkpoint: dict[str, Any] | None = None
+            if job_fence is not None:
+                job_key, owner, attempt = job_fence
+                job = _first(tx.execute(
+                    "DECLARE $key AS Utf8; SELECT owner,attempt,state,lease_until,checkpoint "
+                    "FROM jobs WHERE job_key=$key;",
+                    {"$key": job_key},
+                ))
+                if (job is None or _text(job["owner"]) != owner or int(job["attempt"]) != attempt
+                        or _text(job["state"]) != "active" or int(job["lease_until"]) <= self.clock()):
+                    raise ValueError("job ownership expired before report commit")
+                checkpoint_text = _text(job["checkpoint"])
+                job_checkpoint = json.loads(checkpoint_text) if checkpoint_text else {}
+                if (job_checkpoint.get("phase") != "analyze"
+                        or not isinstance(job_checkpoint.get("input_fingerprint"), str)
+                        or job_checkpoint.get("source_revision") != source_revision):
+                    raise ValueError("job input snapshot changed before report commit")
             row = _first(tx.execute(_GET_REPORT, key))
-            old_revision = int(row["revision"]) if row is not None else 0
+            by_id = tx.execute(_REPORT_BY_ID, {"$id": normalized.id})[0].rows
+            if len(by_id) > 1:
+                raise ValueError("report ID belongs to multiple periods")
+            previous = by_id[0] if by_id else None
+            previous_key: tuple[str, int, int, str] | None = (
+                _text(previous["kind"]) or "", int(previous["period_start"]),
+                int(previous["period_end"]), _text(previous["algorithm_version"]) or "",
+            ) if previous is not None else None
+            current_key = (normalized.kind, key["$start"], key["$end"], normalized.algorithm_version)
+            moving_season = previous_key is not None and previous_key != current_key
+            if moving_season:
+                assert previous_key is not None
+                if not (
+                    normalized.kind == "seasonal" and previous_key[0] == "seasonal"
+                    and previous_key[1] == _seconds(normalized.period_start, exact=True)
+                    and previous_key[3] == normalized.algorithm_version
+                    and previous_key[2] < _seconds(normalized.period_end, exact=True)
+                ):
+                    raise ValueError("report ID already belongs to a different period")
+            old_revision = int(previous["revision"]) if previous is not None else 0
+            if source_revision is not None:
+                current = _first(tx.execute(_GET_REVISION, {"$scope": "publication"}))
+                if (int(current["revision"]) if current is not None else 0) != source_revision:
+                    raise ValueError("inputs changed while report was calculated")
             if telemetry_scope is not None:
                 current = _first(tx.execute(_GET_REVISION, {"$scope": telemetry_scope}))
                 observed = int(current["revision"]) if current is not None else 0
@@ -223,18 +274,18 @@ class ReportRepository:
                 if _text(row["id"]) != normalized.id:
                     raise ValueError("report period already belongs to a different ID")
                 if _text(row["payload"]) == payload:
+                    if job_checkpoint is not None:
+                        self._save_job_checkpoint(tx, job_key, job_checkpoint, normalized)
                     return old_revision
             if old_revision != expected_revision:
                 raise ValueError("stale report revision")
-            by_id = tx.execute(_REPORT_BY_ID, {"$id": normalized.id})[0].rows
-            if any(
-                (_text(found["kind"]), int(found["period_start"]), int(found["period_end"]),
-                 _text(found["algorithm_version"]))
-                != (normalized.kind, key["$start"], key["$end"], normalized.algorithm_version)
-                for found in by_id
-            ):
-                raise ValueError("report ID already belongs to a different period")
             revision = old_revision + 1
+            if moving_season:
+                assert previous_key is not None
+                tx.execute(_DELETE_REPORT, {
+                    "$kind": previous_key[0], "$start": previous_key[1],
+                    "$end": previous_key[2], "$version": previous_key[3],
+                })
             tx.execute(_PUT_REPORT, {**key, "$id": normalized.id,
                                      "$payload": payload, "$revision": revision})
             for recommendation in normalized.recommendations:
@@ -250,6 +301,12 @@ class ReportRepository:
                     _text(existing["experiment"]) if existing is not None else None,
                     int(existing["updated_at"]) if existing is not None else now,
                 )
+                if existing is None:
+                    tx.execute(
+                        "DECLARE $id AS Utf8; DECLARE $created AS Int64; "
+                        "UPDATE recommendations SET created_at=$created WHERE id=$id;",
+                        {"$id": rec_id, "$created": now},
+                    )
             outbox_id = f"outbox:{normalized.id}:log"
             if _first(tx.execute(_GET_OUTBOX, {"$id": outbox_id})) is None:
                 tx.execute(_PUT_OUTBOX, {"$id": outbox_id,
@@ -260,9 +317,25 @@ class ReportRepository:
                 "$revision": publication_revision,
                 "$payload": _json({"report_id": normalized.id, "report_revision": revision}),
             })
+            if job_checkpoint is not None:
+                self._save_job_checkpoint(tx, job_key, job_checkpoint, normalized)
             return revision
 
         return self.db.transaction(save)
+
+    @staticmethod
+    def _save_job_checkpoint(
+        tx: Transaction, job_key: str, checkpoint: dict[str, Any], report: Report,
+    ) -> None:
+        saved = {
+            "phase": "saved", "report_id": report.id, "ai_used": report.ai_used,
+            "input_fingerprint": checkpoint["input_fingerprint"],
+        }
+        tx.execute(
+            "DECLARE $key AS Utf8; DECLARE $checkpoint AS Utf8; "
+            "UPDATE jobs SET checkpoint=$checkpoint WHERE job_key=$key;",
+            {"$key": job_key, "$checkpoint": _json(saved)},
+        )
 
     def report(self, report_id: str) -> Report | None:
         def read(tx: Transaction) -> Report | None:
@@ -272,6 +345,36 @@ class ReportRepository:
             return self._load(rows[0]) if rows else None
 
         return self.db.transaction(read)
+
+    def replace_context(self, original: Report, refreshed: Report, history_key: str, history_value: str) -> bool:
+        """Compare-and-set derived context without changing feedback or delivery state."""
+        if original.model_copy(update={"context": refreshed.context}) != refreshed:
+            raise ValueError("context refresh may only change report context")
+
+        def write(tx: Transaction) -> bool:
+            rows = tx.execute(_REPORT_BY_ID, {"$id": original.id})[0].rows
+            if not rows:
+                return True
+            row = rows[0]
+            payload = json.loads(_text(row["payload"]) or "{}")
+            if Report.model_validate(payload["report"]) != original:
+                return False
+            if original.context == refreshed.context:
+                return True
+            tx.execute(
+                "DECLARE $key AS Utf8; DECLARE $value AS Utf8; "
+                "UPSERT INTO app_meta (key,value) VALUES ($key,$value);",
+                {"$key": history_key, "$value": history_value},
+            )
+            payload["report"] = refreshed.model_dump(mode="json")
+            tx.execute(_PUT_REPORT, {
+                "$kind": row["kind"], "$start": row["period_start"], "$end": row["period_end"],
+                "$version": row["algorithm_version"], "$id": original.id,
+                "$payload": _json(payload), "$revision": int(row["revision"]) + 1,
+            })
+            return True
+
+        return self.db.transaction(write)
 
     def prior_reports(self, before: datetime, *, limit: int = 7) -> list[Report]:
         bound = max(0, min(limit, 7))

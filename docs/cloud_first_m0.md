@@ -272,19 +272,21 @@ Cloud-приложение получает настройки публикац�
 | Тарифы (`TariffRepository`) | `gas_tariffs`, `gas_tariff_audit` | Историю по области действия и месяцу начала, цену и валюту; запись с аудитом без подмены исторических настроек |
 | Настройки AI (`AISettingsRepository`) | `ai_settings_revisions` | Версии настроек, действующее значение и состояние до изменения |
 | Проверка моделей (`ModelReviewRepository`) | `model_review_state`, `model_review_runs`, `model_review_proposals` | Сроки, захват задания, результаты, предложения и решения; применение предложения вместе с новой версией настроек AI |
-| Задания и расходы (`JobRepository`, `UsageRepository`) | `jobs`, `llm_calls`, `notification_outbox` | Учёт вызовов и очередь уведомлений; добавить защиту от повторов, право выполнения задания и состояние неизвестного результата внешнего вызова — сейчас `jobs` для захвата не используется |
+| Задания и расходы (`JobRepository`, `UsageRepository`) | `jobs`, `llm_calls`, `notification_outbox` | Учёт вызовов и очередь уведомлений; защита от повторов, право выполнения задания и состояние неизвестного результата внешнего вызова реализуются в переносе М4 |
 | Версии и публикации (`RevisionRepository`, `PublicationRepository`) | `app_meta`, `publication_changes` | Признаки изменения периода, служебные данные, объединение повторных изменений в журнале, чтение порциями и отметку прогресса публикации без потерь при одновременной работе |
 
-Исходники: [основные таблицы и операции](../src/zont_analyzer/adapters/sqlite/database.py),
+Исходная SQLite-схема сохранена в [ветке old-stable](https://github.com/tupoybot/ZontAnalyzer/tree/old-stable/src/zont_analyzer/adapters/sqlite).
+Текущий перенос: [адаптеры YDB](../src/zont_analyzer/adapters/ydb/),
 [профиль и газ](../src/zont_analyzer/application/owner_context.py),
 [тарифы](../src/zont_analyzer/application/gas_tariffs.py),
 [настройки AI](../src/zont_analyzer/application/ai_settings.py),
 [проверка моделей](../src/zont_analyzer/application/model_review.py),
-[журнал публикаций](../src/zont_analyzer/adapters/sqlite/publication_journal.py).
+[журнал публикаций](../src/zont_analyzer/adapters/ydb/publication.py).
 
-`alembic_version` отдельно хранит версию структуры SQLite; текущая — `f1a2b3c4d5e6`.
-Для YDB нужен собственный порядок изменения структуры, а не запуск SQL-миграций
-SQLite без адаптации.
+`alembic_version` хранит версию структуры исходной SQLite — `f1a2b3c4d5e6`.
+Новая версия использует отдельную версию схемы YDB и проверку её контрольной суммы;
+при несовместимости требуется явная миграция. Alembic удалён из нового runtime.
+Ход проверки переноса описан в [М4](./cloud_first_m4.md).
 
 ### Форматы данных и проверка точности
 

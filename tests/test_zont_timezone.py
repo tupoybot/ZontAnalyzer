@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from tests.ydb_support import make_database
 from zont_analyzer.application.ingestion import IngestionService
 from zont_analyzer.application.timezone import apply_device_timezone
 from zont_analyzer.config import AppConfig
@@ -61,9 +62,18 @@ def test_home_timezone_remains_the_configured_fallback() -> None:
     assert config.home.timezone_provenance["source"] == "configuration_fallback"
 
 
-def test_runtime_uses_persisted_zont_timezone_for_windows_and_reports(tmp_path: Path) -> None:
+def test_runtime_uses_persisted_zont_timezone_for_windows_and_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    fixture_db = make_database(tmp_path)
+    settings = fixture_db.storage.config
+    monkeypatch.setenv("YDB_ENDPOINT", settings.endpoint)
+    monkeypatch.setenv("YDB_DATABASE", settings.database)
+    monkeypatch.setenv("YDB_NAMESPACE", settings.namespace)
+    monkeypatch.setenv("YDB_ANONYMOUS_CREDENTIALS", "1")
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("home:\n  timezone: UTC\nstorage:\n  path: state.sqlite3\n", encoding="utf-8")
+    config_path.write_text("home:\n  timezone: UTC\n", encoding="utf-8")
     runtime = build_runtime(config_path, tmp_path / "data")
     runtime.db.save_devices([{"device_id": "1", "timezone": 4}])
 
@@ -79,6 +89,8 @@ def test_runtime_uses_persisted_zont_timezone_for_windows_and_reports(tmp_path: 
 
     restarted = build_runtime(config_path, tmp_path / "data")
     assert restarted.config.home.effective_timezone == "Etc/GMT-4"
+    restarted.db.close()
+    runtime.db.close()
 
 
 class ChangingClient:
@@ -90,10 +102,7 @@ class ChangingClient:
 
 
 def test_discover_refreshes_timezone_and_invalid_data_falls_back(tmp_path: Path) -> None:
-    from zont_analyzer.adapters.sqlite import Database
-
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     config = AppConfig.model_validate({"home": {"timezone": "UTC"}})
     client = ChangingClient(4)
     service = IngestionService(db, client, config)

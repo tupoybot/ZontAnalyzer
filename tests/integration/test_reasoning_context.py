@@ -1,6 +1,7 @@
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from tests.ydb_support import make_runtime
 from zont_analyzer.adapters.openai.provider import (
     _StructuredAnalysisResult,
     _validate_structured_result,
@@ -9,11 +10,10 @@ from zont_analyzer.adapters.openai.provider import (
 from zont_analyzer.application.reasoning_context import reasoning_context
 from zont_analyzer.domain import DetectedEvent, QualityResult, Report
 from zont_analyzer.domain.reasoning import Hypothesis, TimeInterval
-from zont_analyzer.runtime import build_runtime
 
 
 def test_history_excludes_overlapping_and_future_reports_and_keeps_epistemic_scope(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     start = datetime(2026, 8, 4, tzinfo=UTC)
     quality = QualityResult(score=1, coverage_pct=100, max_gap_seconds=0, stuck_pct=0,
                             implausible_jumps=0, sample_count=4)

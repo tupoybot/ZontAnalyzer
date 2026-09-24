@@ -2,7 +2,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from zont_analyzer.adapters.sqlite import Database
+from tests.ydb_support import make_database, seed_samples
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.analytics.evidence import (
     NumericSample,
     SignalMetadata,
@@ -56,9 +57,8 @@ def test_no_setpoint_is_invented_before_first_known_state():
 
 
 def test_database_keeps_unknown_state_and_previous_command(tmp_path):
-    db = Database(tmp_path / "db.sqlite3")
-    db.initialize()
-    db.upsert_samples([
+    db: Database = make_database(tmp_path)
+    seed_samples(db, [
         TelemetryPoint(device_id="d", source_type="z3k_heating_circuit", entity_id="h", metric_key="target_temp",
                        timestamp_utc=START + timedelta(hours=h), value_num=value,
                        quality="invalid" if value is None else "valid")

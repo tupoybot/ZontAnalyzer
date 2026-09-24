@@ -4,15 +4,15 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from tests.ydb_support import make_runtime, seed_samples
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.period_schedule import run_period_schedule, scheduled_periods
 from zont_analyzer.domain import AnalysisResult
 from zont_analyzer.domain.periods import SeasonBoundaries, midnight
-from zont_analyzer.runtime import build_runtime
 
 
 def test_empty_database_schedule_is_deterministic_and_idempotent(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)
     today = date(2026, 9, 7)
 
@@ -27,7 +27,7 @@ def test_empty_database_schedule_is_deterministic_and_idempotent(tmp_path: Path)
 
 
 def test_schedule_uses_custom_owner_boundaries_and_keeps_current_season_incomplete(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     runtime.config.home.seasons = SeasonBoundaries(
         spring="02-15", summer="05-15", autumn="08-15", winter="11-15"
     )
@@ -41,7 +41,7 @@ def test_schedule_uses_custom_owner_boundaries_and_keeps_current_season_incomple
 
 
 def test_period_schedule_respects_limit_and_releases_work_for_next_catchup(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)
     today = date(2026, 9, 7)
 
@@ -56,7 +56,7 @@ def test_period_schedule_respects_limit_and_releases_work_for_next_catchup(tmp_p
 def test_regenerate_failure_keeps_stored_report_and_success_is_fresh_non_persisting(
     tmp_path: Path,
 ) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     original = AnalysisService(runtime.db, runtime.config).analyze_daily(
         date(2026, 9, 6), use_ai=False
     )
@@ -92,7 +92,7 @@ def test_regenerate_failure_keeps_stored_report_and_success_is_fresh_non_persist
 
 
 def test_current_season_checkpoint_stays_at_monday_until_next_completed_week(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)
     zone = ZoneInfo(runtime.config.home.timezone)
     for day in range(7, 14):
@@ -106,7 +106,7 @@ def test_current_season_checkpoint_stays_at_monday_until_next_completed_week(tmp
 
 
 def test_season_ends_midweek_without_waiting_and_new_season_waits_for_first_monday(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)
     periods = scheduled_periods(analysis, date(2026, 8, 1), date(2026, 9, 2))
     seasons = [item for item in periods if item.kind == "seasonal"]
@@ -120,7 +120,7 @@ def test_season_ai_runs_once_per_week_despite_fresh_daily_telemetry(tmp_path: Pa
 
     from zont_analyzer.domain import TelemetryPoint
 
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     runtime.config.analysis.minimum_quality_score = 0
     calls: list[str] = []
 
@@ -133,7 +133,7 @@ def test_season_ai_runs_once_per_week_despite_fresh_daily_telemetry(tmp_path: Pa
     run_period_schedule(runtime, analysis, date(2026, 9, 7), limit=100)
     assert calls.count("seasonal") == 1
     for day in range(8, 14):
-        runtime.db.upsert_samples([TelemetryPoint(
+        seed_samples(runtime.db, [TelemetryPoint(
             device_id="test", source_type="synthetic", entity_id="room", metric_key="temperature",
             timestamp_utc=datetime(2026, 9, day - 1, 12, tzinfo=UTC), value_num=21, unit="°C",
         )], {"room": "room_temperature"})
@@ -145,7 +145,7 @@ def test_season_ai_runs_once_per_week_despite_fresh_daily_telemetry(tmp_path: Pa
 
 @pytest.mark.parametrize("day", [7, 10])
 def test_weekly_schedule_preserves_manual_season_result(tmp_path: Path, day: int) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)
     fresh = analysis.analyze_period(analysis.seasonal_period(
         2026, "autumn", as_of=midnight(date(2026, 9, day), runtime.config.home.timezone),

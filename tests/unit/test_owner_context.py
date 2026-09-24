@@ -1,39 +1,42 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import inspect
 
-from zont_analyzer.adapters.sqlite.database import Database, DeviceRow, RecommendationRow, ReportRow
+from tests.ydb_support import make_database
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.application.owner_context import OwnerContextStore
+from zont_analyzer.domain.models import QualityResult, Report
 
 
 def _store(tmp_path: Path) -> tuple[Database, OwnerContextStore]:
-    db = Database(tmp_path / "owner.sqlite3")
-    db.initialize()
-    with db.session() as session:
-        session.add(DeviceRow(id="device", name="test", raw_json="{}"))
+    db = make_database(tmp_path)
+    db.save_devices([{"id": "device", "name": "test"}])
     return db, OwnerContextStore(db)
 
 
 def _report(
     db: Database, report_id: str, *, kind: str = "daily", day: int = 0, algorithm: str = "test", device: str = "device"
 ) -> None:
-    with db.session() as session:
-        session.add(
-            ReportRow(
-                id=report_id,
-                kind=kind,
-                period_start=day,
-                period_end=day + 86400,
-                canonical_json=f'{{"timezone":"Europe/Samara","context":{{"device_id":"{device}"}}}}',
-                generated_at=datetime.now(UTC),
-                algorithm_version=algorithm,
-            )
-        )
+    start = datetime.fromtimestamp(day, UTC)
+    report = Report(
+        id=report_id,
+        kind=kind,
+        period_start=start,
+        period_end=start + timedelta(days=1),
+        generated_at=datetime.now(UTC),
+        algorithm_version=algorithm,
+        timezone="Europe/Samara",
+        context={"device_id": device},
+        quality=QualityResult(
+            score=1, coverage_pct=100, max_gap_seconds=0, stuck_pct=0, implausible_jumps=0, sample_count=1
+        ),
+        summary="test",
+    )
+    db.reports.save_report(report, "test")
 
 
 def _manual(fields: dict[str, object], effective_from: str | None = None) -> dict[str, object]:
@@ -41,30 +44,6 @@ def _manual(fields: dict[str, object], effective_from: str | None = None) -> dic
     if effective_from is not None:
         payload["effective_from"] = effective_from
     return payload
-
-
-def test_migration_creates_owner_tables_and_preserves_feedback(tmp_path: Path) -> None:
-    db, _store_value = _store(tmp_path)
-    _report(db, "r1")
-    with db.session() as session:
-        session.add(
-            RecommendationRow(
-                id="feedback",
-                report_id="r1",
-                category="test",
-                priority="low",
-                status="rejected",
-                payload_json="{}",
-                rejection_reason="keep this",
-                created_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
-            )
-        )
-    db.initialize()
-    assert db.recommendation("feedback") is not None
-    assert {"owner_profile_revisions", "gas_readings", "gas_meter_boundaries", "gas_reading_audit"} <= set(
-        inspect(db.engine).get_table_names()
-    )
 
 
 def test_auto_provenance_is_not_the_auto_source_and_repeated_discovery_is_idempotent(tmp_path: Path) -> None:
@@ -148,11 +127,14 @@ def test_coordinates_require_exact_object_scalars_and_geographic_bounds(tmp_path
     [("48,25", "12,5"), ("48.25", "12.5"), (-48.25, "+12,5")],
 )
 def test_coordinates_accept_signed_numbers_with_comma_or_point(
-    tmp_path: Path, latitude: object, longitude: object,
+    tmp_path: Path,
+    latitude: object,
+    longitude: object,
 ) -> None:
     _, store = _store(tmp_path)
     result = store.update_profile(
-        "device", _manual({"coordinates": {"latitude": latitude, "longitude": longitude}}),
+        "device",
+        _manual({"coordinates": {"latitude": latitude, "longitude": longitude}}),
     )
     coordinates = result["fields"]["coordinates"]["value"]
     assert coordinates == {"latitude": float(str(latitude).replace(",", ".")), "longitude": 12.5}
@@ -220,7 +202,7 @@ def test_empty_profile_update_is_an_optional_noop_and_null_is_explicit_unknown(t
         store.profile("missing")
 
 
-def test_concurrent_writes_are_serialized_with_begin_immediate(tmp_path: Path) -> None:
+def test_concurrent_profile_writes_preserve_one_manual_revision(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
 
     def write() -> bool:

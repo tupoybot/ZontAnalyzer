@@ -4,8 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from zont_analyzer.adapters.sqlite import Database
-from zont_analyzer.adapters.sqlite.database import RecommendationRow
+from tests.ydb_support import make_database, seed_samples
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, TelemetryPoint
@@ -28,8 +27,7 @@ def _room_points(start: datetime) -> list[TelemetryPoint]:
 
 
 def test_recommendation_feedback_contains_rejection_and_latest_applied_note(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     service = AnalysisService(db, AppConfig())
 
     applied_report = service.analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -54,8 +52,7 @@ def test_recommendation_feedback_contains_rejection_and_latest_applied_note(tmp_
 
 
 def test_identical_applied_feedback_is_idempotent(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
     recommendation_id = report.recommendations[0].id
     assert recommendation_id is not None
@@ -64,19 +61,17 @@ def test_identical_applied_feedback_is_idempotent(tmp_path: Path) -> None:
     second = db.mark_applied(recommendation_id, "Проверено владельцем")
 
     assert second == first
-    with db.engine.connect() as connection:
-        count = connection.exec_driver_sql(
-            "SELECT count(*) FROM interventions WHERE recommendation_id = ?",
-            (recommendation_id,),
-        ).scalar_one()
+    count = db.storage.execute(
+        "DECLARE $id AS Utf8; SELECT COUNT(*) AS n FROM interventions WHERE recommendation_id=$id;",
+        {"$id": recommendation_id},
+    )[0].rows[0].n
     assert count == 1
 
 
 def test_stale_new_recommendation_becomes_ignored_idempotently_and_can_receive_late_feedback(
     tmp_path: Path,
 ) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     service = AnalysisService(db, AppConfig())
     old_report = service.analyze_daily(date(2026, 8, 1), use_ai=False)
     fresh_report = service.analyze_daily(date(2026, 8, 2), use_ai=False)
@@ -85,12 +80,13 @@ def test_stale_new_recommendation_becomes_ignored_idempotently_and_can_receive_l
     assert old_id is not None and fresh_id is not None
 
     reference = datetime(2026, 8, 5, tzinfo=UTC)
-    with db.session() as session:
-        old_row = session.get(RecommendationRow, old_id)
-        fresh_row = session.get(RecommendationRow, fresh_id)
-        assert old_row is not None and fresh_row is not None
-        old_row.created_at = reference - timedelta(hours=48, seconds=1)
-        fresh_row.created_at = reference - timedelta(hours=47)
+    for identifier, created in ((old_id, reference - timedelta(hours=48, seconds=1)),
+                                (fresh_id, reference - timedelta(hours=47))):
+        db.storage.execute(
+            "DECLARE $id AS Utf8; DECLARE $created AS Int64; "
+            "UPDATE recommendations SET created_at=$created WHERE id=$id;",
+            {"$id": identifier, "$created": int(created.timestamp() * 1_000_000)},
+        )
 
     first = db.expire_stale_recommendations(now=reference)
     old_view = db.recommendation(old_id)
@@ -128,21 +124,21 @@ def test_next_openai_packet_includes_owner_recommendation_feedback(tmp_path: Pat
             self.packets.append(packet)
             return AnalysisResult(summary="AI summary")
 
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     config = AppConfig.model_validate({"analysis": {"daily_ai_when_normal": True}})
     previous = AnalysisService(db, config).analyze_daily(date(2026, 8, 1), use_ai=False)
     recommendation = previous.recommendations[0]
     assert recommendation.id is not None
     owner_note = "Датчик исправен; тему пока закрыть и наблюдать"
     db.reject(recommendation.id, owner_note)
-    with db.session() as session:
-        row = session.get(RecommendationRow, recommendation.id)
-        assert row is not None
-        row.updated_at = datetime(2026, 8, 2, 8, tzinfo=UTC)
+    db.storage.execute(
+        "DECLARE $id AS Utf8; DECLARE $updated AS Int64; "
+        "UPDATE recommendations SET updated_at=$updated WHERE id=$id;",
+        {"$id": recommendation.id, "$updated": int(datetime(2026, 8, 2, 8, tzinfo=UTC).timestamp() * 1_000_000)},
+    )
 
     start = datetime(2026, 8, 1, 20, tzinfo=UTC)
-    db.upsert_samples(_room_points(start), {"room": "indoor_temperature"})
+    seed_samples(db, _room_points(start), {"room": "indoor_temperature"})
     analyst = CapturingAnalyst()
 
     report = AnalysisService(db, config, analyst).analyze_daily(date(2026, 8, 2))

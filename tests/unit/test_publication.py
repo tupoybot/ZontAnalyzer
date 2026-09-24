@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from tests.ydb_support import make_runtime
 from zont_analyzer.application import feedback, publication
 from zont_analyzer.application.feedback import publish_feedback_report
 from zont_analyzer.application.pilot import reports_directory
-from zont_analyzer.runtime import build_runtime
 
 
 def test_only_completed_existing_periods_are_published_and_latest_stays_daily(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     analysis = runtime.analysis(no_ai=True)
     day = analysis.analyze_daily(date(2026, 8, 3), use_ai=False)
     analysis.analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -47,7 +47,7 @@ def test_only_completed_existing_periods_are_published_and_latest_stays_daily(tm
 
 
 def test_empty_archive_and_incomplete_or_corrupt_exports_do_not_get_links(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     output = reports_directory(runtime)
     (output / "daily").mkdir(parents=True)
     (output / "daily/2026-08-01.json").write_text('{"partial":')
@@ -59,7 +59,7 @@ def test_empty_archive_and_incomplete_or_corrupt_exports_do_not_get_links(tmp_pa
 
 
 def test_failed_publication_keeps_manifest_and_latest_complete(tmp_path: Path, monkeypatch) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
     publication.publish_reports(runtime)
     output = reports_directory(runtime)
@@ -85,14 +85,14 @@ def test_failed_publication_keeps_manifest_and_latest_complete(tmp_path: Path, m
 
 
 def test_report_calculated_before_period_end_is_not_completed(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     report = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
     runtime.db.save_report(report.model_copy(update={"generated_at": report.period_start}), "partial")
     assert runtime.db.completed_reports(datetime(2026, 9, 1, tzinfo=UTC)) == []
 
 
 def test_feedback_publication_refreshes_only_requested_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     analysis = runtime.analysis(no_ai=True)
     daily = analysis.analyze_daily(date(2026, 8, 3), use_ai=False)
     weekly = analysis.analyze_week(2026, 31, use_ai=False)
@@ -117,7 +117,7 @@ def test_feedback_publication_refreshes_only_requested_report(tmp_path: Path, mo
 
 
 def test_feedback_can_create_first_calendar_publication(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     analysis = runtime.analysis(no_ai=True)
     old = analysis.analyze_daily(date(2026, 8, 1), use_ai=False)
     latest = analysis.analyze_daily(date(2026, 8, 3), use_ai=False)
@@ -130,7 +130,7 @@ def test_feedback_can_create_first_calendar_publication(tmp_path: Path) -> None:
 
 
 def test_feedback_publication_does_not_overwrite_newer_same_period_snapshot(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     report = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 3), use_ai=False)
     publication.publish_reports(runtime)
     newer = report.model_copy(update={
@@ -146,7 +146,7 @@ def test_feedback_publication_does_not_overwrite_newer_same_period_snapshot(tmp_
 
 @pytest.mark.parametrize("manifest_state", ["valid", "missing", "corrupt"])
 def test_old_day_feedback_preserves_latest_and_archive_index(tmp_path: Path, manifest_state: str) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     old = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
     latest = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 3), use_ai=False)
     publication.publish_reports(runtime)
@@ -173,7 +173,7 @@ def test_old_day_feedback_preserves_latest_and_archive_index(tmp_path: Path, man
 
 
 def test_feedback_on_superseded_report_or_initial_does_not_replace_archive(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     old = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 3), use_ai=False)
     newer = old.model_copy(update={
         "id": "new-report", "generated_at": old.generated_at + timedelta(seconds=1),

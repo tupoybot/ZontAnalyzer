@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.ydb_support import make_runtime
 from zont_analyzer.application.gas_cost import (
     calculate_gas_cost,
     format_cost,
@@ -9,7 +10,6 @@ from zont_analyzer.application.gas_cost import (
     value_volume_by_period_tariffs,
 )
 from zont_analyzer.domain import QualityResult, Report
-from zont_analyzer.runtime import build_runtime
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
 FEBRUARY = datetime(2026, 2, 1, tzinfo=UTC)
@@ -172,7 +172,7 @@ def test_refresh_cost_reads_stored_baseline_inside_database_session(tmp_path) ->
     from zont_analyzer.application.gas import GasService
     from zont_analyzer.application.gas_tariffs import GasTariffStore
 
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     GasTariffStore(runtime.db, "UTC").save(
         {"price": "8.01", "currency": "RUB", "effective_month": "2026-01"}
     )
@@ -231,7 +231,7 @@ def test_refresh_cost_reads_stored_baseline_inside_database_session(tmp_path) ->
 def test_refresh_cost_preserves_gas_and_ai_and_does_not_scan_without_tariffs(tmp_path, monkeypatch) -> None:
     from zont_analyzer.application.gas import GasService
 
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     service = GasService(runtime.db, runtime.config)
     monkeypatch.setattr(service, "window", lambda *_args, **_kwargs: pytest.fail("unexpected telemetry scan"))
     report = Report(
@@ -265,7 +265,7 @@ def test_currency_change_suppresses_comparable_window_money_effect(tmp_path) -> 
     from zont_analyzer.application.gas import GasService
     from zont_analyzer.application.gas_tariffs import GasTariffStore
 
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     tariffs = GasTariffStore(runtime.db, "UTC")
     tariffs.save({"price": "8", "currency": "RUB", "effective_month": "2026-01"})
     tariffs.save({"price": "2", "currency": "USD", "effective_month": "2026-02"})

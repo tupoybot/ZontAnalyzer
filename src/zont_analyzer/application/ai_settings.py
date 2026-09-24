@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Integer, Text, select, text
-from sqlalchemy.orm import Mapped, Session, mapped_column
-
-from zont_analyzer.adapters.sqlite.database import Base, Database, utcnow
+from zont_analyzer.adapters.ydb.model_settings import ModelSettingsStorage, ModelSettingsTransaction
 from zont_analyzer.config import AppConfig
+
+if TYPE_CHECKING:
+    from zont_analyzer.adapters.ydb.application import Database
 
 # Explicit Responses + strict output compatibility, verified 2026-09-08.
 # Unknown models remain usable from YAML; web changes require a supported contract.
@@ -29,14 +30,6 @@ _FIELDS = frozenset({
 })
 
 
-class AISettingsRevisionRow(Base):
-    __tablename__ = "ai_settings_revisions"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    values_json: Mapped[str] = mapped_column(Text)
-    before_json: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
 def validate_profile(model: str, effort: str) -> None:
     supported = MODEL_EFFORTS.get(model)
     if supported is None:
@@ -45,10 +38,15 @@ def validate_profile(model: str, effort: str) -> None:
         raise ValueError(f"Модель {model} не поддерживает глубину {effort}.")
 
 
+def _iso_us(value: int) -> str:
+    return datetime.fromtimestamp(value / 1_000_000, UTC).isoformat()
+
+
 class AISettingsStore:
     def __init__(self, db: Database, config: AppConfig):
         self.db = db
         self.config = config
+        self.storage = ModelSettingsStorage(db.storage)
 
     def _defaults(self) -> dict[str, Any]:
         ai = self.config.openai
@@ -59,11 +57,11 @@ class AISettingsStore:
             "review_enabled": ai.review_enabled, "review_interval_days": ai.review_interval_days,
         }
 
-    def _snapshot(self, session: Session) -> dict[str, Any]:
-        row = session.scalar(select(AISettingsRevisionRow).order_by(AISettingsRevisionRow.id.desc()).limit(1))
-        overrides = json.loads(row.values_json) if row else {}
+    def _snapshot(self, tx: ModelSettingsTransaction) -> dict[str, Any]:
+        row = tx.settings_head()
+        overrides = row["payload"].get("overrides", {}) if row else {}
         effective = self._defaults() | overrides
-        fingerprint = json.dumps({"revision": row.id if row else 0, "effective": effective}, sort_keys=True)
+        fingerprint = json.dumps({"revision": row["version"] if row else 0, "effective": effective}, sort_keys=True)
         return {
             "version": hashlib.sha256(fingerprint.encode()).hexdigest(),
             "effective": effective, "overridden": bool(overrides),
@@ -71,35 +69,40 @@ class AISettingsStore:
         }
 
     def snapshot(self) -> dict[str, Any]:
-        with self.db.session() as session:
-            return self._snapshot(session)
+        return self.storage.transaction(self._snapshot)
+
+    def snapshot_in_transaction(self, session: ModelSettingsTransaction) -> dict[str, Any]:
+        return self._snapshot(session)
 
     def view(self) -> dict[str, Any]:
-        with self.db.session() as session:
-            result = self._snapshot(session)
-            rows = session.scalars(select(AISettingsRevisionRow).order_by(AISettingsRevisionRow.id.desc()).limit(50))
+        def read(tx: ModelSettingsTransaction) -> dict[str, Any]:
+            result = self._snapshot(tx)
             result["history"] = [{
-                "id": row.id, "created_at": row.created_at.isoformat(),
-                "values": json.loads(row.values_json), "before": json.loads(row.before_json),
-            } for row in rows]
-            supported = self._supported_models(session)
-        result["models"] = [{"id": model, "efforts": list(efforts)} for model, efforts in supported.items()]
-        return result
+                "id": row["version"], "created_at": _iso_us(row["effective_at"]),
+                "values": row["payload"].get("overrides", {}),
+                "before": row["payload"].get("before", {}),
+            } for row in tx.settings_history(limit=50)]
+            supported = self._supported_models(tx)
+            result["models"] = [{"id": model, "efforts": list(efforts)}
+                                for model, efforts in supported.items()]
+            return result
+
+        return self.storage.transaction(read)
 
     @staticmethod
-    def _supported_models(session: Session) -> dict[str, tuple[str, ...]]:
-        from zont_analyzer.application.model_review import ModelReviewRunRow
-
+    def _supported_models(tx: ModelSettingsTransaction) -> dict[str, tuple[str, ...]]:
         supported = dict(MODEL_EFFORTS)
-        row = session.scalar(select(ModelReviewRunRow).where(
-            ModelReviewRunRow.status.in_(("proposal", "no_change")),
-            ModelReviewRunRow.started_at >= datetime.now(UTC) - timedelta(days=60),
-        ).order_by(ModelReviewRunRow.started_at.desc()).limit(1))
-        if row:
-            for fact in json.loads(row.catalog_json).get("models", []):
-                if (fact.get("responses_supported") is True and fact.get("structured_outputs_supported") is True
+        cutoff = datetime.now(UTC) - timedelta(days=60)
+        for run in tx.runs("installation", limit=50):
+            if (run.get("status") not in ("proposal", "no_change")
+                    or datetime.fromisoformat(run["started_at"]) < cutoff):
+                continue
+            for fact in run.get("catalog", {}).get("models", []):
+                if (fact.get("responses_supported") is True
+                        and fact.get("structured_outputs_supported") is True
                         and not fact.get("deprecated") and fact.get("reasoning_efforts")):
                     supported[fact["id"]] = tuple(fact["reasoning_efforts"])
+            break
         return supported
 
     def effective_config(self) -> AppConfig:
@@ -110,17 +113,17 @@ class AISettingsStore:
             }),
         })
 
-    def save(self, payload: dict[str, Any], *, session: Session | None = None) -> dict[str, Any]:
+    def save(
+        self, payload: dict[str, Any], *, session: ModelSettingsTransaction | None = None,
+    ) -> dict[str, Any]:
         if session is not None:
             return self._save(session, payload)
-        with self.db.session() as transaction:
-            transaction.execute(text("BEGIN IMMEDIATE"))
-            return self._save(transaction, payload)
+        return self.storage.transaction(lambda tx: self._save(tx, payload))
 
-    def _save(self, session: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    def _save(self, tx: ModelSettingsTransaction, payload: dict[str, Any]) -> dict[str, Any]:
         if set(payload) - {"expected_version", "values", "reset"}:
             raise ValueError("Неизвестные поля настроек AI.")
-        current = self._snapshot(session)
+        current = self._snapshot(tx)
         if payload.get("expected_version") != current["version"]:
             raise ValueError("Настройки уже изменились. Откройте их заново перед сохранением.")
         if payload.get("reset") is True:
@@ -142,14 +145,17 @@ class AISettingsStore:
                     raise ValueError("Некорректная модель или глубина рассуждения.")
             overrides = current["overrides"] | values
             effective = self._defaults() | overrides
-            supported = self._supported_models(session)
+            supported = self._supported_models(tx)
             for profile in ("daily", "review"):
                 if {f"{profile}_model", f"{profile}_reasoning_effort"} & values.keys():
                     model, effort = effective[f"{profile}_model"], effective[f"{profile}_reasoning_effort"]
                     if model not in supported or effort not in supported[model]:
                         raise ValueError(f"Для модели {model} глубина {effort} или совместимость не подтверждены.")
         if overrides != current["overrides"]:
-            session.add(AISettingsRevisionRow(values_json=json.dumps(overrides, sort_keys=True),
-                                             before_json=json.dumps(current["effective"], sort_keys=True)))
-            session.flush()
-        return self._snapshot(session)
+            row = tx.settings_head()
+            tx.put_settings(
+                (row["version"] if row else 0) + 1,
+                {"overrides": overrides, "before": current["effective"]},
+                time.time_ns() // 1_000,
+            )
+        return self._snapshot(tx)

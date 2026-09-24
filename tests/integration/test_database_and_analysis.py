@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import sqlite3
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from zont_analyzer.adapters.sqlite import Database
-from zont_analyzer.adapters.sqlite.database import Base
+from tests.ydb_support import make_database, seed_events, seed_samples
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.ingestion import IngestionService
 from zont_analyzer.config import AppConfig
@@ -29,15 +27,14 @@ def _points(start: datetime, values: list[float], *, entity: str, metric: str = 
 
 
 def test_upsert_is_idempotent_and_analysis_persists_report(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)  # local 2026-08-01 in Samara
     values = [22 + (0.1 if index % 2 else -0.1) for index in range(288)]
     points = list(_points(start, values, entity="room"))
-    assert db.upsert_samples(points, {"room": "indoor_temperature"}) == 288
-    assert db.upsert_samples(points, {"room": "indoor_temperature"}) == 288
+    assert seed_samples(db, points, {"room": "indoor_temperature"}) == 288
+    assert seed_samples(db, points, {"room": "indoor_temperature"}) == 288
     outside = list(_points(start, [5.0] * 288, entity="outside"))
-    assert db.upsert_samples(outside, {"outside": "outdoor_temperature"}) == 288
+    assert seed_samples(db, outside, {"outside": "outdoor_temperature"}) == 288
     assert db.status()["samples"] == 576
 
     config = AppConfig.model_validate({"preferences": {"target_temperature_c": 22}})
@@ -54,8 +51,7 @@ def test_upsert_is_idempotent_and_analysis_persists_report(tmp_path: Path) -> No
 
 
 def test_upsert_fills_unit_for_series_discovered_before_unit_was_known(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     timestamp = datetime(2026, 8, 1, tzinfo=UTC)
     point = TelemetryPoint(
         device_id="1",
@@ -65,9 +61,9 @@ def test_upsert_fills_unit_for_series_discovered_before_unit_was_known(tmp_path:
         timestamp_utc=timestamp,
         value_num=55,
     )
-    db.upsert_samples([point], {"radio": "humidity"})
+    seed_samples(db, [point], {"radio": "humidity"})
     point.unit = "%"
-    db.upsert_samples([point], {"radio": "humidity"})
+    seed_samples(db, [point], {"radio": "humidity"})
 
     assert db.list_series()[0]["unit"] == "%"
 
@@ -76,15 +72,14 @@ def test_upsert_fills_unit_for_series_discovered_before_unit_was_known(tmp_path:
 def test_comfort_analysis_uses_only_control_sensor_regardless_of_series_order(
     tmp_path: Path, control_first: bool
 ) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)
     control = (list(_points(start, [22.0] * 288, entity="control")), "control_indoor_temperature")
     technical = (list(_points(start, [35.0] * 288, entity="boiler-room")), "technical_temperature")
     room = (list(_points(start, [19.0] * 288, entity="bedroom")), "room_temperature")
     groups = [control, technical, room] if control_first else [room, technical, control]
     for points, role in groups:
-        db.upsert_samples(points, {points[0].entity_id: role})
+        seed_samples(db, points, {points[0].entity_id: role})
 
     report = AnalysisService(
         db,
@@ -101,11 +96,10 @@ def test_comfort_analysis_uses_only_control_sensor_regardless_of_series_order(
 
 
 def test_report_renders_compact_sensor_identity_and_return_origins(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)
     points = list(_points(start, [22.0] * 288, entity="living-room"))
-    db.upsert_samples(points, {"living-room": "control_indoor_temperature"})
+    seed_samples(db, points, {"living-room": "control_indoor_temperature"})
     control_series = next(item for item in db.list_series() if item["entity_id"] == "living-room")
     db.update_series_role(
         int(control_series["id"]),
@@ -128,7 +122,7 @@ def test_report_renders_compact_sensor_identity_and_return_origins(tmp_path: Pat
             value_num=31,
             unit="°C",
         )
-        db.upsert_samples([point], {entity: "return_temperature"})
+        seed_samples(db, [point], {entity: "return_temperature"})
         row = next(item for item in db.list_series() if item["entity_id"] == entity)
         db.update_series_role(
             int(row["id"]),
@@ -151,15 +145,14 @@ def test_report_renders_compact_sensor_identity_and_return_origins(tmp_path: Pat
 
 
 def test_temperature_above_setpoint_is_not_attributed_to_inactive_heating(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)
-    db.upsert_samples(
+    seed_samples(db,
         list(_points(start, [24.0] * 288, entity="room")),
         {"room": "indoor_temperature"},
     )
     burner = list(_points(start, [0.0] * 288, entity="boiler", metric="flame"))
-    db.upsert_samples(burner, {"boiler": "burner_activity"})
+    seed_samples(db, burner, {"boiler": "burner_activity"})
 
     config = AppConfig.model_validate({"preferences": {"target_temperature_c": 18}})
     report = AnalysisService(db, config).analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -174,8 +167,7 @@ def test_temperature_above_setpoint_is_not_attributed_to_inactive_heating(tmp_pa
 
 
 def test_low_quality_creates_observation_recommendation_and_lifecycle(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     config = AppConfig()
     report = AnalysisService(db, config).analyze_daily(date(2026, 8, 1), use_ai=False)
     assert report.recommendations[0].category == "observe_only"
@@ -191,8 +183,7 @@ def test_low_quality_creates_observation_recommendation_and_lifecycle(tmp_path: 
 
 
 def test_html_escapes_report_content(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
     report.summary = '<script>alert("x")</script>'
     recommendation_id = report.recommendations[0].id
@@ -209,8 +200,7 @@ def test_html_escapes_report_content(tmp_path: Path) -> None:
 
 
 def test_reliability_events_persist_and_uptime_is_prominent(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     start = datetime(2026, 7, 30, 20, tzinfo=UTC)
     points: list[TelemetryPoint] = []
     for index in range(3 * 24 * 12):
@@ -235,7 +225,7 @@ def test_reliability_events_persist_and_uptime_is_prominent(tmp_path: Path) -> N
                 ),
             ]
         )
-    db.upsert_samples(points)
+    seed_samples(db, points)
     restored = start + timedelta(hours=2)
     source = SourceEvent(
         id="restore",
@@ -243,7 +233,7 @@ def test_reliability_events_persist_and_uptime_is_prominent(tmp_path: Path) -> N
         event_type="ReconnectingBoiler",
         timestamp_utc=restored,
     )
-    assert db.upsert_source_events([source, source]) == 2
+    assert seed_events(db, [source, source]) == 2
     assert len(db.list_source_events(start, start + timedelta(days=3))) == 1
 
     report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -262,8 +252,7 @@ def test_reliability_events_persist_and_uptime_is_prominent(tmp_path: Path) -> N
 
 
 def test_stale_reliability_data_is_rendered_as_missing_fresh_data(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     telemetry_start = datetime(2026, 7, 20, 20, tzinfo=UTC)
     points: list[TelemetryPoint] = []
     for offset in range(3):
@@ -288,7 +277,7 @@ def test_stale_reliability_data_is_rendered_as_missing_fresh_data(tmp_path: Path
                 ),
             ]
         )
-    db.upsert_samples(points)
+    seed_samples(db, points)
 
     report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
     metrics = {item.name: item for item in report.metrics}
@@ -311,12 +300,11 @@ def test_stale_reliability_data_is_rendered_as_missing_fresh_data(tmp_path: Path
 def test_zont_freshness_uses_valid_telemetry_from_only_the_reliability_device(
     tmp_path: Path, same_device_has_fresh_temperature: bool
 ) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)
     end = start + timedelta(days=1)
     latest = end - timedelta(minutes=5)
-    db.upsert_samples(
+    seed_samples(db,
         [
             TelemetryPoint(
                 device_id="1",
@@ -372,7 +360,7 @@ def test_zont_freshness_uses_valid_telemetry_from_only_the_reliability_device(
                 unit="°C",
             )
         ]
-    db.upsert_samples(fresh_points)
+    seed_samples(db, fresh_points)
 
     report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
     zont_uptime = next(item for item in report.metrics if item.name == "zont_uptime_seconds")
@@ -382,8 +370,7 @@ def test_zont_freshness_uses_valid_telemetry_from_only_the_reliability_device(
 
 
 def test_uptime_renderer_does_not_wrap_days_after_99(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
     report.metrics.append(
         MetricValue(
@@ -422,8 +409,7 @@ def test_uptime_renderer_does_not_wrap_days_after_99(tmp_path: Path) -> None:
 
 
 def test_renderers_show_disabled_dhw_target_as_inactive(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     report = AnalysisService(db, AppConfig()).analyze_daily(date(2026, 8, 1), use_ai=False)
     report.context["dhw_interaction"] = {
         "dhw_circuit": {
@@ -446,10 +432,9 @@ def test_renderers_show_disabled_dhw_target_as_inactive(tmp_path: Path) -> None:
 
 
 def test_initial_report_uses_latest_sample_and_stable_id(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     latest = datetime(2026, 5, 27, 12, tzinfo=UTC)
-    db.upsert_samples(list(_points(latest, [21.0], entity="room")), {"room": "indoor_temperature"})
+    seed_samples(db, list(_points(latest, [21.0], entity="room")), {"room": "indoor_temperature"})
 
     first = AnalysisService(db, AppConfig()).analyze_initial(use_ai=False)
     second = AnalysisService(db, AppConfig()).analyze_initial(use_ai=False)
@@ -466,11 +451,10 @@ def test_openai_failure_keeps_deterministic_report(tmp_path: Path) -> None:
         def analyze(self, _packet):
             raise RuntimeError("offline")
 
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)
     values = [22 + (0.1 if index % 2 else -0.1) for index in range(288)]
-    db.upsert_samples(list(_points(start, values, entity="room")), {"room": "indoor_temperature"})
+    seed_samples(db, list(_points(start, values, entity="room")), {"room": "indoor_temperature"})
     config = AppConfig.model_validate(
         {
             "preferences": {"target_temperature_c": 22},
@@ -499,10 +483,9 @@ def test_openai_refresh_failure_reuses_last_valid_interpretation(tmp_path: Path,
         def analyze(self, _packet):
             raise RuntimeError("invalid structured output")
 
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)
-    db.upsert_samples(
+    seed_samples(db,
         list(_points(start, [22.0] * 288, entity="room")),
         {"room": "indoor_temperature"},
     )
@@ -530,18 +513,9 @@ def test_openai_refresh_failure_reuses_last_valid_interpretation(tmp_path: Path,
     assert refreshed.context["ai_interpretation_reuse"]["source_generated_at"] == first.generated_at.isoformat()
 
 
-def test_online_backup_passes_integrity_check(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
-    backup = db.backup(tmp_path / "backups")
-    assert backup.exists()
-    restored = Database(backup)
-    assert restored.integrity_check() == "ok"
-
 
 def test_analysis_integrates_dhw_episode_and_heating_return(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)
 
     def numeric_points(
@@ -612,7 +586,7 @@ def test_analysis_integrates_dhw_episode_and_heating_return(tmp_path: Path) -> N
         (text_points, "unknown"),
     ]
     for points, role in batches:
-        db.upsert_samples(points)
+        seed_samples(db, points)
         row = next(
             item
             for item in db.list_series()
@@ -631,8 +605,7 @@ def test_analysis_integrates_dhw_episode_and_heating_return(tmp_path: Path) -> N
 
 
 def test_analysis_filters_only_short_flame_pulse_without_flow_response(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     start = datetime(2026, 7, 31, 20, tzinfo=UTC)
     state_values = ["[]"] * 17
     state_values[1] = "['dhw', 'fl']"
@@ -663,7 +636,7 @@ def test_analysis_filters_only_short_flame_pulse_without_flow_response(tmp_path:
             for index, point in enumerate(points):
                 point.timestamp_utc = start + timedelta(minutes=index)
                 point.source_type = "z3k_boiler_adapter"
-        db.upsert_samples(points)
+        seed_samples(db, points)
         row = next(
             item
             for item in db.list_series()
@@ -698,93 +671,15 @@ def test_partial_sync_does_not_advance_cursor(tmp_path: Path) -> None:
         def normalize_events(self, _device_id, _events):
             return []
 
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
-    service = IngestionService(db, PartialClient(), AppConfig())  # type: ignore[arg-type]
+    db = make_database(tmp_path)
+    config = AppConfig.model_validate({"zont": {"history_data_types": ["temperature"]}})
+    service = IngestionService(db, PartialClient(), config)  # type: ignore[arg-type]
 
-    result = service.sync(backfill=timedelta(days=1), now=datetime(2026, 8, 1, tzinfo=UTC))
+    result = service.sync(backfill=timedelta(minutes=30), now=datetime(2026, 8, 1, tzinfo=UTC),
+                          max_requests=2)
 
     assert result["complete"] is False
     assert result["failed_windows"] == 1
+    assert result["requests"] == 2
     assert db.get_cursor("1", "temperature") is None
     assert db.get_cursor("1", "raw_events") == datetime(2026, 8, 1, tzinfo=UTC)
-
-
-def test_fresh_database_is_created_at_alembic_head(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    result = db.initialize()
-
-    assert result.previous_revision is None
-    assert result.revision == "f1a2b3c4d5e6"
-    assert result.backup_path is None
-    assert db.current_revision() == result.revision
-    assert db.status()["schema_revision"] == result.revision
-
-
-def test_legacy_create_all_database_is_backed_up_and_adopted(tmp_path: Path) -> None:
-    db_path = tmp_path / "state.sqlite3"
-    legacy = Database(db_path)
-    Base.metadata.create_all(legacy.engine)
-
-    db = Database(db_path)
-    result = db.initialize(tmp_path / "migration-backups")
-
-    assert result.previous_revision is None
-    assert result.adopted_legacy_schema is True
-    assert result.backup_path is not None
-    assert result.backup_path.exists()
-    assert sqlite3.connect(result.backup_path).execute("PRAGMA integrity_check").fetchone() == ("ok",)
-    assert db.current_revision() == result.revision
-
-    repeated = Database(db_path).initialize(tmp_path / "migration-backups")
-    assert repeated.previous_revision == result.revision
-    assert repeated.backup_path is None
-    assert repeated.adopted_legacy_schema is False
-
-
-def test_previous_version_is_backed_up_and_migrated_with_series_semantics(tmp_path: Path) -> None:
-    db_path = tmp_path / "state.sqlite3"
-    previous = Database(db_path)
-    previous._run_alembic(previous._migration_config(), "upgrade", "5a9ce2bd8b34")
-    with sqlite3.connect(db_path) as connection:
-        connection.execute(
-            """
-            INSERT INTO telemetry_series
-                (device_id, source_type, entity_id, metric_key, unit, display_name, role)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("1", "z3k_temperature", "return", "z3k_temperature", "°C", "Обратка", "return_temperature"),
-        )
-
-    upgraded = Database(db_path)
-    result = upgraded.initialize(tmp_path / "migration-backups")
-
-    assert result.previous_revision == "5a9ce2bd8b34"
-    assert result.revision == "f1a2b3c4d5e6"
-    assert result.backup_path is not None and result.backup_path.exists()
-    series = upgraded.list_series()[0]
-    assert series["confidence"] == 0.3
-    assert series["provenance"] == "unknown"
-    assert series["origin"] == "unknown"
-
-
-def test_unversioned_partial_schema_is_rejected(tmp_path: Path) -> None:
-    db_path = tmp_path / "state.sqlite3"
-    with sqlite3.connect(db_path) as connection:
-        connection.execute("CREATE TABLE devices (id TEXT PRIMARY KEY)")
-
-    db = Database(db_path)
-    with pytest.raises(RuntimeError, match="unversioned, incomplete schema"):
-        db.initialize()
-
-
-def test_unversioned_schema_with_wrong_shape_is_rejected(tmp_path: Path) -> None:
-    db_path = tmp_path / "state.sqlite3"
-    legacy = Database(db_path)
-    Base.metadata.create_all(legacy.engine)
-    with sqlite3.connect(db_path) as connection:
-        connection.execute("ALTER TABLE devices RENAME COLUMN name TO wrong_name")
-
-    db = Database(db_path)
-    with pytest.raises(RuntimeError, match="does not match the known legacy baseline"):
-        db.initialize()

@@ -3,17 +3,13 @@ from __future__ import annotations
 
 import json
 import math
-import os
-import tempfile
 from collections.abc import Iterable, Mapping
-from contextlib import suppress
 from datetime import datetime
 from hashlib import sha256
-from pathlib import Path
 from statistics import median
 from typing import Any
 
-from zont_analyzer.adapters.sqlite import Database
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.analytics.dhw import parse_opentherm_flags
 from zont_analyzer.analytics.series_semantics import is_setpoint_series
 from zont_analyzer.domain import Report
@@ -83,10 +79,11 @@ def cached_chart_data(db: Database, report: Report) -> dict[str, Any] | None:
     after that report is recomputed; a retained archive keeps the observations
     it was first published with until then.
     """
-    path, digest = _cache_path(db, report)
+    key, digest = _cache_key(report)
     try:
-        if path.exists():
-            cached = json.loads(path.read_text(encoding="utf-8"))
+        encoded = db.get_app_meta(key)
+        if encoded:
+            cached = json.loads(encoded)
             if (
                 isinstance(cached, Mapping)
                 and cached.get("schema_version") == CHART_DATA_SCHEMA_VERSION
@@ -98,12 +95,11 @@ def cached_chart_data(db: Database, report: Report) -> dict[str, Any] | None:
         pass
     data = build_chart_data(db, report)
     if data is not None:
-        with suppress(OSError):
-            _atomic_write_json(path, {
+        db.set_app_meta(key, json.dumps({
                 "schema_version": CHART_DATA_SCHEMA_VERSION,
                 "report_digest": digest,
                 "data": data,
-            })
+            }, ensure_ascii=False, separators=(",", ":")))
     return data
 
 
@@ -119,9 +115,9 @@ def rebind_chart_cache(db: Database, original: Report, refreshed: Report) -> boo
         return False
 
     try:
-        source_path, original_digest = _cache_path(db, original)
-        target_path, refreshed_digest = _cache_path(db, refreshed)
-        cached = json.loads(source_path.read_text(encoding="utf-8"))
+        source_key, original_digest = _cache_key(original)
+        target_key, refreshed_digest = _cache_key(refreshed)
+        cached = json.loads(db.get_app_meta(source_key) or "null")
         if not (
             isinstance(cached, Mapping)
             and cached.get("schema_version") == CHART_DATA_SCHEMA_VERSION
@@ -129,11 +125,11 @@ def rebind_chart_cache(db: Database, original: Report, refreshed: Report) -> boo
             and isinstance(cached.get("data"), Mapping)
         ):
             return False
-        _atomic_write_json(target_path, {
+        db.set_app_meta(target_key, json.dumps({
             "schema_version": CHART_DATA_SCHEMA_VERSION,
             "report_digest": refreshed_digest,
             "data": dict(cached["data"]),
-        })
+        }, ensure_ascii=False, separators=(",", ":")))
         return True
     except (OSError, ValueError, TypeError):
         return False
@@ -143,36 +139,19 @@ def _report_json_without_gas_context(report: Report) -> str:
     context = dict(report.context)
     for key in _GAS_CACHE_CONTEXT_KEYS:
         context.pop(key, None)
-    return report.model_copy(update={"context": context}).model_dump_json()
+    return _canonical_report_json(report.model_copy(update={"context": context}))
 
 
-def _cache_path(db: Database, report: Report) -> tuple[Path, str]:
-    digest = sha256(report.model_dump_json().encode("utf-8")).hexdigest()
+def _canonical_report_json(report: Report) -> str:
+    # Storage may reorder dictionary keys without changing any report facts.
+    return json.dumps(report.model_dump(mode="json"), ensure_ascii=False,
+                      sort_keys=True, separators=(",", ":"))
+
+
+def _cache_key(report: Report) -> tuple[str, str]:
+    digest = sha256(_canonical_report_json(report).encode("utf-8")).hexdigest()
     report_key = sha256(report.id.encode("utf-8")).hexdigest()
-    return db.path.parent / "chart-data-cache" / f"{report_key}.json", digest
-
-
-def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-            os.fchmod(output.fileno(), 0o600)
-            json.dump(payload, output, ensure_ascii=False, separators=(",", ":"))
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    except BaseException:
-        with suppress(FileNotFoundError):
-            os.unlink(temporary)
-        raise
+    return f"chart-data:v2:{report_key}:{digest}", digest
 
 
 def _selected_rows(report: Report, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

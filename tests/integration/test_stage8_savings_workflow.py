@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from tests.ydb_support import make_runtime, seed_samples
 from zont_analyzer.application.gas import GasService
 from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.domain import Prediction, Recommendation, TelemetryPoint
-from zont_analyzer.runtime import build_runtime
 
 
 def _outdoor_temperature(moment: datetime, boundaries: list[datetime], temperatures: list[float]) -> float:
@@ -22,7 +22,7 @@ def _modeled_volume(temperature: float, *, saving_m3: float = 0.0) -> float:
 
 
 def test_manual_intervention_prediction_is_frozen_then_checked_by_later_meter_readings(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     runtime.config.home.timezone = "UTC"
     runtime.config.analysis.modulation_capability_profile = "flame_zero_is_minimum"
     runtime.db.save_devices([{"id": "1", "name": "boiler"}])
@@ -63,7 +63,7 @@ def test_manual_intervention_prediction_is_frozen_then_checked_by_later_meter_re
             ),
         ))
         cursor += timedelta(minutes=10)
-    runtime.db.upsert_samples(points, roles={"outdoor": "outdoor_temperature"})
+    seed_samples(runtime.db, points, roles={"outdoor": "outdoor_temperature"})
 
     reports = {
         day: runtime.analysis(no_ai=True).analyze_daily(date(2026, 1, day), use_ai=False)

@@ -94,10 +94,8 @@ class NotificationsConfig(StrictModel):
 
 
 class StorageConfig(StrictModel):
-    backend: Literal["sqlite"] = "sqlite"
-    path: str = "zont-analyzer.sqlite3"
+    namespace: str = "application"
     warn_disk_usage_pct: int = Field(default=25, ge=1, le=95)
-    backup_dir: str = "backups"
 
 
 class ZontConfig(StrictModel):

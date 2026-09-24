@@ -2,7 +2,8 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import MethodType
 
-from zont_analyzer.adapters.sqlite import Database
+from tests.ydb_support import make_database, seed_samples
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.comparison_context import build_comparison_context, window_from_report
 from zont_analyzer.application.period_comparison import select_baseline
@@ -115,9 +116,7 @@ def _report(
 
 
 def _db(tmp_path: Path) -> Database:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
-    return db
+    return make_database(tmp_path)
 
 
 def _save(db: Database, report: Report) -> None:
@@ -270,17 +269,17 @@ def test_telemetry_revision_changes_only_for_new_or_corrected_data_and_invalidat
         device_id="1", source_type="synthetic", entity_id="room", metric_key="temperature",
         timestamp_utc=start, value_num=21.0, unit="°C",
     )
-    db.upsert_samples([point], {"room": "room_temperature"})
+    seed_samples(db, [point], {"room": "room_temperature"})
     end = start + timedelta(days=1)
     revision = db.period_data_revision(start, end)
     analysis = AnalysisService(db, AppConfig())
     period = calendar_period("daily", start.date(), analysis.config.home.timezone)
     signature_before = schedule_signature(analysis, period)
-    db.upsert_samples([point], {"room": "room_temperature"})
+    seed_samples(db, [point], {"room": "room_temperature"})
     assert db.period_data_revision(start, end) == revision
 
     corrected = point.model_copy(update={"value_num": 22.0})
-    db.upsert_samples([corrected], {"room": "room_temperature"})
+    seed_samples(db, [corrected], {"room": "room_temperature"})
     changed = db.period_data_revision(start, end)
     assert changed != revision
     assert schedule_signature(analysis, period) != signature_before

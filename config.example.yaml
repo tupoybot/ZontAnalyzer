@@ -45,9 +45,7 @@ notifications:
     enabled: false
 
 storage:
-  backend: sqlite
-  path: zont-analyzer.sqlite3
-  backup_dir: backups
+  namespace: application
 
 # Относительные пути разрешаются внутри ZONT_ANALYZER_DATA_DIR. Абсолютные пути поддерживаются
 # для подключённого каталога публикации; зависящие от окружения веб-пути здесь не задаются.

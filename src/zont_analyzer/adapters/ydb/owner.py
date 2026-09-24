@@ -11,6 +11,7 @@ from typing import Any
 import ydb  # type: ignore[import-untyped]
 
 from .database import Transaction, YdbDatabase
+from .owner_data import OwnerDataMixin
 from .telemetry import bump_revision, encode, next_id
 
 
@@ -52,7 +53,7 @@ def _page_size(limit: int) -> int:
     return limit
 
 
-class OwnerRepository:
+class OwnerRepository(OwnerDataMixin):
     """Stores effective profile history, gas readings, tariffs and AI choices."""
 
     def __init__(self, db: YdbDatabase) -> None:

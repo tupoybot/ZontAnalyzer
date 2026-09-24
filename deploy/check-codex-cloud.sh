@@ -10,6 +10,10 @@ cd "$ROOT"
 export PYTHONDONTWRITEBYTECODE=1
 export RUFF_CACHE_DIR="$TMP/ruff"
 export MYPY_CACHE_DIR="$TMP/mypy"
+if [ -z "${YDB_TEST_ENDPOINT:-}" ]; then
+    export ZONT_SKIP_YDB_TESTS=1
+    echo 'No YDB endpoint: storage integration tests will be skipped; Docker/CI acceptance remains required.' >&2
+fi
 
 "$VENV/bin/ruff" check .
 "$VENV/bin/mypy" src/zont_analyzer

@@ -131,6 +131,32 @@ class JobLeaseRepository:
 
         return self.db.transaction(take)
 
+    def reopen_completed(
+        self, job_key: str, owner: str, lease_seconds: int,
+        expected_checkpoint: str | None, input_fingerprint: str, *, force: bool = False,
+    ) -> JobLease | None:
+        """Reopen a completed period only if its recorded inputs have changed."""
+        if not job_key or not owner or not input_fingerprint or lease_seconds <= 0:
+            raise ValueError("job, owner, fingerprint and positive lease are required")
+
+        def reopen(tx: Transaction) -> JobLease | None:
+            now = self.clock()
+            row = _first(tx.execute(_GET_JOB, {"$job_key": job_key}))
+            old = _job(row) if row is not None else None
+            if old is None or old.state != "done" or old.checkpoint != expected_checkpoint:
+                return None
+            checkpoint = json.loads(old.checkpoint) if old.checkpoint else {}
+            if not force and checkpoint.get("input_fingerprint") == input_fingerprint:
+                return None
+            lease = JobLease(
+                job_key, owner, old.attempt + 1, now + lease_seconds * 1_000_000,
+                "active", json.dumps({"phase": "collect"}, sort_keys=True),
+            )
+            self._put(tx, lease)
+            return lease
+
+        return self.db.transaction(reopen)
+
     def renew(
         self, job_key: str, owner: str, attempt: int, lease_seconds: int
     ) -> JobLease | None:
@@ -183,6 +209,18 @@ class JobLeaseRepository:
             return True
 
         return self.db.transaction(finish)
+
+    def release(self, job_key: str, owner: str, attempt: int) -> bool:
+        """Release a reusable lease only while its fencing token is current."""
+        def release(tx: Transaction) -> bool:
+            now = self.clock()
+            old = self._owned_active(tx, job_key, owner, attempt, now)
+            if old is None:
+                return False
+            self._put(tx, JobLease(job_key, owner, attempt, now, "released", old.checkpoint))
+            return True
+
+        return self.db.transaction(release)
 
     @staticmethod
     def _owned_active(

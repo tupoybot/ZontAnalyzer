@@ -15,9 +15,7 @@ from hashlib import sha256
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, update
-
-from zont_analyzer.adapters.sqlite.database import AppMetaRow, Database, ReportRow
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.analytics.dhw import parse_opentherm_flags
 from zont_analyzer.analytics.gas import (
     ALGORITHM_VERSION,
@@ -29,7 +27,7 @@ from zont_analyzer.analytics.gas import (
     integrate_exposure,
 )
 from zont_analyzer.analytics.series_semantics import is_setpoint_series
-from zont_analyzer.application.owner_context import GasReadingRow, OwnerContextStore
+from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import Report
 
@@ -44,6 +42,18 @@ def _json(value: Any) -> str:
 
 def _hash(value: Any) -> str:
     return sha256(_json(value).encode()).hexdigest()[:24]
+
+
+def _model_reading(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep the historical model fingerprint over semantic meter fields."""
+    updated = row['updated_at']
+    if not isinstance(updated, datetime):
+        raise TypeError('gas reading timestamp must be a datetime')
+    return {
+        'id': row['id'], 'day': row['day'], 'value_m3': row['value_m3'],
+        'segment': row['segment'],
+        'updated_at': str(updated.astimezone(UTC).replace(tzinfo=None)),
+    }
 
 
 def _utc(day: date, timezone: str, hour: int = 0) -> datetime:
@@ -70,11 +80,7 @@ class GasService:
         self.fields = {key: value for key, value in profile.get('fields', {}).items()
                        if key in {'gas_min_m3h', 'gas_max_m3h', 'has_gas_stove', 'boiler_model',
                                   'nominal_power_kw', 'installation_notes'}}
-        with db.session() as session:
-            self.readings = [dict(id=r.id, day=r.reading_day, value_m3=r.value_m3, segment=r.meter_segment,
-                                  updated_at=str(r.updated_at))
-                             for r in session.scalars(select(GasReadingRow).where(
-                                 GasReadingRow.device_id == 'installation').order_by(GasReadingRow.reading_day))]
+        self.readings = [_model_reading(row) for row in OwnerContextStore(db).gas_readings_for_analysis()]
         self._windows: dict[tuple[datetime, datetime], dict[str, Any]] = {}
         self._models: dict[str, Any] = {}
         self._cost_slices: dict[
@@ -553,19 +559,10 @@ class GasService:
                 )
 
     def _stored_gas(self, start: datetime, end: datetime) -> dict[str, Any] | None:
-        with self.db.session() as session:
-            canonical = session.scalar(
-                select(ReportRow.canonical_json)
-                .where(
-                    ReportRow.period_start == int(start.timestamp()),
-                    ReportRow.period_end == int(end.timestamp()),
-                )
-                .order_by(ReportRow.generated_at.desc())
-                .limit(1)
-            )
-        if canonical is None:
+        report = self.db.report_for_period(start, end)
+        if report is None:
             return None
-        gas = Report.model_validate_json(canonical).context.get('gas')
+        gas = report.context.get('gas')
         return dict(gas) if isinstance(gas, dict) else None
 
     @staticmethod
@@ -766,23 +763,11 @@ class GasService:
         return self.refresh_cost(result)
 
     def persist_refresh(self, original: Report, refreshed: Report) -> bool:
-        with self.db.session() as session:
-            # Preserve revisions without touching recommendation lifecycle, outbox,
-            # generation time, or an AI regeneration concurrently replacing the row.
-            old = session.get(ReportRow, original.id)
-            if old is None:
-                return True
-            if Report.model_validate_json(old.canonical_json) != original:
-                return False
-            if original.context == refreshed.context:
-                return True
-            revision = _hash(original.context.get('gas'))
-            session.merge(AppMetaRow(key=f'gas-report-revision:{original.id}:{revision}',
-                                     value=_json(original.context.get('gas'))))
-            changed = session.execute(update(ReportRow).where(
-                ReportRow.id == original.id, ReportRow.canonical_json == old.canonical_json,
-            ).values(canonical_json=refreshed.model_dump_json()))
-            succeeded = bool(getattr(changed, "rowcount", 0))
+        revision = _hash(original.context.get('gas'))
+        succeeded = self.db.reports.replace_context(
+            original, refreshed, f'gas-report-revision:{original.id}:{revision}',
+            _json(original.context.get('gas')),
+        )
         if succeeded:
             from zont_analyzer.reports.chart_data import rebind_chart_cache
 

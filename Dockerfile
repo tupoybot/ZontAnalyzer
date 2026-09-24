@@ -9,12 +9,11 @@ RUN groupadd --system --gid 10001 zont \
     && useradd --system --uid 10001 --gid zont --home-dir /app zont
 COPY pyproject.toml README.md ./
 COPY src ./src
-COPY alembic.ini ./
-COPY migrations ./migrations
 RUN pip install --no-cache-dir .
 
-# The accepted SQLite application remains available for regression comparison.
-FROM package AS legacy
+# Native YDB CLI for local checks and isolated data acceptance.
+FROM package AS cli
+LABEL org.zont.runtime="ydb-cli"
 RUN mkdir -p /data /app/.access /config /publish \
     && chown -R 10001:10001 /data /app/.access /publish
 USER zont
@@ -22,7 +21,7 @@ VOLUME ["/data"]
 ENTRYPOINT ["zont-analyzer", "--data-dir", "/data"]
 CMD ["run"]
 
-FROM legacy AS test
+FROM cli AS test
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*

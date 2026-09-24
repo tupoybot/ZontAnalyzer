@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from tests.ydb_support import make_database
 from zont_analyzer.domain import QualityResult, Report
 from zont_analyzer.reports import chart_data
 from zont_analyzer.reports.charts import render_charts
@@ -114,8 +115,7 @@ def test_requested_panel_can_be_rendered_independently() -> None:
 
 
 def test_rebind_chart_cache_reuses_packet_for_gas_only_refresh(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    db = chart_data.Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     original = _report()
     original.context.update({"gas": {"coefficient": 1}, "calculation_version": "v1"})
     refreshed = original.model_copy(deep=True)
@@ -134,8 +134,7 @@ def test_rebind_chart_cache_reuses_packet_for_gas_only_refresh(tmp_path, monkeyp
 
 
 def test_rebind_chart_cache_refuses_non_gas_changes(tmp_path) -> None:
-    db = chart_data.Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     original = _report()
     refreshed = original.model_copy(update={"summary": "changed"})
 
@@ -144,13 +143,11 @@ def test_rebind_chart_cache_refuses_non_gas_changes(tmp_path) -> None:
 
 @pytest.mark.parametrize("cache_state", ["missing", "corrupt"])
 def test_rebind_chart_cache_handles_missing_or_corrupt_cache(tmp_path, cache_state) -> None:
-    db = chart_data.Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     original = _report()
     refreshed = original.model_copy(update={"context": {"gas": {"value": 1}}})
     if cache_state == "corrupt":
-        path, _digest = chart_data._cache_path(db, original)
-        path.parent.mkdir(parents=True)
-        path.write_text("not json", encoding="utf-8")
+        key, _digest = chart_data._cache_key(original)
+        db.set_app_meta(key, "not json")
 
     assert chart_data.rebind_chart_cache(db, original, refreshed) is False

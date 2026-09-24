@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from zont_analyzer.config import AppConfig
 
 if TYPE_CHECKING:
-    from zont_analyzer.adapters.sqlite import Database
+    from zont_analyzer.adapters.ydb.application import Database
 
 _MIN_OFFSET = -12
 _MAX_OFFSET = 14

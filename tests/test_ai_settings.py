@@ -5,15 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from zont_analyzer.adapters.sqlite import Database
+from tests.ydb_support import make_database
 from zont_analyzer.application.ai_settings import AISettingsStore
 from zont_analyzer.config import AppConfig
 
 
 @pytest.fixture
 def store(tmp_path: Path) -> AISettingsStore:
-    db = Database(tmp_path / "settings.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     return AISettingsStore(db, AppConfig())
 
 

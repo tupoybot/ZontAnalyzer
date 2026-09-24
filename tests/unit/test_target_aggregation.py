@@ -3,19 +3,19 @@ from pathlib import Path
 
 import pytest
 
+from tests.ydb_support import make_runtime, seed_samples
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.domain import QualityResult, Report, TelemetryPoint
 from zont_analyzer.domain.periods import calendar_period
 from zont_analyzer.reports import render_html, render_text
 from zont_analyzer.reports.presentation import kpis, period_target
-from zont_analyzer.runtime import build_runtime
 
 
 @pytest.mark.parametrize("kind", ["weekly", "monthly", "seasonal"])
 def test_period_mean_uses_historical_duration_not_last_snapshot_or_present_override(
     tmp_path: Path, kind: str,
 ) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     runtime.config.home.timezone = "UTC"
     runtime.config.preferences.target_temperature_c = 26
     analysis = AnalysisService(runtime.db, runtime.config)
@@ -30,7 +30,7 @@ def test_period_mean_uses_historical_duration_not_last_snapshot_or_present_overr
     ) for hour in range(hours)]
     # A snapshot at the next period's boundary must not affect this period.
     points.append(points[-1].model_copy(update={"timestamp_utc": period.observed_end, "value_num": 30}))
-    runtime.db.upsert_samples(points, {"target": "target_temperature"})
+    seed_samples(runtime.db, points, {"target": "target_temperature"})
 
     report = analysis.analyze_period(period, use_ai=False)
     expected = (20 * 48 + 24 * (hours - 48)) / hours
@@ -42,11 +42,11 @@ def test_period_mean_uses_historical_duration_not_last_snapshot_or_present_overr
 
 
 def test_late_single_snapshot_cannot_become_whole_period_mean(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     runtime.config.home.timezone = "UTC"
     analysis = AnalysisService(runtime.db, runtime.config)
     period = calendar_period("weekly", date(2026, 8, 31), "UTC")
-    runtime.db.upsert_samples([TelemetryPoint(
+    seed_samples(runtime.db, [TelemetryPoint(
         device_id="1", source_type="synthetic", entity_id="target", metric_key="temperature",
         timestamp_utc=period.observed_end - timedelta(hours=1), value_num=24, unit="°C",
     )], {"target": "target_temperature"})

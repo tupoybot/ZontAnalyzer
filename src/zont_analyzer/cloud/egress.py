@@ -9,12 +9,71 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
 
 MAX_BYTES = 65536
+MAX_REPORT_REQUEST_BYTES = 524_288
+MAX_REPORT_RESPONSE_BYTES = 8_388_608
+
+
+class ReportTransport(httpx.BaseTransport):
+    """Route only approved report API calls, with bounded bodies and no ambient proxy."""
+
+    def __init__(
+        self, proxy_port: int = 1080, *, direct: httpx.BaseTransport | None = None,
+        proxied: httpx.BaseTransport | None = None,
+    ) -> None:
+        if not 1024 <= proxy_port <= 65535:
+            raise ValueError("invalid proxy port")
+        self.direct = direct or httpx.HTTPTransport(trust_env=False)
+        self.proxied = proxied or httpx.HTTPTransport(
+            proxy=f"http://127.0.0.1:{proxy_port}", trust_env=False,
+        )
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        target = request.url
+        if (target.scheme != "https" or target.port not in (None, 443)
+                or target.username or target.password or target.query or target.fragment):
+            raise ValueError("destination denied")
+        path = target.path
+        if target.host == "my.zont.online" and request.method == "POST" and path in {
+            "/api/devices", "/api/load_data", "/api/raw_events",
+        }:
+            transport = self.direct
+        elif target.host == "api.openai.com" and (
+            request.method == "POST" and path == "/v1/responses"
+            or request.method == "GET" and path.startswith("/v1/models/")
+        ):
+            transport = self.proxied
+        else:
+            raise ValueError("destination denied")
+        body = bytearray()
+        for chunk in cast(httpx.SyncByteStream, request.stream):
+            body.extend(chunk)
+            if len(body) > MAX_REPORT_REQUEST_BYTES:
+                raise ValueError("request byte limit")
+        bounded = httpx.Request(request.method, target, headers=request.headers, content=bytes(body))
+        response = transport.handle_request(bounded)
+        try:
+            if 300 <= response.status_code < 400:
+                raise ValueError("redirect denied")
+            content = bytearray()
+            for chunk in response.iter_bytes():
+                content.extend(chunk)
+                if len(content) > MAX_REPORT_RESPONSE_BYTES:
+                    raise ValueError("response byte limit")
+            return httpx.Response(response.status_code, headers=response.headers,
+                                  content=bytes(content), request=request)
+        finally:
+            response.close()
+
+    def close(self) -> None:
+        self.direct.close()
+        if self.proxied is not self.direct:
+            self.proxied.close()
 
 
 class UpstreamError(RuntimeError):

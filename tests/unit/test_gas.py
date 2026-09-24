@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -16,8 +16,21 @@ from zont_analyzer.analytics.gas import (
     integrate_exposure,
     integrate_flame,
 )
+from zont_analyzer.application.gas import _model_reading
 
 START = datetime(2025, 1, 1)
+
+
+def test_model_reading_keeps_old_stable_fingerprint_shape() -> None:
+    reading = {
+        "id": "reading-1", "day": "2026-01-01", "value_m3": "100.5",
+        "meter_segment": "reset-1", "segment": "reset-1",
+        "updated_at": datetime(2026, 1, 1, 15, 4, 5, 123456, tzinfo=timezone(timedelta(hours=3))),
+    }
+    assert _model_reading(reading) == {
+        "id": "reading-1", "day": "2026-01-01", "value_m3": "100.5",
+        "segment": "reset-1", "updated_at": "2026-01-01 12:04:05.123456",
+    }
 
 
 def interval(

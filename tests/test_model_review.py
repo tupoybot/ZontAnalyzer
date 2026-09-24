@@ -5,15 +5,17 @@ from pathlib import Path
 
 import pytest
 
+from tests.ydb_support import make_database
 from zont_analyzer.adapters.openai.model_catalog import (
     CatalogSnapshot,
     ModelFact,
     parse_deprecations_html,
     parse_model_markdown,
 )
-from zont_analyzer.adapters.sqlite.database import Database
+from zont_analyzer.adapters.ydb.application import Database
+from zont_analyzer.adapters.ydb.model_settings import ModelSettingsStorage
 from zont_analyzer.application.ai_settings import AISettingsStore
-from zont_analyzer.application.model_review import ModelReviewProposalRow, ModelReviewRunRow, ModelReviewStore
+from zont_analyzer.application.model_review import ModelReviewStore
 from zont_analyzer.config import AppConfig, OpenAIConfig
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -37,9 +39,7 @@ class Catalog:
 
 
 def _db(tmp_path: Path) -> Database:
-    db = Database(tmp_path / "review.sqlite3")
-    db.initialize(tmp_path / "backups")
-    return db
+    return make_database(tmp_path)
 
 
 def _settings(enabled: bool = True) -> dict[str, object]:
@@ -126,22 +126,27 @@ def test_quality_must_be_comparable_before_cheaper_candidate_is_proposed(tmp_pat
 
 def test_state_retires_persisted_price_only_proposal_without_network(tmp_path: Path) -> None:
     db = _db(tmp_path)
-    with db.session() as session:
-        session.add(ModelReviewRunRow(
-            id="legacy-run", scope="installation", started_at=NOW, trigger="scheduled", status="no_change",
-            settings_version="settings-v1", settings_json="{}",
-        ))
-        session.flush()
-        session.add(ModelReviewProposalRow(
-            id="legacy-price-only", run_id="legacy-run", settings_version="settings-v1",
-            profile="daily", current_model="gpt-5.6-terra", candidate_model="gpt-5.6-luna",
-            recommendation_json='{"reason":"published_candidate_requires_evaluation",'
-            '"requires_evaluation":true,"evaluation":null}',
-        ))
+    storage = ModelSettingsStorage(db.storage)
+    def seed(tx: object) -> None:
+        tx.put_run({
+            "id": "legacy-run", "scope": "installation", "started_at": NOW.isoformat(),
+            "started_at_us": int(NOW.timestamp()) * 1_000_000, "finished_at": NOW.isoformat(),
+            "trigger": "scheduled", "status": "no_change", "settings_version": "settings-v1",
+            "settings": {}, "sources": [], "catalog": {}, "result": {}, "error": None,
+        })
+        tx.put_proposal({
+            "id": "legacy-price-only", "run_id": "legacy-run", "status": "open",
+            "settings_version": "settings-v1", "profile": "daily",
+            "current_model": "gpt-5.6-terra", "candidate_model": "gpt-5.6-luna",
+            "recommendation": {"reason": "published_candidate_requires_evaluation",
+                               "requires_evaluation": True, "evaluation": None},
+            "created_at": NOW.isoformat(), "decided_at": None,
+            "decision_note": None, "version": 1,
+        })
+    storage.transaction(seed)
     store = ModelReviewStore(db, Catalog(_snapshot()))
     assert store.state(_settings())["proposals"] == []
-    with db.session() as session:
-        assert session.get(ModelReviewProposalRow, "legacy-price-only").status == "superseded"
+    assert storage.transaction(lambda tx: tx.proposal("legacy-price-only"))["status"] == "superseded"
 
 
 def test_malformed_catalog_retries_three_times_without_success(tmp_path: Path) -> None:

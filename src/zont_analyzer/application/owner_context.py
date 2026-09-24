@@ -1,78 +1,44 @@
-"""Auditable local storage for owner equipment context and gas meter readings.
-
-This module never writes to ZONT. Automatic discoveries are recorded as
-``source=auto`` with their read-only API path in ``provenance``; owner edits
-are separate manual revisions. SQLite writes start with ``BEGIN IMMEDIATE`` so
-concurrent requests cannot validate stale meter state and both commit it.
-"""
+"""Owner profile and gas meter rules backed by the YDB owner repository."""
 
 from __future__ import annotations
 
 import json
 import math
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
-from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Boolean, DateTime, String, Text, UniqueConstraint, select
-from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from zont_analyzer.adapters.sqlite.database import Base, Database, DeviceRow, ReportRow, utcnow
-
-
-class OwnerProfileRevisionRow(Base):
-    __tablename__ = "owner_profile_revisions"
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    device_id: Mapped[str] = mapped_column(String, index=True)
-    field: Mapped[str] = mapped_column(String, index=True)
-    value_json: Mapped[str] = mapped_column(Text)
-    source: Mapped[str] = mapped_column(String)
-    provenance: Mapped[str] = mapped_column(String)
-    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    is_reset: Mapped[bool] = mapped_column(Boolean, default=False)
+def utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
-class GasReadingRow(Base):
-    __tablename__ = "gas_readings"
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    device_id: Mapped[str] = mapped_column(String, index=True)
-    report_id: Mapped[str] = mapped_column(String, index=True)
-    reading_day: Mapped[str] = mapped_column(String)
-    meter_segment: Mapped[str] = mapped_column(String, default="default")
-    value_m3: Mapped[str] = mapped_column(String)
-    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    __table_args__ = (UniqueConstraint("device_id", "reading_day"),)
+def _when(value: datetime | str | int | None) -> datetime:
+    if value is None:
+        return utcnow()
+    if isinstance(value, int):
+        return datetime.fromtimestamp(value / 1_000_000, UTC)
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("effective_from must be an ISO date or datetime") from exc
+    if not isinstance(value, datetime):
+        raise ValueError("effective_from must be an ISO date or datetime")
+    return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
 
 
-class GasMeterBoundaryRow(Base):
-    """An explicit reset/replacement boundary independent of a reading row."""
-
-    __tablename__ = "gas_meter_boundaries"
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    device_id: Mapped[str] = mapped_column(String, index=True)
-    report_id: Mapped[str] = mapped_column(String)
-    boundary_day: Mapped[str] = mapped_column(String, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    __table_args__ = (UniqueConstraint("device_id", "boundary_day"),)
+def _as_utc(value: datetime | str | None) -> datetime:
+    return _when(value)
 
 
-class GasReadingAuditRow(Base):
-    __tablename__ = "gas_reading_audit"
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    reading_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
-    device_id: Mapped[str] = mapped_column(String, index=True)
-    report_id: Mapped[str] = mapped_column(String)
-    reading_day: Mapped[str] = mapped_column(String, index=True)
-    action: Mapped[str] = mapped_column(String)
-    before_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+def _time(value: datetime | str | int) -> str:
+    return _when(value).isoformat()
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 _PROFILE_FIELDS = frozenset(
@@ -113,27 +79,6 @@ _TEXT_FIELDS = frozenset(
 _MAX_TEXT = 500
 _MAX_GAS_DIGITS = 18
 _MAX_GAS_DECIMALS = 6
-
-
-def _json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _as_utc(value: datetime | str | None) -> datetime:
-    if value is None:
-        return utcnow()
-    if isinstance(value, str):
-        try:
-            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError("effective_from must be an ISO date or datetime") from exc
-    if not isinstance(value, datetime):
-        raise ValueError("effective_from must be an ISO date or datetime")
-    return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
-
-
-def _time(value: datetime) -> str:
-    return _as_utc(value).isoformat()
 
 
 def _decimal(value: Any) -> Decimal:
@@ -186,97 +131,10 @@ def _decimal_text(value: Decimal) -> str:
 
 
 class OwnerContextStore:
-    """Storage API for the authenticated owner-context HTTP adapter."""
+    """Validated public Store API; persistence is in the owner repository."""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Any) -> None:
         self.db = db
-
-    @contextmanager
-    def _write_session(self) -> Iterator[Session]:
-        """Acquire SQLite's writer lock before inspecting and modifying state."""
-        with self.db.engine.connect() as connection:
-            connection.exec_driver_sql("BEGIN IMMEDIATE")
-            session = Session(bind=connection)
-            try:
-                yield session
-                session.flush()
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
-            finally:
-                session.close()
-
-    @staticmethod
-    def _ordered_profile_rows(session: Session, device_id: str, moment: datetime) -> list[OwnerProfileRevisionRow]:
-        return list(
-            session.scalars(
-                select(OwnerProfileRevisionRow)
-                .where(OwnerProfileRevisionRow.device_id == device_id, OwnerProfileRevisionRow.effective_from <= moment)
-                .order_by(
-                    OwnerProfileRevisionRow.effective_from,
-                    OwnerProfileRevisionRow.recorded_at,
-                    OwnerProfileRevisionRow.id,
-                )
-            ).all()
-        )
-
-    @staticmethod
-    def _profile_state(rows: list[OwnerProfileRevisionRow]) -> dict[str, dict[str, Any]]:
-        current: dict[str, dict[str, Any]] = {}
-        latest_auto: dict[str, dict[str, Any]] = {}
-        manual_active: set[str] = set()
-        for row in rows:
-            if row.is_reset:
-                manual_active.discard(row.field)
-                if row.field in latest_auto:
-                    current[row.field] = latest_auto[row.field]
-                else:
-                    current.pop(row.field, None)
-                continue
-            item = {
-                "value": json.loads(row.value_json),
-                "source": row.source,
-                "effective_from": _time(row.effective_from),
-                "provenance": row.provenance,
-            }
-            if row.source == "auto":
-                latest_auto[row.field] = item
-                if row.field not in manual_active:
-                    current[row.field] = item
-            else:
-                manual_active.add(row.field)
-                current[row.field] = item
-        return current
-
-    @staticmethod
-    def _history(rows: list[OwnerProfileRevisionRow]) -> list[dict[str, Any]]:
-        return [
-            {
-                "id": row.id,
-                "field": row.field,
-                "value": json.loads(row.value_json),
-                "source": row.source,
-                "provenance": row.provenance,
-                "effective_from": _time(row.effective_from),
-                "recorded_at": _time(row.recorded_at),
-                "reset": row.is_reset,
-            }
-            for row in rows
-        ]
-
-    def profile(self, device_id: str, as_of: datetime | str | None = None) -> dict[str, Any]:
-        moment = _as_utc(as_of)
-        with self.db.session() as session:
-            if session.get(DeviceRow, device_id) is None:
-                raise KeyError(device_id)
-            rows = self._ordered_profile_rows(session, device_id, moment)
-            return {
-                "device_id": device_id,
-                "as_of": _time(moment),
-                "fields": self._profile_state(rows),
-                "history": self._history(rows),
-            }
 
     @staticmethod
     def _validate_text(field: str, value: Any) -> str:
@@ -361,116 +219,6 @@ class OwnerContextStore:
         if lower is not None and upper is not None and lower > upper:
             raise ValueError("gas_min_m3h must not exceed gas_max_m3h")
 
-    def update_profile(self, device_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        values, effective = self._manual_fields(payload)
-        with self._write_session() as session:
-            # Concurrent requests may acquire the lock in reverse arrival order.
-            # An implicit "now" must include the preceding committed revision.
-            if payload.get("effective_from") is None:
-                effective = utcnow()
-            if session.get(DeviceRow, device_id) is None:
-                raise KeyError(device_id)
-            current = self._profile_state(self._ordered_profile_rows(session, device_id, effective))
-            self._validate_gas_bounds(current, values)
-            recorded_at = utcnow()
-            for field, (reset, value) in values.items():
-                current_field = current.get(field)
-                if reset and (current_field is None or current_field["source"] != "manual"):
-                    continue
-                if (
-                    not reset
-                    and current_field
-                    and current_field["source"] == "manual"
-                    and current_field["value"] == value
-                ):
-                    continue
-                session.add(
-                    OwnerProfileRevisionRow(
-                        id=str(uuid4()),
-                        device_id=device_id,
-                        field=field,
-                        value_json=_json(value),
-                        source="manual",
-                        provenance="owner",
-                        effective_from=effective,
-                        recorded_at=recorded_at,
-                        is_reset=reset,
-                    )
-                )
-        return self.profile(device_id)
-
-    def observe_auto(
-        self, device_id: str, fields: dict[str, Any], observed_at: datetime | str | None = None
-    ) -> dict[str, Any]:
-        """Persist verified discovery once per value/path; never bypass manual priority."""
-        if not isinstance(fields, dict) or not fields:
-            raise ValueError("automatic profile fields must be a non-empty object")
-        effective = _as_utc(observed_at)
-        candidates: dict[str, tuple[Any, str]] = {}
-        for field, item in fields.items():
-            if (
-                field not in _PROFILE_FIELDS
-                or not isinstance(item, dict)
-                or set(item) - {"value", "source", "provenance"}
-            ):
-                raise ValueError(f"invalid automatic profile field: {field}")
-            if "value" not in item:
-                raise ValueError(f"automatic profile field {field} requires value")
-            provenance = item.get("provenance", item.get("source"))
-            if not isinstance(provenance, str) or not provenance.strip() or len(provenance) > _MAX_TEXT:
-                raise ValueError(f"automatic profile field {field} requires a source path")
-            candidates[field] = (self._validate_value(field, item["value"]), provenance.strip())
-        with self._write_session() as session:
-            if session.get(DeviceRow, device_id) is None:
-                raise KeyError(device_id)
-            for field, (value, provenance) in candidates.items():
-                previous = session.scalar(
-                    select(OwnerProfileRevisionRow)
-                    .where(
-                        OwnerProfileRevisionRow.device_id == device_id,
-                        OwnerProfileRevisionRow.field == field,
-                        OwnerProfileRevisionRow.source == "auto",
-                        OwnerProfileRevisionRow.is_reset.is_(False),
-                    )
-                    .order_by(OwnerProfileRevisionRow.recorded_at.desc(), OwnerProfileRevisionRow.id.desc())
-                )
-                if previous and json.loads(previous.value_json) == value and previous.provenance == provenance:
-                    continue
-                session.add(
-                    OwnerProfileRevisionRow(
-                        id=str(uuid4()),
-                        device_id=device_id,
-                        field=field,
-                        value_json=_json(value),
-                        source="auto",
-                        provenance=provenance,
-                        effective_from=effective,
-                        recorded_at=utcnow(),
-                        is_reset=False,
-                    )
-                )
-        return self.profile(device_id)
-
-    @staticmethod
-    def _report_day(session: Session, report_id: str) -> tuple[ReportRow, str, str, ZoneInfo]:
-        row = session.get(ReportRow, report_id)
-        if row is None:
-            raise KeyError(report_id)
-        if row.kind != "daily":
-            raise ValueError("gas readings belong to daily reports only")
-        try:
-            report = json.loads(row.canonical_json)
-            timezone = ZoneInfo(str(report.get("timezone") or "UTC"))
-            context = report.get("context") if isinstance(report.get("context"), dict) else {}
-            # Gas readings describe the installation meter. A report may name
-            # a selected analysis device, which must not split this meter.
-            del context
-            device_id = "installation"
-            day = datetime.fromtimestamp(row.period_start, UTC).astimezone(timezone).date().isoformat()
-        except Exception as exc:
-            raise ValueError("invalid report time or timezone") from exc
-        return row, day, device_id, timezone
-
     @staticmethod
     def _selected_gas_day(value: Any, report_day: str, timezone: ZoneInfo) -> str:
         """Validate an explicitly selected local calendar day.
@@ -495,176 +243,6 @@ class OwnerContextStore:
         return value
 
     @staticmethod
-    def _boundaries(session: Session, device_id: str) -> list[GasMeterBoundaryRow]:
-        return list(
-            session.scalars(
-                select(GasMeterBoundaryRow)
-                .where(GasMeterBoundaryRow.device_id == device_id)
-                .order_by(GasMeterBoundaryRow.boundary_day, GasMeterBoundaryRow.id)
-            ).all()
-        )
-
-    @classmethod
-    def _segment_for_day(cls, session: Session, device_id: str, day: str) -> str:
-        segment = "default"
-        for boundary in cls._boundaries(session, device_id):
-            if boundary.boundary_day > day:
-                break
-            segment = boundary.id
-        return segment
-
-    @classmethod
-    def _refresh_segments(cls, session: Session, device_id: str) -> None:
-        for reading in session.scalars(select(GasReadingRow).where(GasReadingRow.device_id == device_id)).all():
-            reading.meter_segment = cls._segment_for_day(session, device_id, reading.reading_day)
-
-    def gas(self, report_id: str, day: str | None = None) -> dict[str, Any]:
-        with self.db.session() as session:
-            report, report_day, device_id, timezone = self._report_day(session, report_id)
-            selected_day = self._selected_gas_day(day, report_day, timezone)
-            row = session.scalar(
-                select(GasReadingRow).where(
-                    GasReadingRow.device_id == device_id,
-                    GasReadingRow.reading_day == selected_day,
-                )
-            )
-            all_audits = session.scalars(
-                select(GasReadingAuditRow)
-                .where(GasReadingAuditRow.device_id == device_id)
-                .order_by(GasReadingAuditRow.created_at, GasReadingAuditRow.id)
-            ).all()
-            # A move is recorded under its destination day.  Keep it visible
-            # from both ends of history by inspecting the immutable snapshots.
-            audits = [
-                item for item in all_audits
-                if item.reading_day == selected_day
-                or row is not None and item.reading_id == row.id
-                or any(
-                    snapshot and json.loads(snapshot).get("day") == selected_day
-                    for snapshot in (item.before_json, item.after_json)
-                )
-            ]
-            readings = list(session.scalars(
-                select(GasReadingRow).where(GasReadingRow.device_id == device_id)
-                .order_by(GasReadingRow.reading_day, GasReadingRow.id)
-            ).all())
-            latest_period_start = next((candidate.period_start for candidate in session.execute(
-                select(ReportRow.period_start, ReportRow.period_end, ReportRow.generated_at)
-                .where(ReportRow.kind == "daily", ReportRow.period_end <= int(utcnow().timestamp()))
-                .order_by(ReportRow.period_start.desc())
-            ) if int(_as_utc(candidate.generated_at).timestamp()) >= candidate.period_end), None)
-            return {
-                "report_id": report_id,
-                "time_precision": "day",
-                "report_day": report_day,
-                "selected_day": selected_day,
-                "is_latest_report": report.period_start == latest_period_start,
-                "reading": self._reading(row) if row else None,
-                "readings": [self._reading(item) for item in readings],
-                "audit": [self._audit(item) for item in audits],
-                "plausibility": self._gas_plausibility(session, report, selected_day, row),
-            }
-
-    def _gas_plausibility(
-        self, session: Session, report: ReportRow, day: str, reading: GasReadingRow | None
-    ) -> dict[str, Any]:
-        devices = list(session.scalars(select(DeviceRow).order_by(DeviceRow.id)).all())
-        if len(devices) != 1:
-            return {
-                "status": "unknown",
-                "reason": "Не удалось однозначно выбрать профиль оборудования для проверки расхода.",
-                "warnings": [],
-            }
-        as_of = utcnow()
-        profile = self._profile_state(self._ordered_profile_rows(session, devices[0].id, as_of))
-        values = {
-            key: profile.get(key, {}).get("value")
-            for key in ("gas_max_m3h", "has_gas_stove")
-        }
-        if values["gas_max_m3h"] is None:
-            return {
-                "status": "unknown",
-                "reason": "Максимальный паспортный расход котла, м³/ч, ещё не указан.",
-                "warnings": [],
-            }
-        if values["has_gas_stove"] is not False:
-            return {
-                "status": "preliminary",
-                "reason": "Другие потребители газа не исключены; показание не сравнивается с расходом котла.",
-                "warnings": [],
-            }
-        if reading is None:
-            return {"status": "preliminary", "reason": "Нет показания за этот день.", "warnings": []}
-        segment = self._segment_for_day(session, "installation", day)
-        neighbors = [
-            candidate
-            for candidate in session.scalars(
-                select(GasReadingRow).where(GasReadingRow.device_id == "installation")
-            ).all()
-            if candidate.id != reading.id
-            and self._segment_for_day(session, "installation", candidate.reading_day) == segment
-        ]
-        warnings: list[str] = []
-        current_day = date.fromisoformat(day)
-        current_value = _decimal(reading.value_m3)
-        timezone = ZoneInfo(json.loads(report.canonical_json).get("timezone") or "UTC")
-        compared = False
-        for neighbor in neighbors:
-            neighbor_day = date.fromisoformat(neighbor.reading_day)
-            if neighbor_day == current_day:
-                continue
-            first = datetime.combine(min(current_day, neighbor_day), time.min, timezone).astimezone(UTC)
-            after = datetime.combine(max(current_day, neighbor_day) + timedelta(days=1), time.min, timezone)
-            if any(_as_utc(profile[key]["effective_from"]) > first for key in values):
-                continue
-            compared = True
-            hours = Decimal(str((after.astimezone(UTC) - first).total_seconds())) / Decimal(3600)
-            maximum = Decimal(str(values["gas_max_m3h"])) * hours
-            volume = abs(current_value - _decimal(neighbor.value_m3))
-            if volume > maximum:
-                warnings.append(
-                    "Разность показаний превышает паспортный max даже при максимальной неопределённости границы дней."
-                )
-                break
-        if warnings:
-            return {
-                "status": "warning",
-                "reason": "Нужна проверка показаний или параметров профиля.",
-                "warnings": warnings,
-            }
-        return {
-            "status": "preliminary",
-            "reason": (
-                "Предварительная проверка по паспортному максимуму; другие потребители могут влиять на итог."
-                if compared else "Нет соседнего показания с известными параметрами на всём интервале."
-            ),
-            "warnings": [],
-        }
-
-    @staticmethod
-    def _reading(row: GasReadingRow) -> dict[str, Any]:
-        return {
-            "id": row.id,
-            "device_id": row.device_id,
-            "report_id": row.report_id,
-            "day": row.reading_day,
-            "meter_segment": row.meter_segment,
-            "value_m3": row.value_m3,
-            "entered_at": _time(row.entered_at),
-            "updated_at": _time(row.updated_at),
-        }
-
-    @staticmethod
-    def _audit(row: GasReadingAuditRow) -> dict[str, Any]:
-        return {
-            "id": row.id,
-            "action": row.action,
-            "before": json.loads(row.before_json) if row.before_json else None,
-            "after": json.loads(row.after_json) if row.after_json else None,
-            "created_at": _time(row.created_at),
-        }
-
-    @staticmethod
     def _gas_payload(payload: dict[str, Any]) -> tuple[bool, bool, Decimal | None, Any, bool]:
         if not isinstance(payload, dict) or set(payload) - {"value_m3", "delete", "reset", "day", "reading_id"}:
             raise ValueError("gas payload accepts only value_m3, delete, reset, day, and reading_id")
@@ -683,124 +261,269 @@ class OwnerContextStore:
             raise ValueError("value_m3 is required unless delete is true")
         return False, reset, _decimal(payload["value_m3"]), reading_id, "reading_id" in payload
 
-    def _validate_monotonic(
-        self, session: Session, device_id: str, day: str, number: Decimal, reading_id: str | None
-    ) -> None:
-        segment = self._segment_for_day(session, device_id, day)
-        for candidate in session.scalars(select(GasReadingRow).where(GasReadingRow.device_id == device_id)).all():
-            if (
-                candidate.id == reading_id
-                or self._segment_for_day(session, device_id, candidate.reading_day) != segment
-            ):
+    @staticmethod
+    def _profile_state(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        current: dict[str, dict[str, Any]] = {}
+        latest_auto: dict[str, dict[str, Any]] = {}
+        manual_active: set[str] = set()
+        for row in sorted(rows, key=lambda r: (_when(r["effective_at"]), _when(r["recorded_at"]), r["id"])):
+            field = row["field"]
+            if row.get("is_reset", False):
+                manual_active.discard(field)
+                if field in latest_auto:
+                    current[field] = latest_auto[field]
+                else:
+                    current.pop(field, None)
                 continue
-            other = _decimal(candidate.value_m3)
-            if candidate.reading_day < day and number < other or candidate.reading_day > day and number > other:
-                raise ValueError(
-                    f"Конфликт с показанием за {candidate.reading_day}: {candidate.value_m3} м³. "
-                    "Накопленное показание не может уменьшаться. Проверьте значение; "
-                    "при замене или сбросе счётчика укажите отдельную границу учёта."
-                )
+            value = row.get("value", json.loads(row["value_json"]) if "value_json" in row else None)
+            item = {
+                "value": value,
+                "source": row["source"],
+                "effective_from": _time(row["effective_at"]),
+                "provenance": row["provenance"],
+            }
+            if row["source"] == "auto":
+                latest_auto[field] = item
+                if field not in manual_active:
+                    current[field] = item
+            else:
+                manual_active.add(field)
+                current[field] = item
+        return current
+
+    def profile(self, device_id: str, as_of: datetime | str | None = None) -> dict[str, Any]:
+        moment = _as_utc(as_of)
+        rows = self.db.owner.application_profile_rows(device_id, moment)
+        return {
+            "device_id": device_id,
+            "as_of": _time(moment),
+            "fields": self._profile_state(rows),
+            "history": [
+                {
+                    "id": row["id"],
+                    "field": row["field"],
+                    "value": row.get("value", json.loads(row["value_json"]) if "value_json" in row else None),
+                    "source": row["source"],
+                    "provenance": row["provenance"],
+                    "effective_from": _time(row["effective_at"]),
+                    "recorded_at": _time(row["recorded_at"]),
+                    "reset": bool(row.get("is_reset", False)),
+                }
+                for row in rows
+            ],
+        }
+
+    def update_profile(self, device_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        values, effective = self._manual_fields(payload)
+        self.db.owner.application_profile_update(
+            device_id,
+            values,
+            None if payload.get("effective_from") is None else effective,
+        )
+        return self.profile(device_id)
+
+    def observe_auto(
+        self, device_id: str, fields: dict[str, Any], observed_at: datetime | str | None = None
+    ) -> dict[str, Any]:
+        if not isinstance(fields, dict) or not fields:
+            raise ValueError("automatic profile fields must be a non-empty object")
+        candidates: dict[str, tuple[Any, str]] = {}
+        for field, item in fields.items():
+            if (
+                field not in _PROFILE_FIELDS
+                or not isinstance(item, dict)
+                or set(item) - {"value", "source", "provenance"}
+            ):
+                raise ValueError(f"invalid automatic profile field: {field}")
+            if "value" not in item:
+                raise ValueError(f"automatic profile field {field} requires value")
+            provenance = item.get("provenance", item.get("source"))
+            if not isinstance(provenance, str) or not provenance.strip() or len(provenance) > _MAX_TEXT:
+                raise ValueError(f"automatic profile field {field} requires a source path")
+            candidates[field] = (self._validate_value(field, item["value"]), provenance.strip())
+        self.db.owner.application_profile_observe(device_id, candidates, _as_utc(observed_at))
+        return self.profile(device_id)
+
+    @staticmethod
+    def _report_day(report: Any) -> tuple[str, str, ZoneInfo]:
+        if report.kind != "daily":
+            raise ValueError("gas readings belong to daily reports only")
+        try:
+            zone = ZoneInfo(str(report.timezone or "UTC"))
+            day = _when(report.period_start).astimezone(zone).date().isoformat()
+        except Exception as exc:
+            raise ValueError("invalid report time or timezone") from exc
+        return day, "installation", zone
+
+    @staticmethod
+    def _segment_for_day(boundaries: list[dict[str, Any]], day: str) -> str:
+        segment = "default"
+        for boundary in sorted(boundaries, key=lambda b: (b["boundary_day"], b["id"])):
+            if boundary["boundary_day"] > day:
+                break
+            segment = boundary["id"]
+        return segment
+
+    @staticmethod
+    def _reading(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "device_id": row["device_id"],
+            "report_id": row["report_id"],
+            "day": row["reading_day"],
+            "meter_segment": row["meter_segment"],
+            "value_m3": row["value_m3"],
+            "entered_at": _time(row["entered_at"]),
+            "updated_at": _time(row["updated_at"]),
+        }
+
+    @staticmethod
+    def _audit(row: dict[str, Any]) -> dict[str, Any]:
+        def snapshot(key: str) -> Any:
+            value = row.get(key)
+            return json.loads(value) if isinstance(value, str) else value
+
+        return {
+            "id": row["id"],
+            "action": row["action"],
+            "before": snapshot("before_json"),
+            "after": snapshot("after_json"),
+            "created_at": _time(row["created_at"]),
+        }
+
+    def gas(self, report_id: str, day: str | None = None) -> dict[str, Any]:
+        report = self.db.reports.report(report_id)
+        if report is None:
+            raise KeyError(report_id)
+        report_day, device_id, zone = self._report_day(report)
+        selected_day = self._selected_gas_day(day, report_day, zone)
+        readings, boundaries, audits = self.db.owner.application_gas_state(device_id)
+        row = next((r for r in readings if r["reading_day"] == selected_day), None)
+        visible = [
+            item
+            for item in audits
+            if item["reading_day"] == selected_day
+            or row is not None
+            and item.get("reading_id") == row["id"]
+            or any(
+                snapshot and snapshot.get("day") == selected_day
+                for snapshot in (self._audit(item)["before"], self._audit(item)["after"])
+            )
+        ]
+        visible.sort(key=lambda item: (_when(item["created_at"]), item["id"]))
+        completed = self.db.reports.completed_reports(utcnow())
+        latest_start = max((r.period_start for r in completed if r.kind == "daily"), default=None)
+        return {
+            "report_id": report_id,
+            "time_precision": "day",
+            "report_day": report_day,
+            "selected_day": selected_day,
+            "is_latest_report": report.period_start == latest_start,
+            "reading": self._reading(row) if row else None,
+            "readings": [self._reading(r) for r in sorted(readings, key=lambda r: (r["reading_day"], r["id"]))],
+            "audit": [self._audit(item) for item in visible],
+            "plausibility": self._gas_plausibility(report, selected_day, row, readings, boundaries),
+        }
 
     def update_gas(self, report_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         delete, reset, number, reading_id, reading_id_supplied = self._gas_payload(payload)
-        with self._write_session() as session:
-            _report, report_day, device_id, timezone = self._report_day(session, report_id)
-            day = self._selected_gas_day(payload.get("day"), report_day, timezone)
-            target = session.scalar(
-                select(GasReadingRow).where(
-                    GasReadingRow.device_id == device_id,
-                    GasReadingRow.reading_day == day,
-                )
-            )
-            existing = target
-            if isinstance(reading_id, str):
-                existing = session.get(GasReadingRow, reading_id)
-                if existing is None or existing.device_id != device_id:
-                    raise ValueError("Показание не найдено. Обновите страницу и выберите его в истории.")
-                if delete and existing.reading_day != day:
-                    raise ValueError("Дата показания изменилась. Перед удалением выберите его в истории заново.")
-                if existing.reading_day != day and session.scalar(
-                    select(GasMeterBoundaryRow).where(
-                        GasMeterBoundaryRow.device_id == device_id,
-                        GasMeterBoundaryRow.boundary_day == existing.reading_day,
-                    )
-                ) is not None:
-                    raise ValueError("Нельзя переместить показание на границе сброса счётчика.")
-                if target is not None and target.id != existing.id:
-                    raise ValueError(f"Конфликт: показание за {day} уже существует.")
-            elif reading_id_supplied:  # Explicit null is create-only, never an upsert.
-                if target is not None:
-                    raise ValueError(f"Конфликт: показание за {day} уже существует.")
-            boundary = session.scalar(
-                select(GasMeterBoundaryRow).where(
-                    GasMeterBoundaryRow.device_id == device_id,
-                    GasMeterBoundaryRow.boundary_day == day,
-                )
-            )
-            if delete and existing is None:
-                return self.gas(report_id, day)
-            if (
-                not delete
-                and existing is not None
-                and number is not None
-                and existing.value_m3 == _decimal_text(number)
-                and (not reset or boundary is not None)
-                and existing.reading_day == day
-            ):
-                return self.gas(report_id, day)
-            before = self._reading(existing) if existing else None
-            if reset and boundary is None:
-                boundary = GasMeterBoundaryRow(
-                    id=f"reset:{uuid4()}",
-                    device_id=device_id,
-                    report_id=report_id,
-                    boundary_day=day,
-                    created_at=utcnow(),
-                )
-                session.add(boundary)
-                session.flush()
-                self._refresh_segments(session, device_id)
-            if delete:
-                assert existing is not None
-                session.delete(existing)
-                action, after, reading_id = "delete", None, existing.id
-            else:
-                assert number is not None
-                self._validate_monotonic(session, device_id, day, number, existing.id if existing else None)
-                now = utcnow()
-                segment = self._segment_for_day(session, device_id, day)
-                if existing is None:
-                    existing = GasReadingRow(
-                        id=str(uuid4()),
-                        device_id=device_id,
-                        report_id=report_id,
-                        reading_day=day,
-                        meter_segment=segment,
-                        value_m3=_decimal_text(number),
-                        entered_at=now,
-                        updated_at=now,
-                    )
-                    session.add(existing)
-                    action = "reset" if reset else "create"
-                else:
-                    moved = existing.reading_day != day
-                    existing.reading_day = day
-                    existing.report_id = report_id
-                    existing.meter_segment, existing.value_m3, existing.updated_at = segment, _decimal_text(number), now
-                    action = "move" if moved else ("reset" if reset else "update")
-                session.flush()
-                after, reading_id = self._reading(existing), existing.id
-            session.add(
-                GasReadingAuditRow(
-                    id=str(uuid4()),
-                    reading_id=reading_id,
-                    device_id=device_id,
-                    report_id=report_id,
-                    reading_day=day,
-                    action=action,
-                    before_json=_json(before) if before else None,
-                    after_json=_json(after) if after else None,
-                    created_at=utcnow(),
-                )
-            )
+        report = self.db.reports.report(report_id)
+        if report is None:
+            raise KeyError(report_id)
+        report_day, device_id, zone = self._report_day(report)
+        day = self._selected_gas_day(payload.get("day"), report_day, zone)
+        self.db.owner.application_gas_update(
+            device_id,
+            report_id,
+            day,
+            None if number is None else _decimal_text(number),
+            delete=delete,
+            reset=reset,
+            reading_id=reading_id,
+            reading_id_supplied=reading_id_supplied,
+        )
         return self.gas(report_id, day)
+
+    def gas_readings_for_analysis(self) -> list[dict[str, Any]]:
+        readings, _boundaries, _audits = self.db.owner.application_gas_state("installation")
+        return [
+            {
+                "id": row["id"],
+                "day": row["reading_day"],
+                "value_m3": row["value_m3"],
+                "meter_segment": row["meter_segment"],
+                "segment": row["meter_segment"],
+                "updated_at": _when(row["updated_at"]),
+            }
+            for row in sorted(readings, key=lambda row: (row["reading_day"], row["id"]))
+        ]
+
+    def _gas_plausibility(
+        self,
+        report: Any,
+        day: str,
+        reading: dict[str, Any] | None,
+        readings: list[dict[str, Any]],
+        boundaries: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        devices = self.db.owner.application_devices()
+        if len(devices) != 1:
+            return {
+                "status": "unknown",
+                "reason": "Не удалось однозначно выбрать профиль оборудования для проверки расхода.",
+                "warnings": [],
+            }
+        profile = self.profile(devices[0])["fields"]
+        values = {key: profile.get(key, {}).get("value") for key in ("gas_max_m3h", "has_gas_stove")}
+        if values["gas_max_m3h"] is None:
+            return {
+                "status": "unknown",
+                "reason": "Максимальный паспортный расход котла, м³/ч, ещё не указан.",
+                "warnings": [],
+            }
+        if values["has_gas_stove"] is not False:
+            return {
+                "status": "preliminary",
+                "reason": "Другие потребители газа не исключены; показание не сравнивается с расходом котла.",
+                "warnings": [],
+            }
+        if reading is None:
+            return {"status": "preliminary", "reason": "Нет показания за этот день.", "warnings": []}
+        segment = self._segment_for_day(boundaries, day)
+        neighbors = [
+            r
+            for r in readings
+            if r["id"] != reading["id"] and self._segment_for_day(boundaries, r["reading_day"]) == segment
+        ]
+        current_day = date.fromisoformat(day)
+        current_value = _decimal(reading["value_m3"])
+        zone = ZoneInfo(str(report.timezone or "UTC"))
+        compared = False
+        for neighbor in neighbors:
+            neighbor_day = date.fromisoformat(neighbor["reading_day"])
+            if neighbor_day == current_day:
+                continue
+            first = datetime.combine(min(current_day, neighbor_day), time.min, zone).astimezone(UTC)
+            after = datetime.combine(max(current_day, neighbor_day) + timedelta(days=1), time.min, zone).astimezone(UTC)
+            if any(_when(profile[key]["effective_from"]) > first for key in values):
+                continue
+            compared = True
+            hours = Decimal(str((after - first).total_seconds())) / Decimal(3600)
+            maximum = Decimal(str(values["gas_max_m3h"])) * hours
+            volume = abs(current_value - _decimal(neighbor["value_m3"]))
+            if volume > maximum:
+                return {
+                    "status": "warning",
+                    "reason": "Нужна проверка показаний или параметров профиля.",
+                    "warnings": [
+                        "Разность показаний превышает паспортный max даже при максимальной "
+                        "неопределённости границы дней."
+                    ],
+                }
+        return {
+            "status": "preliminary",
+            "reason": "Предварительная проверка по паспортному максимуму; другие потребители могут влиять на итог."
+            if compared
+            else "Нет соседнего показания с известными параметрами на всём интервале.",
+            "warnings": [],
+        }

@@ -3,11 +3,11 @@ from __future__ import annotations
 from datetime import date, timedelta
 from pathlib import Path
 
+from tests.ydb_support import make_runtime, seed_events, seed_samples
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.period_schedule import run_period_schedule, schedule_signature
 from zont_analyzer.domain import SourceEvent, TelemetryPoint
 from zont_analyzer.domain.periods import calendar_period
-from zont_analyzer.runtime import build_runtime
 
 
 def _point(timestamp, value: float) -> TelemetryPoint:
@@ -25,12 +25,12 @@ def _point(timestamp, value: float) -> TelemetryPoint:
 def test_schedule_adopts_legacy_signature_without_reanalysis_and_respects_exact_period_bounds(
     tmp_path: Path, monkeypatch
 ) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)
     timezone = runtime.config.home.effective_timezone
     period = calendar_period("weekly", date(2026, 8, 31), timezone)
     inside = period.start + timedelta(hours=1)
-    runtime.db.upsert_samples([_point(inside, 21.0)], {"room": "room_temperature"})
+    seed_samples(runtime.db, [_point(inside, 21.0)], {"room": "room_temperature"})
 
     original = analysis.analyze_period(period, use_ai=False)
     legacy_signature = schedule_signature(analysis, period, legacy_revision=True)
@@ -59,7 +59,7 @@ def test_schedule_adopts_legacy_signature_without_reanalysis_and_respects_exact_
 
     # This falls on the same UTC day as the local-calendar boundary, but is not
     # part of the report's exact [start, observed_end) telemetry interval.
-    runtime.db.upsert_samples([_point(period.observed_end + timedelta(hours=1), 5.0)])
+    seed_samples(runtime.db, [_point(period.observed_end + timedelta(hours=1), 5.0)])
     assert run_period_schedule(runtime, analysis, date(2026, 9, 8)) == []
 
     calls = 0
@@ -70,7 +70,7 @@ def test_schedule_adopts_legacy_signature_without_reanalysis_and_respects_exact_
         return adopted.model_copy(deep=True)
 
     monkeypatch.setattr(analysis, "analyze_period", updated_analysis)
-    runtime.db.upsert_samples([_point(inside, 22.0)])
+    seed_samples(runtime.db, [_point(inside, 22.0)])
     result = run_period_schedule(runtime, analysis, date(2026, 9, 8))
     assert calls == 1
     assert result == [{
@@ -85,14 +85,14 @@ def test_schedule_adopts_legacy_signature_without_reanalysis_and_respects_exact_
 def test_schedule_reanalyzes_when_late_prior_event_changes_reliability_revision(
     tmp_path: Path, monkeypatch
 ) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)
     period = calendar_period("weekly", date(2026, 8, 31), runtime.config.home.effective_timezone)
-    runtime.db.upsert_samples([_point(period.start + timedelta(hours=1), 21.0)], {"room": "room_temperature"})
+    seed_samples(runtime.db, [_point(period.start + timedelta(hours=1), 21.0)], {"room": "room_temperature"})
     original = analysis.analyze_period(period, use_ai=False)
     original.context["schedule_signature"] = schedule_signature(analysis, period)
     runtime.db.save_report(original, "saved")
-    runtime.db.upsert_source_events(
+    seed_events(runtime.db,
         [
             SourceEvent(
                 id="late-power-on",
