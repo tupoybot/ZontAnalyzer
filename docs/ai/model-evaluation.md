@@ -1,5 +1,7 @@
 # Offline model evaluation packets
 
+`#for-human`
+
 The evaluation set is `evaluation-v1` and contains eight anonymized packets built
 through the production `analysis_packet` function: normal operation, insufficient
 data, DHW/heating, competing causes, rejected advice, experiment, gas, and a long

@@ -1,5 +1,7 @@
 # Локальная проверка в Docker
 
+`#for-human`
+
 Используйте `deploy/check-local.sh` из корня репозитория. Скрипт собирает
 тестовый Docker-образ, запускает Ruff и mypy, выполняет **весь** pytest через
 `deploy/check-tests.sh` и собирает wheel/sdist. Чистая логика проверяется без

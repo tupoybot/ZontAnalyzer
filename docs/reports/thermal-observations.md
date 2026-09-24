@@ -1,5 +1,7 @@
 # Полезные наблюдения о тепловой системе
 
+`#for-human`
+
 Согласовано 2026-09-09. Ветка `stage9/thermal-observations` создана после слияния
 принятой `stage9/ai-freshness` в `main` (merge `5b436a9`).
 

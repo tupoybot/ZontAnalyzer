@@ -1,5 +1,7 @@
 # Автозапуск Codex Cloud для bug issue
 
+`#for-human`
+
 ZontAnalyzer использует GitHub Actions как небольшой мост между GitHub Issues и
 subscription-backed Codex Cloud.
 
