@@ -1,0 +1,126 @@
+[
+  {
+    "attempt": 1,
+    "workflow_run_id": 36046423610,
+    "inputs_match": true,
+    "inputs": {
+      "commit": "468fd2959d2769a84e585f55287e1c082ee208c7",
+      "test_image_fingerprint": "sha256:02a7cdefcc377b817442efc1045a540894c457f2b66f847c67ba9dc629eceeb3",
+      "tests_tree_sha256": "4a917be9faeeac7e36e4ed74fdedb3b85a3f515eb043a977c5a1e3875c4f5a3b",
+      "ydb_image_digest": "sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402",
+      "command": "deploy/check-tests.sh",
+      "args": [
+        "tests",
+        "--durations=0",
+        "--durations-min=0"
+      ],
+      "ydb_workers": 2,
+      "container_limits": {
+        "pure": {
+          "nano_cpus": 2000000000,
+          "cpu_quota_us": 0,
+          "cpu_period_us": 0,
+          "memory_bytes": 1073741824,
+          "memory_swap_bytes": 1073741824,
+          "pids_limit": null
+        },
+        "ydb": {
+          "nano_cpus": 2000000000,
+          "cpu_quota_us": 0,
+          "cpu_period_us": 0,
+          "memory_bytes": 5368709120,
+          "memory_swap_bytes": 5368709120,
+          "pids_limit": null
+        },
+        "test": {
+          "nano_cpus": 2000000000,
+          "cpu_quota_us": 0,
+          "cpu_period_us": 0,
+          "memory_bytes": 1073741824,
+          "memory_swap_bytes": 1073741824,
+          "pids_limit": null
+        }
+      }
+    },
+    "original_tests_retained": 849,
+    "total_tests": 864,
+    "local_summary": "after-one-local.json",
+    "actions_summary": "after-one-actions.json",
+    "artifacts": {
+      "image": {
+        "name": "ci-test-image-1",
+        "id": 10828481998,
+        "digest": "sha256:6bc708c92a772c3c4ef4a207fda4ec91a21a58a89762d2ec15f0d1b9661a274a",
+        "downloaded_zip_digest_matches": true
+      },
+      "metrics": {
+        "name": "ci-metrics-1",
+        "id": 10828299432,
+        "digest": "sha256:7a86fab5cfcd0bafc112f9733e81696bbb11ddad5c9eb387a6372af5291ade69",
+        "downloaded_zip_digest_matches": true
+      }
+    }
+  },
+  {
+    "attempt": 2,
+    "workflow_run_id": 36046423610,
+    "inputs_match": true,
+    "inputs": {
+      "commit": "468fd2959d2769a84e585f55287e1c082ee208c7",
+      "test_image_fingerprint": "sha256:0eb5661b1a6eea1e0aec9aaadf7d706e32999b7dbdd9b17d8bf3bf92a46d7bc4",
+      "tests_tree_sha256": "4a917be9faeeac7e36e4ed74fdedb3b85a3f515eb043a977c5a1e3875c4f5a3b",
+      "ydb_image_digest": "sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402",
+      "command": "deploy/check-tests.sh",
+      "args": [
+        "tests",
+        "--durations=0",
+        "--durations-min=0"
+      ],
+      "ydb_workers": 2,
+      "container_limits": {
+        "pure": {
+          "nano_cpus": 2000000000,
+          "cpu_quota_us": 0,
+          "cpu_period_us": 0,
+          "memory_bytes": 1073741824,
+          "memory_swap_bytes": 1073741824,
+          "pids_limit": null
+        },
+        "ydb": {
+          "nano_cpus": 2000000000,
+          "cpu_quota_us": 0,
+          "cpu_period_us": 0,
+          "memory_bytes": 5368709120,
+          "memory_swap_bytes": 5368709120,
+          "pids_limit": null
+        },
+        "test": {
+          "nano_cpus": 2000000000,
+          "cpu_quota_us": 0,
+          "cpu_period_us": 0,
+          "memory_bytes": 1073741824,
+          "memory_swap_bytes": 1073741824,
+          "pids_limit": null
+        }
+      }
+    },
+    "original_tests_retained": 849,
+    "total_tests": 864,
+    "local_summary": "after-two-local.json",
+    "actions_summary": "after-two-actions.json",
+    "artifacts": {
+      "image": {
+        "name": "ci-test-image-2",
+        "id": 10829047348,
+        "digest": "sha256:875a3c207577d10d2a3fbb4350577e191df44fcbc6424a8c9ddd44f7f5464d9b",
+        "downloaded_zip_digest_matches": true
+      },
+      "metrics": {
+        "name": "ci-metrics-2",
+        "id": 10828913197,
+        "digest": "sha256:f7b695e6f8fa7d92dc7d8c0832777be3d7ccbf7fb99cfc8e917dc5d44dfb800d",
+        "downloaded_zip_digest_matches": true
+      }
+    }
+  }
+]

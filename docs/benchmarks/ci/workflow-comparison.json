@@ -1,0 +1,544 @@
+{
+  "baseline": {
+    "id": 36036100844,
+    "commit": "f01adaff0b033c9fa381d0c6912c1d1a1076e42d",
+    "created_at": "2026-09-24T17:41:48Z",
+    "started_at": "2026-09-24T17:41:48Z",
+    "completed_at": "2026-09-24T18:00:21Z",
+    "conclusion": "success",
+    "jobs": [
+      {
+        "name": "test",
+        "started_at": "2026-09-24T17:41:52Z",
+        "completed_at": "2026-09-24T18:00:21Z",
+        "seconds": 1109,
+        "steps": [
+          {
+            "name": "Set up job",
+            "started_at": "2026-09-24T17:41:53Z",
+            "completed_at": "2026-09-24T17:41:54Z",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "started_at": "2026-09-24T17:41:54Z",
+            "completed_at": "2026-09-24T17:41:55Z",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+            "started_at": "2026-09-24T17:41:55Z",
+            "completed_at": "2026-09-24T17:41:56Z",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Build test environment",
+            "started_at": "2026-09-24T17:41:56Z",
+            "completed_at": "2026-09-24T17:42:31Z",
+            "seconds": 35,
+            "conclusion": "success"
+          },
+          {
+            "name": "Export identical benchmark environment",
+            "started_at": "2026-09-24T17:42:31Z",
+            "completed_at": "2026-09-24T17:42:41Z",
+            "seconds": 10,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "started_at": "2026-09-24T17:42:41Z",
+            "completed_at": "2026-09-24T17:42:43Z",
+            "seconds": 2,
+            "conclusion": "success"
+          },
+          {
+            "name": "Check source in the measured environment",
+            "started_at": "2026-09-24T17:42:43Z",
+            "completed_at": "2026-09-24T17:58:22Z",
+            "seconds": 939,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "started_at": "2026-09-24T17:58:22Z",
+            "completed_at": "2026-09-24T17:58:24Z",
+            "seconds": 2,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run docker build --target cli -t zont-analyzer:test .",
+            "started_at": "2026-09-24T17:58:24Z",
+            "completed_at": "2026-09-24T17:58:24Z",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run sh tests/integration/test_nginx_basic_auth.sh",
+            "started_at": "2026-09-24T17:58:24Z",
+            "completed_at": "2026-09-24T17:58:28Z",
+            "seconds": 4,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run docker tag zont-analyzer:test zont-analyzer:stage18-candidate",
+            "started_at": "2026-09-24T17:58:28Z",
+            "completed_at": "2026-09-24T17:58:28Z",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run npm ci --prefix tests/integration/browser",
+            "started_at": "2026-09-24T17:58:28Z",
+            "completed_at": "2026-09-24T17:58:29Z",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run npx --prefix tests/integration/browser playwright install --with-deps chromium",
+            "started_at": "2026-09-24T17:58:29Z",
+            "completed_at": "2026-09-24T17:58:50Z",
+            "seconds": 21,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run sh tests/integration/test_archive_browser.sh",
+            "started_at": "2026-09-24T17:58:50Z",
+            "completed_at": "2026-09-24T18:00:18Z",
+            "seconds": 88,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run ZONT_ANALYZER_ENV_FILE=\"$GITHUB_WORKSPACE/deploy/env.example\" docker compose -f deploy/compose.yaml -f deploy/compose.test.yaml config --quiet",
+            "started_at": "2026-09-24T18:00:18Z",
+            "completed_at": "2026-09-24T18:00:18Z",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run docker compose -f deploy/compose.local.yaml config --quiet",
+            "started_at": "2026-09-24T18:00:18Z",
+            "completed_at": "2026-09-24T18:00:18Z",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+            "started_at": "2026-09-24T18:00:18Z",
+            "completed_at": "2026-09-24T18:00:18Z",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "started_at": "2026-09-24T18:00:18Z",
+            "completed_at": "2026-09-24T18:00:18Z",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "started_at": "2026-09-24T18:00:18Z",
+            "completed_at": "2026-09-24T18:00:18Z",
+            "seconds": 0,
+            "conclusion": "success"
+          }
+        ]
+      }
+    ],
+    "wait_seconds": 1113,
+    "runner_seconds": 1109
+  },
+  "after_one": {
+    "run_id": 36046423610,
+    "attempt": 1,
+    "created_at": "2026-09-24T19:11:18Z",
+    "jobs": [
+      {
+        "name": "test",
+        "job_id": 107790993537,
+        "created_at": "2026-09-24T19:11:19Z",
+        "started_at": "2026-09-24T19:11:22Z",
+        "completed_at": "2026-09-24T19:17:58Z",
+        "conclusion": "success",
+        "seconds": 396,
+        "steps": [
+          {
+            "name": "Set up job",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Build test environment",
+            "seconds": 37,
+            "conclusion": "success"
+          },
+          {
+            "name": "Export identical benchmark environment",
+            "seconds": 9,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "seconds": 4,
+            "conclusion": "success"
+          },
+          {
+            "name": "Check source in the measured environment",
+            "seconds": 197,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run docker build --target cli -t zont-analyzer:test .",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run sh tests/integration/test_nginx_basic_auth.sh",
+            "seconds": 4,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run docker tag zont-analyzer:test zont-analyzer:stage18-candidate",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run npm ci --prefix tests/integration/browser",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run npx --prefix tests/integration/browser playwright install --with-deps chromium",
+            "seconds": 37,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run sh tests/integration/test_archive_browser.sh",
+            "seconds": 87,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run ZONT_ANALYZER_ENV_FILE=\"$GITHUB_WORKSPACE/deploy/env.example\" docker compose -f deploy/compose.yaml -f deploy/compose.test.yaml config --quiet",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run docker compose -f deploy/compose.local.yaml config --quiet",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Build and smoke the cloud candidate",
+            "seconds": 11,
+            "conclusion": "success"
+          },
+          {
+            "name": "Export tested cloud candidate for this release run",
+            "seconds": 0,
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "seconds": 0,
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "seconds": 0,
+            "conclusion": "success"
+          }
+        ]
+      }
+    ],
+    "wait_seconds": 400,
+    "runner_seconds": 396,
+    "additional_infrastructure": {
+      "run_id": 36046423651,
+      "jobs": [
+        {
+          "name": "terraform",
+          "job_id": 107790994070,
+          "created_at": "2026-09-24T19:11:19Z",
+          "started_at": "2026-09-24T19:11:22Z",
+          "completed_at": "2026-09-24T19:11:36Z",
+          "conclusion": "success",
+          "seconds": 14,
+          "steps": [
+            {
+              "name": "Set up job",
+              "seconds": 1,
+              "conclusion": "success"
+            },
+            {
+              "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "seconds": 0,
+              "conclusion": "success"
+            },
+            {
+              "name": "Run hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd",
+              "seconds": 2,
+              "conclusion": "success"
+            },
+            {
+              "name": "Run terraform fmt -check -recursive infra",
+              "seconds": 2,
+              "conclusion": "success"
+            },
+            {
+              "name": "Run terraform -chdir=infra/bootstrap init -backend=false -input=false -lockfile=readonly",
+              "seconds": 2,
+              "conclusion": "success"
+            },
+            {
+              "name": "Run terraform -chdir=infra/bootstrap validate",
+              "seconds": 1,
+              "conclusion": "success"
+            },
+            {
+              "name": "Run terraform -chdir=infra/cloud init -backend=false -input=false -lockfile=readonly",
+              "seconds": 2,
+              "conclusion": "success"
+            },
+            {
+              "name": "Run terraform -chdir=infra/cloud validate",
+              "seconds": 0,
+              "conclusion": "success"
+            },
+            {
+              "name": "Run terraform -chdir=infra/cloud test",
+              "seconds": 1,
+              "conclusion": "success"
+            },
+            {
+              "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "seconds": 0,
+              "conclusion": "success"
+            },
+            {
+              "name": "Complete job",
+              "seconds": 0,
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "name": "probe",
+          "job_id": 107790994256,
+          "created_at": "2026-09-24T19:11:19Z",
+          "started_at": "2026-09-24T19:11:22Z",
+          "completed_at": "2026-09-24T19:12:05Z",
+          "conclusion": "success",
+          "seconds": 43,
+          "steps": [
+            {
+              "name": "Set up job",
+              "seconds": 0,
+              "conclusion": "success"
+            },
+            {
+              "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "seconds": 1,
+              "conclusion": "success"
+            },
+            {
+              "name": "Run docker build -t m1-tools infra/tools",
+              "seconds": 29,
+              "conclusion": "success"
+            },
+            {
+              "name": "Check deployment scope rejection",
+              "seconds": 1,
+              "conclusion": "success"
+            },
+            {
+              "name": "Check deployment routing and verified candidate selection",
+              "seconds": 1,
+              "conclusion": "success"
+            },
+            {
+              "name": "Test isolated probe without cloud credentials",
+              "seconds": 2,
+              "conclusion": "success"
+            },
+            {
+              "name": "Run docker build -t m1-probe infra/probe",
+              "seconds": 5,
+              "conclusion": "success"
+            },
+            {
+              "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+              "seconds": 0,
+              "conclusion": "success"
+            },
+            {
+              "name": "Complete job",
+              "seconds": 0,
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    },
+    "all_required_runner_seconds": 453
+  },
+  "after_two": {
+    "run_id": 36046423610,
+    "attempt": 2,
+    "requested_at": "2026-09-24T19:19:33Z",
+    "jobs": [
+      {
+        "name": "test",
+        "job_id": 107794138038,
+        "created_at": "2026-09-24T19:19:35Z",
+        "started_at": "2026-09-24T19:19:38Z",
+        "completed_at": "2026-09-24T19:25:52Z",
+        "conclusion": "success",
+        "seconds": 374,
+        "steps": [
+          {
+            "name": "Set up job",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "seconds": 2,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Build test environment",
+            "seconds": 39,
+            "conclusion": "success"
+          },
+          {
+            "name": "Export identical benchmark environment",
+            "seconds": 9,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "seconds": 3,
+            "conclusion": "success"
+          },
+          {
+            "name": "Check source in the measured environment",
+            "seconds": 192,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run docker build --target cli -t zont-analyzer:test .",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run sh tests/integration/test_nginx_basic_auth.sh",
+            "seconds": 4,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run docker tag zont-analyzer:test zont-analyzer:stage18-candidate",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run npm ci --prefix tests/integration/browser",
+            "seconds": 1,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run npx --prefix tests/integration/browser playwright install --with-deps chromium",
+            "seconds": 21,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run sh tests/integration/test_archive_browser.sh",
+            "seconds": 87,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run ZONT_ANALYZER_ENV_FILE=\"$GITHUB_WORKSPACE/deploy/env.example\" docker compose -f deploy/compose.yaml -f deploy/compose.test.yaml config --quiet",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Run docker compose -f deploy/compose.local.yaml config --quiet",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Build and smoke the cloud candidate",
+            "seconds": 10,
+            "conclusion": "success"
+          },
+          {
+            "name": "Export tested cloud candidate for this release run",
+            "seconds": 0,
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "seconds": 0,
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "seconds": 0,
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "seconds": 1,
+            "conclusion": "success"
+          }
+        ]
+      }
+    ],
+    "wait_seconds": 379,
+    "runner_seconds": 374,
+    "note": "Only the CI job was repeated; unchanged infrastructure checks were not rerun."
+  }
+}
