@@ -96,28 +96,26 @@ def test_profile_history_and_field_timestamps_are_utc_iso(tmp_path: Path) -> Non
     assert result["history"][0]["recorded_at"].endswith("+00:00")
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
+@pytest.mark.ydb
+def test_profile_payload_shape_is_strict(tmp_path: Path) -> None:
+    _, store = _store(tmp_path)
+    invalid_payloads = [
         {"auto_adapt": False},
         {"fields": {"auto_adapt": False}},
         {"fields": {"auto_adapt": {"value": False, "source": "manual"}}},
         {"fields": {"missing": {"value": True}}},
-    ],
-)
-@pytest.mark.ydb
-def test_profile_payload_shape_is_strict(tmp_path: Path, payload: dict[str, object]) -> None:
-    _, store = _store(tmp_path)
-    with pytest.raises(ValueError):
-        store.update_profile("device", payload)
+    ]
+    for payload in invalid_payloads:
+        with pytest.raises(ValueError):
+            store.update_profile("device", payload)
 
 
-@pytest.mark.parametrize("value", ["x", 1, [], {}])
 @pytest.mark.ydb
-def test_tristates_reject_non_tristate_values(tmp_path: Path, value: object) -> None:
+def test_tristates_reject_non_tristate_values(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
-    with pytest.raises(ValueError, match="auto_adapt"):
-        store.update_profile("device", _manual({"auto_adapt": value}))
+    for value in ("x", 1, [], {}):
+        with pytest.raises(ValueError, match="auto_adapt"):
+            store.update_profile("device", _manual({"auto_adapt": value}))
 
 
 @pytest.mark.ydb
@@ -168,19 +166,19 @@ def test_profile_numbers_accept_comma_or_point(tmp_path: Path, value: object) ->
     assert result["fields"]["gas_max_m3h"]["value"] == 2.69
 
 
-@pytest.mark.parametrize("value", ["2,6.9", "--2", "NaN", "Infinity", "-1", "0", True, ""])
 @pytest.mark.ydb
-def test_invalid_profile_number_does_not_change_existing_data(tmp_path: Path, value: object) -> None:
+def test_invalid_profile_number_does_not_change_existing_data(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
     original = store.update_profile("device", _manual({"gas_max_m3h": "2,69"}))
-    with pytest.raises(ValueError, match="positive finite"):
-        store.update_profile(
-            "device",
-            _manual({"gas_min_m3h": "1,5", "gas_max_m3h": value}),
-        )
-    after = store.profile("device")
-    assert after["fields"] == original["fields"]
-    assert after["history"] == original["history"]
+    for value in ("2,6.9", "--2", "NaN", "Infinity", "-1", "0", True, ""):
+        with pytest.raises(ValueError, match="positive finite"):
+            store.update_profile(
+                "device",
+                _manual({"gas_min_m3h": "1,5", "gas_max_m3h": value}),
+            )
+        after = store.profile("device")
+        assert after["fields"] == original["fields"]
+        assert after["history"] == original["history"]
 
 
 @pytest.mark.ydb
@@ -305,13 +303,13 @@ def test_gas_explicit_null_reading_id_is_create_only_and_reset_boundary_cannot_m
     assert store.gas("r1", "1970-01-20")["reading"]["id"] == reading["id"]
 
 
-@pytest.mark.parametrize("day", ["1970-1-20", "1970-01-32", "1970-01-20T00:00:00", 19700120])
 @pytest.mark.ydb
-def test_gas_selected_day_is_strict(tmp_path: Path, day: object) -> None:
+def test_gas_selected_day_is_strict(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
-    with pytest.raises(ValueError, match="YYYY-MM-DD"):
-        store.update_gas("r1", {"day": day, "value_m3": 10})
+    for day in ("1970-1-20", "1970-01-32", "1970-01-20T00:00:00", 19700120):
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            store.update_gas("r1", {"day": day, "value_m3": 10})
 
 
 @pytest.mark.ydb
@@ -345,15 +343,15 @@ def test_gas_reading_accepts_comma_or_point_with_exact_precision(tmp_path: Path,
     assert result["reading"]["value_m3"] == "10.250001"
 
 
-@pytest.mark.parametrize("value", ["1,2.3", "1.2,3", "NaN", "-1", True])
 @pytest.mark.ydb
-def test_invalid_gas_reading_does_not_change_existing_data(tmp_path: Path, value: object) -> None:
+def test_invalid_gas_reading_does_not_change_existing_data(tmp_path: Path) -> None:
     db, store = _store(tmp_path)
     _report(db, "r1", day=86400 * 20)
     original = store.update_gas("r1", {"value_m3": "10,25"})
-    with pytest.raises(ValueError):
-        store.update_gas("r1", {"value_m3": value})
-    assert store.gas("r1") == original
+    for value in ("1,2.3", "1.2,3", "NaN", "-1", True):
+        with pytest.raises(ValueError):
+            store.update_gas("r1", {"value_m3": value})
+        assert store.gas("r1") == original
 
 
 @pytest.mark.ydb

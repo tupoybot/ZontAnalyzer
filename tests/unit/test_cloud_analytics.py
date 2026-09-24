@@ -31,18 +31,16 @@ def test_analytics_uses_existing_pure_calculations_without_storage() -> None:
     assert result["events"][0]["kind"] == "temperature_below_heating_setpoint"
 
 
-@pytest.mark.parametrize(
-    "change",
-    [
+def test_analytics_rejects_unbounded_or_ambiguous_series() -> None:
+    changes = [
         lambda payload: payload.update({"period_end": "2026-09-03T00:00:00Z"}),
         lambda payload: payload["samples"].append(payload["samples"][0]),
         lambda payload: payload["samples"].__setitem__(0, {"timestamp": "2026-09-01T00:00:00", "value": 20}),
         lambda payload: payload["samples"].__setitem__(1, {"timestamp": "2026-09-01T00:10:00Z", "value": float("nan")}),
-    ],
-)
-def test_analytics_rejects_unbounded_or_ambiguous_series(change) -> None:  # type: ignore[no-untyped-def]
-    payload = _payload()
-    change(payload)
+    ]
+    for change in changes:
+        payload = _payload()
+        change(payload)
 
-    with pytest.raises(ValidationError):
-        AnalyticsInput.model_validate(payload)
+        with pytest.raises(ValidationError):
+            AnalyticsInput.model_validate(payload)

@@ -65,18 +65,19 @@ def test_settings_concurrent_saves_cannot_overwrite_each_other(store: AISettings
     assert len(store.view()["history"]) == 1
 
 
-@pytest.mark.parametrize("values", [
-    {"enabled": "false"}, {"review_enabled": 0}, {"review_interval_days": True},
-    {"review_interval_days": 0}, {"review_interval_days": 366}, {"api_key": "secret"},
-    {"daily_model": "gpt-nonexistent"}, {"daily_model": "gpt-6-astra", "daily_reasoning_effort": "none"},
-    {"review_reasoning_effort": "invented"}, {"daily_model": "gpt-5-mini", "daily_reasoning_effort": "max"},
-])
 @pytest.mark.ydb
-def test_invalid_settings_leave_audit_and_state_unchanged(store: AISettingsStore, values: dict) -> None:
+def test_invalid_settings_leave_audit_and_state_unchanged(store: AISettingsStore) -> None:
     before = store.view()
-    with pytest.raises(ValueError):
-        store.save({"expected_version": before["version"], "values": values})
-    assert store.view() == before
+    invalid_values = [
+        {"enabled": "false"}, {"review_enabled": 0}, {"review_interval_days": True},
+        {"review_interval_days": 0}, {"review_interval_days": 366}, {"api_key": "secret"},
+        {"daily_model": "gpt-nonexistent"}, {"daily_model": "gpt-6-astra", "daily_reasoning_effort": "none"},
+        {"review_reasoning_effort": "invented"}, {"daily_model": "gpt-5-mini", "daily_reasoning_effort": "max"},
+    ]
+    for values in invalid_values:
+        with pytest.raises(ValueError):
+            store.save({"expected_version": before["version"], "values": values})
+        assert store.view() == before
 
 
 @pytest.mark.ydb

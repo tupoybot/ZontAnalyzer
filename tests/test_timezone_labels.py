@@ -30,9 +30,9 @@ def test_etc_gmt_uses_the_posix_opposite_sign() -> None:
     assert timezone_label("Etc/GMT+3") == "UTC-3"
 
 
-@pytest.mark.parametrize("zone", ["Europe/Samara", "America/New_York", "Etc/GMT-99", "UTC+04:30", ""])
-def test_unknown_or_fractional_zones_are_preserved(zone: str) -> None:
-    assert timezone_label(zone) == zone
+def test_unknown_or_fractional_zones_are_preserved() -> None:
+    for zone in ("Europe/Samara", "America/New_York", "Etc/GMT-99", "UTC+04:30", ""):
+        assert timezone_label(zone) == zone
 
 
 @pytest.mark.parametrize("zone", ["GMT", "Etc/UTC", "Etc/GMT", "Etc/GMT+0"])
