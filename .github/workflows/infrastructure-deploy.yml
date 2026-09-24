@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       application_image:
-        description: Verified cloud candidate digest (empty selects private configuration)
+        description: Verified cloud candidate digest (empty selects latest compatible successful release)
         type: string
         required: false
       apply:
@@ -29,6 +29,7 @@ jobs:
     environment: cloud-dev
     permissions:
       contents: read
+      actions: read
       id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -48,7 +49,6 @@ jobs:
           STATE_ACCESS_KEY: ${{ secrets.M1_STATE_ACCESS_KEY }}
           STATE_SECRET_KEY: ${{ secrets.M1_STATE_SECRET_KEY }}
           DEPLOY_SERVICE_ACCOUNT: ${{ secrets.M1_DEPLOY_SERVICE_ACCOUNT }}
-          APPLICATION_IMAGE: ${{ inputs.application_image }}
         run: |
           set -euo pipefail
           umask 077
@@ -62,8 +62,8 @@ jobs:
           mkdir -p "$private/cloud-work"
           printf '%s' "$SCOPE" > "$private/scope.json"
           printf '%s' "$BACKEND" > "$private/cloud.tfbackend.json"
-          printf '%s' "$CONFIG" | jq --arg image "$APPLICATION_IMAGE" \
-            'if $image != "" then .application_image=$image else . end' > "$private/cloud-work/inputs.tfvars.json"
+          printf '%s' "$CONFIG" | jq 'del(.application_image, .application_revision)' \
+            > "$private/cloud-work/inputs.tfvars.json"
           printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' \
             "$STATE_ACCESS_KEY" "$STATE_SECRET_KEY" > "$private/state.env"
           docker build -t zont-m1-tools:local infra/tools
@@ -72,6 +72,11 @@ jobs:
             --mount "type=bind,src=$private,dst=/private,readonly" \
             zont-m1-tools:local python /scripts/check-scope.py \
             /private/scope.json /private/cloud-work/inputs.tfvars.json /private/cloud.tfbackend.json
+      - name: Select a verified application release independently of environment secrets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLICATION_IMAGE: ${{ inputs.application_image }}
+        run: node infra/scripts/select_application_candidate.mjs "$RUNNER_TEMP/m1"
       - name: Exchange the protected GitHub identity
         env:
           DEPLOY_SERVICE_ACCOUNT: ${{ secrets.M1_DEPLOY_SERVICE_ACCOUNT }}
@@ -138,7 +143,7 @@ jobs:
           [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
           test "$(jq -er '.Labels["org.zont.runtime"]' "$private/application-source-inspect.json")" = cloud
           git merge-base --is-ancestor "$commit" HEAD
-          git diff --exit-code "$commit" HEAD -- src migrations Dockerfile .dockerignore pyproject.toml README.md alembic.ini >/dev/null
+          git diff --exit-code "$commit" HEAD -- src Dockerfile .dockerignore pyproject.toml README.md >/dev/null
           run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/application-release.yml/runs?head_sha=$commit&status=success" \
             --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")][0].id')
           [[ "$run_id" =~ ^[0-9]+$ ]]
@@ -164,7 +169,7 @@ jobs:
       - name: Plan infrastructure without publishing its private output
         run: infra/deploy.sh plan "$RUNNER_TEMP/m1"
       - name: Apply the selected artifact and environment
-        if: inputs.apply || (github.event_name == 'push' && startsWith(github.event.head_commit.message, '[m2-apply] '))
+        if: inputs.apply || (github.event_name == 'push' && startsWith(github.event.head_commit.message, '[cloud-apply] '))
         run: infra/deploy.sh apply "$RUNNER_TEMP/m1"
       - name: Preserve private deployment evidence
         if: always() && steps.configuration.outcome == 'success'

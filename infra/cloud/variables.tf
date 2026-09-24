@@ -76,6 +76,16 @@ variable "application_revision" {
   }
 }
 
+variable "application_ydb_namespace" {
+  description = "Explicit isolated application schema selected for import and runtime."
+  type        = string
+  sensitive   = true
+  validation {
+    condition     = can(regex("^[a-zA-Z][a-zA-Z0-9_]{0,63}$", var.application_ydb_namespace))
+    error_message = "Use a YDB namespace of up to 64 letters, digits and underscores, starting with a letter."
+  }
+}
+
 variable "openai_smoke_model" {
   description = "Exact selected model used only by the bounded M2 OpenAI access check."
   type        = string

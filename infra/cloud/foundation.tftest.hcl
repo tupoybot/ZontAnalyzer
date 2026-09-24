@@ -20,6 +20,7 @@ variables {
   probe_image                = "cr.yandex/test/probe@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   application_image          = "cr.yandex/test/application@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   application_revision       = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  application_ydb_namespace  = "test_application"
   openai_smoke_model         = "gpt-5.2"
   secret_version_id          = "test-version"
 }
@@ -57,8 +58,8 @@ run "isolated_defaults" {
     error_message = "The initial probe must have bounded invocation resources."
   }
   assert {
-    condition     = yandex_serverless_container.application.memory == 512 && yandex_serverless_container.application.cores == 1 && yandex_serverless_container.application.core_fraction == 100 && yandex_serverless_container.application.concurrency == 1 && yandex_serverless_container.application.execution_timeout == "30s"
-    error_message = "The application must have the bounded M2 runtime budget."
+    condition     = yandex_serverless_container.application.memory == 512 && yandex_serverless_container.application.cores == 1 && yandex_serverless_container.application.core_fraction == 100 && yandex_serverless_container.application.concurrency == 1 && yandex_serverless_container.application.execution_timeout == "210s"
+    error_message = "The application must have the bounded report runtime budget."
   }
   assert {
     condition     = length(yandex_serverless_container.application.mounts) == 0
@@ -138,9 +139,21 @@ run "gateway_routes_use_the_correct_container" {
     error_message = "Application readiness and diagnostics routes must invoke the application container."
   }
   assert {
-    condition     = alltrue([for path in ["/jobs/analytics", "/jobs/integrations"] : yamldecode(yandex_api_gateway.probe.spec).paths[path]["post"]["x-yc-apigateway-integration"].container_id == "application-container"])
+    condition     = alltrue([for path in ["/jobs/analytics", "/jobs/integrations", "/jobs/reports"] : yamldecode(yandex_api_gateway.probe.spec).paths[path]["post"]["x-yc-apigateway-integration"].container_id == "application-container"])
     error_message = "Application job routes must invoke the application container."
   }
+  assert {
+    condition     = yandex_api_gateway.probe.execution_timeout == "210" && yandex_serverless_container.application.image[0].environment.CLOUD_REPORT_TIMEOUT_SECONDS == "180"
+    error_message = "The gateway and container must allow the bounded report job to finish."
+  }
+}
+
+run "reject_invalid_application_namespace" {
+  command = plan
+  variables {
+    application_ydb_namespace = "../other"
+  }
+  expect_failures = [var.application_ydb_namespace]
 }
 
 run "reject_production" {

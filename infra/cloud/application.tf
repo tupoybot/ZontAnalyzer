@@ -5,7 +5,7 @@ resource "yandex_serverless_container" "application" {
   cores              = 1
   core_fraction      = 100
   concurrency        = 1
-  execution_timeout  = "30s"
+  execution_timeout  = "210s"
   service_account_id = var.runtime_service_account_id
 
   runtime {
@@ -19,8 +19,13 @@ resource "yandex_serverless_container" "application" {
       CLOUD_ENVIRONMENT             = var.environment
       CLOUD_REVISION                = var.application_revision
       CLOUD_JOB_TIMEOUT_SECONDS     = "15"
+      CLOUD_REPORT_TIMEOUT_SECONDS  = "180"
       CLOUD_OPENAI_MODEL            = var.openai_smoke_model
       CLOUD_OPENAI_ACCESS_CONFIRMED = var.openai_access_confirmed ? "true" : "false"
+      YDB_ENDPOINT                  = "grpcs://${yandex_ydb_database_serverless.probe.ydb_api_endpoint}"
+      YDB_DATABASE                  = yandex_ydb_database_serverless.probe.database_path
+      YDB_NAMESPACE                 = var.application_ydb_namespace
+      YDB_METADATA_CREDENTIALS      = "1"
     }
   }
 
@@ -77,7 +82,14 @@ resource "yandex_serverless_container" "application" {
   depends_on = [
     yandex_container_registry_iam_binding.pull,
     yandex_lockbox_secret_iam_binding.runtime,
+    yandex_ydb_database_iam_binding.application,
   ]
+}
+
+resource "yandex_ydb_database_iam_binding" "application" {
+  database_id = yandex_ydb_database_serverless.probe.id
+  role        = "ydb.editor"
+  members     = ["serviceAccount:${var.runtime_service_account_id}"]
 }
 
 resource "yandex_serverless_container_iam_binding" "application_invoker" {

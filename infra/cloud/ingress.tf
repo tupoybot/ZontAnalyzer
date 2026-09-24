@@ -9,11 +9,12 @@ resource "yandex_cm_certificate" "probe" {
 }
 
 resource "yandex_api_gateway" "probe" {
-  folder_id = data.yandex_resourcemanager_folder.project.id
-  name      = "${local.name}-web"
+  folder_id         = data.yandex_resourcemanager_folder.project.id
+  name              = "${local.name}-web"
+  execution_timeout = "210"
   spec = yamlencode({
     openapi = "3.0.0"
-    info    = { title = "Isolated M1 probe and M2 application", version = "2.0" }
+    info    = { title = "Isolated probe and YDB application", version = "4.0" }
     paths = merge(
       {
         for path in ["/api/probe", "/private/probe.txt"] : path => {
@@ -40,7 +41,7 @@ resource "yandex_api_gateway" "probe" {
         }
       },
       {
-        for path in ["/jobs/analytics", "/jobs/integrations"] : path => {
+        for path in ["/jobs/analytics", "/jobs/integrations", "/jobs/reports"] : path => {
           post = {
             responses = { "200" = { description = "Bounded application job completed" } }
             "x-yc-apigateway-integration" = {
