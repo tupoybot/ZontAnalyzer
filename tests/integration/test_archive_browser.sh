@@ -26,7 +26,7 @@ test -d "$project_root/tests/integration/browser/node_modules/playwright" || {
 
 docker network create "$network" >/dev/null
 docker run -d --name "$ydb" --hostname "$ydb" --network "$network" --memory 5g \
-    -e GRPC_PORT=2136 -e MON_PORT=8765 -e YDB_USE_IN_MEMORY_PDISKS=1 \
+    -e GRPC_PORT=2136 -e MON_PORT=8765 -e YDB_USE_IN_MEMORY_PDISKS=true \
     -e YDB_DEFAULT_LOG_LEVEL=WARN \
     ydbplatform/local-ydb@sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402 >/dev/null
 docker run --rm --network "$network" --entrypoint python zont-analyzer:stage18-candidate -c '
@@ -38,6 +38,7 @@ while time.monotonic()<deadline:
     except OSError: time.sleep(1)
 else: raise SystemExit("YDB did not become ready")
 ' "$ydb"
+sh "$project_root/deploy/assert-ydb-memory.sh" "$ydb" zont-analyzer:stage18-candidate
 
 install -d "$fixture_dir/data" "$fixture_dir/publish"
 # The production image runs as the unprivileged zont UID; these are disposable

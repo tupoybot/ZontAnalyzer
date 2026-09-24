@@ -42,12 +42,12 @@ const metadata = {
   tests_tree_sha256: null,
   test_image: image,
   test_image_id: null,
+  test_image_fingerprint: null,
   ydb_image_digest: null,
   command: 'deploy/check-ydb.sh',
   args,
   pytest_args: ['-ra', '-p', 'no:cacheprovider', ...args],
   cpu_count: os.cpus().length,
-  cpu_model: os.cpus()[0]?.model || null,
   memory_total_bytes: os.totalmem(),
   docker_daemon: null,
   container_limits: {},
@@ -55,6 +55,7 @@ const metadata = {
   preparation_end_epoch_ms: null,
   finished_epoch_ms: null,
   exit_status: null,
+  sampling_errors: 0,
 };
 const save = () => writeFileSync(path.join(actual, 'run.json'), JSON.stringify(metadata, null, 2) + '\n');
 const command = (bin, cmdArgs) => {
@@ -62,6 +63,13 @@ const command = (bin, cmdArgs) => {
   if (result.status !== 0) throw new Error(`${bin} ${cmdArgs[0]} failed: ${(result.stderr || '').trim()}`);
   return result.stdout.trim();
 };
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+  }
+  return value;
+}
 function hashTests() {
   const listed = spawnSync('git', ['ls-files', '-z', '--', 'tests'], { cwd: root });
   if (listed.status !== 0) throw new Error('git ls-files tests failed');
@@ -108,12 +116,13 @@ async function sample() {
         appendFileSync(path.join(actual, 'docker-stats.jsonl'), JSON.stringify({
           epoch_ms: Date.now(), container: name.endsWith('-ydb') ? 'ydb' : 'test',
           cpu_percent: row.CPUPerc, memory_usage: row.MemUsage,
-          memory_percent: row.MemPerc, pids: row.PIDs,
+          memory_percent: row.MemPerc, pids: row.PIDs, block_io: row.BlockIO,
         }) + '\n');
       }
     }
   } catch {
     // A container may exit between ps and stats; the next sample can still succeed.
+    metadata.sampling_errors += 1;
   } finally {
     sampling = false;
   }
@@ -122,7 +131,16 @@ async function sample() {
 try {
   metadata.commit = command('git', ['rev-parse', 'HEAD']);
   metadata.tests_tree_sha256 = hashTests();
-  metadata.test_image_id = command('docker', ['image', 'inspect', '--format', '{{.Id}}', image]);
+  const inspected = JSON.parse(command('docker', ['image', 'inspect', image]))[0];
+  metadata.test_image_id = inspected.Id;
+  // Docker's classic and containerd stores expose different kinds of image IDs.
+  // Compare the immutable filesystem layers and execution configuration instead.
+  const configKeys = ['Cmd', 'Entrypoint', 'Env', 'User', 'WorkingDir', 'Labels', 'Volumes', 'ExposedPorts', 'StopSignal'];
+  const fingerprint = canonical({
+    architecture: inspected.Architecture, os: inspected.Os, layers: inspected.RootFS.Layers,
+    config: Object.fromEntries(configKeys.map(key => [key, inspected.Config[key] ?? null])),
+  });
+  metadata.test_image_fingerprint = 'sha256:' + createHash('sha256').update(JSON.stringify(fingerprint)).digest('hex');
   const [daemonCpus, daemonMemory] = command('docker', ['info', '--format', '{{.NCPU}} {{.MemTotal}}']).split(' ');
   metadata.docker_daemon = { cpu_count: Number(daemonCpus), memory_total_bytes: Number(daemonMemory) };
   const script = readFileSync(path.join(root, 'deploy/check-ydb.sh'), 'utf8');

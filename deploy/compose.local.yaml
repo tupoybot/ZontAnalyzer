@@ -25,7 +25,7 @@ services:
     environment:
       GRPC_PORT: "2136"
       MON_PORT: "8765"
-      YDB_USE_IN_MEMORY_PDISKS: "1"
+      YDB_USE_IN_MEMORY_PDISKS: "true"
       YDB_DEFAULT_LOG_LEVEL: WARN
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/2136'"]

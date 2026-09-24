@@ -40,7 +40,7 @@ stamp preparation end
 PHASE=ydb_startup
 stamp ydb_startup start
 docker run -d --name "$NAME" --hostname "$NAME" --network "$NAME" --memory 5g \
-    -e GRPC_PORT=2136 -e MON_PORT=8765 -e YDB_USE_IN_MEMORY_PDISKS=1 \
+    -e GRPC_PORT=2136 -e MON_PORT=8765 -e YDB_USE_IN_MEMORY_PDISKS=true \
     -e YDB_DEFAULT_LOG_LEVEL=WARN "$YDB_IMAGE" >/dev/null
 stamp ydb_startup end
 PHASE=ydb_readiness
@@ -55,6 +55,11 @@ while time.monotonic()<deadline:
     except OSError: time.sleep(1)
 else: raise SystemExit("YDB did not become ready")
 ' "$NAME"
+if [ -n "$METRICS_DIR" ]; then
+    sh "$ROOT/deploy/assert-ydb-memory.sh" "$NAME" "$IMAGE" > "$METRICS_DIR/storage-mode.json"
+else
+    sh "$ROOT/deploy/assert-ydb-memory.sh" "$NAME" "$IMAGE"
+fi
 stamp ydb_readiness end
 PHASE=pytest
 stamp pytest start
