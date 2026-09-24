@@ -53,13 +53,13 @@ def review_state(runtime: Runtime) -> dict[str, Any]:
         AISettingsStore(runtime.db, runtime.config).snapshot(),
     )
     with _lock:
-        thread = _threads.get(str(runtime.db.path))
+        thread = _threads.get(runtime.db.identity)
         result["running"] = result["running"] or bool(thread and thread.is_alive())
     return result
 
 
 def start_review(runtime: Runtime, *, manual: bool = False) -> bool:
-    key = str(runtime.db.path)
+    key = runtime.db.identity
     settings = AISettingsStore(runtime.db, runtime.config).snapshot()
     catalog = OpenAIModelCatalog()
     store = ModelReviewStore(runtime.db, catalog, assessments=local_assessments(runtime))

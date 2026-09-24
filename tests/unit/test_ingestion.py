@@ -1,3 +1,4 @@
+"""YDB ingestion contract: bounded coverage, independent sources, and role links."""
 from __future__ import annotations
 
 import json
@@ -7,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 
-from zont_analyzer.adapters.sqlite import Database
+from tests.ydb_support import make_database
 from zont_analyzer.adapters.zont_readonly import ZontReadOnlyClient
 from zont_analyzer.adapters.zont_readonly.client import infer_role
 from zont_analyzer.application.analysis import _select_control_temperature_series
@@ -21,579 +22,243 @@ from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import SourceEvent, TelemetryPoint
 
 CONTRACT_FIXTURES = Path(__file__).parents[1] / "fixtures" / "zont_contract"
+NOW = datetime(2026, 8, 25, 12, tzinfo=UTC)
+
+
+class RecordingClient:
+    def __init__(self) -> None:
+        self.history_calls: list[dict[str, Any]] = []
+        self.event_calls: list[dict[str, Any]] = []
+        self.fail_history_once = False
+        self.late_point = False
+
+    def discover_devices(self) -> list[dict[str, Any]]:
+        return [{"device_id": 1, "name": "fixture"}]
+
+    def load_history(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.history_calls.append(kwargs)
+        if self.fail_history_once:
+            self.fail_history_once = False
+            raise RuntimeError("temporary source error")
+        return [{"device_id": 1, "ok": True, "start": kwargs["start"], "end": kwargs["end"]}]
+
+    def normalize_history(self, response: dict[str, Any]) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
+        at = NOW - timedelta(minutes=90) if self.late_point else response["start"] + timedelta(minutes=1)
+        if not response["start"] <= at < response["end"]:
+            return [], {}
+        return [TelemetryPoint(device_id="1", source_type="temperature", entity_id="zont:1:temperature:1",
+                               metric_key="temperature", timestamp_utc=at, value_num=21, unit="°C")], {}
+
+    def load_events(self, **kwargs: Any) -> list[list[Any]]:
+        self.event_calls.append(kwargs)
+        at = NOW - timedelta(minutes=20)
+        return [["power", int(at.timestamp()), "PowerOn"]] if kwargs["start"] <= at < kwargs["end"] else []
+
+    def normalize_events(self, device_id: str, rows: list[list[Any]]) -> list[SourceEvent]:
+        return ZontReadOnlyClient.normalize_events(device_id, rows)
+
+
+def _service(tmp_path: Path) -> tuple[Any, IngestionService, RecordingClient]:
+    db = make_database(tmp_path)
+    client = RecordingClient()
+    config = AppConfig()
+    config.zont.history_data_types = ["temperature"]
+    return db, IngestionService(db, cast(ZontReadOnlyClient, client), config), client
+
+
+def _seed_points(db: Any, points: list[TelemetryPoint]) -> None:
+    start = min(point.timestamp_utc for point in points) - timedelta(seconds=1)
+    end = max(point.timestamp_utc for point in points) + timedelta(seconds=1)
+    db.telemetry.write_window(device_id="1", data_type="fixture", start=start, end=end,
+                              points=points, state="complete")
 
 
 def test_same_second_connection_events_apply_disconnect_before_restore() -> None:
     timestamp = datetime(2026, 8, 25, tzinfo=UTC)
-    events = [
-        SourceEvent(id="a-restore", device_id="1", event_type="connected", timestamp_utc=timestamp),
-        SourceEvent(id="z-loss", device_id="1", event_type="disconnected", timestamp_utc=timestamp),
-    ]
-
+    events = [SourceEvent(id="a-restore", device_id="1", event_type="connected", timestamp_utc=timestamp),
+              SourceEvent(id="z-loss", device_id="1", event_type="disconnected", timestamp_utc=timestamp)]
     state = _record_connection_events({}, events)
-
     assert state["open_disconnect_at"] is None
     assert state["pending_replay_start"] == timestamp
     assert state["pending_restore_at"] == timestamp
 
 
-def test_explicit_backfill_replays_requested_interval_despite_current_cursor(tmp_path: Path) -> None:
-    class RecordingClient:
-        def __init__(self) -> None:
-            self.history_calls: list[dict[str, object]] = []
-            self.event_calls: list[dict[str, object]] = []
-
-        def discover_devices(self) -> list[dict[str, object]]:
-            return [{"device_id": 1, "name": "test"}]
-
-        def load_history(self, **kwargs: object) -> list[dict[str, object]]:
-            self.history_calls.append(kwargs)
-            return [{"device_id": 1, "ok": True, "dta": {}}]
-
-        def normalize_history(
-            self, _response: dict[str, object]
-        ) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
-            return [], {}
-
-        def load_events(self, **_kwargs: object) -> list[list[Any]]:
-            self.event_calls.append(_kwargs)
-            return []
-
-        def normalize_events(self, _device_id: str, _events: list[list[Any]]) -> list[Any]:
-            return []
-
-    now = datetime(2026, 8, 25, 12, tzinfo=UTC)
-    requested_start = now - timedelta(days=1)
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
-    db.upsert_samples(
-        [
-            TelemetryPoint(
-                device_id="1",
-                source_type="z3k_temperature",
-                entity_id="zont:1:z3k_temperature:1",
-                metric_key="z3k_temperature",
-                timestamp_utc=now - timedelta(days=30),
-                value_num=20.0,
-                unit="°C",
-            )
-        ]
-    )
-    db.set_cursor("1", "temperature", now)
-    db.set_cursor("1", "raw_events", now)
-    client = RecordingClient()
-
-    result = IngestionService(db, cast(ZontReadOnlyClient, client), AppConfig()).sync(
-        backfill=timedelta(days=1),
-        now=now,
-    )
-
-    assert result["complete"] is True
-    assert result["windows"] == 1
-    assert client.history_calls[0]["start"] == requested_start
-    assert client.history_calls[0]["end"] == now
-    assert client.event_calls[0]["start"] == requested_start
+def test_explicit_backfill_uses_requested_interval_and_bounded_calls(tmp_path: Path) -> None:
+    db, service, client = _service(tmp_path)
+    db.save_devices(client.discover_devices())
+    db.telemetry.write_window(device_id="1", data_type="temperature", start=NOW - timedelta(hours=1),
+                              end=NOW, state="empty")
+    result = service.sync(backfill=timedelta(days=90), now=NOW, max_requests=2)
+    assert result["requests"] == 2 and not result["complete"]
+    assert len(client.history_calls) + len(client.event_calls) == 2
+    assert client.history_calls[0]["start"] == NOW - timedelta(days=90)
+    assert all(call["end"] - call["start"] <= timedelta(minutes=30)
+               for call in client.history_calls + client.event_calls)
+    before = len(client.history_calls) + len(client.event_calls)
+    service.sync(backfill=timedelta(days=90), now=NOW, max_requests=2)
+    assert len(client.history_calls) + len(client.event_calls) == before + 2
+    assert all(call["start"] >= NOW - timedelta(days=90)
+               for call in client.history_calls + client.event_calls)
 
 
-def test_history_failure_does_not_hide_events_and_both_paths_retry_without_duplicates(tmp_path: Path) -> None:
-    class FlakyClient:
-        def __init__(self) -> None:
-            self.history_calls = 0
-            self.event_calls = 0
-
-        def discover_devices(self) -> list[dict[str, object]]:
-            return [{"device_id": 1, "name": "test"}]
-
-        def load_history(self, **_kwargs: object) -> list[dict[str, object]]:
-            self.history_calls += 1
-            if self.history_calls == 1:
-                raise RuntimeError("history unavailable")
-            return [{"device_id": 1, "ok": True}]
-
-        def normalize_history(
-            self, _response: dict[str, object]
-        ) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
-            return [
-                TelemetryPoint(
-                    device_id="1",
-                    source_type="z3k_temperature",
-                    entity_id="zont:1:z3k_temperature:1",
-                    metric_key="z3k_temperature",
-                    timestamp_utc=now - timedelta(minutes=30),
-                    value_num=20.0,
-                    unit="°C",
-                )
-            ], {}
-
-        def load_events(self, **_kwargs: object) -> list[list[Any]]:
-            self.event_calls += 1
-            return [["event", int((now - timedelta(minutes=20)).timestamp()), "OTFound"]]
-
-        def normalize_events(self, device_id: str, events: list[list[Any]]) -> list[Any]:
-            return ZontReadOnlyClient.normalize_events(device_id, events)
-
-    now = datetime(2026, 8, 25, 12, tzinfo=UTC)
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
-    client = FlakyClient()
-    config = AppConfig.model_validate({"zont": {"history_data_types": ["z3k_temperature"]}})
-    service = IngestionService(db, cast(ZontReadOnlyClient, client), config)
-
-    interrupted = service.sync(now=now)
-    completed = service.sync(now=now)
-
-    assert interrupted["complete"] is False
-    assert interrupted["source_events"] == 1
-    assert completed["complete"] is True
-    assert client.history_calls == 2
-    assert client.event_calls == 2
-    assert len(db.list_source_events(now - timedelta(days=1), now)) == 1
-    assert len(db.fetch_samples(1, now - timedelta(hours=1), now)) == 1
+def test_history_failure_keeps_event_coverage_and_retries_without_duplicates(tmp_path: Path) -> None:
+    db, service, client = _service(tmp_path)
+    client.fail_history_once = True
+    first = service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=2)
+    assert not first["complete"] and first["failed_windows"] == 1
+    assert first["source_events"] == 1
+    assert db.get_cursor("1", "temperature") is None
+    assert db.get_cursor("1", "raw_events") == NOW
+    second = service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=2)
+    assert second["complete"]
+    assert len(client.history_calls) == 2 and len(client.event_calls) == 1
+    assert len(db.list_source_events(NOW - timedelta(hours=1), NOW)) == 1
+    assert len(db.fetch_samples(db.list_series()[0]["id"], NOW - timedelta(hours=1), NOW)) == 1
 
 
-def test_normal_sync_replays_late_telemetry_and_events_with_two_hour_overlap(tmp_path: Path) -> None:
-    class ReplayClient:
-        def __init__(self) -> None:
-            self.history_calls: list[dict[str, object]] = []
-            self.event_calls: list[dict[str, object]] = []
-
-        def discover_devices(self) -> list[dict[str, object]]:
-            return [{"device_id": 1, "name": "test"}]
-
-        def load_history(self, **kwargs: object) -> list[dict[str, object]]:
-            self.history_calls.append(kwargs)
-            return [{"device_id": 1, "ok": True}]
-
-        def normalize_history(
-            self, _response: dict[str, object]
-        ) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
-            timestamps = [now - timedelta(minutes=10)]
-            if len(self.history_calls) > 1:
-                timestamps.append(now - timedelta(minutes=90))
-            return [
-                TelemetryPoint(
-                    device_id="1",
-                    source_type="z3k_temperature",
-                    entity_id="zont:1:z3k_temperature:1",
-                    metric_key="z3k_temperature",
-                    timestamp_utc=timestamp,
-                    value_num=20.0,
-                    unit="°C",
-                )
-                for timestamp in timestamps
-            ], {}
-
-        def load_events(self, **kwargs: object) -> list[list[Any]]:
-            self.event_calls.append(kwargs)
-            return [["event", int((now - timedelta(minutes=80)).timestamp()), "OTFound"]]
-
-        def normalize_events(self, device_id: str, events: list[list[Any]]) -> list[Any]:
-            return ZontReadOnlyClient.normalize_events(device_id, events)
-
-    now = datetime(2026, 8, 25, 12, tzinfo=UTC)
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
-    db.set_cursor("1", "history_bootstrap_complete:z3k_temperature", now - timedelta(days=1))
-    db.set_cursor("1", "z3k_temperature", now - timedelta(hours=2))
-    client = ReplayClient()
-    config = AppConfig.model_validate({"zont": {"history_data_types": ["z3k_temperature"]}})
-    service = IngestionService(db, cast(ZontReadOnlyClient, client), config)
-
-    first = service.sync(now=now)
-    second = service.sync(now=now + timedelta(minutes=10))
-
-    assert first["complete"] is True
-    assert second["complete"] is True
-    assert client.history_calls[0]["start"] == now - timedelta(hours=4)
-    assert client.history_calls[1]["start"] == now - timedelta(hours=2)
-    series_id = db.list_series()[0]["id"]
-    assert len(db.fetch_samples(series_id, now - timedelta(hours=2), now)) == 2
-    assert len(db.list_source_events(now - timedelta(days=1), now)) == 1
-    assert client.event_calls[1]["start"] == now - timedelta(hours=2)
+def test_normal_sync_replays_late_history_and_events_with_two_hour_overlap(tmp_path: Path) -> None:
+    db, service, client = _service(tmp_path)
+    db.save_devices(client.discover_devices())
+    start = NOW - timedelta(hours=2)
+    for data_type in ("temperature", "raw_events"):
+        db.telemetry.write_window(device_id="1", data_type=data_type,
+                                  start=NOW - timedelta(days=1), end=start, state="empty")
+    first = service.sync(backfill=timedelta(hours=2), now=NOW, max_requests=8)
+    assert first["complete"]
+    client.late_point = True
+    second = service.sync(now=NOW + timedelta(minutes=10), max_requests=16)
+    assert second["complete"]
+    assert any(call["start"] <= NOW - timedelta(minutes=90) for call in client.history_calls[4:])
+    samples = db.fetch_samples(db.list_series()[0]["id"], NOW - timedelta(hours=2), NOW)
+    assert NOW - timedelta(minutes=90) in {at for at, _ in samples}
+    assert len(samples) >= 5
+    assert len(db.list_source_events(start, NOW)) == 1
 
 
-def test_reconnect_replays_history_before_overlap_and_retries_once(tmp_path: Path) -> None:
-    class ReconnectClient:
-        def __init__(self) -> None:
-            self.history_calls: list[dict[str, object]] = []
-            self.event_calls = 0
-            self.fail_recovery_once = True
-
-        def discover_devices(self) -> list[dict[str, object]]:
-            return [{"device_id": 1, "name": "test"}]
-
-        def load_history(self, **kwargs: object) -> list[dict[str, object]]:
-            self.history_calls.append(kwargs)
-            start = cast(datetime, kwargs["start"])
-            if (
-                len(self.history_calls) >= 3
-                and start <= disconnect_at - timedelta(hours=2)
-                and self.fail_recovery_once
-            ):
-                self.fail_recovery_once = False
-                raise RuntimeError("temporary recovery failure")
-            return [{"device_id": 1, "ok": True, "start": start}]
-
-        def normalize_history(
-            self, response: dict[str, object]
-        ) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
-            if cast(datetime, response["start"]) > buffered_at or len(self.history_calls) == 4:
-                return [], {}
-            return [
-                TelemetryPoint(
-                    device_id="1",
-                    source_type="z3k_temperature",
-                    entity_id="zont:1:z3k_temperature:1",
-                    metric_key="z3k_temperature",
-                    timestamp_utc=buffered_at,
-                    value_num=19.5,
-                    unit="°C",
-                ),
-                TelemetryPoint(
-                    device_id="1",
-                    source_type="z3k_temperature",
-                    entity_id="zont:1:z3k_temperature:1",
-                    metric_key="z3k_temperature",
-                    timestamp_utc=observed_after_restore,
-                    value_num=19.7,
-                    unit="°C",
-                ),
-            ], {}
-
-        def load_events(self, **kwargs: object) -> list[list[Any]]:
-            self.event_calls += 1
-            if self.event_calls == 5:
-                raise RuntimeError("temporary event failure")
-            rows = [
-                ["disconnect", int(disconnect_at.timestamp()), "disconnected"],
-                ["buffered-power", int(buffered_event_at.timestamp()), "PowerOn"],
-                ["restore", int(restored_at.timestamp()), "reconnected"],
-            ]
-            start = cast(datetime, kwargs["start"])
-            end = cast(datetime, kwargs["end"])
-            return [row for row in rows if start <= datetime.fromtimestamp(row[1], UTC) <= end]
-
-        def normalize_events(self, device_id: str, events: list[list[Any]]) -> list[Any]:
-            return ZontReadOnlyClient.normalize_events(device_id, events)
-
-    disconnect_at = datetime(2026, 8, 25, 0, tzinfo=UTC)
-    buffered_at = disconnect_at + timedelta(hours=1)
-    buffered_event_at = disconnect_at + timedelta(hours=1, minutes=30)
-    restored_at = disconnect_at + timedelta(hours=5)
-    observed_after_restore = restored_at + timedelta(minutes=5)
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
-    db.set_cursor("1", "history_bootstrap_complete:z3k_temperature", disconnect_at)
-    db.set_cursor("1", "z3k_temperature", disconnect_at)
-    client = ReconnectClient()
-    config = AppConfig.model_validate({"zont": {"history_data_types": ["z3k_temperature"]}})
-    service = IngestionService(db, cast(ZontReadOnlyClient, client), config)
-
-    service.sync(now=disconnect_at + timedelta(minutes=30))
-    # Regular successful empty responses can advance while the controller is
-    # offline, leaving buffered device history older than the normal overlap.
-    db.set_cursor("1", "z3k_temperature", restored_at - timedelta(minutes=30))
-    db.set_cursor("1", "raw_events", restored_at - timedelta(minutes=30))
-    restored = service.sync(now=restored_at)
-    failed_replay = service.sync(now=restored_at + timedelta(minutes=30))
-    empty_replay = service.sync(now=restored_at + timedelta(hours=1))
-    empty_recovery_state = json.loads(db.get_app_meta("connection_recovery:1") or "{}")
-    failed_event_replay = service.sync(now=restored_at + timedelta(hours=1, minutes=30))
-    completed_replay = service.sync(now=restored_at + timedelta(hours=2))
-    ordinary_next = service.sync(now=restored_at + timedelta(hours=2, minutes=30))
-
-    assert restored["complete"] is True
-    assert failed_replay["complete"] is False
-    assert empty_replay["complete"] is True
-    assert "pending_replay_start" in empty_recovery_state
-    assert failed_event_replay["complete"] is False
-    assert completed_replay["complete"] is True
-    assert ordinary_next["complete"] is True
-    recovery_starts = [cast(datetime, call["start"]) for call in client.history_calls]
-    assert recovery_starts[2] == disconnect_at - timedelta(hours=2)
-    assert recovery_starts[3] == disconnect_at - timedelta(hours=2)
-    assert recovery_starts[4] == disconnect_at - timedelta(hours=2)
-    assert recovery_starts[5] == disconnect_at - timedelta(hours=2)
-    assert recovery_starts[6] == restored_at
-    assert client.event_calls == 7
-    series_id = db.list_series()[0]["id"]
-    recovered_samples = db.fetch_samples(series_id, disconnect_at, restored_at)
-    assert len(recovered_samples) == 1
-    assert recovered_samples[0][0] == buffered_at
+def test_reconnect_state_requires_recovered_sample_and_survives_retry(tmp_path: Path) -> None:
+    db, service, client = _service(tmp_path)
+    disconnected = NOW - timedelta(hours=5)
+    restored = NOW - timedelta(hours=1)
+    db.save_devices(client.discover_devices())
+    db.set_app_meta("connection_recovery:1", json.dumps({
+        "pending_replay_start": disconnected.isoformat(),
+        "pending_restore_at": restored.isoformat(),
+    }))
+    client.fail_history_once = True
+    failed = service.sync(now=NOW, max_requests=2)
+    assert not failed["complete"]
+    pending = json.loads(db.get_app_meta("connection_recovery:1") or "{}")
+    assert pending["pending_replay_start"] == disconnected.isoformat()
+    assert min(call["start"] for call in client.history_calls) <= disconnected - timedelta(hours=2)
+    # A later successful window with post-restore evidence closes the replay state.
+    db.telemetry.write_window(device_id="1", data_type="temperature", start=restored,
+                              end=restored + timedelta(minutes=30),
+                              points=[TelemetryPoint(device_id="1", source_type="temperature",
+                                                     entity_id="zont:1:temperature:1", metric_key="temperature",
+                                                     timestamp_utc=restored + timedelta(minutes=1),
+                                                     value_num=21, unit="°C")], state="complete")
+    assert db.fetch_device_sample_timestamps("1", restored, NOW)
+    replay_start = disconnected - timedelta(hours=2)
+    for data_type in ("temperature", "raw_events"):
+        db.telemetry.write_window(device_id="1", data_type=data_type,
+                                  start=replay_start + timedelta(minutes=30), end=NOW, state="empty")
+    completed = service.sync(now=NOW, max_requests=16)
+    for _ in range(5):
+        if completed["complete"]:
+            break
+        completed = service.sync(now=NOW, max_requests=16)
+    assert completed["complete"]
+    assert len(client.history_calls) >= 2
+    assert client.history_calls[1]["start"] == replay_start
     recovery = json.loads(db.get_app_meta("connection_recovery:1") or "{}")
-    assert recovery == {"handled_restore_at": restored_at.isoformat()}
-    events = db.list_source_events(disconnect_at, restored_at + timedelta(seconds=1))
-    assert [event.event_type for event in events] == ["disconnected", "PowerOn", "reconnected"]
+    assert recovery == {"handled_restore_at": restored.isoformat()}
 
 
-@pytest.mark.parametrize("existing_event_cursor", [False, True])
-def test_empty_database_bootstrap_retries_the_all_time_request_and_reports_observed_range(
-    tmp_path: Path, existing_event_cursor: bool,
-) -> None:
-    class PagingClient:
-        def __init__(self) -> None:
-            self.history_calls: list[dict[str, object]] = []
-            self.event_calls: list[dict[str, object]] = []
-            self.calls = 0
+def test_reconnect_rereads_completed_history_to_capture_late_buffered_sample(tmp_path: Path) -> None:
+    db, service, client = _service(tmp_path)
+    disconnected = NOW - timedelta(hours=5)
+    restored = NOW - timedelta(hours=1)
+    buffered = disconnected + timedelta(hours=1)
+    replay_start = disconnected - timedelta(hours=2)
+    db.save_devices(client.discover_devices())
+    # These windows were already checked while the controller was offline.
+    for data_type in ("temperature", "raw_events"):
+        db.telemetry.write_window(device_id="1", data_type=data_type,
+                                  start=replay_start, end=NOW, state="empty")
+    db.set_app_meta("connection_recovery:1", json.dumps({
+        "pending_replay_start": disconnected.isoformat(),
+        "pending_restore_at": restored.isoformat(),
+    }))
 
-        def discover_devices(self) -> list[dict[str, object]]:
-            return [{"device_id": 1, "name": "test"}]
-
-        def load_history(self, **kwargs: object) -> list[dict[str, object]]:
-            self.history_calls.append(kwargs)
-            self.calls += 1
-            if self.calls == 1:
-                return [{"device_id": 1, "ok": False, "error": "temporary"}]
-            timestamp = now - timedelta(days=30)
-            return [
-                {
-                    "device_id": 1,
-                    "ok": True,
-                    "time_truncated": True,
-                    "timestamp": timestamp,
-                }
-            ]
-
-        def normalize_history(
-            self, response: dict[str, object]
-        ) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
-            timestamp = cast(datetime, response["timestamp"])
-            return (
-                [
-                    TelemetryPoint(
-                        device_id="1",
-                        source_type="z3k_temperature",
-                        entity_id="zont:1:z3k_temperature:1",
-                        metric_key="z3k_temperature",
-                        timestamp_utc=timestamp,
-                        value_num=20.0,
-                        unit="°C",
-                    )
-                ],
-                {},
-            )
-
-        def load_events(self, **_kwargs: object) -> list[list[Any]]:
-            self.event_calls.append(_kwargs)
-            event_time = now - timedelta(days=29)
-            if cast(datetime, _kwargs['start']) <= event_time:
-                return [['older-event', int(event_time.timestamp()), 'PowerOn']]
-            return []
-
-        def normalize_events(self, _device_id: str, _events: list[list[Any]]) -> list[Any]:
-            return ZontReadOnlyClient.normalize_events(_device_id, _events)
-
-    now = datetime(2026, 8, 25, 12, tzinfo=UTC)
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
-    client = PagingClient()
-    if existing_event_cursor:
-        db.set_cursor("1", "raw_events", now)
-    config = AppConfig.model_validate({"zont": {"history_data_types": ["z3k_temperature"]}})
-    service = IngestionService(db, cast(ZontReadOnlyClient, client), config)
-
-    interrupted = service.sync(now=now)
-
-    assert interrupted["complete"] is False
-    assert client.history_calls[0]["start"] == datetime.fromtimestamp(0, UTC)
-    assert client.history_calls[0]["end"] == now
-    assert db.get_cursor("1", "raw_events") == (now if existing_event_cursor else None)
-
-    completed = service.sync(now=now)
-
-    assert completed["complete"] is True
-    assert client.history_calls[1]["start"] == datetime.fromtimestamp(0, UTC)
-    assert client.history_calls[1]["end"] == now
-    assert completed["history_range"] == {
-        "first_observed": (now - timedelta(days=30)).isoformat(),
-        "last_observed": (now - timedelta(days=30)).isoformat(),
-    }
-    assert completed["bootstrap_ranges"] == {
-        "1:z3k_temperature": {
-            "requested_start": datetime.fromtimestamp(0, UTC).isoformat(),
-            "requested_end": now.isoformat(),
-            "time_truncated": True,
-            "first_observed": (now - timedelta(days=30)).isoformat(),
-            "last_observed": (now - timedelta(days=30)).isoformat(),
-        }
-    }
-    assert db.get_cursor("1", "z3k_temperature") == now
-    assert db.get_cursor("1", "raw_events") == now
-    assert client.event_calls[-1]['start'] == now - timedelta(days=30)
-    assert len(db.list_source_events(now - timedelta(days=30), now)) == 1
-
-
-def test_empty_bootstrap_response_records_no_invented_bounds_and_completes(tmp_path: Path) -> None:
-    class EmptyArchiveClient:
-        def __init__(self) -> None:
-            self.history_calls: list[dict[str, object]] = []
-
-        def discover_devices(self) -> list[dict[str, object]]:
-            return [{"device_id": 1, "name": "test"}]
-
-        def load_history(self, **kwargs: object) -> list[dict[str, object]]:
-            self.history_calls.append(kwargs)
-            return [{"device_id": 1, "ok": True, "time_truncated": True}]
-
-        def normalize_history(
-            self, _response: dict[str, object]
-        ) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
+    def buffered_history(response: dict[str, Any]) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
+        if not response["start"] <= buffered < response["end"]:
             return [], {}
+        return [TelemetryPoint(device_id="1", source_type="temperature", entity_id="zont:1:temperature:1",
+                               metric_key="temperature", timestamp_utc=buffered,
+                               value_num=20, unit="°C")], {}
 
-        def load_events(self, **_kwargs: object) -> list[list[Any]]:
-            return []
+    client.normalize_history = buffered_history  # type: ignore[method-assign]
+    first = service.sync(now=NOW, max_requests=24)
+    assert first["requests"] <= 24
+    for _ in range(3):
+        if any(call["start"] <= buffered < call["end"] for call in client.history_calls):
+            break
+        service.sync(now=NOW, max_requests=24)
+    assert any(call["start"] <= buffered < call["end"] for call in client.history_calls)
+    assert buffered in {at for at, _ in db.fetch_samples(db.list_series()[0]["id"], replay_start, NOW)}
+    assert json.loads(db.get_app_meta("connection_recovery:1") or "{}")["pending_replay_start"]
 
-        def normalize_events(self, _device_id: str, _events: list[list[Any]]) -> list[Any]:
-            return []
 
-    now = datetime(2026, 8, 25, 12, tzinfo=UTC)
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
-    client = EmptyArchiveClient()
-    config = AppConfig.model_validate({"zont": {"history_data_types": ["z3k_temperature"]}})
+def test_new_restore_waits_for_separate_replay_before_marking_handled(tmp_path: Path) -> None:
+    db, service, client = _service(tmp_path)
+    disconnected = NOW - timedelta(minutes=100)
+    restored = NOW - timedelta(minutes=50)
+    db.save_devices(client.discover_devices())
+    for data_type in ("temperature", "raw_events"):
+        db.telemetry.write_window(device_id="1", data_type=data_type,
+                                  start=NOW - timedelta(hours=2), end=NOW, state="empty")
 
-    result = IngestionService(db, cast(ZontReadOnlyClient, client), config).sync(now=now)
+    def events(**kwargs: Any) -> list[list[Any]]:
+        client.event_calls.append(kwargs)
+        return [[label, int(at.timestamp()), event_type]
+                for label, at, event_type in (("loss", disconnected, "disconnected"),
+                                              ("restore", restored, "reconnected"))
+                if kwargs["start"] <= at < kwargs["end"]]
 
-    assert result["complete"] is True
+    client.load_events = events  # type: ignore[method-assign]
+    first = service.sync(now=NOW, max_requests=8)
+    state = json.loads(db.get_app_meta("connection_recovery:1") or "{}")
+    assert not first["complete"]
+    assert state["pending_replay_start"] == disconnected.isoformat()
+    assert "handled_restore_at" not in state
+
+
+def test_empty_bootstrap_has_no_invented_observation_bounds(tmp_path: Path) -> None:
+    db, service, client = _service(tmp_path)
+    client.normalize_history = lambda _response: ([], {})  # type: ignore[method-assign]
+    result = service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=2)
+    assert result["complete"]
     assert result["history_range"] == {"first_observed": None, "last_observed": None}
-    assert result["bootstrap_ranges"] == {
-        "1:z3k_temperature": {
-            "requested_start": datetime.fromtimestamp(0, UTC).isoformat(),
-            "requested_end": now.isoformat(),
-            "time_truncated": True,
-            "first_observed": None,
-            "last_observed": None,
-        }
-    }
-    assert db.get_cursor("1", "z3k_temperature") == now
+    assert db.get_cursor("1", "temperature") == NOW
 
 
-def test_bootstrap_transport_error_is_reported_and_retried(tmp_path: Path) -> None:
-    class FlakyClient:
-        def __init__(self) -> None:
-            self.calls = 0
+def test_oversized_source_response_is_split_before_storage(tmp_path: Path) -> None:
+    db, service, client = _service(tmp_path)
+    start = NOW - timedelta(minutes=30)
 
-        def discover_devices(self) -> list[dict[str, object]]:
-            return [{"device_id": 1, "name": "test"}]
+    def too_many(_response: dict[str, Any]) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
+        return [TelemetryPoint(device_id="1", source_type="temperature",
+                               entity_id=f"zont:1:temperature:{entity}", metric_key="temperature",
+                               timestamp_utc=start + timedelta(seconds=second),
+                               value_num=20, unit="°C")
+                for entity in (1, 2) for second in range(1800)], {}
 
-        def load_history(self, **_kwargs: object) -> list[dict[str, object]]:
-            self.calls += 1
-            if self.calls == 1:
-                raise RuntimeError("connection reset")
-            return [{"device_id": 1, "ok": True}]
-
-        def normalize_history(
-            self, _response: dict[str, object]
-        ) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
-            return [], {}
-
-        def load_events(self, **_kwargs: object) -> list[list[Any]]:
-            return []
-
-        def normalize_events(self, _device_id: str, _events: list[list[Any]]) -> list[Any]:
-            return []
-
-    now = datetime(2026, 8, 25, 12, tzinfo=UTC)
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
-    client = FlakyClient()
-    config = AppConfig.model_validate({"zont": {"history_data_types": ["z3k_temperature"]}})
-    service = IngestionService(db, cast(ZontReadOnlyClient, client), config)
-
-    interrupted = service.sync(now=now)
-    assert db.get_cursor("1", "history_bootstrap_complete:z3k_temperature") is None
-    completed = service.sync(now=now)
-
-    assert interrupted["complete"] is False
-    assert interrupted["failed_windows"] == 1
-    assert interrupted["errors"] == [
-        f"{datetime.fromtimestamp(0, UTC).isoformat()} history request: RuntimeError: connection reset",
-        "bootstrap device 1 data type z3k_temperature: no successful response",
-    ]
-    assert client.calls == 2
-    assert db.get_cursor("1", "history_bootstrap_complete:z3k_temperature") == now
-    assert completed["complete"] is True
-
-
-def test_bootstrap_streams_real_client_points_in_bounded_batches_and_filters_requested_window(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    class StreamingClient:
-        def discover_devices(self) -> list[dict[str, object]]:
-            return [{"device_id": 1, "name": "test"}]
-
-        def load_history(self, **_kwargs: object) -> list[dict[str, object]]:
-            return [{"device_id": 1, "ok": True}]
-
-        def normalize_history(
-            self, _response: dict[str, object]
-        ) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
-            raise AssertionError("ingestion must use the streaming normalizer when it is available")
-
-        def iter_normalized_history(
-            self, _response: dict[str, object]
-        ) -> tuple[object, dict[str, dict[str, Any]]]:
-            def points() -> object:
-                yield TelemetryPoint(
-                    device_id="1",
-                    source_type="z3k_boiler_adapter",
-                    entity_id="zont:1:z3k_boiler_adapter:1",
-                    metric_key="bt",
-                    timestamp_utc=now + timedelta(seconds=1),
-                    value_num=0.0,
-                    unit="°C",
-                )
-                for index in range(4_001):
-                    yield TelemetryPoint(
-                        device_id="1",
-                        source_type="z3k_boiler_adapter",
-                        entity_id="zont:1:z3k_boiler_adapter:1",
-                        metric_key="bt",
-                        timestamp_utc=now - timedelta(seconds=index),
-                        value_num=float(index),
-                        unit="°C",
-                    )
-
-            return points(), {
-                "zont:1:z3k_boiler_adapter:1": {
-                    "device_id": "1",
-                    "source_type": "z3k_boiler_adapter",
-                    "external_id": "1",
-                    "display_name": "boiler",
-                    "role": "flow_temperature",
-                    "confidence": 1.0,
-                    "unit": "°C",
-                }
-            }
-
-        def load_events(self, **_kwargs: object) -> list[list[Any]]:
-            return []
-
-        def normalize_events(self, _device_id: str, _events: list[list[Any]]) -> list[Any]:
-            return []
-
-    now = datetime(2026, 8, 25, 12, tzinfo=UTC)
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
-    batch_sizes: list[int] = []
-    original_upsert = db.upsert_samples
-
-    def record_batches(points: object, roles: dict[str, str] | None = None) -> int:
-        batch = list(cast(list[TelemetryPoint], points))
-        batch_sizes.append(len(batch))
-        return original_upsert(batch, roles)
-
-    monkeypatch.setattr(db, "upsert_samples", record_batches)
-    config = AppConfig.model_validate({"zont": {"history_data_types": ["z3k_boiler_adapter"]}})
-
-    result = IngestionService(db, cast(ZontReadOnlyClient, StreamingClient()), config).sync(now=now)
-
-    assert result["complete"] is True
-    assert batch_sizes == [2_000, 2_000, 1]
-    assert result["history_range"] == {
-        "first_observed": (now - timedelta(seconds=4_000)).isoformat(),
-        "last_observed": now.isoformat(),
-    }
+    client.normalize_history = too_many  # type: ignore[method-assign]
+    first = service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=1)
+    assert not first["complete"] and first["requests"] == 1
+    assert first["samples"] == 0
+    assert db.get_app_meta("collection-window-seconds:1:temperature") == "900"
+    assert db.list_series() == []
 
 
 def test_heating_circuit_target_sensor_is_indoor_regardless_of_room_name() -> None:
@@ -742,10 +407,9 @@ def test_sensor_roles_follow_config_link_not_import_order(tmp_path: Path, sensor
         ]
     )
 
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     db.save_devices([raw_device])
-    db.upsert_samples(ordered_points)
+    _seed_points(db, ordered_points)
     service = IngestionService(db, cast(ZontReadOnlyClient, object()), AppConfig())
     service._refresh_series_roles(devices, {}, _object_names(devices))
 
@@ -795,10 +459,9 @@ def test_user_override_can_select_new_primary_without_reclassifying_radio_humidi
     config = AppConfig.model_validate(
         {"entity_overrides": {"zont:1:z3k_radio_sensor:102": {"role": "control_indoor_temperature"}}}
     )
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     db.save_devices([raw_device])
-    db.upsert_samples(points)
+    _seed_points(db, points)
     IngestionService(db, cast(ZontReadOnlyClient, object()), config)._refresh_series_roles(
         devices, {}, _object_names(devices)
     )

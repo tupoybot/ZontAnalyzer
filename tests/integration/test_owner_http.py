@@ -8,15 +8,15 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.ydb_support import make_runtime
 from zont_analyzer.application.feedback import build_feedback_server
 from zont_analyzer.application.pilot import reports_directory
 from zont_analyzer.application.publication import publish_reports
-from zont_analyzer.runtime import build_runtime
 
 
 @pytest.fixture
 def owner_server(tmp_path: Path):
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     runtime.config.feedback.listen_port = 0
     runtime.config.feedback.public_api_base_url = "/api"
     runtime.db.save_devices([{"id": "test-device", "_equipment": {
@@ -83,7 +83,7 @@ def test_gas_writes_do_not_wait_for_publication_and_survive_restart(owner_server
             fcntl.flock(lock, fcntl.LOCK_UN)
 
     # The worker's publisher uses durable state, without an in-memory job.
-    restarted = build_runtime(None, runtime.loaded.data_dir)
+    restarted = make_runtime(runtime.loaded.data_dir)
     from zont_analyzer.application import publication
 
     def fail(*args, **kwargs):

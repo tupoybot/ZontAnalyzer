@@ -45,6 +45,7 @@ class RuntimeConfig:
     revision: str
     authorization: str
     xray_proxy_port: int = 1080
+    report_timeout_seconds: float = 180
 
     @classmethod
     def from_environment(cls) -> RuntimeConfig:
@@ -57,9 +58,10 @@ class RuntimeConfig:
         try:
             port = int(os.environ.get("PORT", "8080"))
             timeout = float(os.environ.get("CLOUD_JOB_TIMEOUT_SECONDS", "15"))
+            report_timeout = float(os.environ.get("CLOUD_REPORT_TIMEOUT_SECONDS", "180"))
         except ValueError as exc:
             raise ValueError("invalid cloud runtime numeric configuration") from exc
-        if not 1 <= port <= 65535 or not 1 <= timeout <= 20:
+        if not 1 <= port <= 65535 or not 1 <= timeout <= 20 or not 1 <= report_timeout <= 180:
             raise ValueError("cloud runtime limits are outside their allowed range")
         revision = os.environ.get("CLOUD_REVISION", "unknown")
         if not revision or len(revision) > 128:
@@ -70,6 +72,7 @@ class RuntimeConfig:
             job_timeout_seconds=timeout,
             revision=revision,
             authorization="Basic " + base64.b64encode(credentials.encode("utf-8")).decode("ascii"),
+            report_timeout_seconds=report_timeout,
         )
 
 
@@ -181,9 +184,18 @@ def _dispatch_integrations(payload: dict[str, Any]) -> dict[str, Any]:
     return integrations.check(payload)
 
 
+def _dispatch_reports(payload: dict[str, Any]) -> dict[str, Any]:
+    from zont_analyzer.cloud import report_jobs
+
+    request = dict(payload)
+    timeout = request.pop("_runtime_timeout_seconds")
+    return report_jobs.execute(request, timeout_seconds=timeout)
+
+
 DISPATCHERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "analytics": _dispatch_analytics,
     "integrations": _dispatch_integrations,
+    "reports": _dispatch_reports,
 }
 
 
@@ -259,6 +271,7 @@ class CloudHandler(BaseHTTPRequestHandler):
         endpoint = {
             "/jobs/analytics": "analytics",
             "/jobs/integrations": "integrations",
+            "/jobs/reports": "reports",
         }.get(self.path)
         if self.command != "POST" or endpoint is None:
             self._finish_input()
@@ -283,8 +296,12 @@ class CloudHandler(BaseHTTPRequestHandler):
                 request_payload = dict(payload)
                 if endpoint == "analytics":
                     request_payload["period_id"] = job_id
+                if endpoint == "reports":
+                    request_payload["_runtime_timeout_seconds"] = self.server.config.report_timeout_seconds
                 result = run_bounded(
-                    DISPATCHERS[endpoint], request_payload, self.server.config.job_timeout_seconds, self.server.stopping
+                    DISPATCHERS[endpoint], request_payload,
+                    (self.server.config.report_timeout_seconds if endpoint == "reports"
+                     else self.server.config.job_timeout_seconds), self.server.stopping,
                 )
             except JobTimeoutError:
                 self.server.counters.record("timeouts")

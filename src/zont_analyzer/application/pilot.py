@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from zont_analyzer.adapters.sqlite import Database
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.application.analysis import CALCULATION_VERSION
 from zont_analyzer.application.reasoning_context import reuse_ai_interpretation
 from zont_analyzer.domain import Report

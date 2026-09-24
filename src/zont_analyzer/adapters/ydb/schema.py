@@ -1,6 +1,23 @@
-"""Schema v1. No source retention TTL is applied to the application's history."""
+"""Schema v2. No source retention TTL is applied to the application's history."""
 
 TABLES = {
+    "migration_records": (
+        "source_table Utf8 NOT NULL, source_key Utf8 NOT NULL, target_table Utf8, target_key Utf8, "
+        "checksum Utf8, payload Utf8, PRIMARY KEY(source_table,source_key)"
+    ),
+    "app_meta": "key Utf8 NOT NULL, value Utf8, PRIMARY KEY(key)",
+    "ai_budget_months": (
+        "month Utf8 NOT NULL, reserved_tokens Int64, charged_tokens Int64, PRIMARY KEY(month)"
+    ),
+    "data_gaps": "id Int64 NOT NULL, payload Utf8, PRIMARY KEY(id)",
+    "analysis_periods": "id Utf8 NOT NULL, payload Utf8, PRIMARY KEY(id)",
+    "metric_values": "id Utf8 NOT NULL, period_id Utf8, payload Utf8, PRIMARY KEY(id)",
+    "detected_events": "id Utf8 NOT NULL, period_id Utf8, payload Utf8, PRIMARY KEY(id)",
+    "interventions": (
+        "id Utf8 NOT NULL, recommendation_id Utf8, applied_at Int64, payload Utf8, "
+        "INDEX by_applied_at GLOBAL SYNC ON (applied_at), PRIMARY KEY(id)"
+    ),
+    "intervention_experiments": "id Utf8 NOT NULL, intervention_id Utf8, payload Utf8, PRIMARY KEY(id)",
     "metadata": "name Utf8 NOT NULL, value Utf8, PRIMARY KEY (name)",
     "sequences": "name Utf8 NOT NULL, value Int64, PRIMARY KEY (name)",
     "devices": "id Utf8 NOT NULL, payload Utf8, PRIMARY KEY (id)",
@@ -50,6 +67,13 @@ TABLES = {
         "INDEX by_revision GLOBAL SYNC ON (revision), "
         "PRIMARY KEY (scope, identifier)"
     ),
+    "publication_items": (
+        "href Utf8 NOT NULL, report_id Utf8, kind Utf8, period_start Int64, period_end Int64, "
+        "generated_at Int64, digest Utf8, lo Double, hi Double, comparisons Bool, dirty Int64, "
+        "queued_at Int64, entry Utf8, json_stamp Utf8, html_stamp Utf8, "
+        "INDEX by_queue GLOBAL SYNC ON (dirty,queued_at), "
+        "INDEX by_kind_start GLOBAL SYNC ON (kind,period_start), PRIMARY KEY(href)"
+    ),
     "owner_profile_revisions": (
         "device_id Utf8 NOT NULL, revision Int64 NOT NULL, field Utf8 NOT NULL, effective_at Int64, payload Utf8, "
         "PRIMARY KEY (device_id, field, revision)"
@@ -76,11 +100,14 @@ TABLES = {
         "id Int64 NOT NULL, device_id Utf8, boundary_day Utf8, at Int64, payload Utf8, PRIMARY KEY (id)"
     ),
     "recommendations": (
-        "id Utf8 NOT NULL, report_id Utf8, payload Utf8, status Utf8, note Utf8, experiment Utf8, updated_at Int64, "
+        "id Utf8 NOT NULL, report_id Utf8, payload Utf8, status Utf8, note Utf8, experiment Utf8, "
+        "created_at Int64, updated_at Int64, "
         "PRIMARY KEY (id)"
     ),
     "recommendation_audit": "id Int64 NOT NULL, recommendation_id Utf8, at Int64, payload Utf8, PRIMARY KEY (id)",
-    "notification_outbox": "id Utf8 NOT NULL, report_id Utf8, payload Utf8, state Utf8, PRIMARY KEY (id)",
+    "notification_outbox": (
+        "id Utf8 NOT NULL, report_id Utf8, channel Utf8, payload Utf8, state Utf8, attempts Int64, PRIMARY KEY (id)"
+    ),
     "ai_response_cache": (
         "fingerprint Utf8 NOT NULL, payload Utf8, provenance Utf8, settings_version Utf8, model Utf8, "
         "created_at Int64, PRIMARY KEY (fingerprint)"

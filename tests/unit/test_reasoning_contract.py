@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from zont_analyzer.adapters.sqlite import Database
+from tests.ydb_support import make_database
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.domain import (
     EvidenceReference,
     Hypothesis,
@@ -109,10 +110,9 @@ def _report() -> Report:
     )
 
 
-def test_reasoning_contract_round_trips_through_sqlite_without_reference_rejection(tmp_path: Path) -> None:
+def test_reasoning_contract_round_trips_through_ydb_without_reference_rejection(tmp_path: Path) -> None:
     report = _report()
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db: Database = make_database(tmp_path)
     db.save_report(report, render_text(report))
 
     saved = db.report(report.id)

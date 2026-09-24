@@ -7,7 +7,14 @@ import httpx
 import pytest
 
 from zont_analyzer.cloud import integrations
-from zont_analyzer.cloud.egress import PolicyClient, UpstreamError, validate_config
+from zont_analyzer.cloud.egress import (
+    MAX_REPORT_REQUEST_BYTES,
+    MAX_REPORT_RESPONSE_BYTES,
+    PolicyClient,
+    ReportTransport,
+    UpstreamError,
+    validate_config,
+)
 
 
 def client_mock(monkeypatch, status=200, content=b'{}'):
@@ -116,3 +123,56 @@ def test_openai_exactly_one_metadata_request_without_generation(monkeypatch):
     request.assert_called_once_with('https://api.openai.com/v1/models/example-model',
                                     headers={'Authorization': 'Bearer private-token'})
     assert result['generation'] is False
+
+
+def test_report_transport_routes_zont_direct_and_responses_through_proxy(monkeypatch):
+    monkeypatch.setenv('HTTPS_PROXY', 'http://untrusted.invalid:80')
+    calls: list[tuple[str, str]] = []
+
+    def route(name):
+        def answer(request):
+            calls.append((name, request.url.path))
+            return httpx.Response(200, content=b'{}')
+        return httpx.MockTransport(answer)
+
+    with httpx.Client(transport=ReportTransport(direct=route('direct'), proxied=route('xray')),
+                      follow_redirects=False, trust_env=False) as client:
+        assert client.post('https://my.zont.online/api/load_data', json={'requests': []}).status_code == 200
+        assert client.post('https://my.zont.online/api/raw_events', json={}).status_code == 200
+        assert client.post('https://api.openai.com/v1/responses', json={'input': []}).status_code == 200
+        assert client.get('https://api.openai.com/v1/models/example').status_code == 200
+    assert calls == [('direct', '/api/load_data'), ('direct', '/api/raw_events'),
+                     ('xray', '/v1/responses'), ('xray', '/v1/models/example')]
+
+
+@pytest.mark.parametrize('url,method', [
+    ('https://my.zont.online/api/set_state', 'POST'),
+    ('https://api.openai.com/v1/chat/completions', 'POST'),
+    ('https://api.openai.com/v1/responses', 'GET'),
+    ('https://api.openai.com/v1/responses?foo=bar', 'POST'),
+    ('http://api.openai.com/v1/responses', 'POST'),
+    ('https://other.invalid/api/load_data', 'POST'),
+])
+def test_report_transport_rejects_unlisted_destination(url, method):
+    calls = []
+    backend = httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(200))
+    transport = ReportTransport(direct=backend, proxied=backend)
+    with httpx.Client(transport=transport) as client, pytest.raises(ValueError, match='destination denied'):
+        client.request(method, url)
+    assert calls == []
+
+
+def test_report_transport_bounds_bodies_and_rejects_redirects():
+    calls = []
+    backend = httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(302))
+    with httpx.Client(transport=ReportTransport(direct=backend, proxied=backend)) as client:
+        with pytest.raises(ValueError, match='request byte limit'):
+            client.post('https://my.zont.online/api/devices', content=b'x' * (MAX_REPORT_REQUEST_BYTES + 1))
+        assert calls == []
+        with pytest.raises(ValueError, match='redirect denied'):
+            client.post('https://my.zont.online/api/devices', json={})
+    oversized = httpx.MockTransport(lambda _request: httpx.Response(200, content=b'x' *
+                                                                (MAX_REPORT_RESPONSE_BYTES + 1)))
+    with (httpx.Client(transport=ReportTransport(direct=oversized, proxied=oversized)) as client,
+          pytest.raises(ValueError, match='response byte limit')):
+        client.post('https://my.zont.online/api/devices', json={})

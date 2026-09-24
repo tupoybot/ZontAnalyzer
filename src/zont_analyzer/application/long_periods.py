@@ -9,9 +9,7 @@ from statistics import median
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
-
-from zont_analyzer.adapters.sqlite.database import Database, ReportRow
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.analytics.evidence import EvidenceMetric
 from zont_analyzer.domain import DetectedEvent, MetricValue, QualityResult, Report
 from zont_analyzer.domain.periods import Period, midnight
@@ -124,144 +122,131 @@ def aggregate_long_period(db: Database, period: Period) -> Report:
     latest_end: datetime | None = None
     target_means: list[tuple[float, float]] = []
 
-    statement = (
-        select(ReportRow.canonical_json)
-        .where(
-            ReportRow.kind == "daily",
-            ReportRow.period_start >= int(period.start.timestamp()),
-            ReportRow.period_end <= int(period.observed_end.timestamp()),
-        )
-        .order_by(ReportRow.period_start, ReportRow.generated_at.desc())
-        .execution_options(yield_per=1)
-    )
-    with db.session() as session:
-        for encoded in session.scalars(statement):
-            report = Report.model_validate_json(encoded)
-            start_key = int(report.period_start.timestamp())
-            expected_day = expected_by_start.get(start_key)
-            if expected_day is None or start_key in seen_starts:
-                continue
-            day, expected_end = expected_day
-            if report.period_end != expected_end or report.generated_at < report.period_end:
-                continue
-            seen_starts.add(start_key)
-            duration = (report.period_end - report.period_start).total_seconds()
-            included_seconds += duration
-            included_dates.append(day.isoformat())
-            weighted_quality += report.quality.score * duration
-            weighted_coverage += report.quality.coverage_pct * duration
-            weighted_stuck += report.quality.stuck_pct * duration
-            max_gap = max(max_gap, report.quality.max_gap_seconds)
-            jumps += report.quality.implausible_jumps
-            sample_count += report.quality.sample_count
+    for report in db.daily_reports(period.start, period.observed_end):
+        start_key = int(report.period_start.timestamp())
+        expected_day = expected_by_start.get(start_key)
+        if expected_day is None or start_key in seen_starts:
+            continue
+        day, expected_end = expected_day
+        if report.period_end != expected_end or report.generated_at < report.period_end:
+            continue
+        seen_starts.add(start_key)
+        duration = (report.period_end - report.period_start).total_seconds()
+        included_seconds += duration
+        included_dates.append(day.isoformat())
+        weighted_quality += report.quality.score * duration
+        weighted_coverage += report.quality.coverage_pct * duration
+        weighted_stuck += report.quality.stuck_pct * duration
+        max_gap = max(max_gap, report.quality.max_gap_seconds)
+        jumps += report.quality.implausible_jumps
+        sample_count += report.quality.sample_count
 
-            metric_values = {item.name: item.value for item in report.metrics}
-            for report_metric in report.metrics:
-                key = (report_metric.name, report_metric.unit)
-                if report_metric.unit == "count" or report_metric.unit == "°C·h":
-                    additive[key] += report_metric.value
-                    additive_days[key] += 1
-                elif report_metric.name.endswith("mean_temperature_c"):
-                    role = (
-                        "outdoor_temperature"
-                        if report_metric.name.startswith("outdoor_")
-                        else "control_temperature"
-                    )
-                    coverage = _role_coverage(report, role)
-                    if coverage is None and role == "control_temperature":
-                        coverage = report.quality.coverage_pct
-                    if coverage is not None and coverage > 0:
-                        means[key].append((report_metric.value, duration * coverage / 100))
-
-            evidence = _daily_evidence(report)
-            evidence_by_name = {item.name: item for item in evidence}
-            target_signal = report.context.get("temporal_evidence", {}).get("quality", {}).get(
-                "target_temperature", {}
-            )
-            target_mean = report.context.get("period_target_mean_c", (
-                target_signal.get("mean") if isinstance(target_signal, dict) else None
-            ))
-            target_coverage = report.context.get("period_target_coverage_pct", (
-                target_signal.get("coverage_pct") if isinstance(target_signal, dict) else None
-            ))
-            if (
-                isinstance(target_mean, (int, float))
-                and isinstance(target_coverage, (int, float))
-                and target_coverage > 0
-            ):
-                target_means.append((float(target_mean), duration * float(target_coverage) / 100))
-            for evidence_metric in evidence:
-                if evidence_metric.value is None:
-                    continue
-                if evidence_metric.name in _DAILY_STATISTICS:
-                    daily_statistics[evidence_metric.name].append(evidence_metric.value)
-                if (
-                    evidence_metric.denominator is not None
-                    and evidence_metric.denominator > 0
-                    and evidence_metric.denominator_unit
-                    and evidence_metric.unit in {"ratio", "count/hour"}
-                ):
-                    rates[(evidence_metric.name, evidence_metric.unit, evidence_metric.denominator_unit)].append(
-                        (evidence_metric.value, evidence_metric.denominator)
-                    )
-            runtime_metric = evidence_by_name.get("burner_runtime_request_ratio")
-            temporal_windows = report.context.get("temporal_evidence", {}).get("windows", [])
-            delta_values = [
-                value
-                for item in temporal_windows
-                if not item.get("excluded_reasons")
-                for value in [item.get("facts", {}).get("delta_t_c", {}).get("mean")]
-                if isinstance(value, (int, float))
-            ]
-            if delta_values:
-                daily_statistics["delta_t_c"].append(median(delta_values))
-
-            for event in report.events:
-                entry = event_counts.setdefault(
-                    event.kind,
-                    {"count": 0, "severity": "info", "first": event.started_at, "last": event.started_at},
+        metric_values = {item.name: item.value for item in report.metrics}
+        for report_metric in report.metrics:
+            key = (report_metric.name, report_metric.unit)
+            if report_metric.unit == "count" or report_metric.unit == "°C·h":
+                additive[key] += report_metric.value
+                additive_days[key] += 1
+            elif report_metric.name.endswith("mean_temperature_c"):
+                role = (
+                    "outdoor_temperature"
+                    if report_metric.name.startswith("outdoor_")
+                    else "control_temperature"
                 )
-                entry["count"] += 1
-                entry["first"] = min(entry["first"], event.started_at)
-                entry["last"] = max(entry["last"], event.ended_at or event.started_at)
-                if {"info": 0, "warning": 1, "critical": 2}[event.severity] > {
-                    "info": 0, "warning": 1, "critical": 2
-                }[entry["severity"]]:
-                    entry["severity"] = event.severity
+                coverage = _role_coverage(report, role)
+                if coverage is None and role == "control_temperature":
+                    coverage = report.quality.coverage_pct
+                if coverage is not None and coverage > 0:
+                    means[key].append((report_metric.value, duration * coverage / 100))
 
-            day_windows.append(
-                {
-                    "id": f"evidence:long:{period.kind}:{start_key}:{ALGORITHM_VERSION}",
-                    "started_at": report.period_start.isoformat(),
-                    "ended_at": report.period_end.isoformat(),
-                    "timezone": period.timezone,
-                    "kind": "representative",
-                    "tags": ["daily_aggregate"],
-                    "excluded_reasons": [],
-                    "signals": {},
-                    "facts": {
-                        name: {"mean": value, "source": "derived"}
-                        for name, value in (
-                            ("outdoor_mean_temperature_c", metric_values.get("outdoor_mean_temperature_c")),
-                            ("mean_temperature_c", metric_values.get("mean_temperature_c")),
-                            (
-                                "burner_runtime_request_ratio",
-                                runtime_metric.value if runtime_metric is not None else None,
-                            ),
-                        )
-                        if isinstance(value, (int, float))
-                    },
-                    "source_report_id": report.id,
-                    "epistemic_level": "derived_from_daily_report",
-                }
+        evidence = _daily_evidence(report)
+        evidence_by_name = {item.name: item for item in evidence}
+        target_signal = report.context.get("temporal_evidence", {}).get("quality", {}).get(
+            "target_temperature", {}
+        )
+        target_mean = report.context.get("period_target_mean_c", (
+            target_signal.get("mean") if isinstance(target_signal, dict) else None
+        ))
+        target_coverage = report.context.get("period_target_coverage_pct", (
+            target_signal.get("coverage_pct") if isinstance(target_signal, dict) else None
+        ))
+        if (
+            isinstance(target_mean, (int, float))
+            and isinstance(target_coverage, (int, float))
+            and target_coverage > 0
+        ):
+            target_means.append((float(target_mean), duration * float(target_coverage) / 100))
+        for evidence_metric in evidence:
+            if evidence_metric.value is None:
+                continue
+            if evidence_metric.name in _DAILY_STATISTICS:
+                daily_statistics[evidence_metric.name].append(evidence_metric.value)
+            if (
+                evidence_metric.denominator is not None
+                and evidence_metric.denominator > 0
+                and evidence_metric.denominator_unit
+                and evidence_metric.unit in {"ratio", "count/hour"}
+            ):
+                rates[(evidence_metric.name, evidence_metric.unit, evidence_metric.denominator_unit)].append(
+                    (evidence_metric.value, evidence_metric.denominator)
+                )
+        runtime_metric = evidence_by_name.get("burner_runtime_request_ratio")
+        temporal_windows = report.context.get("temporal_evidence", {}).get("windows", [])
+        delta_values = [
+            value
+            for item in temporal_windows
+            if not item.get("excluded_reasons")
+            for value in [item.get("facts", {}).get("delta_t_c", {}).get("mean")]
+            if isinstance(value, (int, float))
+        ]
+        if delta_values:
+            daily_statistics["delta_t_c"].append(median(delta_values))
+
+        for event in report.events:
+            entry = event_counts.setdefault(
+                event.kind,
+                {"count": 0, "severity": "info", "first": event.started_at, "last": event.started_at},
             )
-            if latest_end is None or report.period_end > latest_end:
-                latest_end = report.period_end
-                latest_report_id = report.id
-                latest_context = {
-                    key: deepcopy(report.context[key]) for key in _LATEST_CONTEXT if key in report.context
-                }
+            entry["count"] += 1
+            entry["first"] = min(entry["first"], event.started_at)
+            entry["last"] = max(entry["last"], event.ended_at or event.started_at)
+            if {"info": 0, "warning": 1, "critical": 2}[event.severity] > {
+                "info": 0, "warning": 1, "critical": 2
+            }[entry["severity"]]:
+                entry["severity"] = event.severity
 
+        day_windows.append(
+            {
+                "id": f"evidence:long:{period.kind}:{start_key}:{ALGORITHM_VERSION}",
+                "started_at": report.period_start.isoformat(),
+                "ended_at": report.period_end.isoformat(),
+                "timezone": period.timezone,
+                "kind": "representative",
+                "tags": ["daily_aggregate"],
+                "excluded_reasons": [],
+                "signals": {},
+                "facts": {
+                    name: {"mean": value, "source": "derived"}
+                    for name, value in (
+                        ("outdoor_mean_temperature_c", metric_values.get("outdoor_mean_temperature_c")),
+                        ("mean_temperature_c", metric_values.get("mean_temperature_c")),
+                        (
+                            "burner_runtime_request_ratio",
+                            runtime_metric.value if runtime_metric is not None else None,
+                        ),
+                    )
+                    if isinstance(value, (int, float))
+                },
+                "source_report_id": report.id,
+                "epistemic_level": "derived_from_daily_report",
+            }
+        )
+        if latest_end is None or report.period_end > latest_end:
+            latest_end = report.period_end
+            latest_report_id = report.id
+            latest_context = {
+                key: deepcopy(report.context[key]) for key in _LATEST_CONTEXT if key in report.context
+            }
     expected_dates = [day.isoformat() for day, _start, _end in expected]
     included_set = set(included_dates)
     missing_dates = [day for day in expected_dates if day not in included_set]

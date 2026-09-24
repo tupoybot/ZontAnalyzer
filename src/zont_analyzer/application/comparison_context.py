@@ -9,9 +9,7 @@ from statistics import median
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
-
-from zont_analyzer.adapters.sqlite.database import Database, ReportRow
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.analytics.evidence import EvidenceMetric
 from zont_analyzer.application.period_comparison import ComparisonWindow, compare_periods, select_baseline
 from zont_analyzer.domain import Report
@@ -107,18 +105,7 @@ def daily_history(
     exclude_report_id: str | None = None,
 ) -> list[Report]:
     """Evenly spread days; load at most 32 canonical reports, never arbitrary raw telemetry."""
-    with db.session() as session:
-        rows = list(
-            session.execute(
-                select(ReportRow.id, ReportRow.period_start)
-                .where(
-                    ReportRow.kind == "daily",
-                    ReportRow.period_start >= int(start.timestamp()),
-                    ReportRow.period_end <= int(end.timestamp()),
-                )
-                .order_by(ReportRow.period_start)
-            )
-        )
+    rows = list(db.daily_report_catalogue(start, end))
     if exclude_report_id is not None:
         rows = [row for row in rows if str(row[0]) != exclude_report_id]
     if len(rows) > limit:

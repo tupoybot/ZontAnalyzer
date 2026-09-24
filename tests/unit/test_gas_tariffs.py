@@ -4,30 +4,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy import inspect
 
-from zont_analyzer.adapters.sqlite.database import AppMetaRow, Database
+from tests.ydb_support import make_database
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.application.gas_tariffs import CURRENCIES, GasTariffStore
 
 
 def _store(tmp_path: Path, timezone: str = "Europe/Moscow") -> tuple[Database, GasTariffStore]:
-    db = Database(tmp_path / "tariffs.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     return db, GasTariffStore(db, timezone)
-
-
-def test_migration_adds_tariff_tables_without_losing_existing_data(tmp_path: Path) -> None:
-    db = Database(tmp_path / "tariffs.sqlite3")
-    db._run_alembic(db._migration_config(), "upgrade", "e5a1f0c4d920")
-    with db.session() as session:
-        session.merge(AppMetaRow(key="preserved", value="yes"))
-
-    result = db.initialize()
-
-    assert result.previous_revision == "e5a1f0c4d920"
-    assert {"gas_tariffs", "gas_tariff_audit"} <= set(inspect(db.engine).get_table_names())
-    with db.session() as session:
-        assert session.get(AppMetaRow, "preserved").value == "yes"  # type: ignore[union-attr]
 
 
 def test_create_accepts_comma_decimal_and_month_start_uses_local_timezone(tmp_path: Path) -> None:
@@ -226,6 +211,4 @@ def test_invalid_payload_timezone_and_missing_id_are_rejected(tmp_path: Path) ->
     with pytest.raises(ValueError, match="timezone"):
         store.save({"price": 8, "currency": "RUB"}, timezone="Missing/Zone")
     with pytest.raises(ValueError, match="id"):
-        store.save(
-            {"action": "correct", "price": 9, "currency": "RUB", "correction_reason": "typo"}
-        )
+        store.save({"action": "correct", "price": 9, "currency": "RUB", "correction_reason": "typo"})

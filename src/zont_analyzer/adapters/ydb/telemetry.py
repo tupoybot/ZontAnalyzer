@@ -37,7 +37,9 @@ def next_id(tx: Transaction, name: str) -> int:
     return value
 
 
-def bump_revision(tx: Transaction, scope: str) -> int:
+def bump_revision(
+    tx: Transaction, scope: str, *, publication_scope: str | None = None, identifier: str = "",
+) -> int:
     rows = tx.execute(
         "DECLARE $scope AS Utf8; SELECT revision FROM revisions WHERE scope=$scope;", {"$scope": scope},
     )[0].rows
@@ -50,10 +52,10 @@ def bump_revision(tx: Transaction, scope: str) -> int:
     if scope != "publication":
         publication_revision = bump_revision(tx, "publication")
         tx.execute(
-            "DECLARE $scope AS Utf8; DECLARE $revision AS Int64; "
+            "DECLARE $scope AS Utf8; DECLARE $identifier AS Utf8; DECLARE $revision AS Int64; "
             "UPSERT INTO publication_changes (scope,identifier,revision,payload) "
-            "VALUES ($scope,'',$revision,'{}');",
-            {"$scope": scope, "$revision": publication_revision},
+            "VALUES ($scope,$identifier,$revision,'{}');",
+            {"$scope": publication_scope or scope, "$identifier": identifier, "$revision": publication_revision},
         )
     return revision
 
@@ -76,6 +78,9 @@ class TelemetryRepository:
                 tx: Transaction, device_id: str = device_id, payload: str = payload,
                 digest: str = digest, captured_at: int = captured_at,
             ) -> None:
+                previous = tx.execute(
+                    "DECLARE $id AS Utf8; SELECT payload FROM devices WHERE id=$id;", {"$id": device_id},
+                )[0].rows
                 tx.execute(
                     "DECLARE $id AS Utf8; DECLARE $payload AS Utf8; "
                     "UPSERT INTO devices (id,payload) VALUES ($id,$payload);",
@@ -96,6 +101,8 @@ class TelemetryRepository:
                         {"$id": device_id, "$hash": digest, "$n": snapshot_id,
                          "$payload": payload, "$at": captured_at},
                     )
+                if not previous or previous[0].payload != payload:
+                    bump_revision(tx, "device:" + device_id)
 
             self.db.transaction(write)
             saved += 1
@@ -152,10 +159,19 @@ class TelemetryRepository:
             "DECLARE $device AS Utf8; DECLARE $source AS Utf8; DECLARE $entity AS Utf8; DECLARE $metric AS Utf8; "
         )
         rows = tx.execute(
-            declarations + "SELECT id FROM telemetry_series WHERE device_id=$device AND source_type=$source "
+            declarations + "SELECT id,payload FROM telemetry_series WHERE device_id=$device AND source_type=$source "
             "AND entity_id=$entity AND metric_key=$metric;", params,
         )[0].rows
         if rows:
+            payload = json.loads(rows[0].payload)
+            if payload.get("unit") is None and point.unit is not None:
+                payload["unit"] = point.unit
+                tx.execute(
+                    declarations + "DECLARE $payload AS Utf8; UPDATE telemetry_series SET payload=$payload "
+                    "WHERE device_id=$device AND source_type=$source AND entity_id=$entity AND metric_key=$metric;",
+                    {**params, "$payload": encode(payload)},
+                )
+                bump_revision(tx, "series:" + point.device_id)
             return int(rows[0].id)
         series_id = next_id(tx, "telemetry_series")
         payload = {"id": series_id, "device_id": point.device_id, "source_type": point.source_type,
@@ -198,7 +214,7 @@ class TelemetryRepository:
         checked = int(datetime.now(UTC).timestamp() * 1_000_000)
 
         def write(tx: Transaction) -> int:
-            rows = []
+            rows: list[dict[str, Any]] = []
             changed = False
             series_cache: dict[tuple[str, str, str], int] = {}
             for point in samples:
@@ -209,12 +225,15 @@ class TelemetryRepository:
                              "value_num": point.value_num, "value_text": point.value_text,
                              "quality": point.quality, "ingested_at": checked})
             if rows:
+                key_type = (ydb.TupleType().add_element(ydb.PrimitiveType.Int64)
+                            .add_element(ydb.PrimitiveType.Int64))
                 old_rows = tx.execute(
-                    "DECLARE $ids AS List<Int64>; DECLARE $start AS Int64; DECLARE $end AS Int64; "
-                    "SELECT * FROM telemetry_samples WHERE series_id IN $ids "
-                    "AND timestamp_utc >= $start AND timestamp_utc <= $end;",
-                    {"$ids": ydb.TypedValue(list(series_cache.values()), ydb.ListType(ydb.PrimitiveType.Int64)),
-                     "$start": started, "$end": ended},
+                    "DECLARE $keys AS List<Tuple<Int64,Int64>>; "
+                    "SELECT * FROM telemetry_samples WHERE (series_id,timestamp_utc) IN $keys;",
+                    {"$keys": ydb.TypedValue(
+                        [(row["series_id"], row["timestamp_utc"]) for row in rows],
+                        ydb.ListType(key_type),
+                    )},
                 )[0].rows
                 existing = {(r.series_id, r.timestamp_utc): dict(r) for r in old_rows}
                 rows = [r for r in rows if any(
@@ -231,26 +250,52 @@ class TelemetryRepository:
                             .add_member("ingested_at", ydb.PrimitiveType.Int64))
                 tx.execute("UPSERT INTO telemetry_samples SELECT * FROM AS_TABLE($rows);",
                            {"$rows": ydb.TypedValue(rows, ydb.ListType(row_type))})
-            for event in source_events:
-                old_events = tx.execute(
-                    "DECLARE $id AS Utf8; SELECT device_id,timestamp_utc,payload FROM source_events VIEW by_id "
-                    "WHERE id=$id;", {"$id": event.id},
+            changed_times = {int(row["timestamp_utc"]) for row in rows}
+            if source_events:
+                # Source IDs identify canonical events even when the source
+                # corrects their timestamp. Resolve only this bounded batch of
+                # IDs, then move old keys and write new rows in the same commit.
+                by_id = {event.id: event for event in source_events}
+                ids = ydb.TypedValue(list(by_id), ydb.ListType(ydb.PrimitiveType.Utf8))
+                prior = tx.execute(
+                    "DECLARE $ids AS List<Utf8>; "
+                    "SELECT id,device_id,timestamp_utc,payload FROM source_events VIEW by_id "
+                    "WHERE id IN $ids;", {"$ids": ids},
                 )[0].rows
-                if old_events and old_events[0].payload == event.model_dump_json():
-                    continue
-                for old_event in old_events:
-                    tx.execute(
-                        "DECLARE $device AS Utf8; DECLARE $at AS Int64; DECLARE $id AS Utf8; "
-                        "DELETE FROM source_events WHERE device_id=$device AND timestamp_utc=$at AND id=$id;",
-                        {"$device": old_event.device_id, "$at": old_event.timestamp_utc, "$id": event.id},
-                    )
-                changed = True
-                tx.execute(
-                    "DECLARE $device AS Utf8; DECLARE $at AS Int64; DECLARE $id AS Utf8; DECLARE $payload AS Utf8; "
-                    "UPSERT INTO source_events (device_id,timestamp_utc,id,payload) VALUES ($device,$at,$id,$payload);",
-                    {"$device": device_id, "$at": utc_seconds(event.timestamp_utc),
-                     "$id": event.id, "$payload": event.model_dump_json()},
-                )
+                old_by_id: dict[str, list[Any]] = {}
+                for old in prior:
+                    old_by_id.setdefault(str(old.id), []).append(old)
+                old_keys: list[dict[str, Any]] = []
+                new_rows: list[dict[str, Any]] = []
+                for event_id, event in by_id.items():
+                    payload = event.model_dump_json()
+                    previous = old_by_id.get(event_id, [])
+                    if previous and previous[0].payload == payload:
+                        continue
+                    for old in previous:
+                        old_keys.append({"device_id": str(old.device_id),
+                                         "timestamp_utc": int(old.timestamp_utc), "id": event_id})
+                        changed_times.add(int(old.timestamp_utc))
+                    new_rows.append({"device_id": device_id, "timestamp_utc": utc_seconds(event.timestamp_utc),
+                                     "id": event_id, "payload": payload})
+                    changed_times.add(utc_seconds(event.timestamp_utc))
+                if new_rows:
+                    changed = True
+                    if old_keys:
+                        key_type = (ydb.StructType().add_member("device_id", ydb.PrimitiveType.Utf8)
+                                    .add_member("timestamp_utc", ydb.PrimitiveType.Int64)
+                                    .add_member("id", ydb.PrimitiveType.Utf8))
+                        tx.execute("DECLARE $keys AS List<Struct<device_id:Utf8,timestamp_utc:Int64,id:Utf8>>; "
+                                   "DELETE FROM source_events ON SELECT * FROM AS_TABLE($keys);",
+                                   {"$keys": ydb.TypedValue(old_keys, ydb.ListType(key_type))})
+                    row_type = (ydb.StructType().add_member("device_id", ydb.PrimitiveType.Utf8)
+                                .add_member("timestamp_utc", ydb.PrimitiveType.Int64)
+                                .add_member("id", ydb.PrimitiveType.Utf8)
+                                .add_member("payload", ydb.PrimitiveType.Utf8))
+                    tx.execute("DECLARE $rows AS List<Struct<device_id:Utf8,timestamp_utc:Int64,"
+                               "id:Utf8,payload:Utf8>>; "
+                               "UPSERT INTO source_events SELECT * FROM AS_TABLE($rows);",
+                               {"$rows": ydb.TypedValue(new_rows, ydb.ListType(row_type))})
             # A failed recheck must not erase evidence of an earlier successful response.
             params = {"$device": device_id, "$type": data_type, "$start": started, "$end": ended}
             decl = "DECLARE $device AS Utf8; DECLARE $type AS Utf8; DECLARE $start AS Int64; DECLARE $end AS Int64; "
@@ -274,7 +319,13 @@ class TelemetryRepository:
                     {"$device": device_id, "$type": data_type, "$end": ended},
                 )
             if changed:
-                bump_revision(tx, "telemetry:" + device_id)
+                revision = bump_revision(tx, "telemetry:" + device_id)
+                for day in {datetime.fromtimestamp(at, UTC).date().isoformat() for at in changed_times}:
+                    tx.execute(
+                        "DECLARE $key AS Utf8; DECLARE $value AS Utf8; "
+                        "UPSERT INTO app_meta (key,value) VALUES ($key,$value);",
+                        {"$key": f"telemetry-day:{day}", "$value": f"ydb:{device_id}:{revision}"},
+                    )
             return len(samples) + len(source_events)
 
         return self.db.transaction(write)

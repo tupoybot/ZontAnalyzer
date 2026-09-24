@@ -2,7 +2,8 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from zont_analyzer.adapters.sqlite import Database
+from tests.ydb_support import make_database, seed_samples
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import AnalysisResult, TelemetryPoint
@@ -18,8 +19,7 @@ class CaptureAnalyst:
 
 
 def test_daily_evidence_reaches_ai_storage_and_reports_with_historical_target(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db: Database = make_database(tmp_path)
     start = datetime(2026, 8, 1, tzinfo=UTC)
     for entity, key, role, base, source in (
         ("living", "temperature", "control_indoor_temperature", 21.0, "synthetic"),
@@ -34,10 +34,10 @@ def test_daily_evidence_reaches_ai_storage_and_reports_with_historical_target(tm
             device_id="test-device", source_type=source, entity_id=entity, metric_key=key,
             timestamp_utc=start + timedelta(minutes=5 * index), value_num=base + (index % 2) * 0.1, unit="°C",
         ) for index in range(288)]
-        db.upsert_samples(points, {entity: role})
+        seed_samples(db, points, {entity: role})
         row = next(item for item in db.list_series() if item["entity_id"] == entity and item["metric_key"] == key)
         db.update_series_role(row["id"], role, f"Датчик {entity}", provenance="test fixture")
-    db.upsert_samples([TelemetryPoint(
+    seed_samples(db, [TelemetryPoint(
         device_id="test-device", source_type="z3k_boiler_adapter", entity_id="boiler", metric_key="s",
         timestamp_utc=start + timedelta(minutes=5 * index), value_text="['ch']",
     ) for index in range(288)], {"boiler": "state"})

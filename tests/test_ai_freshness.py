@@ -176,12 +176,12 @@ def test_legacy_digest_upgrades_only_after_exact_evidence_match() -> None:
 def test_completed_daily_analysis_is_stable_after_persistence(tmp_path) -> None:
     from datetime import date
 
+    from tests.ydb_support import make_runtime
     from zont_analyzer.application.analysis import AnalysisService
     from zont_analyzer.application.reasoning_context import reuse_ai_interpretation
     from zont_analyzer.domain import AnalysisResult
-    from zont_analyzer.runtime import build_runtime
 
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     runtime.config.home.timezone = 'Europe/Samara'
     runtime.config.analysis.minimum_quality_score = 0
     runtime.config.analysis.daily_ai_when_normal = True

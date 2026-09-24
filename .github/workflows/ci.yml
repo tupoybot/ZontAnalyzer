@@ -20,25 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: "3.12"
-          cache: pip
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
-      - run: pip install -e '.[dev]'
-      - run: ruff check .
-      - run: mypy src/zont_analyzer
-      - run: pytest --cov=zont_analyzer --cov-report=term-missing
-      - run: python -m build --wheel
-      - run: pip install --force-reinstall --no-deps dist/*.whl
-      - run: python -c "from zont_analyzer.cli import app; from zont_analyzer.reports import render_html"
-      - run: zont-analyzer --data-dir "$(mktemp -d)" init
-      - run: docker build --target legacy -t zont-analyzer:test .
-      - run: docker build --target test -t zont-analyzer:feedback-e2e .
-      - run: docker run --rm zont-analyzer:feedback-e2e
-      - run: ZONT_TEST_IMAGE=zont-analyzer:feedback-e2e deploy/check-ydb.sh
+      - run: deploy/check-local.sh all
+      - run: docker build --target cli -t zont-analyzer:test .
       - run: sh tests/integration/test_nginx_basic_auth.sh
       - run: docker tag zont-analyzer:test zont-analyzer:stage18-candidate
       - run: npm ci --prefix tests/integration/browser

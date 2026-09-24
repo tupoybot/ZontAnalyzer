@@ -67,6 +67,21 @@ def test_lease_renewal_cannot_revive_expired_attempt(ydb_database: object) -> No
     assert not repo.checkpoint(job_key, "a", first.attempt, "late")
 
 
+def test_reusable_lease_release_preserves_fencing(ydb_database: object) -> None:
+    now = [2_000_000]
+    repo = JobLeaseRepository(ydb_database, clock=lambda: now[0])  # type: ignore[arg-type]
+    job_key = _key()
+    first = repo.acquire(job_key, "publisher-a", 60)
+    assert first is not None
+    assert not repo.release(job_key, "publisher-b", first.attempt)
+    assert repo.release(job_key, "publisher-a", first.attempt)
+    assert not repo.release(job_key, "publisher-a", first.attempt)
+    second = repo.acquire(job_key, "publisher-b", 60)
+    assert second is not None and second.attempt == first.attempt + 1
+    assert not repo.release(job_key, "publisher-a", first.attempt)
+    assert repo.get(job_key) == second
+
+
 def test_lease_rechecks_clock_when_transaction_starts(ydb_database: object) -> None:
     now = [3_000_000]
     job_key = _key()

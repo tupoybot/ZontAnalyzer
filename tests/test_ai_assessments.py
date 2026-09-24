@@ -6,17 +6,17 @@ from pathlib import Path
 
 import pytest
 
+from tests.ydb_support import make_runtime
 from zont_analyzer.adapters.openai.model_catalog import CatalogSnapshot, ModelFact
 from zont_analyzer.adapters.openai.provider import PROMPT_VERSION, SCHEMA_VERSION
 from zont_analyzer.application.ai_maintenance import local_assessments
 from zont_analyzer.application.ai_settings import AISettingsStore
 from zont_analyzer.application.model_review import ModelReviewStore
 from zont_analyzer.evaluation.dataset import build_dataset, dataset_sha
-from zont_analyzer.runtime import build_runtime
 
 
 def test_only_complete_matching_local_assessments_are_used(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     runtime.config.openai.evaluation_results_file = "assessments.json"
     cases = build_dataset()
     entry = {
@@ -59,7 +59,7 @@ def test_only_complete_matching_local_assessments_are_used(tmp_path: Path) -> No
     ({"factual": 1.0, "advice": 1.0, "uncertainty": 0.8}, "no_change"),
 ])
 def test_lower_price_never_outweighs_a_quality_regression(tmp_path: Path, scores, expected) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     cases = build_dataset()
     entry = {
         "dataset_sha256": dataset_sha(cases), "prompt_id": PROMPT_VERSION, "schema_id": SCHEMA_VERSION,

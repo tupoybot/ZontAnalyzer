@@ -4,7 +4,10 @@ set -eu
 image=${1:?Usage: check-legacy-image.sh IMAGE}
 revision=$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
 runtime=$(docker image inspect "$image" --format '{{index .Config.Labels "org.zont.runtime"}}')
-[ "$runtime" != cloud ] || { echo 'Cloud images cannot run on legacy production' >&2; exit 1; }
+case "$runtime" in
+    ''|legacy) ;;
+    *) echo 'Native YDB images cannot run on legacy production' >&2; exit 1 ;;
+esac
 case "$revision" in ''|*[!0-9a-f]*) echo 'Image revision is missing or invalid' >&2; exit 1 ;; esac
 [ "${#revision}" = 40 ] || exit 1
 repository=${image#ghcr.io/}

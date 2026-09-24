@@ -18,8 +18,11 @@ def run_doctor(runtime: Runtime, *, live: bool = False) -> dict[str, Any]:
     add("data_directory", data_dir.is_dir(), str(data_dir))
     usage = shutil.disk_usage(data_dir)
     add("free_disk", usage.free > 100 * 1024 * 1024, f"{usage.free} bytes free")
-    integrity = runtime.db.integrity_check()
-    add("sqlite_integrity", integrity == "ok", integrity)
+    try:
+        revision = runtime.db.get_schema_revision()
+        add("ydb_schema", revision == "2", f"schema revision {revision}")
+    except Exception as exc:
+        add("ydb_schema", False, type(exc).__name__)
     token = runtime.loaded.secrets.zont_token
     credentials_ok = bool(token and runtime.config.zont.client_email)
     add("zont_credentials", credentials_ok, "present" if credentials_ok else "missing token or client email")

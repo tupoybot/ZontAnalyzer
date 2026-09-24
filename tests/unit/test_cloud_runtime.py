@@ -190,6 +190,27 @@ def test_unready_xray_blocks_jobs_but_not_diagnostics(server: Any) -> None:
     assert body["xray_ready"] is False
 
 
+def test_reports_route_uses_separate_bounded_budget_and_authorization(
+    server: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance, credentials = server
+    instance.config = replace(instance.config, report_timeout_seconds=180)
+    calls: list[tuple[dict[str, Any], float]] = []
+
+    def bounded(_dispatch: Any, payload: dict[str, Any], timeout: float, _cancelled: Any) -> dict[str, Any]:
+        calls.append((payload, timeout))
+        return {"status": "pending", "phase": "collect"}
+
+    monkeypatch.setattr(runtime_module, "run_bounded", bounded)
+    request = {"kind": "daily", "date": "2026-09-23", "use_ai": False}
+    assert _request(instance, "wrong", "POST", "/jobs/reports", request)[0] == 401
+    status, body = _request(instance, credentials, "POST", "/jobs/reports", request)
+    assert status == 200 and body["result"]["status"] == "pending"
+    assert calls == [({**request, "_runtime_timeout_seconds": 180}, 180)]
+    _request(instance, credentials, "POST", "/jobs/analytics", _payload())
+    assert calls[1][1] == 3
+
+
 def test_job_rejects_concurrency_and_recovers_after_timeout(server: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     instance, credentials = server
     monkeypatch.setitem(DISPATCHERS, "analytics", _briefly_slow)

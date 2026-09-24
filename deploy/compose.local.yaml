@@ -6,8 +6,31 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      target: cli
+    environment:
+      YDB_ENDPOINT: grpc://ydb:2136
+      YDB_DATABASE: /local
+      YDB_NAMESPACE: local_application
+      YDB_ANONYMOUS_CREDENTIALS: "1"
+    depends_on:
+      ydb:
+        condition: service_healthy
     volumes:
       - local-data:/data
     command: ['analyze', 'daily', '--no-ai']
+  ydb:
+    image: ydbplatform/local-ydb@sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402
+    hostname: ydb
+    mem_limit: 5g
+    environment:
+      GRPC_PORT: "2136"
+      MON_PORT: "8765"
+      YDB_USE_IN_MEMORY_PDISKS: "1"
+      YDB_DEFAULT_LOG_LEVEL: WARN
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/2136'"]
+      interval: 2s
+      timeout: 2s
+      retries: 45
 volumes:
   local-data:

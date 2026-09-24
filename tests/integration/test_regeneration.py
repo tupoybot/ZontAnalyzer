@@ -10,16 +10,16 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+from tests.ydb_support import make_runtime
 from zont_analyzer.application import feedback, regeneration
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.feedback import build_feedback_server
 from zont_analyzer.domain import DetectedEvent, MetricValue
 from zont_analyzer.reports.regeneration import render_regeneration
-from zont_analyzer.runtime import build_runtime
 
 
 def _runtime(tmp_path: Path):
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     report = AnalysisService(runtime.db, runtime.config).analyze_daily(
         datetime(2026, 8, 1, tzinfo=UTC).date(), use_ai=False
     )

@@ -10,8 +10,8 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from zont_analyzer.adapters.openai.provider import PROMPT_VERSION, Analyst, analysis_packet
-from zont_analyzer.adapters.sqlite import Database
+from zont_analyzer.adapters.openai.provider import PROMPT_VERSION, AIRequestPending, Analyst, analysis_packet
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.analytics import (
     ReliabilityEvidencePoint,
     ReliabilityEvidenceSeries,
@@ -145,7 +145,11 @@ def _sensor_report_context(
 
 
 class AnalysisService:
-    def __init__(self, db: Database, config: AppConfig, analyst: Analyst | None = None):
+    def __init__(
+        self, db: Database, config: AppConfig, analyst: Analyst | None = None, *,
+        job_fence: tuple[str, str, int] | None = None,
+    ):
+        self.job_fence = job_fence
         from zont_analyzer.application.timezone import apply_device_timezone
 
         apply_device_timezone(db, config)
@@ -248,6 +252,7 @@ class AnalysisService:
         persist: bool = True, include_comparisons: bool = True, force_ai: bool = False,
         period: Period | None = None, request_nonce: str | None = None, question: str | None = None,
     ) -> Report:
+        source_revision = self.db.source_revision()
         if kind == "seasonal" and end - start > timedelta(days=31):
             from zont_analyzer.application.long_periods import aggregate_long_period
 
@@ -258,6 +263,7 @@ class AnalysisService:
                 force_ai=force_ai, period=period, request_nonce=request_nonce, quality=aggregated.quality,
                 metrics=aggregated.metrics, events=aggregated.events, control_context=aggregated.context,
                 summary=aggregated.summary, recommendations=aggregated.recommendations, question=question,
+                source_revision=source_revision,
             )
         period_id = f"{kind}:{int(start.timestamp())}"
         context_start = start - timedelta(days=7)
@@ -695,7 +701,7 @@ class AnalysisService:
             start, end, kind=kind, use_ai=use_ai, persist=persist, include_comparisons=include_comparisons,
             force_ai=force_ai, period=period, request_nonce=request_nonce, quality=quality, metrics=metrics,
             events=events, control_context=control_context, summary=summary,
-            recommendations=recommendations, question=question,
+            recommendations=recommendations, question=question, source_revision=source_revision,
         )
 
     def _finish_analysis(
@@ -704,6 +710,7 @@ class AnalysisService:
         period: Period | None, request_nonce: str | None,
         quality: QualityResult, metrics: list[MetricValue], events: list[DetectedEvent],
         control_context: dict[str, Any], summary: str, recommendations: list[Recommendation],
+        source_revision: int,
         question: str | None = None,
     ) -> Report:
         report_id = self.report_id_for(kind, start)
@@ -771,6 +778,8 @@ class AnalysisService:
             control_context.update(heating_context(self.db, control_context, start, end))
         else:
             control_context.get("temporal_evidence", {}).pop("heating_source_windows", None)
+        if self.db.source_revision() != source_revision:
+            raise ValueError("inputs changed while report was calculated")
         should_use_ai = (
             use_ai
             and self.analyst is not None
@@ -820,7 +829,7 @@ class AnalysisService:
                     )
                 ai_used = True
             except Exception as exc:
-                if force_ai:
+                if force_ai or (self.job_fence is not None and isinstance(exc, AIRequestPending)):
                     raise
                 logger.warning("OpenAI analysis failed; keeping deterministic report: %s", type(exc).__name__)
                 if (
@@ -864,8 +873,10 @@ class AnalysisService:
             report.context["ai_facts_fingerprint"] = report_facts_fingerprint(report)
         elif ai_used and previous_report and previous_report.context.get("ai_facts_fingerprint"):
             report.context["ai_facts_fingerprint"] = previous_report.context["ai_facts_fingerprint"]
+        if self.db.source_revision() != source_revision:
+            raise ValueError("inputs changed while report was calculated")
         if persist:
-            self.db.save_report(report, render_text(report))
+            self.db.save_report(report, render_text(report), source_revision=source_revision, job_fence=self.job_fence)
         return report
 
     def _temporal_evidence(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -79,12 +80,11 @@ def test_historical_recovery_rejects_wrong_report_and_later_regeneration_log() -
 
 
 def test_provider_persists_response_metadata_and_returns_it_from_cache(tmp_path) -> None:
+    from tests.ydb_support import make_database
     from zont_analyzer.adapters.openai.provider import OpenAIAnalyst, _StructuredAnalysisResult
-    from zont_analyzer.adapters.sqlite import Database
     from zont_analyzer.config import AppConfig
 
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     analyst = OpenAIAnalyst(api_key="not-a-real-key", config=AppConfig(), db=db)
     calls: list[object] = []
 
@@ -109,13 +109,12 @@ def test_provider_persists_response_metadata_and_returns_it_from_cache(tmp_path)
 
 
 def test_provider_reuses_pre92_ledger_entry_without_a_request(tmp_path) -> None:
+    from tests.ydb_support import make_database
     from zont_analyzer.adapters.openai.provider import PROMPT_VERSION, OpenAIAnalyst
-    from zont_analyzer.adapters.sqlite import Database
-    from zont_analyzer.application.ai_ledger import AILedger
+    from zont_analyzer.adapters.ydb.ai import AiResponseCache
     from zont_analyzer.config import AppConfig
 
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     config = AppConfig()
     packet = {"period": {"kind": "daily", "start": "2026-09-07T00:00:00+00:00"}}
     encoded = json.dumps(packet, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -123,9 +122,7 @@ def test_provider_reuses_pre92_ledger_entry_without_a_request(tmp_path) -> None:
         "model": config.openai.daily_model, "prompt_version": PROMPT_VERSION,
         "reasoning_effort": config.openai.reasoning_effort, "max_output_tokens": 6000,
     }, "input": encoded}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-    ledger = AILedger(db.path)
-    assert ledger.reserve(key, budget=10_000, used=0, estimate=1) is None
-    ledger.finish(key, status="success", input_tokens=1, output_tokens=1, result={"summary": "legacy"})
+    AiResponseCache(db.storage).put_success(key, '{"summary":"legacy"}', "{}", "legacy", config.openai.daily_model)
     analyst = OpenAIAnalyst(api_key="not-a-real-key", config=config, db=db)
     def unexpected_request(**_):
         raise AssertionError("the legacy cache must avoid an OpenAI request")
@@ -134,3 +131,73 @@ def test_provider_reuses_pre92_ledger_entry_without_a_request(tmp_path) -> None:
     result = analyst.analyze(packet)
     assert result.summary == "legacy"
     assert result.provenance is None
+
+
+def test_ai_budget_reservations_are_atomic_and_unknown_calls_are_not_reused(tmp_path) -> None:
+    from tests.ydb_support import make_database
+    from zont_analyzer.adapters.ydb.ai_usage import AiUsageRepository
+
+    db = make_database(tmp_path)
+    ledger = AiUsageRepository(db.storage)
+
+    def reserve(key: str) -> bool:
+        try:
+            ledger.reserve(key, "report:one", {"model": "test"}, budget=15, estimate=10,
+                           billing_month="2026-09")
+            return True
+        except RuntimeError as exc:
+            assert "budget" in str(exc)
+            return False
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sum(pool.map(reserve, ("request-a", "request-b"))) == 1
+    key = "request-a" if ledger.cached("request-a") else "request-b"
+    assert ledger.cached(key) == {"status": "prepared", "error": None}
+    assert ledger.mark_sent(key)
+    ledger.mark_unknown(key, "transport lost")
+    assert ledger.cached(key) == {"status": "unknown", "error": "transport lost"}
+    assert ledger.reserve(key, "report:one", {"model": "test"}, budget=15, estimate=10,
+                          billing_month="2026-09")["status"] == "unknown"
+    assert not ledger.mark_sent(key)
+
+
+def test_cached_ai_response_survives_budget_exhaustion(tmp_path) -> None:
+    from tests.ydb_support import make_database
+    from zont_analyzer.adapters.ydb.ai_usage import AiUsageRepository
+
+    db = make_database(tmp_path)
+    ledger = AiUsageRepository(db.storage)
+    key = "request-success"
+    ledger.reserve(key, "report:one", {"model": "test"}, budget=10, estimate=10,
+                   billing_month="2026-09")
+    assert ledger.mark_sent(key)
+    result = {"summary": "cached", "provenance": {"requested_model": "test"}}
+    ledger.finish_success(key, result, result["provenance"], settings_version="v1", model="test",
+                          input_tokens=0, cached_tokens=0, output_tokens=0, charge_reserved=True)
+    assert ledger.cached(key)["result"] == result
+    assert ledger.reserve(key, "report:one", {"model": "test"}, budget=0, estimate=10,
+                          billing_month="2026-09")["result"] == result
+
+
+def test_provider_never_retries_a_request_with_unknown_outcome(tmp_path) -> None:
+    import pytest
+
+    from tests.ydb_support import make_database
+    from zont_analyzer.adapters.openai.provider import OpenAIAnalyst
+    from zont_analyzer.config import AppConfig
+
+    analyst = OpenAIAnalyst(api_key="not-a-real-key", config=AppConfig(), db=make_database(tmp_path))
+    calls = 0
+
+    def fail(**kwargs):
+        nonlocal calls
+        calls += 1
+        raise ConnectionError("connection lost after send")
+
+    analyst.client = SimpleNamespace(responses=SimpleNamespace(parse=fail))
+    packet = {"period": {"kind": "daily", "start": "2026-09-07T00:00:00+00:00"}}
+    with pytest.raises(RuntimeError, match="unknown"):
+        analyst.analyze(packet)
+    with pytest.raises(RuntimeError, match="unknown"):
+        analyst.analyze(packet)
+    assert calls == 1

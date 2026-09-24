@@ -279,12 +279,11 @@ def test_reasoning_provider_preserves_budget_privacy_and_records_actual_prompt(t
     from types import SimpleNamespace
     from unittest.mock import Mock
 
+    from tests.ydb_support import make_database
     from zont_analyzer.adapters.openai.provider import PROMPT_VERSION, OpenAIAnalyst
-    from zont_analyzer.adapters.sqlite import Database
     from zont_analyzer.config import AppConfig
 
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     config = AppConfig.model_validate({"openai": {"prompt_version": "legacy-config"}})
     analyst = OpenAIAnalyst(api_key="not-a-real-key", config=config, db=db)
     parse = Mock(return_value=SimpleNamespace(
@@ -298,14 +297,14 @@ def test_reasoning_provider_preserves_budget_privacy_and_records_actual_prompt(t
     kwargs = parse.call_args.kwargs
     assert kwargs["store"] is False and "tools" not in kwargs
     assert kwargs["max_output_tokens"] == 6000
-    assert db.token_usage_this_month() == 30
-    import sqlite3
-    with sqlite3.connect(db.path) as connection:
-        assert connection.execute("select prompt_version from llm_calls").fetchone()[0] == PROMPT_VERSION
+    assert analyst.ledger.token_usage_this_month() == 30
+    call = db.storage.execute("SELECT payload FROM llm_calls LIMIT 1;")[0].rows[0]
+    assert __import__("json").loads(call.payload)["prompt_version"] == PROMPT_VERSION
     config.openai.monthly_token_budget = 30
+    assert analyst.analyze({"period": {"kind": "daily"}}) == result
     import pytest
     with pytest.raises(RuntimeError, match="budget"):
-        analyst.analyze({"period": {"kind": "daily"}})
+        analyst.analyze({"period": {"kind": "daily"}, "request_nonce": "new"})
     assert parse.call_count == 1
 
 
@@ -313,12 +312,11 @@ def test_reasoning_provider_reuses_successful_result_without_second_api_call(tmp
     from types import SimpleNamespace
     from unittest.mock import Mock
 
+    from tests.ydb_support import make_database
     from zont_analyzer.adapters.openai.provider import OpenAIAnalyst
-    from zont_analyzer.adapters.sqlite import Database
     from zont_analyzer.config import AppConfig
 
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     analyst = OpenAIAnalyst(api_key="not-a-real-key", config=AppConfig(), db=db)
     parsed = _StructuredAnalysisResult(summary="Повторное чтение")
     parse = Mock(return_value=SimpleNamespace(
@@ -331,19 +329,18 @@ def test_reasoning_provider_reuses_successful_result_without_second_api_call(tmp
 
     assert first == second
     assert parse.call_count == 1
-    assert db.token_usage_this_month() == 18
+    assert analyst.ledger.token_usage_this_month() == 18
 
 
 def test_reasoning_provider_accounts_usage_when_structured_output_is_invalid(tmp_path) -> None:
     from types import SimpleNamespace
     from unittest.mock import Mock
 
+    from tests.ydb_support import make_database
     from zont_analyzer.adapters.openai.provider import OpenAIAnalyst
-    from zont_analyzer.adapters.sqlite import Database
     from zont_analyzer.config import AppConfig
 
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     analyst = OpenAIAnalyst(api_key="not-a-real-key", config=AppConfig(), db=db)
     parse = Mock(return_value=SimpleNamespace(
         output_parsed=None, usage=SimpleNamespace(input_tokens=13, output_tokens=29), id="mock:invalid"
@@ -354,22 +351,23 @@ def test_reasoning_provider_accounts_usage_when_structured_output_is_invalid(tmp
     with pytest.raises(RuntimeError, match="parsed output"):
         analyst.analyze({"period": {"kind": "daily"}, "nonce": "invalid"})
 
-    assert db.token_usage_this_month() == 42
+    assert analyst.ledger.token_usage_this_month() == 42
     with pytest.raises(RuntimeError, match="previously failed"):
         analyst.analyze({"period": {"kind": "daily"}, "nonce": "invalid"})
     assert parse.call_count == 1
 
 
 def test_ai_ledger_serializes_pending_reservations(tmp_path) -> None:
-    from zont_analyzer.application.ai_ledger import AILedger
+    from tests.ydb_support import make_database
+    from zont_analyzer.adapters.ydb.ai_usage import AiUsageRepository
 
-    first = AILedger(tmp_path / "state.sqlite3")
-    second = AILedger(tmp_path / "state.sqlite3")
-    assert first.reserve("same", budget=100, used=0, estimate=80) is None
-    pending = second.reserve("same", budget=100, used=0, estimate=80)
-    assert pending is not None and pending["status"] == "pending"
+    db = make_database(tmp_path)
+    first, second = AiUsageRepository(db.storage), AiUsageRepository(db.storage)
+    assert first.reserve("same", "job", {}, budget=100, estimate=80, billing_month="2026-09") is None
+    pending = second.reserve("same", "job", {}, budget=100, estimate=80, billing_month="2026-09")
+    assert pending is not None and pending["status"] == "prepared"
     with __import__("pytest").raises(RuntimeError, match="exhausted"):
-        second.reserve("other", budget=100, used=0, estimate=30)
+        second.reserve("other", "job", {}, budget=100, estimate=30, billing_month="2026-09")
 
 
 def test_request_fingerprint_changes_for_nonce_and_model(tmp_path) -> None:
@@ -377,12 +375,11 @@ def test_request_fingerprint_changes_for_nonce_and_model(tmp_path) -> None:
     from types import SimpleNamespace
     from unittest.mock import Mock
 
+    from tests.ydb_support import make_database
     from zont_analyzer.adapters.openai.provider import OpenAIAnalyst
-    from zont_analyzer.adapters.sqlite import Database
     from zont_analyzer.config import AppConfig
 
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     analyst = OpenAIAnalyst(api_key="not-a-real-key", config=AppConfig(), db=db)
     parse = Mock(side_effect=[
         SimpleNamespace(output_parsed=_StructuredAnalysisResult(summary="one"), usage=None, id="one"),
@@ -394,20 +391,19 @@ def test_request_fingerprint_changes_for_nonce_and_model(tmp_path) -> None:
     analyst.config.openai.daily_model = "different-model"
     analyst.analyze({"period": {"kind": "daily"}, "request_nonce": "two"})
     assert parse.call_count == 2
-    ledger_entries = json.loads(analyst.ledger.path.read_text())["entries"].values()
-    assert all(int(entry["charged_tokens"]) > 0 for entry in ledger_entries)
+    ledger_entries = db.storage.execute("SELECT payload FROM llm_calls;")[0].rows
+    assert all(int(json.loads(entry.payload)["charged_tokens"]) > 0 for entry in ledger_entries)
 
 
 def test_budget_reservation_includes_prompt_and_schema_bytes(tmp_path) -> None:
     from types import SimpleNamespace
     from unittest.mock import Mock
 
+    from tests.ydb_support import make_database
     from zont_analyzer.adapters.openai.provider import SYSTEM_PROMPT, OpenAIAnalyst, _StructuredAnalysisResult
-    from zont_analyzer.adapters.sqlite import Database
     from zont_analyzer.config import AppConfig
 
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     schema = __import__("json").dumps(_StructuredAnalysisResult.model_json_schema(), ensure_ascii=False, sort_keys=True)
     minimum = len(SYSTEM_PROMPT.encode()) + len(schema.encode()) + 1 + 6000
     config = AppConfig.model_validate({"openai": {"monthly_token_budget": minimum - 1}})
@@ -422,34 +418,68 @@ def test_budget_reservation_includes_prompt_and_schema_bytes(tmp_path) -> None:
 
 
 def test_ai_ledger_keeps_old_pending_fingerprint_but_scopes_budget_by_month(tmp_path) -> None:
-    import json
-    import time
+    from tests.ydb_support import make_database
+    from zont_analyzer.adapters.ydb.ai_usage import AiUsageRepository
 
-    from zont_analyzer.application.ai_ledger import AILedger
-
-    ledger = AILedger(tmp_path / "state.sqlite3")
-    assert ledger.reserve("stuck", budget=100, used=0, estimate=90, billing_month="2025-01") is None
-    state = json.loads(ledger.path.read_text())
-    state["entries"]["stuck"]["created_at"] = time.time() - 7200
-    ledger.path.write_text(json.dumps(state))
-    assert ledger.reserve("stuck", budget=1, used=0, estimate=1, billing_month="2026-09")["status"] == "pending"
-    assert ledger.reserve("new", budget=10, used=0, estimate=10, billing_month="2026-09") is None
+    db = make_database(tmp_path)
+    ledger = AiUsageRepository(db.storage, clock=lambda: 1)
+    assert ledger.reserve("stuck", "job", {}, budget=100, estimate=90, billing_month="2025-01") is None
+    ledger.mark_sent("stuck")
+    later = AiUsageRepository(db.storage)
+    assert later.reserve("stuck", "job", {}, budget=1, estimate=1, billing_month="2026-09")["status"] == "sent"
+    assert later.reserve("new", "job", {}, budget=10, estimate=10, billing_month="2026-09") is None
+    assert later.mark_sent("stuck") is False
 
 
 def test_ai_ledger_fails_closed_on_corruption_and_unknown_usage_stays_charged(tmp_path) -> None:
-    from zont_analyzer.application.ai_ledger import AILedger
-
-    ledger = AILedger(tmp_path / "state.sqlite3")
-    ledger.path.write_text("not-json")
     import pytest
-    with pytest.raises(RuntimeError, match="corrupt"):
-        ledger.reserve("key", budget=100, used=0, estimate=1)
 
-    ledger.path.unlink()
-    assert ledger.reserve("ambiguous", budget=100, used=0, estimate=80, billing_month="2026-09") is None
-    ledger.finish("ambiguous", status="failure", input_tokens=0, output_tokens=0, charge_reserved=True)
+    from tests.ydb_support import make_database
+    from zont_analyzer.adapters.ydb.ai_usage import AiUsageRepository
+
+    db = make_database(tmp_path)
+    ledger = AiUsageRepository(db.storage)
+    assert ledger.reserve("bad", "job", {}, budget=100, estimate=1, billing_month="2026-08") is None
+    db.storage.execute("UPDATE llm_calls SET payload='not-json' WHERE call_key='bad';")
+    with pytest.raises(ValueError):
+        ledger.reserve("bad", "job", {}, budget=100, estimate=1, billing_month="2026-08")
+    assert ledger.reserve("ambiguous", "job", {}, budget=100, estimate=80, billing_month="2026-09") is None
+    ledger.mark_sent("ambiguous")
+    ledger.mark_unknown("ambiguous", "connection lost")
     with pytest.raises(RuntimeError, match="exhausted"):
-        ledger.reserve("another", budget=100, used=0, estimate=21, billing_month="2026-09")
+        ledger.reserve("another", "job", {}, budget=100, estimate=21, billing_month="2026-09")
+    assert ledger.mark_sent("ambiguous") is False
+
+
+def test_prepared_reservation_resumes_after_crash_without_double_dispatch(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import pytest
+
+    from tests.ydb_support import make_database
+    from zont_analyzer.adapters.openai.provider import OpenAIAnalyst
+    from zont_analyzer.config import AppConfig
+
+    db = make_database(tmp_path)
+    analyst = OpenAIAnalyst(api_key="not-a-real-key", config=AppConfig(), db=db)
+    parse = Mock(return_value=SimpleNamespace(
+        output_parsed=_StructuredAnalysisResult(summary="resumed"), usage=None, id="fixture-response",
+    ))
+    analyst.client = SimpleNamespace(responses=SimpleNamespace(parse=parse))
+    original = analyst.ledger.mark_sent
+    with monkeypatch.context() as patch:
+        patch.setattr(analyst.ledger, "mark_sent", Mock(side_effect=RuntimeError("crash before dispatch")))
+        with pytest.raises(RuntimeError, match="crash before dispatch"):
+            analyst.analyze({"period": {"kind": "daily"}})
+    parse.assert_not_called()
+    rows = db.storage.execute("SELECT call_key,state FROM llm_calls;")[0].rows
+    assert len(rows) == 1 and rows[0].state == "prepared"
+    assert analyst.analyze({"period": {"kind": "daily"}}).summary == "resumed"
+    assert analyst.analyze({"period": {"kind": "daily"}}).summary == "resumed"
+    assert parse.call_count == 1
+    assert original(rows[0].call_key) is False
+    assert len(db.storage.execute("SELECT call_key FROM llm_calls;")[0].rows) == 1
 
 
 def test_settings_snapshot_time_comes_from_input_and_preserves_other_intervals() -> None:

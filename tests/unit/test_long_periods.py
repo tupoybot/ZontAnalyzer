@@ -5,16 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from zont_analyzer.adapters.sqlite import Database
+from tests.ydb_support import make_database
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.application.long_periods import aggregate_long_period
 from zont_analyzer.domain import DetectedEvent, MetricValue, QualityResult, Report
 from zont_analyzer.domain.periods import Period
 
 
 def _db(tmp_path: Path) -> Database:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
-    return db
+    return make_database(tmp_path)
 
 
 def _period(start: datetime, end: datetime, *, timezone: str = "UTC") -> Period:

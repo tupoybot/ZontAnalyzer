@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.ydb_support import make_database
 from zont_analyzer.adapters.openai.provider import analysis_packet
-from zont_analyzer.adapters.sqlite import Database
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.reasoning_context import reasoning_context
 from zont_analyzer.config import AppConfig
@@ -22,8 +23,7 @@ def _recommendation(db: Database) -> str:
 
 
 def test_structured_experiment_is_idempotent_and_note_edit_preserves_history(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     db.save_devices([{
         "device_id": "device-1",
         "z3k_config": {
@@ -64,15 +64,13 @@ def test_structured_experiment_is_idempotent_and_note_edit_preserves_history(tmp
     ],
 )
 def test_experiment_contract_rejects_invalid_values(tmp_path: Path, experiment: dict[str, object]) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     with pytest.raises(ValueError):
         db.set_recommendation_feedback(_recommendation(db), "applied", experiment=experiment)
 
 
 def test_intervention_history_is_bounded_and_keeps_explicit_temporal_boundary(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     recommendation_id = _recommendation(db)
     db.set_recommendation_feedback(
         recommendation_id, "applied", "Firmware installed",
@@ -85,8 +83,7 @@ def test_intervention_history_is_bounded_and_keeps_explicit_temporal_boundary(tm
 
 
 def test_rejected_feedback_cannot_silently_record_an_experiment(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     with pytest.raises(ValueError, match="applied"):
         db.set_recommendation_feedback(
             _recommendation(db), "rejected", experiment={"category": "other"},
@@ -94,8 +91,7 @@ def test_rejected_feedback_cannot_silently_record_an_experiment(tmp_path: Path) 
 
 
 def test_firmware_rollback_and_feedback_boundary_are_preserved(tmp_path: Path) -> None:
-    db = Database(tmp_path / "state.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     recommendation_id = _recommendation(db)
     db.set_recommendation_feedback(
         recommendation_id, "applied", "Rollback completed",

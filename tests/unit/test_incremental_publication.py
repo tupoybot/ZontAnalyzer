@@ -5,18 +5,38 @@ from pathlib import Path
 
 import pytest
 
+from tests.ydb_support import make_database
+from zont_analyzer.adapters.ydb.application import Database
+from zont_analyzer.adapters.ydb.publication import PublicationRepository
+from zont_analyzer.adapters.ydb.telemetry import bump_revision
 from zont_analyzer.application import publication
 from zont_analyzer.application.gas import GasService
-from zont_analyzer.runtime import build_runtime
+from zont_analyzer.config import AppConfig, LoadedConfig, Secrets
+from zont_analyzer.runtime import Runtime
 
 
 def _runtime(tmp_path: Path):
-    return build_runtime(None, tmp_path)
+    loaded = LoadedConfig(config=AppConfig(), secrets=Secrets(), config_path=None,
+                          data_dir=tmp_path, sources={})
+    return Runtime(loaded, make_database(tmp_path))
 
 
 def _daily_reports(runtime, count: int, *, start: date = date(2026, 8, 1)):
     analysis = runtime.analysis(no_ai=True)
     return [analysis.analyze_daily(start + timedelta(days=day), use_ai=False) for day in range(count)]
+
+
+def _record_change(db, scope: str, identifier: str) -> None:
+    def write(tx) -> None:
+        revision = bump_revision(tx, "publication")
+        tx.execute(
+            "DECLARE $scope AS Utf8; DECLARE $identifier AS Utf8; DECLARE $revision AS Int64; "
+            "UPSERT INTO publication_changes (scope,identifier,revision,payload) "
+            "VALUES ($scope,$identifier,$revision,'{}');",
+            {"$scope": scope, "$identifier": identifier, "$revision": revision},
+        )
+
+    db.storage.transaction(write)
 
 
 def test_noop_does_not_recalculate_or_walk_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -26,7 +46,10 @@ def test_noop_does_not_recalculate_or_walk_database(tmp_path: Path, monkeypatch:
 
     monkeypatch.setattr(GasService, "refresh", lambda *args: pytest.fail("refresh on no-op"))
     monkeypatch.setattr(publication, "render_html", lambda *args, **kwargs: pytest.fail("render on no-op"))
-    monkeypatch.setattr(runtime.db, "completed_reports", lambda *args, **kwargs: pytest.fail("DB walk on no-op"))
+    monkeypatch.setattr(PublicationRepository, "load",
+                        lambda *args, **kwargs: pytest.fail("full index load on no-op"))
+    monkeypatch.setattr(PublicationRepository, "canonical_reports",
+                        lambda *args, **kwargs: pytest.fail("canonical report walk on no-op"))
 
     result = publication.publish_reports(runtime)
     assert result["rendered_reports"] == 0
@@ -63,10 +86,14 @@ def test_initial_publish_is_bounded_and_restart_can_drain_with_daily_latest(tmp_
     first = publication.publish_reports(runtime, batch_size=2)
     assert first["pending_reports"] > 0
 
-    restarted = _runtime(tmp_path)
-    results = [first]
-    while results[-1]["pending_reports"]:
-        results.append(publication.publish_reports(restarted, batch_size=2))
+    restarted_db = Database(runtime.db.storage.config)
+    try:
+        restarted = Runtime(runtime.loaded, restarted_db)
+        results = [first]
+        while results[-1]["pending_reports"]:
+            results.append(publication.publish_reports(restarted, batch_size=2))
+    finally:
+        restarted_db.close()
     assert results[-1]["pending_reports"] == 0
     assert results[-1]["latest_report_id"] == daily[-1].id
     assert sum(item["rendered_reports"] for item in results) >= 4
@@ -96,12 +123,10 @@ def test_publication_failure_leaves_pending_work_for_retry(tmp_path: Path, monke
 def test_new_week_is_published_before_old_archive_maintenance(tmp_path: Path) -> None:
     import json
 
-    from zont_analyzer.adapters.sqlite.publication_journal import record_change
-
     runtime = _runtime(tmp_path)
     daily = _daily_reports(runtime, 12, start=date(2026, 9, 9))
     publication.publish_reports(runtime, batch_size=100)
-    record_change(runtime.db, "global", "gas")
+    _record_change(runtime.db, "global", "gas")
     # Leave an older backlog before the newly completed week enters the queue.
     publication.publish_reports(runtime, batch_size=1)
     weekly = runtime.analysis(no_ai=True).analyze_week(2026, 38, use_ai=False)
@@ -131,22 +156,40 @@ def test_global_gas_change_is_bounded_and_latest_is_first(tmp_path: Path) -> Non
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
-def test_telemetry_outside_archive_is_idle_and_late_hour_is_targeted(tmp_path: Path) -> None:
-    from zont_analyzer.adapters.sqlite.publication_journal import record_change
+def test_tariff_change_recalculates_cost_without_gas_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from zont_analyzer.application.gas_tariffs import GasTariffStore
 
+    runtime = _runtime(tmp_path)
+    _daily_reports(runtime, 2)
+    publication.publish_reports(runtime)
+    GasTariffStore(runtime.db).save({"price": "8.01", "currency": "RUB", "effective_month": "2026-08"})
+    monkeypatch.setattr(GasService, "refresh", lambda *args: pytest.fail("gas model recalculated for tariff"))
+    assert publication.publish_reports(runtime)["rendered_reports"] == 2
+    assert publication.publish_reports(runtime)["rendered_reports"] == 0
+
+
+def test_exact_tariff_marker_recalculates_only_affected_period(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    _daily_reports(runtime, 2)
+    publication.publish_reports(runtime)
+    _record_change(runtime.db, "tariff", "2026-08-02T00:00:00+00:00")
+    assert publication.publish_reports(runtime)["rendered_reports"] == 1
+    assert publication.publish_reports(runtime)["rendered_reports"] == 0
+
+
+def test_telemetry_outside_archive_is_idle_and_late_hour_is_targeted(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     reports = _daily_reports(runtime, 3)
     publication.publish_reports(runtime)
-    record_change(runtime.db, "telemetry", "2026-09-13T12")
+    _record_change(runtime.db, "telemetry", "2026-09-13T12")
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
-    record_change(runtime.db, "telemetry", "2026-08-01T12")
+    _record_change(runtime.db, "telemetry", "2026-08-01T12")
     assert publication.publish_reports(runtime)["rendered_reports"] == 1
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
     assert reports[0].id != reports[-1].id
 
 
 def test_calibration_telemetry_invalidates_reports_outside_sample_window(tmp_path: Path) -> None:
-    from zont_analyzer.adapters.sqlite.publication_journal import record_change
     from zont_analyzer.application.owner_context import OwnerContextStore
 
     runtime = _runtime(tmp_path)
@@ -155,7 +198,7 @@ def test_calibration_telemetry_invalidates_reports_outside_sample_window(tmp_pat
     store.update_gas(reports[0].id, {"value_m3": "100"})
     store.update_gas(reports[1].id, {"value_m3": "102"})
     publication.publish_reports(runtime)
-    record_change(runtime.db, "telemetry", "2026-08-01T12")
+    _record_change(runtime.db, "telemetry", "2026-08-01T12")
     result = publication.publish_reports(runtime, batch_size=1)
     assert result["rendered_reports"] == 1
     assert result["pending_reports"] == 3
@@ -184,9 +227,30 @@ def test_change_during_publication_remains_pending(tmp_path: Path, monkeypatch: 
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
-@pytest.mark.parametrize("damage", ["missing_cache", "corrupt_cache", "old_schema", "missing_html", "corrupt_json"])
-def test_disposable_cache_and_artifact_recovery(tmp_path: Path, damage: str) -> None:
-    import sqlite3
+@pytest.mark.parametrize("damage", ["missing_manifest", "missing_html", "corrupt_json", "missing_latest", "rebuild"])
+def test_durable_index_and_artifact_recovery(tmp_path: Path, damage: str) -> None:
+    from zont_analyzer.application.pilot import reports_directory
+
+    runtime = _runtime(tmp_path)
+    report = _daily_reports(runtime, 1)[0]
+    publication.publish_reports(runtime)
+    output = reports_directory(runtime)
+    if damage == "missing_manifest":
+        (output / "reports.json").unlink()
+    elif damage == "missing_html":
+        (output / "daily/2026-08-01.html").unlink()
+    elif damage == "corrupt_json":
+        (output / "daily/2026-08-01.json").write_text("broken json")
+    elif damage == "missing_latest":
+        (output / "latest.html").unlink()
+    result = publication.publish_reports(runtime, rebuild=damage == "rebuild")
+    assert result["rendered_reports"] == (0 if damage == "missing_manifest" else 1)
+    assert report.id in (output / "latest.html").read_text()
+    assert publication.publish_reports(runtime)["rendered_reports"] == 0
+
+
+def test_local_artifact_loss_recovers_from_canonical_ydb(tmp_path: Path) -> None:
+    import shutil
 
     from zont_analyzer.application.pilot import reports_directory
 
@@ -194,44 +258,17 @@ def test_disposable_cache_and_artifact_recovery(tmp_path: Path, damage: str) -> 
     report = _daily_reports(runtime, 1)[0]
     publication.publish_reports(runtime)
     output = reports_directory(runtime)
-    cache = output / ".publication-cache.sqlite3"
-    assert cache.stat().st_mode & 0o777 == 0o600
-    if damage == "missing_cache":
-        cache.unlink()
-    elif damage == "corrupt_cache":
-        cache.write_text("broken sqlite")
-    elif damage == "old_schema":
-        cache.unlink()
-        with sqlite3.connect(cache) as connection:
-            connection.execute("CREATE TABLE items(href TEXT PRIMARY KEY)")
-    elif damage == "missing_html":
-        (output / "daily/2026-08-01.html").unlink()
-    else:
-        (output / "daily/2026-08-01.json").write_text("broken json")
-    assert publication.publish_reports(runtime)["rendered_reports"] == 1
+    shutil.rmtree(output / "daily")
+    (output / "reports.json").unlink()
+    (output / "latest.html").unlink()
+    result = publication.publish_reports(runtime)
+    assert result["reports"] == 1
     assert report.id in (output / "latest.html").read_text()
+    assert (output / "daily/2026-08-01.json").is_file()
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
-def test_recovery_retains_file_only_exports(tmp_path: Path) -> None:
-    import shutil
-
-    from zont_analyzer.application.pilot import reports_directory
-
-    source = _runtime(tmp_path / "source")
-    report = _daily_reports(source, 1)[0]
-    publication.publish_reports(source)
-    target = _runtime(tmp_path / "target")
-    shutil.copytree(reports_directory(source) / "daily", reports_directory(target) / "daily")
-    assert target.db.report(report.id) is None
-    result = publication.publish_reports(target)
-    assert result["reports"] == 1
-    assert report.id in (reports_directory(target) / "latest.html").read_text()
-    assert publication.publish_reports(target)["rendered_reports"] == 0
-
-
 def test_comparison_is_requeued_when_its_source_finishes_in_later_batch(tmp_path: Path, monkeypatch) -> None:
-    from zont_analyzer.adapters.sqlite.publication_journal import record_change
 
     runtime = _runtime(tmp_path)
     older, latest = _daily_reports(runtime, 2)
@@ -253,7 +290,7 @@ def test_comparison_is_requeued_when_its_source_finishes_in_later_batch(tmp_path
         return result
 
     monkeypatch.setattr(GasService, "refresh", revised_volume)
-    record_change(runtime.db, "global", "gas")
+    _record_change(runtime.db, "global", "gas")
     # Latest is rendered first. Its older source changes only in the next batch.
     assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 1
     assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 1

@@ -1,31 +1,31 @@
-"""Bounded publication queue; the index is disposable, canonical data is not.
+"""Bounded publication from canonical YDB reports and a durable YDB index.
 
-Only recovery walks the archive. Input changes are committed with source writes;
-queue/checkpoint commits happen after atomic artifact publication. A crash can
-repeat work, but cannot acknowledge work whose artifacts were not completed.
+The change checkpoint and dirty flags commit only after all artifacts are
+atomically published. A failed run may repeat work but cannot acknowledge an
+unpublished change.
 """
 from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
+from collections.abc import Callable
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import text
-
-from zont_analyzer.adapters.sqlite.publication_journal import changes_since
+from zont_analyzer.adapters.ydb.publication import PublicationRepository
 from zont_analyzer.domain import Report
 
 if TYPE_CHECKING:
     from zont_analyzer.runtime import Runtime
 
-# Increment when rendering/derived-calculation semantics change.
 VERSION = "publication-v1"
 RENDER, GAS, COST = 1, 2, 4
 AUDIT_SIZE = 16
+LEASE_SECONDS = 3600
 
 
 def _digest(value: Any) -> str:
@@ -40,51 +40,8 @@ def _stamp(path: Path) -> str:
         return ""
 
 
-def _meta(cache: sqlite3.Connection, key: str, default: str = "") -> str:
-    row = cache.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-    return str(row[0]) if row else default
-
-
-def _set(cache: sqlite3.Connection, key: str, value: str) -> None:
-    cache.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (key, value))
-
-
-def _open(path: Path) -> sqlite3.Connection:
-    def connect() -> sqlite3.Connection:
-        cache = sqlite3.connect(path)
-        # It is process state, not a static report. Also protect legacy /za/
-        # servers whose prefix location does not apply the dotfile deny rule.
-        path.chmod(0o600)
-        cache.row_factory = sqlite3.Row
-        try:
-            cache.executescript("""
-                CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS items(
-                    href TEXT PRIMARY KEY, report_id TEXT NOT NULL, kind TEXT NOT NULL,
-                    start REAL NOT NULL, end REAL NOT NULL, generated REAL NOT NULL,
-                    digest TEXT NOT NULL, lo REAL NOT NULL, hi REAL NOT NULL, comparisons INTEGER NOT NULL,
-                    dirty INTEGER NOT NULL, queued REAL NOT NULL,
-                    entry TEXT, json_stamp TEXT NOT NULL DEFAULT '', html_stamp TEXT NOT NULL DEFAULT ''
-                );
-                CREATE INDEX IF NOT EXISTS item_report ON items(report_id);
-                CREATE INDEX IF NOT EXISTS item_queue ON items(queued) WHERE dirty!=0;
-                CREATE INDEX IF NOT EXISTS item_latest ON items(kind,start DESC);
-            """)
-            columns = {row[1] for row in cache.execute("PRAGMA table_info(items)")}
-            required = {"href", "report_id", "kind", "start", "end", "generated", "digest", "lo", "hi",
-                        "dirty", "queued", "entry", "json_stamp", "html_stamp", "comparisons"}
-            if not required <= columns:
-                raise sqlite3.DatabaseError("obsolete publication cache schema")
-        except sqlite3.DatabaseError:
-            cache.close()
-            raise
-        return cache
-    try:
-        return connect()
-    except sqlite3.DatabaseError:
-        # Derived index only; no report/telemetry database or export is deleted.
-        path.unlink(missing_ok=True)
-        return connect()
+def _micros(moment: datetime) -> int:
+    return int(moment.timestamp() * 1_000_000)
 
 
 def _windows(report: Report) -> tuple[float, float]:
@@ -130,123 +87,94 @@ def _entry(output: Path, report: Report) -> dict[str, Any]:
     }
 
 
-def _enqueue(
-    cache: sqlite3.Connection, flags: int, now: datetime, where: str = "1", args: tuple[Any, ...] = (),
-) -> None:
-    cache.execute(
-        f"UPDATE items SET queued=CASE WHEN dirty=0 THEN ? ELSE queued END, dirty=dirty|? WHERE {where}",
-        (now.timestamp(), flags | RENDER, *args),
-    )
+def _enqueue(items: dict[str, dict[str, Any]], flags: int, now: datetime,
+             predicate: Callable[[dict[str, Any]], bool] = lambda _: True) -> None:
+    for item in items.values():
+        if predicate(item):
+            if not item["dirty"]:
+                item["queued"] = _micros(now)
+            item["dirty"] |= flags | RENDER
 
 
-def _remember(
-    cache: sqlite3.Connection, output: Path, report: Report, now: datetime, *, retained: bool = False,
-) -> bool:
+def _remember(items: dict[str, dict[str, Any]], output: Path, report: Report,
+              now: datetime) -> bool:
     from zont_analyzer.application.publication import KINDS, archive_paths
 
     if report.kind not in KINDS or report.period_end > now or report.generated_at < report.period_end:
         return False
     html_path, json_path = archive_paths(output, report)
     href = html_path.relative_to(output).as_posix()
-    previous = cache.execute("SELECT * FROM items WHERE href=?", (href,)).fetchone()
+    previous = items.get(href)
     digest = _digest(report.model_dump(mode="json"))
-    if previous and (previous["generated"] > report.generated_at.timestamp() or previous["digest"] == digest):
+    if previous and (previous["generated"] > _micros(report.generated_at) or previous["digest"] == digest):
         return False
     lo, hi = _windows(report)
-    entry = previous["entry"] if previous else None
-    if retained and html_path.is_file():
-        entry = json.dumps(_entry(output, report))
-    cache.execute("""
-        INSERT INTO items(href,report_id,kind,start,end,generated,digest,lo,hi,comparisons,
-                          dirty,queued,entry,json_stamp,html_stamp)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(href) DO UPDATE SET
-        report_id=excluded.report_id,kind=excluded.kind,start=excluded.start,end=excluded.end,
-        generated=excluded.generated,digest=excluded.digest,lo=excluded.lo,hi=excluded.hi,
-        comparisons=excluded.comparisons,
-        queued=CASE WHEN items.dirty=0 THEN excluded.queued ELSE items.queued END,
-        dirty=items.dirty|excluded.dirty,entry=excluded.entry
-        """, (href, report.id, report.kind, report.period_start.timestamp(), report.period_end.timestamp(),
-              report.generated_at.timestamp(), digest, lo, hi, bool(report.context.get("period_comparisons")),
-              RENDER | GAS, now.timestamp(), entry,
-              _stamp(json_path), _stamp(html_path)))
+    items[href] = {
+        "href": href, "report_id": report.id, "kind": report.kind,
+        "start": int(report.period_start.timestamp()), "end": int(report.period_end.timestamp()),
+        "generated": _micros(report.generated_at), "digest": digest, "lo": lo, "hi": hi,
+        "comparisons": bool(report.context.get("period_comparisons")),
+        "dirty": (previous["dirty"] if previous else 0) | RENDER | GAS,
+        "queued": previous["queued"] if previous and previous["dirty"] else _micros(now),
+        "entry": previous["entry"] if previous else None,
+        "json_stamp": previous["json_stamp"] if previous else _stamp(json_path),
+        "html_stamp": previous["html_stamp"] if previous else _stamp(html_path),
+    }
     return True
 
 
-def _dependents(cache: sqlite3.Connection, report: Report, now: datetime) -> None:
-    # Comparison money reads stored gas of other periods. A bounded batch may
-    # refresh those periods after their consumers; queue a cost-only correction.
-    _enqueue(cache, COST, now, "comparisons=1 AND report_id!=? AND lo < ? AND hi > ?",
-             (report.id, report.period_end.timestamp(), report.period_start.timestamp()))
+def _dependents(items: dict[str, dict[str, Any]], report: Report, now: datetime) -> None:
+    end, start = report.period_end.timestamp(), report.period_start.timestamp()
+    _enqueue(items, COST, now, lambda item: item["comparisons"] and item["report_id"] != report.id
+             and item["lo"] < end and item["hi"] > start)
 
 
-def _scan_exports(cache: sqlite3.Connection, output: Path, now: datetime) -> None:
-    from zont_analyzer.application.publication import KINDS, archive_paths
-
-    for kind in KINDS:
-        for path in (output / kind).glob("*.json"):
-            href = path.with_suffix(".html").relative_to(output).as_posix()
-            old = cache.execute("SELECT json_stamp FROM items WHERE href=?", (href,)).fetchone()
-            if old and old[0] == _stamp(path):
-                continue
-            try:
-                report = Report.model_validate_json(path.read_text(encoding="utf-8"))
-                html_path, expected = archive_paths(output, report)
-                if expected == path and html_path.is_file():
-                    _remember(cache, output, report, now, retained=True)
-            except (OSError, ValueError):
-                continue
-
-
-def _source(runtime: Runtime, output: Path, row: sqlite3.Row) -> Report | None:
-    report = runtime.db.report(row["report_id"])
-    try:
-        exported = Report.model_validate_json((output / row["href"]).with_suffix(".json").read_text())
-        if report is None or exported.generated_at > report.generated_at:
-            report = exported
-    except (OSError, ValueError):
-        pass
-    return report
-
-
-def _telemetry(cache: sqlite3.Connection, runtime: Runtime, hours: list[str], now: datetime) -> None:
+def _telemetry(items: dict[str, dict[str, Any]], repository: PublicationRepository,
+               runtime: Runtime, hours: list[str], now: datetime) -> None:
     if not hours:
         return
-    # The gas model uses all meter intervals; late samples within calibration
-    # can change estimates outside the sample's own report period.
-    with runtime.db.session() as session:
-        span = session.execute(text("SELECT MIN(reading_day),MAX(reading_day) FROM gas_readings")).one()
+    earliest, latest = repository.reading_span()
     calibration: tuple[float, float] | None = None
-    if span[0] and span[1] and span[0] != span[1]:
+    if earliest and latest and earliest != latest:
         zone = ZoneInfo(runtime.config.home.effective_timezone)
         calibration = (
-            datetime.fromisoformat(span[0]).replace(tzinfo=zone).timestamp() - 900,
-            (datetime.fromisoformat(span[1]).replace(tzinfo=zone) + timedelta(days=1)).timestamp() + 900,
+            datetime.fromisoformat(earliest).replace(tzinfo=zone).timestamp() - 900,
+            (datetime.fromisoformat(latest).replace(tzinfo=zone) + timedelta(days=1)).timestamp() + 900,
         )
     for hour in hours:
         start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
         end = start + 3600
         if calibration and start < calibration[1] and end > calibration[0]:
-            _enqueue(cache, GAS, now)
+            _enqueue(items, GAS, now)
             return
-        _enqueue(cache, GAS, now, "lo < ? AND hi > ?", (end, start))
+        _enqueue(items, GAS, now, lambda item: item["lo"] < end and item["hi"] > start)  # noqa: B023
 
 
-def publish_incremental(
-    runtime: Runtime, output: Path, now: datetime, *, batch_size: int = 8, rebuild: bool = False,
-) -> dict[str, Any]:
+def _queue(items: dict[str, dict[str, Any]], latest_href: str, batch_size: int) -> list[dict[str, Any]]:
+    return sorted((item for item in items.values() if item["dirty"]), key=lambda item: (
+        0 if item["href"] == latest_href else 1 if item["entry"] is None else 2,
+        -item["start"] if item["entry"] is None else 0,
+        item["queued"], item["href"],
+    ))[:batch_size]
+
+
+def publish_incremental(runtime: Runtime, output: Path, now: datetime, *,
+                        batch_size: int = 8, rebuild: bool = False) -> dict[str, Any]:
     if not 1 <= batch_size <= 100:
         raise ValueError("publication batch_size must be between 1 and 100")
-    cache = _open(output / ".publication-cache.sqlite3")
+    repository = PublicationRepository(runtime.db.storage)
+    owner = str(uuid4())
+    lease = runtime.db.jobs.acquire("publication", owner, LEASE_SECONDS)
+    if lease is None:
+        raise RuntimeError("another publisher holds the YDB publication lease")
     try:
-        with cache:
-            return _run(cache, runtime, output, now, batch_size, rebuild)
+        return _run(repository, runtime, output, now, batch_size, rebuild, owner, lease.attempt)
     finally:
-        cache.close()
+        runtime.db.jobs.release("publication", owner, lease.attempt)
 
 
-def _run(
-    cache: sqlite3.Connection, runtime: Runtime, output: Path, now: datetime, batch_size: int, rebuild: bool,
-) -> dict[str, Any]:
+def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now: datetime,
+         batch_size: int, rebuild: bool, owner: str, attempt: int) -> dict[str, Any]:
     from zont_analyzer.application import publication as pub
     from zont_analyzer.application.ai_maintenance import review_state
     from zont_analyzer.application.gas import GasService
@@ -254,144 +182,181 @@ def _run(
     from zont_analyzer.application.owner_context import OwnerContextStore
     from zont_analyzer.application.timezone import apply_device_timezone
 
-    apply_device_timezone(runtime.db, runtime.config)
-    # Capture before reading sources. Writes during publication stay pending.
-    checkpoint = int(_meta(cache, "checkpoint", "0"))
-    upper, changes = changes_since(runtime.db, checkpoint)
-    identity = str(runtime.db.path.resolve()) + ":" + str(runtime.db.get_app_meta("instance_id"))
-    recovering = rebuild or upper < checkpoint or _meta(cache, "identity") != identity
-    if recovering:
-        cache.execute("DELETE FROM items")
-        _scan_exports(cache, output, now)
-        # Metadata IDs only; never materialize the archive's canonical JSON at once.
-        with runtime.db.session() as session:
-            ids = session.execute(text("SELECT id FROM reports WHERE period_end<=:end ORDER BY generated_at"),
-                                  {"end": int(now.timestamp())}).scalars().all()
-        for report_id in ids:
-            report = runtime.db.report(report_id)
-            if report is not None:
-                _remember(cache, output, report, now)
-        _set(cache, "identity", identity)
-    else:
-        if _meta(cache, "directories") != _digest([_stamp(output / k) for k in pub.KINDS]):
-            _scan_exports(cache, output, now)
-        for change in changes:
-            scope, identifier = change["scope"], change["identifier"]
-            if scope == "report":
-                report = runtime.db.report(identifier)
-                if report is not None and _remember(cache, output, report, now):
-                    _dependents(cache, report, now)
-            elif scope == "render":
-                _enqueue(cache, RENDER, now, "report_id=?", (identifier,))
-            elif scope == "global":
-                _enqueue(cache, {"gas": GAS, "cost": COST}.get(identifier, RENDER), now)
-            elif scope == "tariff":
-                start = datetime.fromisoformat(identifier).replace(tzinfo=UTC).timestamp()
-                # Conservative until the next known tariff; display-only changes
-                # to a future tariff do not recalculate historical money or gas.
-                with runtime.db.session() as session:
-                    next_start = session.execute(text(
-                        "SELECT MIN(effective_from) FROM gas_tariffs WHERE effective_from>:start"
-                    ), {"start": identifier}).scalar_one()
-                end = (datetime.fromisoformat(next_start).replace(tzinfo=UTC).timestamp()
-                       if next_start else float("inf"))
-                _enqueue(cache, COST, now, "lo+900 < ? AND hi-900 > ?", (end, start))
-        _telemetry(cache, runtime, [c["identifier"] for c in changes if c["scope"] == "telemetry"], now)
+    def fence() -> None:
+        if runtime.db.jobs.renew("publication", owner, attempt, LEASE_SECONDS) is None:
+            raise RuntimeError("publisher lost its YDB lease")
 
+    apply_device_timezone(runtime.db, runtime.config)
     owner_store = OwnerContextStore(runtime.db)
-    profiles = [owner_store.profile(str(d["id"]), now) for d in runtime.db.list_devices()]
-    # as_of is display metadata, not an input change. Effective fields catch
-    # activation of a future-dated profile even when no new DB write occurs.
-    profile_digest = _digest([{k: v for k, v in p.items() if k != "as_of"} for p in profiles])
-    if _meta(cache, "profiles") != profile_digest:
-        _enqueue(cache, GAS, now)
-    _set(cache, "profiles", profile_digest)
+    profiles = [owner_store.profile(str(device["id"]), now) for device in runtime.db.list_devices()]
+    profile_digest = _digest([{key: value for key, value in profile.items() if key != "as_of"} for profile in profiles])
     ai_review = review_state(runtime)
     config_digest = _digest((VERSION, runtime.config.home.model_dump(), runtime.config.home.effective_timezone,
                              runtime.config.preferences.model_dump(), runtime.config.analysis.model_dump(),
                              runtime.config.feedback.public_api_base_url))
-    if _meta(cache, "config") != config_digest:
-        _enqueue(cache, GAS, now)
-    _set(cache, "config", config_digest)
-    if _meta(cache, "ai_review") != _digest(ai_review):
-        _enqueue(cache, RENDER, now)
-    _set(cache, "ai_review", _digest(ai_review))
+    review_digest = _digest(ai_review)
+    meta_hint = repository.load_meta()
+    checkpoint = int(meta_hint.get("checkpoint", "0"))
+    upper = runtime.db.source_revision()
+    manifest_path = output / "reports.json"
+    if (
+        not rebuild and upper == checkpoint and meta_hint.get("identity") == runtime.db.identity
+        and meta_hint.get("profiles") == profile_digest and meta_hint.get("config") == config_digest
+        and meta_hint.get("ai_review") == review_digest and "count" in meta_hint
+        and meta_hint.get("manifest_stamp") == _stamp(manifest_path) and manifest_path.exists()
+        and not repository.has_dirty()
+    ):
+        latest_hint = repository.latest_daily()
+        if latest_hint is None or meta_hint.get("latest_stamp") == _stamp(output / "latest.html"):
+            audit_hint = repository.audit_page(meta_hint.get("audit", ""), AUDIT_SIZE)
+            if all(
+                row["json_stamp"] == _stamp((output / row["href"]).with_suffix(".json"))
+                and row["html_stamp"] == _stamp(output / row["href"])
+                for row in audit_hint
+            ):
+                updated_meta = dict(meta_hint)
+                updated_meta["audit"] = audit_hint[-1]["href"] if len(audit_hint) == AUDIT_SIZE else ""
+                fence()
+                if not repository.save({}, {}, updated_meta, meta_hint, expected_checkpoint=checkpoint,
+                                       lease_owner=owner, lease_attempt=attempt):
+                    raise RuntimeError("publisher lost its YDB checkpoint or lease")
+                return {"reports": int(meta_hint["count"]), "rendered_reports": 0, "pending_reports": 0,
+                        "manifest": str(manifest_path),
+                        "latest_report_id": latest_hint["report_id"] if latest_hint else None}
 
-    # Bounded stat audit catches removed/corrupted artifacts without scanning all
-    # paths every poll. Cache loss or --rebuild gives immediate full reconciliation.
-    cursor = int(_meta(cache, "audit", "0"))
-    audit = cache.execute("SELECT rowid,* FROM items WHERE rowid>? ORDER BY rowid LIMIT ?",
-                          (cursor, AUDIT_SIZE)).fetchall()
-    for row in audit:
-        path = output / row["href"]
-        if row["json_stamp"] != _stamp(path.with_suffix(".json")) or row["html_stamp"] != _stamp(path):
-            _enqueue(cache, GAS, now, "href=?", (row["href"],))
-    _set(cache, "audit", str(audit[-1]["rowid"]) if len(audit) == AUDIT_SIZE else "0")
+    items, meta = repository.load()
+    previous, old_meta = deepcopy(items), dict(meta)
+    checkpoint = int(meta.get("checkpoint", "0"))
+    upper = runtime.db.source_revision()
+    changes = repository.changes_since(checkpoint, upper)
+    identity = runtime.db.identity
+    recovering = rebuild or upper < checkpoint or meta.get("identity") != identity
+    if recovering:
+        items.clear()
+        for canonical_report in repository.canonical_reports(now):
+            _remember(items, output, canonical_report, now)
+        meta["identity"] = identity
+    else:
+        for change in changes:
+            scope, identifier = str(change["scope"]), str(change["identifier"])
+            if scope == "report":
+                report = runtime.db.report(identifier)
+                if report is not None and _remember(items, output, report, now):
+                    _dependents(items, report, now)
+            elif scope == "render":
+                _enqueue(items, RENDER, now, lambda item: item["report_id"] == identifier)  # noqa: B023
+            elif scope == "global":
+                _enqueue(items, {"gas": GAS, "cost": COST}.get(identifier, RENDER), now)
+            elif scope == "tariff" and identifier:
+                start = datetime.fromisoformat(identifier.replace("Z", "+00:00")).timestamp()
+                following = repository.next_tariff_start(identifier)
+                end = (datetime.fromisoformat(following.replace("Z", "+00:00")).timestamp()
+                       if following else float("inf"))
+                _enqueue(items, COST, now,
+                         lambda item: item["lo"] + 900 < end and item["hi"] - 900 > start)  # noqa: B023
+            elif scope.startswith("tariff:"):
+                _enqueue(items, COST, now)
+            elif scope.startswith(("owner-profile:", "owner-gas:", "device:", "series:", "telemetry:")):
+                _enqueue(items, GAS, now)
+        _telemetry(items, repository, runtime,
+                   [str(c["identifier"]) for c in changes if c["scope"] == "telemetry"], now)
 
-    latest_row = cache.execute("SELECT * FROM items WHERE kind='daily' ORDER BY start DESC LIMIT 1").fetchone()
-    latest_href = latest_row["href"] if latest_row else ""
-    if latest_row and _meta(cache, "latest_stamp") != _stamp(output / "latest.html"):
-        _enqueue(cache, RENDER, now, "href=?", (latest_href,))
-    # A newly calculated week/month must become visible before maintenance of
-    # already published history. Keep latest daily first and the batch bounded.
-    queue = cache.execute("""SELECT * FROM items WHERE dirty!=0
-        ORDER BY CASE WHEN href=? THEN 0 WHEN entry IS NULL THEN 1 ELSE 2 END,
-                 CASE WHEN entry IS NULL THEN start END DESC,queued,rowid LIMIT ?""",
-                          (latest_href, batch_size)).fetchall()
-    service = GasService(runtime.db, runtime.config) if any(r["dirty"] & (GAS | COST) for r in queue) else None
+    # A lost local publication directory is reconciled from canonical YDB.
+    # Ordinary polls examine only sixteen paths and do no full archive walk.
+    if not manifest_path.exists():
+        for item in items.values():
+            if not (output / item["href"]).is_file() or not (output / item["href"]).with_suffix(".json").is_file():
+                _enqueue(items, GAS, now, lambda row: row["href"] == item["href"])  # noqa: B023
+                item["entry"] = None
+    if meta.get("profiles") != profile_digest:
+        _enqueue(items, GAS, now)
+    meta["profiles"] = profile_digest
+    if meta.get("config") != config_digest:
+        _enqueue(items, GAS, now)
+    meta["config"] = config_digest
+    if meta.get("ai_review") != review_digest:
+        _enqueue(items, RENDER, now)
+    meta["ai_review"] = review_digest
+
+    hrefs = sorted(items)
+    cursor = meta.get("audit", "")
+    later = [href for href in hrefs if href > cursor]
+    audit = later[:AUDIT_SIZE]
+    for href in audit:
+        item = items[href]
+        path = output / href
+        if item["json_stamp"] != _stamp(path.with_suffix(".json")) or item["html_stamp"] != _stamp(path):
+            _enqueue(items, GAS, now, lambda row: row["href"] == href)  # noqa: B023
+    meta["audit"] = audit[-1] if len(audit) == AUDIT_SIZE else ""
+
+    latest = max((item for item in items.values() if item["kind"] == "daily"),
+                 key=lambda item: (item["start"], item["href"]), default=None)
+    latest_href = latest["href"] if latest else ""
+    if latest and meta.get("latest_stamp") != _stamp(output / "latest.html"):
+        _enqueue(items, RENDER, now, lambda item: item["href"] == latest_href)
+    queue = _queue(items, latest_href, batch_size)
+    service = GasService(runtime.db, runtime.config) if any(item["dirty"] & (GAS | COST) for item in queue) else None
     tariffs = GasTariffStore(runtime.db).history() if queue else []
 
-    def render(report: Report, *, latest: bool = False) -> str:
-        owner_data = {"profiles": profiles, "tariffs": tariffs, "ai_review": ai_review,
-                      "gas": (owner_store.gas(report.id)
-                              if report.kind == "daily" and runtime.db.report(report.id) else None)}
+    def render(report: Report, *, is_latest: bool = False) -> str:
+        owner_data = {
+            "profiles": profiles, "tariffs": tariffs, "ai_review": ai_review,
+            "gas": owner_store.gas(report.id) if report.kind == "daily" and runtime.db.report(report.id) else None,
+        }
         return pub.render_html(report, runtime.db.recommendation_views_for_report(report.id),
                                chart_data=pub.cached_chart_data(runtime.db, report),
                                feedback_api_base_url=runtime.config.feedback.public_api_base_url,
                                current_comfort_band_c=runtime.config.preferences.comfort_band_c,
-                               latest_report_href="latest.html" if latest else "../latest.html", owner_data=owner_data)
+                               latest_report_href="latest.html" if is_latest else "../latest.html",
+                               owner_data=owner_data)
 
     rendered = 0
     newest: Report | None = None
-    for row in queue:
-        report = _source(runtime, output, row)
+    for item in queue:
+        fence()
+        report = runtime.db.report(item["report_id"])
         if report is None:
-            cache.execute("DELETE FROM items WHERE href=?", (row["href"],))
+            items.pop(item["href"], None)
             continue
-        if service is not None and row["dirty"] & (GAS | COST):
-            refreshed = service.refresh(report) if row["dirty"] & GAS else service.refresh_cost(report)
+        if service is not None and item["dirty"] & (GAS | COST):
+            refreshed = service.refresh(report) if item["dirty"] & GAS else service.refresh_cost(report)
             if service.persist_refresh(report, refreshed):
-                if row["dirty"] & GAS and report.context.get("gas") != refreshed.context.get("gas"):
-                    _dependents(cache, refreshed, now)
+                if item["dirty"] & GAS and report.context.get("gas") != refreshed.context.get("gas"):
+                    _dependents(items, refreshed, now)
                 report = refreshed
             else:
                 report = runtime.db.report(report.id) or report
         html_path, json_path = pub.archive_paths(output, report)
-        pub._write_changed(html_path, render(report))
+        html = render(report)
+        fence()
+        pub._write_changed(html_path, html)
         pub._write_changed(json_path, report.model_dump_json(indent=2) + "\n")
         lo, hi = _windows(report)
-        cache.execute("""UPDATE items SET dirty=0,entry=?,digest=?,lo=?,hi=?,generated=?,json_stamp=?,html_stamp=?
-            WHERE href=?""", (json.dumps(_entry(output, report)), _digest(report.model_dump(mode="json")), lo, hi,
-                              report.generated_at.timestamp(), _stamp(json_path), _stamp(html_path), row["href"]))
-        if row["href"] == latest_href:
+        item.update(dirty=0, entry=json.dumps(_entry(output, report)),
+                    digest=_digest(report.model_dump(mode="json")), lo=lo, hi=hi,
+                    generated=_micros(report.generated_at), json_stamp=_stamp(json_path), html_stamp=_stamp(html_path))
+        if item["href"] == latest_href:
             newest = report
         rendered += 1
 
-    manifest_path = output / "reports.json"
-    if queue or recovering or _meta(cache, "manifest_stamp") != _stamp(manifest_path) or not manifest_path.exists():
-        entries = [json.loads(r[0]) for r in cache.execute(
-            "SELECT entry FROM items WHERE entry IS NOT NULL ORDER BY kind,start")]
+    fence()
+    entries = [json.loads(item["entry"]) for item in sorted(items.values(), key=lambda row: (row["kind"], row["start"]))
+               if item["entry"] is not None]
+    if queue or recovering or meta.get("manifest_stamp") != _stamp(manifest_path) or not manifest_path.exists():
         manifest = {"version": 1, "updated_at": now.astimezone(UTC).isoformat(), "reports": entries}
         pub.atomic_write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", mode=0o644)
     if newest is not None:
-        pub._write_changed(output / "latest.html", render(newest, latest=True))
-    _set(cache, "manifest_stamp", _stamp(manifest_path))
-    _set(cache, "latest_stamp", _stamp(output / "latest.html"))
-    _set(cache, "directories", _digest([_stamp(output / k) for k in pub.KINDS]))
-    _set(cache, "checkpoint", str(upper))
-    if queue or recovering:
-        _set(cache, "count", str(cache.execute("SELECT COUNT(*) FROM items WHERE entry IS NOT NULL").fetchone()[0]))
-    return {"reports": int(_meta(cache, "count", "0")),
-            "rendered_reports": rendered,
-            "pending_reports": cache.execute("SELECT COUNT(*) FROM items WHERE dirty!=0").fetchone()[0],
-            "manifest": str(manifest_path), "latest_report_id": latest_row["report_id"] if latest_row else None}
+        fence()
+        pub._write_changed(output / "latest.html", render(newest, is_latest=True))
+    meta["manifest_stamp"] = _stamp(manifest_path)
+    meta["latest_stamp"] = _stamp(output / "latest.html")
+    meta["checkpoint"] = str(upper)
+    meta["count"] = str(len(entries))
+    meta["latest_report_id"] = latest["report_id"] if latest else ""
+    fence()
+    if not repository.save(items, previous, meta, old_meta, expected_checkpoint=checkpoint,
+                           lease_owner=owner, lease_attempt=attempt):
+        raise RuntimeError("publisher lost its YDB checkpoint or lease")
+    return {"reports": len(entries), "rendered_reports": rendered,
+            "pending_reports": sum(bool(item["dirty"]) for item in items.values()),
+            "manifest": str(manifest_path), "latest_report_id": latest["report_id"] if latest else None}

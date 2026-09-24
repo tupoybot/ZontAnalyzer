@@ -1,15 +1,16 @@
+import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from tests.ydb_support import make_runtime, seed_samples
 from zont_analyzer.application.gas import GasService
 from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.application.publication import publish_reports
 from zont_analyzer.domain import TelemetryPoint
-from zont_analyzer.runtime import build_runtime
 
 
 def history(tmp_path: Path):
-    r = build_runtime(None, tmp_path)
+    r = make_runtime(tmp_path)
     r.config.home.timezone = 'UTC'
     r.config.analysis.modulation_capability_profile = 'flame_zero_is_minimum'
     r.db.save_devices([{'id': '1', 'name': 'boiler'}])
@@ -21,7 +22,7 @@ def history(tmp_path: Path):
             points.append(TelemetryPoint(device_id='1', entity_id='outdoor' if key == 'outdoor' else 'boiler',
                                          source_type='z3k_boiler_adapter', metric_key=key, timestamp_utc=timestamp,
                                          **({"value_text": value} if isinstance(value, str) else {"value_num": value})))
-    r.db.upsert_samples(points, roles={'outdoor': 'outdoor_temperature'})
+    seed_samples(r.db, points, roles={'outdoor': 'outdoor_temperature'})
     store = OwnerContextStore(r.db)
     store.update_profile('1', {'fields': {'has_gas_stove': {'value': False}}})
     a = r.analysis(no_ai=True)
@@ -110,13 +111,13 @@ def test_meter_intervals_follow_selected_days_without_reports_and_recalibrate_af
 
 
 def test_missing_fl_is_not_reconstructed_from_modulation(tmp_path: Path):
-    r = build_runtime(None, tmp_path)
+    r = make_runtime(tmp_path)
     start = datetime(2026, 1, 1, tzinfo=UTC)
     r.db.save_devices([{'id': '1'}])
     points = [TelemetryPoint(device_id='1', entity_id='boiler', source_type='z3k_boiler_adapter',
                               metric_key='rml', timestamp_utc=start+timedelta(minutes=i), value_num=100.0)
               for i in range(60)]
-    r.db.upsert_samples(points)
+    seed_samples(r.db, points)
     gas = GasService(r.db, r.config).context(start, start+timedelta(hours=1))
     assert gas['coverage_pct'] == 0 and gas['volume_m3'] is None
     assert gas['flame_pct'] is None
@@ -217,10 +218,10 @@ def test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild(tm
     from zont_analyzer.reports import chart_data
     r, store, reports = history(tmp_path)
     for report in reports:
-        path, digest = chart_data._cache_path(r.db, report)
-        chart_data._atomic_write_json(path, {
+        key, digest = chart_data._cache_key(report)
+        r.db.set_app_meta(key, json.dumps({
             'schema_version': chart_data.CHART_DATA_SCHEMA_VERSION, 'report_digest': digest, 'data': {'series': {}},
-        })
+        }))
     store.update_gas(reports[0].id, {'value_m3': 100})
     store.update_gas(reports[2].id, {'value_m3': 292})
 
@@ -235,14 +236,14 @@ def test_gas_correction_reuses_published_charts_without_raw_telemetry_rebuild(tm
 def test_gas_context_holds_old_setpoint_until_explicit_unknown(tmp_path: Path):
     import pytest
 
-    r = build_runtime(None, tmp_path)
+    r = make_runtime(tmp_path)
     start = datetime(2026, 1, 1, tzinfo=UTC)
     points = [TelemetryPoint(device_id='1', entity_id='circuit', source_type='z3k_heating_circuit',
                              metric_key='target_temp', timestamp_utc=stamp, value_num=value)
               for stamp, value in [(start-timedelta(days=3), 22.0),
                                    (start+timedelta(hours=1), None),
                                    (start+timedelta(hours=2), 24.0)]]
-    r.db.upsert_samples(points, roles={'circuit': 'target_temperature'})
+    seed_samples(r.db, points, roles={'circuit': 'target_temperature'})
     window = GasService(r.db, r.config).window(start, start+timedelta(hours=3))
     assert window['target_hours'] == pytest.approx(2)
     assert window['target_degree_hours'] == pytest.approx(46)

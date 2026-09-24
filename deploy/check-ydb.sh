@@ -27,5 +27,10 @@ else: raise SystemExit("YDB did not become ready")
 docker run --rm --network "$NAME" --user "$(id -u):$(id -g)" --workdir /workspace \
     --mount "type=bind,src=$ROOT,dst=/workspace,readonly" \
     --tmpfs /tmp:rw,exec,nosuid,nodev,size=1g \
-    -e PYTHONPATH=/workspace/src -e "YDB_TEST_ENDPOINT=grpc://$NAME:2136" \
-    --entrypoint sh "$IMAGE" -c 'exec pytest -ra -p no:cacheprovider tests/integration/test_ydb_*.py'
+    -e PYTHONPATH=/workspace/src:/workspace -e "YDB_TEST_ENDPOINT=grpc://$NAME:2136" \
+    --entrypoint pytest "$IMAGE" -ra -p no:cacheprovider "${@:-tests}"
+# Exercise the installed CLI in a clean working directory and a disposable schema.
+docker run --rm --network "$NAME" --workdir /tmp \
+    -e "YDB_ENDPOINT=grpc://$NAME:2136" -e YDB_DATABASE=/local \
+    -e YDB_NAMESPACE=cli_smoke -e YDB_ANONYMOUS_CREDENTIALS=1 \
+    --entrypoint zont-analyzer "$IMAGE" --data-dir /tmp/cli-data init

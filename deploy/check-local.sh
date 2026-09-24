@@ -67,9 +67,9 @@ build_package() {
 }
 
 check() {
-    run_in_image ruff check --no-cache /workspace/src /workspace/tests
+    run_in_image ruff check --no-cache /workspace/src /workspace/tests /workspace/tools
     run_in_image mypy --cache-dir /tmp/mypy /workspace/src/zont_analyzer
-    run_in_image pytest -ra -p no:cacheprovider
+    ZONT_TEST_IMAGE="$IMAGE" "$ROOT/deploy/check-ydb.sh" tests
     build_package
 }
 

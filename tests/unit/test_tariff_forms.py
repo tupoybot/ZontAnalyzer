@@ -5,7 +5,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
-from zont_analyzer.adapters.sqlite.database import Database
+from tests.ydb_support import make_database
 from zont_analyzer.application.gas_tariffs import GasTariffStore
 from zont_analyzer.domain import QualityResult, Report
 from zont_analyzer.reports.owner_forms import render_owner_forms
@@ -71,8 +71,7 @@ def test_tariff_editor_is_adjacent_to_daily_meter_and_not_in_equipment_settings(
 def test_latest_scheduled_edit_is_the_only_active_month_value_in_embedded_data(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    db = Database(tmp_path / "tariff-form.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     store = GasTariffStore(db, "Europe/Samara")
     monkeypatch.setattr("zont_analyzer.application.gas_tariffs.utcnow", lambda: datetime(2026, 9, 7, tzinfo=UTC))
     first = store.save({"price": "8,01", "currency": "RUB"})
@@ -89,8 +88,7 @@ def test_latest_scheduled_edit_is_the_only_active_month_value_in_embedded_data(
 
 
 def test_tariff_audit_is_script_safe_and_client_renders_it_as_text(tmp_path: Path) -> None:
-    db = Database(tmp_path / "tariff-audit.sqlite3")
-    db.initialize()
+    db = make_database(tmp_path)
     store = GasTariffStore(db, "Europe/Samara")
     created = store.save({"price": "8", "currency": "RUB", "effective_month": "2026-08"})
     hostile_reason = '</script><img src=x onerror="alert(1)">'

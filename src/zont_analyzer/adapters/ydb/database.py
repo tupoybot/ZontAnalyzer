@@ -34,10 +34,10 @@ class YdbConfig:
             raise ValueError("authenticated YDB requires TLS")
 
     @classmethod
-    def from_environment(cls) -> YdbConfig:
+    def from_environment(cls, *, namespace: str = "application") -> YdbConfig:
         return cls(
             endpoint=os.environ["YDB_ENDPOINT"], database=os.environ["YDB_DATABASE"],
-            namespace=os.environ.get("YDB_NAMESPACE", "application"),
+            namespace=os.environ.get("YDB_NAMESPACE", namespace),
             anonymous=os.environ.get("YDB_ANONYMOUS_CREDENTIALS") == "1",
         )
 
@@ -84,10 +84,16 @@ class YdbDatabase:
         self.driver.stop()
 
     def execute(self, query: str, parameters: dict[str, Any] | None = None) -> list[Any]:
-        results = list(self.pool.execute_with_retries(self.prefix + query, parameters=parameters))
-        if any(result.truncated for result in results):
-            raise ValueError("YDB returned a truncated result")
-        return results
+        merged: dict[int, Any] = {}
+        for part in self.pool.execute_with_retries(self.prefix + query, parameters=parameters):
+            if part.truncated:
+                raise ValueError("YDB returned a truncated result")
+            index = int(part.index or 0)
+            if index in merged:
+                merged[index].rows.extend(part.rows)
+            else:
+                merged[index] = part
+        return [merged[index] for index in sorted(merged)]
 
     def transaction(self, callback: Callable[[Transaction], T]) -> T:
         def run(session: Any) -> T:
@@ -107,6 +113,9 @@ class YdbDatabase:
             self.driver.scheme_client.make_directory(self.path)
         existing = {entry.name for entry in self.driver.scheme_client.list_directory(self.path).children}
         if "metadata" in existing:
+            versions = self.execute("SELECT value FROM metadata WHERE name='schema_version';")[0].rows
+            if versions and versions[0].value != "2":
+                raise ValueError("unsupported YDB schema version")
             rows = self.execute("SELECT value FROM metadata WHERE name='schema_hash';")[0].rows
             if rows and rows[0].value != schema_hash:
                 raise ValueError("YDB schema changed; an explicit migration is required")
@@ -116,9 +125,9 @@ class YdbDatabase:
         # A future schema upgrade must explicitly handle the recorded version.
         def version(tx: Transaction) -> None:
             rows = tx.execute("SELECT value FROM metadata WHERE name = 'schema_version';")[0].rows
-            if rows and rows[0].value != "1":
+            if rows and rows[0].value != "2":
                 raise ValueError("unsupported YDB schema version")
-            tx.execute("UPSERT INTO metadata (name, value) VALUES ('schema_version', '1');")
+            tx.execute("UPSERT INTO metadata (name, value) VALUES ('schema_version', '2');")
             tx.execute(
                 "DECLARE $hash AS Utf8; UPSERT INTO metadata (name,value) VALUES ('schema_hash',$hash);",
                 {"$hash": schema_hash},

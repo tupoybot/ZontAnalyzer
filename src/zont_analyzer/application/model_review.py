@@ -1,76 +1,27 @@
-"""Persisted, bounded review of public OpenAI model information.
+"""Persisted, bounded review of public model information on YDB.
 
-Fetching happens outside SQLite transactions.  A short lease prevents duplicate
-workers; results are committed only while the lease token still belongs to this
-attempt.  This module never calls OpenAI generation APIs and never changes a
-model automatically.
+Network catalog reads happen outside retried database transactions. No model is
+changed automatically; accepting a proposal requires an owner decision.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any, Protocol
-
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, select, update
-from sqlalchemy.orm import Mapped, Session, mapped_column
+from typing import TYPE_CHECKING, Any, Protocol
 
 from zont_analyzer.adapters.openai.model_catalog import CatalogSnapshot, ModelFact
-from zont_analyzer.adapters.sqlite.database import Base, Database, utcnow
+from zont_analyzer.adapters.ydb.model_settings import ModelSettingsStorage, ModelSettingsTransaction
+
+if TYPE_CHECKING:
+    from zont_analyzer.adapters.ydb.application import Database
 
 DEFAULT_INTERVAL_DAYS = 60
 MAX_RETRIES = 3
 LEASE_SECONDS = 600
 SCOPE = "installation"
-
-
-class ModelReviewStateRow(Base):
-    __tablename__ = "model_review_state"
-    scope: Mapped[str] = mapped_column(String, primary_key=True)
-    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    next_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    attempts: Mapped[int] = mapped_column(Integer, default=0)
-    lease_token: Mapped[str | None] = mapped_column(String, nullable=True)
-    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class ModelReviewRunRow(Base):
-    __tablename__ = "model_review_runs"
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    scope: Mapped[str] = mapped_column(String, index=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    trigger: Mapped[str] = mapped_column(String)
-    status: Mapped[str] = mapped_column(String, index=True)
-    settings_version: Mapped[str] = mapped_column(String)
-    settings_json: Mapped[str] = mapped_column(Text)
-    sources_json: Mapped[str] = mapped_column(Text, default="[]")
-    catalog_json: Mapped[str] = mapped_column(Text, default="{}")
-    result_json: Mapped[str] = mapped_column(Text, default="{}")
-    error: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class ModelReviewProposalRow(Base):
-    __tablename__ = "model_review_proposals"
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    run_id: Mapped[str] = mapped_column(ForeignKey("model_review_runs.id"), index=True)
-    status: Mapped[str] = mapped_column(String, index=True, default="open")
-    settings_version: Mapped[str] = mapped_column(String)
-    profile: Mapped[str] = mapped_column(String)
-    current_model: Mapped[str] = mapped_column(String)
-    candidate_model: Mapped[str] = mapped_column(String)
-    recommendation_json: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    version: Mapped[int] = mapped_column(Integer, default=1)
 
 
 class Catalog(Protocol):
@@ -79,12 +30,12 @@ class Catalog(Protocol):
 
 class SettingsStore(Protocol):
     def snapshot(self) -> dict[str, Any]: ...
-
-    def save(self, payload: dict[str, Any], *, session: Session | None = None) -> dict[str, Any]: ...
+    def snapshot_in_transaction(self, session: ModelSettingsTransaction) -> dict[str, Any]: ...
+    def save(self, payload: dict[str, Any], *, session: ModelSettingsTransaction | None = None) -> dict[str, Any]: ...
 
 
 def _utc(value: datetime | None = None) -> datetime:
-    value = value or utcnow()
+    value = value or datetime.now(UTC)
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
@@ -96,182 +47,157 @@ def _iso(value: datetime | None) -> str | None:
     return _utc(value).isoformat() if value else None
 
 
+def _parse(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value).astimezone(UTC) if value else None
+
+
+def _micros(value: datetime) -> int:
+    utc = _utc(value)
+    return int(utc.timestamp()) * 1_000_000 + utc.microsecond
+
+
 class ModelReviewStore:
-    def __init__(self, db: Database, catalog: Catalog, *, lease_seconds: int = LEASE_SECONDS,
-                 assessments: dict[str, Any] | None = None):
+    def __init__(
+        self, db: Database, catalog: Catalog, *, lease_seconds: int = LEASE_SECONDS,
+        assessments: dict[str, Any] | None = None,
+    ) -> None:
         self.db, self.catalog, self.lease_seconds = db, catalog, lease_seconds
         self.assessments = assessments or {}
-
-    @contextmanager
-    def _write(self) -> Iterator[Session]:
-        with self.db.engine.connect() as connection:
-            connection.exec_driver_sql("BEGIN IMMEDIATE")
-            session = Session(bind=connection)
-            try:
-                yield session
-                session.flush()
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
-            finally:
-                session.close()
+        self.storage = ModelSettingsStorage(db.storage)
 
     @staticmethod
-    def _state_item(state: ModelReviewStateRow | None) -> dict[str, Any]:
+    def _state_item(state: dict[str, Any] | None) -> dict[str, Any]:
         if state is None:
             return {
-                "last_success_at": None,
-                "next_due_at": None,
-                "last_attempt_at": None,
-                "attempts": 0,
-                "last_error": None,
-                "running": False,
+                "last_success_at": None, "next_due_at": None, "last_attempt_at": None,
+                "attempts": 0, "last_error": None, "running": False,
             }
+        lease_until = _parse(state.get("lease_until"))
         return {
-            "last_success_at": _iso(state.last_success_at),
-            "next_due_at": _iso(state.next_due_at),
-            "last_attempt_at": _iso(state.last_attempt_at),
-            "attempts": state.attempts,
-            "last_error": state.last_error,
-            "running": bool(state.lease_until and _utc(state.lease_until) > _utc()),
+            "last_success_at": state.get("last_success_at"),
+            "next_due_at": state.get("next_due_at"),
+            "last_attempt_at": state.get("last_attempt_at"),
+            "attempts": state.get("attempts", 0),
+            "last_error": state.get("last_error"),
+            "running": bool(lease_until and lease_until > _utc()),
         }
 
+    @staticmethod
+    def _run_item(run: dict[str, Any]) -> dict[str, Any]:
+        return {key: run.get(key) for key in (
+            "id", "started_at", "finished_at", "trigger", "status",
+            "settings_version", "sources", "result", "error",
+        )}
+
+    @staticmethod
+    def _proposal_item(proposal: dict[str, Any]) -> dict[str, Any]:
+        return {key: proposal.get(key) for key in (
+            "id", "run_id", "status", "settings_version", "profile",
+            "current_model", "candidate_model", "recommendation",
+            "created_at", "decided_at", "decision_note", "version",
+        )}
+
     def state(self, settings_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
-        with self.db.session() as session:
-            if settings_snapshot is not None:
-                settings_version = str(settings_snapshot.get("version", ""))
-                # Older releases could persist a price-only proposal.  Retire
-                # it on the first local state read so the UI does not keep
-                # presenting an unsupported recommendation until the next
-                # scheduled catalog fetch.
-                for proposal in session.scalars(
-                    select(ModelReviewProposalRow).where(
-                        ModelReviewProposalRow.status.in_(("open", "deferred")),
-                        ModelReviewProposalRow.settings_version == settings_version,
-                    )
-                ):
-                    recommendation = json.loads(proposal.recommendation_json)
-                    if (
-                        recommendation.get("reason") != "current_model_deprecated"
+        def read(tx: ModelSettingsTransaction) -> dict[str, Any]:
+            state_item = tx.state(SCOPE)
+            state = state_item[0] if state_item else None
+            runs = tx.runs(SCOPE, limit=10)
+            proposals = tx.proposals(limit=1000)
+            settings_version = str(settings_snapshot.get("version", "")) if settings_snapshot else None
+            for proposal in proposals:
+                if (settings_version is None or proposal["status"] not in ("open", "deferred")
+                        or proposal["settings_version"] != settings_version):
+                    continue
+                recommendation = proposal["recommendation"]
+                if (recommendation.get("reason") != "current_model_deprecated"
                         and not (
                             isinstance(recommendation.get("evaluation"), dict)
                             and isinstance(recommendation.get("current_evaluation"), dict)
                             and self._assessments_comparable(
                                 recommendation["current_evaluation"], recommendation["evaluation"],
                             )
-                        )
-                    ):
-                        proposal.status = "superseded"
-                        proposal.decided_at = utcnow()
-            state = session.get(ModelReviewStateRow, SCOPE)
-            runs = session.scalars(
-                select(ModelReviewRunRow)
-                .where(ModelReviewRunRow.scope == SCOPE)
-                .order_by(ModelReviewRunRow.started_at.desc())
-                .limit(10)
-            ).all()
-            proposals = session.scalars(
-                select(ModelReviewProposalRow)
-                .where(ModelReviewProposalRow.status.in_(("open", "deferred")))
-                .order_by(ModelReviewProposalRow.created_at.desc())
-            ).all()
+                        )):
+                    proposal["status"] = "superseded"
+                    proposal["decided_at"] = _iso(_utc())
+                    proposal["version"] += 1
+                    tx.put_proposal(proposal)
+            visible = [proposal for proposal in proposals if proposal["status"] in ("open", "deferred")]
+            visible.sort(key=lambda item: item["created_at"], reverse=True)
             result = {
                 **self._state_item(state),
-                "runs": [self._run_item(row) for row in runs],
-                "proposals": [self._proposal_item(row) for row in proposals],
+                "runs": [self._run_item(run) for run in runs],
+                "proposals": [self._proposal_item(proposal) for proposal in visible],
             }
             if settings_snapshot is not None and state is not None:
                 result["next_due_at"] = _iso(self._next_due(state, settings_snapshot.get("effective", {})))
             if settings_snapshot is not None:
                 result["proposals"] = [item for item in result["proposals"]
                                        if item["settings_version"] == settings_snapshot["version"]]
-                result["settings_changed"] = bool(runs and runs[0].settings_version != settings_snapshot["version"])
+                result["settings_changed"] = bool(
+                    runs and runs[0]["settings_version"] != settings_snapshot["version"]
+                )
             return result
 
-    @staticmethod
-    def _run_item(row: ModelReviewRunRow) -> dict[str, Any]:
-        return {
-            "id": row.id,
-            "started_at": _iso(row.started_at),
-            "finished_at": _iso(row.finished_at),
-            "trigger": row.trigger,
-            "status": row.status,
-            "settings_version": row.settings_version,
-            "sources": json.loads(row.sources_json),
-            "result": json.loads(row.result_json),
-            "error": row.error,
-        }
-
-    @staticmethod
-    def _proposal_item(row: ModelReviewProposalRow) -> dict[str, Any]:
-        return {
-            "id": row.id,
-            "run_id": row.run_id,
-            "status": row.status,
-            "settings_version": row.settings_version,
-            "profile": row.profile,
-            "current_model": row.current_model,
-            "candidate_model": row.candidate_model,
-            "recommendation": json.loads(row.recommendation_json),
-            "created_at": _iso(row.created_at),
-            "decided_at": _iso(row.decided_at),
-            "decision_note": row.decision_note,
-            "version": row.version,
-        }
+        return self.storage.transaction(read)
 
     def due(self, settings_snapshot: dict[str, Any], now: datetime | None = None) -> bool:
         effective = settings_snapshot.get("effective", {})
         if not effective.get("review_enabled", True):
             return False
-        now = _utc(now)
-        with self.db.session() as session:
-            state = session.get(ModelReviewStateRow, SCOPE)
-            next_due = self._next_due(state, effective) if state else None
-            return next_due is None or next_due <= now
+        moment = _utc(now)
+
+        def read(tx: ModelSettingsTransaction) -> bool:
+            item = tx.state(SCOPE)
+            next_due = self._next_due(item[0], effective) if item else None
+            return next_due is None or next_due <= moment
+
+        return self.storage.transaction(read)
 
     @staticmethod
-    def _next_due(state: ModelReviewStateRow, effective: dict[str, Any]) -> datetime | None:
-        if state.last_error and state.next_due_at:
-            return _utc(state.next_due_at)
+    def _next_due(state: dict[str, Any], effective: dict[str, Any]) -> datetime | None:
+        if state.get("last_error") and state.get("next_due_at"):
+            return _parse(state["next_due_at"])
         interval = effective.get("review_interval_days", DEFAULT_INTERVAL_DAYS)
-        if state.last_success_at:
-            return _utc(state.last_success_at) + timedelta(days=int(interval))
-        return _utc(state.next_due_at) if state.next_due_at else None
+        if state.get("last_success_at"):
+            last_success = _parse(state["last_success_at"])
+            return last_success + timedelta(days=int(interval)) if last_success else None
+        return _parse(state.get("next_due_at"))
 
     def _claim(self, settings: dict[str, Any], now: datetime, trigger: str) -> tuple[str, str] | None:
         effective = settings.get("effective", {})
         if trigger == "scheduled" and not effective.get("review_enabled", True):
             return None
-        with self._write() as session:
-            state = session.get(ModelReviewStateRow, SCOPE)
-            if state is None:
-                state = ModelReviewStateRow(scope=SCOPE)
-                session.add(state)
-            if state.lease_until and _utc(state.lease_until) > now:
+        token, run_id = str(uuid.uuid4()), str(uuid.uuid4())
+
+        def claim(tx: ModelSettingsTransaction) -> tuple[str, str] | None:
+            item = tx.state(SCOPE)
+            state, version = item if item else ({}, 0)
+            lease_until = _parse(state.get("lease_until"))
+            if lease_until and lease_until > now:
                 return None
             next_due = self._next_due(state, effective)
             if trigger == "scheduled" and next_due is not None and next_due > now:
                 return None
-            session.execute(update(ModelReviewRunRow).where(
-                ModelReviewRunRow.scope == SCOPE, ModelReviewRunRow.status == "running",
-            ).values(status="interrupted", finished_at=now,
-                     error="Проверка прервана перезапуском; выполняется повтор."))
-            token, run_id = str(uuid.uuid4()), str(uuid.uuid4())
-            state.lease_token, state.lease_until = token, now + timedelta(seconds=self.lease_seconds)
-            state.last_attempt_at, state.attempts, state.updated_at = now, (state.attempts or 0) + 1, now
-            session.add(
-                ModelReviewRunRow(
-                    id=run_id,
-                    scope=SCOPE,
-                    started_at=now,
-                    trigger=trigger,
-                    status="running",
-                    settings_version=str(settings.get("version", "")),
-                    settings_json=_json(settings),
-                )
+            for run in tx.runs(SCOPE, limit=1000):
+                if run["status"] == "running":
+                    run.update(status="interrupted", finished_at=_iso(now),
+                               error="Проверка прервана перезапуском; выполняется повтор.")
+                    tx.put_run(run)
+            state.update(
+                lease_token=token, lease_until=_iso(now + timedelta(seconds=self.lease_seconds)),
+                last_attempt_at=_iso(now), attempts=int(state.get("attempts", 0)) + 1,
+                updated_at=_iso(now),
             )
+            tx.put_state(SCOPE, state, version + 1)
+            tx.put_run({
+                "id": run_id, "scope": SCOPE, "started_at": _iso(now),
+                "started_at_us": _micros(now), "finished_at": None, "trigger": trigger,
+                "status": "running", "settings_version": str(settings.get("version", "")),
+                "settings": settings, "sources": [], "catalog": {}, "result": {}, "error": None,
+            })
             return token, run_id
+
+        return self.storage.transaction(claim)
 
     def _assessment(self, model: str, effort: str | None) -> dict[str, Any] | None:
         assessment = self.assessments.get(model)
@@ -443,197 +369,160 @@ class ModelReviewStore:
             if deprecated_current
             else "Нет подтверждённых сопоставимой оценкой качества оснований для смены; одной цены недостаточно.",
         }
-        with self._write() as session:
-            state = session.get(ModelReviewStateRow, SCOPE)
-            run = session.get(ModelReviewRunRow, run_id)
-            if state is None or run is None or state.lease_token != token:
+        def finish(tx: ModelSettingsTransaction) -> dict[str, Any] | None:
+            state_item = tx.state(SCOPE)
+            run = tx.run(run_id)
+            if state_item is None or run is None or state_item[0].get("lease_token") != token:
                 return None
+            state, version = state_item
             interval = effective.get("review_interval_days", DEFAULT_INTERVAL_DAYS)
             interval = interval if isinstance(interval, int) and interval > 0 else DEFAULT_INTERVAL_DAYS
-            run.finished_at, run.status, run.sources_json, run.catalog_json, run.result_json, run.error = (
-                moment,
-                status,
-                _json(snapshot.as_dict().get("sources", [])),
-                _json(snapshot.as_dict()),
-                _json(result),
-                error,
+            run.update(
+                finished_at=_iso(moment), status=status,
+                sources=list(snapshot.as_dict().get("sources", [])),
+                catalog=snapshot.as_dict(), result=result, error=error,
             )
-            state.lease_token, state.lease_until, state.updated_at = None, None, moment
+            tx.put_run(run)
+            state.update(lease_token=None, lease_until=None, updated_at=_iso(moment))
             if status == "unverified":
-                state.last_error = error or "official catalog is incomplete"
-                if state.attempts < MAX_RETRIES:
-                    state.next_due_at = moment + timedelta(hours=6)
+                state["last_error"] = error or "official catalog is incomplete"
+                if state["attempts"] < MAX_RETRIES:
+                    state["next_due_at"] = _iso(moment + timedelta(hours=6))
                 else:
-                    state.next_due_at = moment + timedelta(days=interval)
-                    state.attempts = 0
+                    state["next_due_at"] = _iso(moment + timedelta(days=interval))
+                    state["attempts"] = 0
             else:
-                state.last_success_at, state.next_due_at, state.last_error, state.attempts = (
-                    moment,
-                    moment + timedelta(days=interval),
-                    None,
-                    0,
+                state.update(
+                    last_success_at=_iso(moment),
+                    next_due_at=_iso(moment + timedelta(days=interval)),
+                    last_error=None, attempts=0,
                 )
+                existing = tx.proposals(limit=1000)
+                valid: set[tuple[str, str, str]] = set()
                 for item in proposals:
                     current, candidate = item["current"], item["candidate"]
                     candidate_id = candidate.id if candidate else ""
-                    existing = session.scalar(
-                        select(ModelReviewProposalRow).where(
-                            ModelReviewProposalRow.status.in_(("open", "deferred", "rejected")),
-                            ModelReviewProposalRow.settings_version == str(settings_snapshot.get("version", "")),
-                            ModelReviewProposalRow.profile == item["profile"],
-                            ModelReviewProposalRow.current_model == current.id,
-                            ModelReviewProposalRow.candidate_model == candidate_id,
-                        )
-                    )
-                    if existing is not None:
-                        continue
-                    # A changed candidate supersedes an undecided predecessor for
-                    # the same profile, so repeated runs never multiply notices.
-                    for previous in session.scalars(
-                        select(ModelReviewProposalRow).where(
-                            ModelReviewProposalRow.status.in_(("open", "deferred")),
-                            ModelReviewProposalRow.profile == item["profile"],
-                        )
+                    identity = (item["profile"], current.id, candidate_id)
+                    valid.add(identity)
+                    if any(
+                        previous["status"] in ("open", "deferred", "rejected")
+                        and previous["settings_version"] == str(settings_snapshot.get("version", ""))
+                        and (previous["profile"], previous["current_model"], previous["candidate_model"]) == identity
+                        for previous in existing
                     ):
-                        previous.status = "superseded"
-                        previous.decided_at = moment
-                    if candidate is None:
-                        recommendation = {
-                            "reason": item["reason"],
-                            "requires_evaluation": True,
-                            "replacement_available": False,
-                            "sources": list(snapshot.sources),
-                        }
-                    else:
-                        evaluation = self._assessment(
-                            candidate.id, effective.get(f"{item['profile']}_reasoning_effort"),
+                        continue
+                    evaluation = self._assessment(
+                        candidate.id, effective.get(f"{item['profile']}_reasoning_effort"),
+                    ) if candidate else None
+                    current_evaluation = self._assessment(
+                        current.id, effective.get(f"{item['profile']}_reasoning_effort"),
+                    )
+                    quality_note = "Не проверено на пакетах приложения; качество может измениться."
+                    latency_note = "Не измерена на пакетах приложения."
+                    if evaluation:
+                        scores = evaluation["scores"]
+                        quality_note = (
+                            f"Локальная оценка: факты {scores['factual']:.2f}, "
+                            f"уместность {scores['advice']:.2f}, неопределённость {scores['uncertainty']:.2f}. "
+                            + str(evaluation["rationale"])
                         )
-                        quality_note = "Не проверено на пакетах приложения; качество может измениться."
-                        latency_note = "Не измерена на пакетах приложения."
-                        if evaluation:
-                            scores = evaluation["scores"]
-                            quality_note = (
-                                f"Локальная оценка: факты {scores['factual']:.2f}, "
-                                f"уместность {scores['advice']:.2f}, неопределённость {scores['uncertainty']:.2f}. "
-                                + str(evaluation["rationale"])
-                            )
-                            latency = evaluation.get("measurements", {}).get("latency_ms")
-                            if latency is not None:
-                                latency_note = f"Измерено локально: {latency} мс."
-                        recommendation = {
-                            "reason": item["reason"],
-                            "requires_evaluation": evaluation is None,
-                            "evaluation": evaluation,
-                            "current_evaluation": self._assessment(
-                                current.id, effective.get(f"{item['profile']}_reasoning_effort"),
-                            ),
-                            "tradeoffs": {
-                                "quality": quality_note,
-                                "latency": latency_note,
-                                "price": {
-                                    "current": {
-                                        "input_per_mtok_usd": current.input_price_per_mtok_usd,
-                                        "output_per_mtok_usd": current.output_price_per_mtok_usd,
-                                    },
-                                    "candidate": {
-                                        "input_per_mtok_usd": candidate.input_price_per_mtok_usd,
-                                        "output_per_mtok_usd": candidate.output_price_per_mtok_usd,
-                                    },
+                        latency = evaluation.get("measurements", {}).get("latency_ms")
+                        if latency is not None:
+                            latency_note = f"Измерено локально: {latency} мс."
+                    recommendation = {
+                        "reason": item["reason"], "requires_evaluation": evaluation is None,
+                        "evaluation": evaluation, "current_evaluation": current_evaluation,
+                        "tradeoffs": {
+                            "quality": quality_note, "latency": latency_note,
+                            "price": {
+                                "current": {
+                                    "input_per_mtok_usd": current.input_price_per_mtok_usd,
+                                    "output_per_mtok_usd": current.output_price_per_mtok_usd,
+                                },
+                                "candidate": {
+                                    "input_per_mtok_usd": candidate.input_price_per_mtok_usd if candidate else None,
+                                    "output_per_mtok_usd": candidate.output_price_per_mtok_usd if candidate else None,
                                 },
                             },
-                            "sources": list(snapshot.sources),
-                        }
-                    session.add(
-                        ModelReviewProposalRow(
-                            id=str(uuid.uuid4()),
-                            run_id=run_id,
-                            settings_version=str(settings_snapshot.get("version", "")),
-                            profile=item["profile"],
-                            current_model=current.id,
-                            candidate_model=candidate_id,
-                            recommendation_json=_json(recommendation),
-                        )
-                    )
-                # A successful review reconciles pending notices as well as
-                # creating new ones. This removes an old price-only (or stale
-                # assessment) proposal from the settings UI once its basis is
-                # no longer valid.
-                valid = {
-                    (item["profile"], item["current"].id, item["candidate"].id)
-                    for item in proposals
-                    if item["candidate"] is not None
-                }
-                for previous in session.scalars(
-                    select(ModelReviewProposalRow).where(
-                        ModelReviewProposalRow.status.in_(("open", "deferred")),
-                        ModelReviewProposalRow.settings_version == str(settings_snapshot.get("version", "")),
-                    )
-                ):
-                    if (previous.profile, previous.current_model, previous.candidate_model) not in valid:
-                        previous.status = "superseded"
-                        previous.decided_at = moment
+                        },
+                        "sources": list(snapshot.sources),
+                    }
+                    proposal = {
+                        "id": str(uuid.uuid4()), "run_id": run_id, "status": "open",
+                        "settings_version": str(settings_snapshot.get("version", "")),
+                        "profile": item["profile"], "current_model": current.id,
+                        "candidate_model": candidate_id, "recommendation": recommendation,
+                        "created_at": _iso(moment), "decided_at": None,
+                        "decision_note": None, "version": 1,
+                    }
+                    tx.put_proposal(proposal)
+                for previous in existing:
+                    if previous["status"] not in ("open", "deferred"):
+                        continue
+                    identity = (previous["profile"], previous["current_model"], previous["candidate_model"])
+                    if (previous["settings_version"] == str(settings_snapshot.get("version", ""))
+                            and identity in valid):
+                        continue
+                    previous.update(status="superseded", decided_at=_iso(moment), version=previous["version"] + 1)
+                    tx.put_proposal(previous)
+            tx.put_state(SCOPE, state, version + 1)
             return self._run_item(run)
 
+        return self.storage.transaction(finish)
+
     def decide(
-        self,
-        proposal_id: str,
-        action: str,
-        expected_version: int,
-        settings_store: SettingsStore,
-        note: str | None = None,
+        self, proposal_id: str, action: str, expected_version: int,
+        settings_store: SettingsStore, note: str | None = None,
         now: datetime | None = None,
     ) -> dict[str, Any]:
         if action not in {"accept", "reject", "defer"}:
             raise ValueError("action must be accept, reject or defer")
         moment = _utc(now)
-        # The network check happens before the short database transaction.  It is
-        # intentionally a guard, not a discovery pass: accepting cannot revive a
-        # candidate which is no longer publicly compatible or is now deprecated.
+        candidate: ModelFact | None = None
+        fresh_facts: dict[str, ModelFact] = {}
+        fresh: CatalogSnapshot | None = None
         if action == "accept":
-            with self.db.session() as read_session:
-                proposed = read_session.get(ModelReviewProposalRow, proposal_id)
-                if proposed is None or not proposed.candidate_model:
-                    raise ValueError("proposal has no applicable replacement")
-                current_model, candidate_model = proposed.current_model, proposed.candidate_model
-            fresh = self.catalog.fetch(moment, (current_model, candidate_model))
+            proposed = self.storage.transaction(lambda tx: tx.proposal(proposal_id))
+            if proposed is None or not proposed["candidate_model"]:
+                raise ValueError("proposal has no applicable replacement")
+            fresh = self.catalog.fetch(moment, (proposed["current_model"], proposed["candidate_model"]))
             fresh_facts = {fact.id: fact for fact in fresh.models}
-            candidate = fresh_facts.get(candidate_model)
-            if (
-                fresh.incomplete
-                or candidate is None
-                or candidate.deprecated
-                or candidate.responses_supported is not True
-                or candidate.structured_outputs_supported is not True
-            ):
+            candidate = fresh_facts.get(proposed["candidate_model"])
+            if (fresh.incomplete or candidate is None or candidate.deprecated
+                    or candidate.responses_supported is not True
+                    or candidate.structured_outputs_supported is not True):
                 raise ValueError("proposal is stale because its candidate is no longer verified")
-        with self._write() as session:
-            proposal = session.get(ModelReviewProposalRow, proposal_id)
+
+        def decide_tx(tx: ModelSettingsTransaction) -> dict[str, Any]:
+            proposal = tx.proposal(proposal_id)
             if proposal is None:
                 raise KeyError(proposal_id)
-            if proposal.version != expected_version or proposal.status not in {"open", "deferred"}:
+            if proposal["version"] != expected_version or proposal["status"] not in ("open", "deferred"):
                 raise ValueError("proposal is stale")
             if action == "accept":
-                live = settings_store.snapshot()
-                if str(live.get("version", "")) != proposal.settings_version:
+                live = settings_store.snapshot_in_transaction(tx)
+                if str(live.get("version", "")) != proposal["settings_version"]:
                     raise ValueError("proposal is stale because AI settings changed")
-                effort = live["effective"][f"{proposal.profile}_reasoning_effort"]
+                effort = live["effective"][f"{proposal['profile']}_reasoning_effort"]
                 if candidate is None or effort not in candidate.reasoning_efforts:
                     raise ValueError("Кандидат больше не поддерживает выбранную глубину рассуждения.")
-                current = fresh_facts.get(proposal.current_model)
+                current = fresh_facts.get(proposal["current_model"])
                 if current is None or self._candidate(current, [candidate], effort) is None:
                     raise ValueError("Основание предложения изменилось; выполните новую проверку моделей.")
-                field = f"{proposal.profile}_model"
+                field = f"{proposal['profile']}_model"
                 settings_store.save(
-                    {"expected_version": proposal.settings_version, "values": {field: proposal.candidate_model}},
-                    session=session,
+                    {"expected_version": proposal["settings_version"],
+                     "values": {field: proposal["candidate_model"]}},
+                    session=tx,
                 )
-                recommendation = json.loads(proposal.recommendation_json)
-                recommendation["acceptance_check"] = fresh.as_dict()
-                proposal.recommendation_json = _json(recommendation)
-            proposal.status, proposal.decided_at, proposal.decision_note, proposal.version = (
-                {"accept": "accepted", "reject": "rejected", "defer": "deferred"}[action],
-                moment,
-                note,
-                proposal.version + 1,
+                recommendation = dict(proposal["recommendation"])
+                recommendation["acceptance_check"] = fresh.as_dict() if fresh else {}
+                proposal["recommendation"] = recommendation
+            proposal.update(
+                status={"accept": "accepted", "reject": "rejected", "defer": "deferred"}[action],
+                decided_at=_iso(moment), decision_note=note, version=proposal["version"] + 1,
             )
+            tx.put_proposal(proposal)
             return self._proposal_item(proposal)
+
+        return self.storage.transaction(decide_tx)

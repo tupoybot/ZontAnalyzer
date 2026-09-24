@@ -1,13 +1,13 @@
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from tests.ydb_support import make_runtime
 from zont_analyzer.adapters.openai.provider import analysis_packet
 from zont_analyzer.application.owner_context import OwnerContextStore
-from zont_analyzer.runtime import build_runtime
 
 
 def test_owner_context_uses_effective_history_and_reaches_bounded_ai_packet(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     runtime.db.save_devices([{"id": "fixture"}])
     store = OwnerContextStore(runtime.db)
     store.update_profile("fixture", {"fields": {"auto_adapt": {"value": True}},

@@ -27,13 +27,11 @@ report_app = typer.Typer(help="Show and export reports.")
 recommendations_app = typer.Typer(help="Manage recommendation lifecycle.")
 config_app = typer.Typer(help="Inspect effective configuration.")
 notifications_app = typer.Typer(help="Test notification delivery.")
-db_app = typer.Typer(help="Database maintenance.")
 app.add_typer(analyze_app, name="analyze")
 app.add_typer(report_app, name="report")
 app.add_typer(recommendations_app, name="recommendations")
 app.add_typer(config_app, name="config")
 app.add_typer(notifications_app, name="notifications")
-app.add_typer(db_app, name="db")
 
 
 class State:
@@ -55,6 +53,7 @@ def callback(
     try:
         state = State()
         state.runtime = build_runtime(config, data_dir)
+        ctx.call_on_close(state.runtime.db.close)
         ctx.obj = state
     except Exception as exc:
         typer.echo(f"Configuration error: {exc}", err=True)
@@ -73,10 +72,8 @@ def initialize(ctx: typer.Context) -> None:
         {
             "initialized": True,
             "data_dir": runtime.loaded.data_dir,
-            "db": runtime.db.path,
-            "schema_revision": runtime.migration.revision,
-            "migrated_from": runtime.migration.previous_revision,
-            "pre_migration_backup": runtime.migration.backup_path,
+            "storage": "YDB",
+            "schema_revision": runtime.db.get_schema_revision(),
         }
     )
 
@@ -348,15 +345,6 @@ def notifications_test(ctx: typer.Context) -> None:
     for message in delivered:
         logging.getLogger("zont_analyzer.notifications").info(message)
     _json({"delivered": len(delivered), "channel": "log"})
-
-
-@db_app.command("backup")
-def db_backup(ctx: typer.Context) -> None:
-    runtime = _runtime(ctx)
-    destination = Path(runtime.config.storage.backup_dir)
-    if not destination.is_absolute():
-        destination = runtime.loaded.data_dir / destination
-    typer.echo(str(runtime.db.backup(destination)))
 
 
 @app.command()

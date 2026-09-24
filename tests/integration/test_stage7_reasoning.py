@@ -3,14 +3,14 @@ from pathlib import Path
 
 import pytest
 
+from tests.ydb_support import make_runtime
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.domain import AnalysisResult, Prediction
 from zont_analyzer.reports import render_html, render_text
-from zont_analyzer.runtime import build_runtime
 
 
 def test_counterfactual_reaches_ai_and_roundtrips_without_changing_old_report(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     runtime.config.openai.enabled = True
     original = AnalysisService(runtime.db, runtime.config).analyze_daily(date(2026, 8, 1), use_ai=False)
     question = 'Что будет при изменении ПЗА? <script>alert(1)</script>'
@@ -39,7 +39,7 @@ def test_counterfactual_reaches_ai_and_roundtrips_without_changing_old_report(tm
 
 
 def test_question_requires_ai_and_invalid_question_cannot_call_analyst(tmp_path: Path) -> None:
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     service = AnalysisService(runtime.db, runtime.config)
     report = service.analyze_daily(date(2026, 8, 1), use_ai=False)
     with pytest.raises(RuntimeError):
@@ -55,7 +55,7 @@ def test_dense_heating_windows_are_used_before_general_packet_size_reduction(tmp
     from zont_analyzer.analytics.evidence import EvidenceWindow, build_evidence
     from zont_analyzer.application.heating_context import heating_context
 
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     start = datetime(2026, 1, 1, tzinfo=UTC)
     sink: list[EvidenceWindow] = []
     packet = build_evidence(start=start, end=start + timedelta(days=7), timezone="UTC", signals=[], window_sink=sink)

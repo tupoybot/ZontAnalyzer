@@ -7,13 +7,13 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.ydb_support import make_runtime
 from zont_analyzer.application.feedback import build_feedback_server
-from zont_analyzer.runtime import build_runtime
 
 
 @pytest.fixture
 def ai_server(tmp_path: Path):
-    runtime = build_runtime(None, tmp_path)
+    runtime = make_runtime(tmp_path)
     runtime.config.feedback.listen_port = 0
     runtime.config.feedback.public_api_base_url = "/api"
     server = build_feedback_server(runtime)

@@ -7,14 +7,21 @@ from typing import Any
 
 import httpx
 
-from zont_analyzer.adapters.sqlite.database import RecommendationRow
+from tests.ydb_support import make_database, seed_samples
 from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.application.feedback import build_feedback_server
 from zont_analyzer.application.pilot import PilotService, atomic_write_text, reports_directory
-from zont_analyzer.config import AppConfig
+from zont_analyzer.config import AppConfig, LoadedConfig, Secrets
 from zont_analyzer.domain import AnalysisResult, TelemetryPoint
 from zont_analyzer.reports import render_html
-from zont_analyzer.runtime import build_runtime
+from zont_analyzer.runtime import Runtime
+
+
+def _runtime(tmp_path: Path) -> Runtime:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    return Runtime(LoadedConfig(config=AppConfig(), secrets=Secrets(), config_path=None,
+                                data_dir=data_dir, sources={}), make_database(tmp_path))
 
 
 def _room_points(start: datetime) -> list[TelemetryPoint]:
@@ -33,7 +40,7 @@ def _room_points(start: datetime) -> list[TelemetryPoint]:
 
 
 def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch) -> None:
-    runtime = build_runtime(None, tmp_path / "data")
+    runtime = _runtime(tmp_path)
     runtime.loaded.config.feedback.listen_port = 0
     runtime.loaded.config.feedback.public_api_base_url = "/api"
     report = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
@@ -121,11 +128,12 @@ def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch
             return AnalysisResult(summary="AI summary")
 
     config = AppConfig.model_validate({"analysis": {"daily_ai_when_normal": True}})
-    runtime.db.upsert_samples(_room_points(datetime(2026, 8, 1, 20, tzinfo=UTC)), {"room": "indoor_temperature"})
-    with runtime.db.session() as session:
-        row = session.get(RecommendationRow, recommendation.id)
-        assert row is not None
-        row.updated_at = datetime(2026, 8, 2, 8, tzinfo=UTC)
+    seed_samples(runtime.db, _room_points(datetime(2026, 8, 1, 20, tzinfo=UTC)), {"room": "indoor_temperature"})
+    runtime.db.storage.execute(
+        "DECLARE $id AS Utf8; DECLARE $updated AS Int64; "
+        "UPDATE recommendations SET updated_at=$updated WHERE id=$id;",
+        {"$id": recommendation.id, "$updated": int(datetime(2026, 8, 2, 8, tzinfo=UTC).timestamp() * 1_000_000)},
+    )
     analyst = CapturingAnalyst()
     next_report = AnalysisService(runtime.db, config, analyst).analyze_daily(date(2026, 8, 2))
 
@@ -139,7 +147,7 @@ def test_html_feedback_round_trip_and_next_ai_packet(tmp_path: Path, monkeypatch
 def test_worker_health_checks_heartbeat_without_database(tmp_path: Path, monkeypatch) -> None:
     import json
 
-    runtime = build_runtime(None, tmp_path / "data")
+    runtime = _runtime(tmp_path)
     runtime.config.feedback.listen_port = 0
     runtime.config.feedback.public_api_base_url = "/custom"
     runtime.config.pilot.worker_status_file = "custom-status.json"

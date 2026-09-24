@@ -11,6 +11,7 @@ SCRIPT = Path(__file__).resolve().parents[2] / 'deploy/check-legacy-image.sh'
 
 @pytest.mark.parametrize('runtime,ancestry,allowed', [
     ('cloud', 'identical', False), ('', 'diverged', False), ('', 'behind', False),
+    ('ydb-cli', 'identical', False),
     ('', 'ahead', True), ('', 'identical', True),
 ])
 def test_legacy_gate_rejects_cloud_and_unaccepted_source(tmp_path, runtime, ancestry, allowed):

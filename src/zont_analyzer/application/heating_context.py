@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from zont_analyzer.adapters.sqlite.database import Database
+from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.analytics.heating import build_heating_evidence
 from zont_analyzer.analytics.settings import control_settings
 from zont_analyzer.application.comparison_context import daily_history

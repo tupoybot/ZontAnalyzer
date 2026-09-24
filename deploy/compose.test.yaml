@@ -4,7 +4,7 @@ services:
   worker:
     volumes:
       - type: bind
-        source: ${ZONT_ANALYZER_PUBLISH_DIR:-/opt/nightscout-compose/certbot/www/tupoybot.ru/html/za}
+        source: ${ZONT_ANALYZER_PUBLISH_DIR:-/srv/zont-analyzer/published}
         target: /publish
         bind:
           create_host_path: false

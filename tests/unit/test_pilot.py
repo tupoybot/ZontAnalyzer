@@ -52,7 +52,7 @@ class FakeDatabase:
         self.reports: dict[str, Report] = {}
         self.app_meta: dict[str, str] = {}
         self.event_revision = "source-events-v1:empty"
-        self.path = Path("/tmp/zont-analyzer-fake.sqlite3")
+        self.identity = "fixture-database"
 
     def source_event_revision(self, _end: datetime) -> str:
         return self.event_revision

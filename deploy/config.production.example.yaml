@@ -15,9 +15,7 @@ dhw:
   recirculation_present: true
 
 storage:
-  backend: sqlite
-  path: zont-analyzer.sqlite3
-  backup_dir: backups
+  namespace: application
   warn_disk_usage_pct: 25
 
 zont:
