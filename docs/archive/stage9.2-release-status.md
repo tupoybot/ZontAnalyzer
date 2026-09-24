@@ -3,8 +3,8 @@
 Реализация и deployment завершены. Владелец явно принял 9.2 командой «ок мерж»
 2026-09-08 после уточнения шапки; ветка слита в `main`. Перед merge локально
 выполнен `docker system prune -af` (освобождено 538,3 MB); на HK очистка не выполнялась.
-Активные контракты: [план 9.2](../model-maintenance-plan.md),
-[оценочные пакеты](../model-evaluation.md), [процедура выпуска](../release-process.md).
+Активные контракты: [план 9.2](../ai/model-maintenance-plan.md),
+[оценочные пакеты](../ai/model-evaluation.md), [процедура выпуска](../development/release-process.md).
 
 ## Версия и проверки
 

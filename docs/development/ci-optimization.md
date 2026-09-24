@@ -193,7 +193,7 @@ Runner-время — сумма длительностей заданий, бе
 [Исходный запуск](https://github.com/tupoybot/ZontAnalyzer/actions/runs/36036100844),
 [итоговые попытки 1 и 2](https://github.com/tupoybot/ZontAnalyzer/actions/runs/36046423610),
 [проверки инфраструктуры](https://github.com/tupoybot/ZontAnalyzer/actions/runs/36046423651).
-Время всех шагов сохранено в [сравнении workflows](./benchmarks/ci/workflow-comparison.json).
+Время всех шагов сохранено в [сравнении workflows](../benchmarks/ci/workflow-comparison.json).
 
 Локально также прошли Basic Auth, браузерный сценарий, обе конфигурации Compose,
 сборка и smoke облачного образа, его сохранение/загрузка и проверка меток.
@@ -218,19 +218,19 @@ YDB, команды и лимиты. Две попытки Actions собира�
 
 | Прогон | Сводка | Setup, call и teardown каждого теста |
 |---|---|---|
-| Исходный, локально | [JSON](./benchmarks/ci/baseline-local.json) | [CSV](./benchmarks/ci/baseline-local.csv) |
-| Исходный, Actions | [JSON](./benchmarks/ci/baseline-actions.json) | [CSV](./benchmarks/ci/baseline-actions.csv) |
-| Только режим дисков | [JSON](./benchmarks/ci/memory-local.json) | [CSV](./benchmarks/ci/memory-local.csv) |
-| Переиспользование, 1 процесс | [JSON](./benchmarks/ci/pool-one-local.json) | [CSV](./benchmarks/ci/pool-one-local.csv) |
-| Переиспользование, 2 процесса | [JSON](./benchmarks/ci/pool-two-local.json) | [CSV](./benchmarks/ci/pool-two-local.csv) |
-| Итоговый №1, локально | [JSON](./benchmarks/ci/after-one-local.json) | [CSV](./benchmarks/ci/after-one-local.csv) |
-| Итоговый №1, Actions | [JSON](./benchmarks/ci/after-one-actions.json) | [CSV](./benchmarks/ci/after-one-actions.csv) |
-| Итоговый №2, локально | [JSON](./benchmarks/ci/after-two-local.json) | [CSV](./benchmarks/ci/after-two-local.csv) |
-| Итоговый №2, Actions | [JSON](./benchmarks/ci/after-two-actions.json) | [CSV](./benchmarks/ci/after-two-actions.csv) |
+| Исходный, локально | [JSON](../benchmarks/ci/baseline-local.json) | [CSV](../benchmarks/ci/baseline-local.csv) |
+| Исходный, Actions | [JSON](../benchmarks/ci/baseline-actions.json) | [CSV](../benchmarks/ci/baseline-actions.csv) |
+| Только режим дисков | [JSON](../benchmarks/ci/memory-local.json) | [CSV](../benchmarks/ci/memory-local.csv) |
+| Переиспользование, 1 процесс | [JSON](../benchmarks/ci/pool-one-local.json) | [CSV](../benchmarks/ci/pool-one-local.csv) |
+| Переиспользование, 2 процесса | [JSON](../benchmarks/ci/pool-two-local.json) | [CSV](../benchmarks/ci/pool-two-local.csv) |
+| Итоговый №1, локально | [JSON](../benchmarks/ci/after-one-local.json) | [CSV](../benchmarks/ci/after-one-local.csv) |
+| Итоговый №1, Actions | [JSON](../benchmarks/ci/after-one-actions.json) | [CSV](../benchmarks/ci/after-one-actions.csv) |
+| Итоговый №2, локально | [JSON](../benchmarks/ci/after-two-local.json) | [CSV](../benchmarks/ci/after-two-local.csv) |
+| Итоговый №2, Actions | [JSON](../benchmarks/ci/after-two-actions.json) | [CSV](../benchmarks/ci/after-two-actions.csv) |
 
-[Проверка исходного образа](./benchmarks/ci/baseline-image-proof.json) связывает
+[Проверка исходного образа](../benchmarks/ci/baseline-image-proof.json) связывает
 локальный manifest с конфигурацией из Actions.
-[Проверка итоговых пар](./benchmarks/ci/after-pair-proof.json)
+[Проверка итоговых пар](../benchmarks/ci/after-pair-proof.json)
 содержит совпадающие входные данные и проверенные контрольные суммы архивов.
 Сводки содержат только необходимые ресурсные характеристики; модели компьютера,
 имена хостов, частные пути и содержимое окружения не публикуются.

@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from typing import Any, TypeGuard
 
-# Protocol evidence and scope: docs/zont-control-settings.md.
+# Protocol evidence and scope: docs/reports/zont-control-settings.md.
 _CONTRACT = "zont-controls-v1"
 _FIELDS = {
     "pza": "Ссылка на кривую ПЗА",
