@@ -34,8 +34,8 @@ jobs:
           docker run --rm --network none
           --mount type=bind,src=${{ github.workspace }},dst=/repo,readonly
           --workdir /repo m1-tools sh -c 'ruff check --no-cache infra/scripts && cd infra/scripts && python -m unittest -v'
-      - name: Check verified application candidate selection
-        run: node --test infra/scripts/test_select_application_candidate.mjs
+      - name: Check deployment routing and verified candidate selection
+        run: node --test infra/scripts/test_deployment_trigger.mjs infra/scripts/test_select_application_candidate.mjs
       - name: Test isolated probe without cloud credentials
         run: >-
           docker run --rm --network none

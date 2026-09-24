@@ -14,6 +14,9 @@ on:
         description: Apply the reviewed infrastructure configuration
         type: boolean
         default: false
+  workflow_run:
+    workflows: ['Verified cloud application candidate']
+    types: [completed]
 
 permissions:
   contents: read
@@ -23,8 +26,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  route:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      deploy: ${{ steps.route.outputs.deploy }}
+      branch: ${{ steps.route.outputs.branch }}
+      head: ${{ steps.route.outputs.head }}
+      apply: ${{ steps.route.outputs.apply }}
+      release_run_id: ${{ steps.route.outputs.release_run_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Route trusted deployment event before protected access
+        id: route
+        run: node infra/scripts/deployment_trigger.mjs
   deploy:
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/stageM'))
+    needs: route
+    if: needs.route.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     environment: cloud-dev
     permissions:
@@ -34,12 +56,19 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ needs.route.outputs.head }}
           fetch-depth: 0
       - name: Verify trusted stage branch
+        env:
+          CANDIDATE_BRANCH: ${{ needs.route.outputs.branch }}
+          CANDIDATE_HEAD: ${{ needs.route.outputs.head }}
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF_NAME" == main || "$GITHUB_REF_NAME" =~ ^stageM[0-9]+/[a-z0-9/-]+$ ]]
+          [[ "$CANDIDATE_BRANCH" == main || "$CANDIDATE_BRANCH" =~ ^stageM[0-9]+/[a-z0-9/-]+$ ]]
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_HEAD"
           git merge-base --is-ancestor origin/main HEAD
+          git fetch origin "$CANDIDATE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_HEAD"
       - name: Prepare private environment configuration
         id: configuration
         env:
@@ -76,6 +105,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           APPLICATION_IMAGE: ${{ inputs.application_image }}
+          CANDIDATE_BRANCH: ${{ needs.route.outputs.branch }}
+          APPLICATION_RELEASE_RUN_ID: ${{ needs.route.outputs.release_run_id }}
         run: node infra/scripts/select_application_candidate.mjs "$RUNNER_TEMP/m1"
       - name: Exchange the protected GitHub identity
         env:
@@ -121,6 +152,7 @@ jobs:
       - name: Verify and copy the tested cloud candidate
         env:
           GH_TOKEN: ${{ github.token }}
+          APPLICATION_RELEASE_RUN_ID: ${{ needs.route.outputs.release_run_id }}
         run: |
           set -euo pipefail
           private="$RUNNER_TEMP/m1"
@@ -144,8 +176,12 @@ jobs:
           test "$(jq -er '.Labels["org.zont.runtime"]' "$private/application-source-inspect.json")" = cloud
           git merge-base --is-ancestor "$commit" HEAD
           git diff --exit-code "$commit" HEAD -- src Dockerfile .dockerignore pyproject.toml README.md >/dev/null
-          run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/application-release.yml/runs?head_sha=$commit&status=success" \
-            --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")][0].id')
+          if [[ -n "$APPLICATION_RELEASE_RUN_ID" ]]; then
+            run_id="$APPLICATION_RELEASE_RUN_ID"
+          else
+            run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/application-release.yml/runs?head_sha=$commit&status=success" \
+              --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")][0].id')
+          fi
           [[ "$run_id" =~ ^[0-9]+$ ]]
           gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name application-provenance --dir "$private/provenance"
           jq -e --arg commit "$commit" --arg image "ghcr.io/${GITHUB_REPOSITORY,,}@$digest" \
@@ -169,7 +205,7 @@ jobs:
       - name: Plan infrastructure without publishing its private output
         run: infra/deploy.sh plan "$RUNNER_TEMP/m1"
       - name: Apply the selected artifact and environment
-        if: inputs.apply || (github.event_name == 'push' && startsWith(github.event.head_commit.message, '[cloud-apply] '))
+        if: needs.route.outputs.apply == 'true'
         run: infra/deploy.sh apply "$RUNNER_TEMP/m1"
       - name: Preserve private deployment evidence
         if: always() && steps.configuration.outcome == 'success'

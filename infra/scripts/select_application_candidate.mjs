@@ -45,7 +45,7 @@ function compatible(commit) {
 function main() {
   const privateDirectory = process.argv[2];
   const repository = process.env.GITHUB_REPOSITORY;
-  const branch = process.env.GITHUB_REF_NAME;
+  const branch = process.env.CANDIDATE_BRANCH || process.env.GITHUB_REF_NAME;
   if (!privateDirectory || !repository || !branch) throw new CandidateSelectionError('Missing candidate selection context.');
   const configPath = join(privateDirectory, 'cloud-work/inputs.tfvars.json');
   const config = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -60,10 +60,20 @@ function main() {
     // then supplies the exact revision before planning infrastructure.
     console.log('Explicit candidate selected; image verification follows.');
   } else {
-    const endpoint = `repos/${repository}/actions/workflows/application-release.yml/runs` +
-      `?branch=${encodeURIComponent(branch)}&status=success&per_page=100`;
-    const response = JSON.parse(execFileSync('gh', ['api', endpoint], {encoding: 'utf8'}));
-    const run = selectCandidate(response.workflow_runs, branch, repository, compatible);
+    const releaseRunId = process.env.APPLICATION_RELEASE_RUN_ID || '';
+    if (releaseRunId && !/^[1-9][0-9]*$/.test(releaseRunId)) {
+      throw new CandidateSelectionError('Invalid application release run ID.');
+    }
+    let runs;
+    if (releaseRunId) {
+      runs = [JSON.parse(execFileSync('gh', ['api',
+        `repos/${repository}/actions/runs/${releaseRunId}`], {encoding: 'utf8'}))];
+    } else {
+      const endpoint = `repos/${repository}/actions/workflows/application-release.yml/runs` +
+        `?branch=${encodeURIComponent(branch)}&status=success&per_page=100`;
+      runs = JSON.parse(execFileSync('gh', ['api', endpoint], {encoding: 'utf8'})).workflow_runs;
+    }
+    const run = selectCandidate(runs, branch, repository, compatible);
     const provenanceDirectory = join(privateDirectory, `selected-provenance-${run.id}`);
     mkdirSync(provenanceDirectory, {recursive: true, mode: 0o700});
     execFileSync('gh', ['run', 'download', String(run.id), '--repo', repository,
