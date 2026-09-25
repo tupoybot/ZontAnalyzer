@@ -53,10 +53,25 @@ resource "yandex_api_gateway" "probe" {
         }
       },
       {
-        for path in [
-          "/", "/index.html", "/latest.html", "/reports.json",
-          "/daily/{file}", "/weekly/{file}", "/monthly/{file}", "/seasonal/{file}",
-          ] : path => {
+        for path in ["/", "/index.html", "/latest.html", "/reports.json"] : path => {
+          get = {
+            responses = { "200" = { description = "Protected published application content" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+      },
+      {
+        for path in ["/daily/{file}", "/weekly/{file}", "/monthly/{file}", "/seasonal/{file}"] : path => {
+          parameters = [{
+            name     = "file"
+            in       = "path"
+            required = true
+            schema   = { type = "string" }
+          }]
           get = {
             responses = { "200" = { description = "Protected published application content" } }
             "x-yc-apigateway-integration" = {

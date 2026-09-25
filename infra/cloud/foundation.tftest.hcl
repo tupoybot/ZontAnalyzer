@@ -155,6 +155,10 @@ run "gateway_routes_use_the_correct_container" {
     error_message = "Published application content routes must invoke the protected application container."
   }
   assert {
+    condition     = alltrue([for route in [{ path = "/daily/{file}", parameter = "file" }, { path = "/weekly/{file}", parameter = "file" }, { path = "/monthly/{file}", parameter = "file" }, { path = "/seasonal/{file}", parameter = "file" }, { path = "/api/{path+}", parameter = "path" }, { path = "/za/{path+}", parameter = "path" }, { path = "/za/api/{path+}", parameter = "path" }] : anytrue([for parameter in yamldecode(yandex_api_gateway.probe.spec).paths[route.path].parameters : parameter.name == route.parameter && parameter.in == "path" && parameter.required && parameter.schema.type == "string"])])
+    error_message = "Every templated gateway route must declare its required string path parameter."
+  }
+  assert {
     condition     = alltrue([for method in ["get", "put", "post"] : yamldecode(yandex_api_gateway.probe.spec).paths["/api/{path+}"][method]["x-yc-apigateway-integration"].container_id == "application-container"])
     error_message = "The greedy API route must forward GET, PUT, and POST to the application container."
   }
