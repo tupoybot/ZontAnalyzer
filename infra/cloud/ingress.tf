@@ -143,6 +143,36 @@ resource "yandex_api_gateway" "probe" {
         }
       },
       {
+        "/login" = {
+          get = {
+            responses = { "200" = { description = "Login form" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+          post = {
+            responses = { "200" = { description = "Login response" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+        "/logout" = {
+          post = {
+            responses = { "200" = { description = "Logout response" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+      },
+      {
         "/api/{path+}" = {
           parameters = [{
             name     = "path"

@@ -9,6 +9,7 @@ import json
 import logging
 import multiprocessing
 import os
+import re
 import signal
 import socket
 import threading
@@ -20,10 +21,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
+from zont_analyzer.cloud import auth
+
 MAX_BODY_BYTES = 65_536
 MAX_RESULT_BYTES = 1_048_576
 MAX_SITE_BYTES = 16_777_216
 MAX_INPUT_SECONDS = 5.0
+MAX_LOGIN_BYTES = 4096
+_HTML_SITE = re.compile(
+    r"\A/(?:|index\.html|latest\.html|(?:daily|weekly|monthly|seasonal)/\d{4}-\d{2}-\d{2}\.html"
+    r"|za/?|za/(?:index\.html|latest\.html|(?:daily|weekly|monthly|seasonal)/\d{4}-\d{2}-\d{2}\.html))\Z"
+)
 logger = logging.getLogger(__name__)
 
 
@@ -323,10 +331,24 @@ class CloudHandler(BaseHTTPRequestHandler):
         self._handle()
 
     def _handle(self) -> None:
+        path = urlsplit(self.path).path
+        if path == "/login" and self.command == "GET":
+            self._finish_input()
+            self._reply_bytes(200, auth.login_page(authenticated=self._authorized()), "text/html; charset=utf-8")
+            return
+        if path == "/login" and self.command == "POST":
+            self._login()
+            return
+        if path == "/logout" and self.command == "POST":
+            self._logout()
+            return
         internal_maintenance = self.command == "POST" and self.path == "/internal/maintenance"
         if not internal_maintenance and not self._authorized():
             self._finish_input()
-            self._reply(401, {"error": "unauthorized"}, basic_challenge=True)
+            if self.command == "GET" and _HTML_SITE.fullmatch(path):
+                self._reply_bytes(401, auth.login_page(), "text/html; charset=utf-8")
+            else:
+                self._reply(401, {"error": "unauthorized"}, basic_challenge=True)
             return
         if self.command == "GET":
             self._finish_input()
@@ -344,7 +366,6 @@ class CloudHandler(BaseHTTPRequestHandler):
                 "counters": self.server.counters.snapshot(),
             })
             return
-        path = urlsplit(self.path).path
         if path.startswith(("/api/", "/za/api/")):
             from zont_analyzer.cloud import web_api
 
@@ -456,8 +477,62 @@ class CloudHandler(BaseHTTPRequestHandler):
         finally:
             self.server.active_job.release()
 
+    def _login(self) -> None:
+        if not auth.same_origin(self.headers, os.environ.get("CLOUD_PUBLIC_ORIGIN")):
+            self._finish_input()
+            self._reply_bytes(401, auth.login_page(failed=True), "text/html; charset=utf-8")
+            return
+        if self.headers.get("Transfer-Encoding"):
+            self._finish_input()
+            self._reply(400, {"error": "transfer_encoding_denied"})
+            return
+        if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded":
+            self._finish_input()
+            self._reply(415, {"error": "form_content_type_required"})
+            return
+        try:
+            size = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            size = -1
+        if not 1 <= size <= MAX_LOGIN_BYTES:
+            self._finish_input()
+            self._reply(413, {"error": "invalid_body_size"})
+            return
+        try:
+            raw = self.rfile.read(size)
+        except (OSError, TimeoutError):
+            self._finish_input()
+            self._reply(408, {"error": "input_timeout"})
+            return
+        if len(raw) != size:
+            self._finish_input()
+            self._reply(400, {"error": "incomplete_body"})
+            return
+        self._finish_input()
+        credentials = auth.parse_credentials(raw)
+        if credentials is None or not auth.credentials_match(*credentials, self.server.config.authorization):
+            self._reply_bytes(401, auth.login_page(failed=True), "text/html; charset=utf-8")
+            return
+        cookie = auth.session_cookie(auth.issue_session(self.server.config.authorization))
+        self._reply_bytes(303, b"", "text/plain; charset=utf-8",
+                          extra_headers={"Location": "/", "Set-Cookie": cookie})
+
+    def _logout(self) -> None:
+        if not auth.same_origin(self.headers, os.environ.get("CLOUD_PUBLIC_ORIGIN")):
+            self._finish_input()
+            self._reply(403, {"error": "origin_denied"})
+            return
+        if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0":
+            self._finish_input()
+            self._reply(400, {"error": "invalid_body_size"})
+            return
+        self._finish_input()
+        self._reply_bytes(303, b"", "text/plain; charset=utf-8",
+                          extra_headers={"Location": "/login", "Set-Cookie": auth.clear_cookie()})
+
     def _authorized(self) -> bool:
-        return hmac.compare_digest(self.headers.get("Authorization", ""), self.server.config.authorization)
+        return (hmac.compare_digest(self.headers.get("Authorization", ""), self.server.config.authorization)
+                or auth.session_from_headers(self.headers, self.server.config.authorization))
 
     def _json_body(self) -> dict[str, Any] | None:
         if self.headers.get("Transfer-Encoding"):
@@ -505,7 +580,7 @@ class CloudHandler(BaseHTTPRequestHandler):
                           basic_challenge=basic_challenge)
 
     def _reply_bytes(self, status: int, encoded: bytes, content_type: str, *,
-                     basic_challenge: bool = False) -> None:
+                     basic_challenge: bool = False, extra_headers: dict[str, str] | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(encoded)))
@@ -514,6 +589,8 @@ class CloudHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         if basic_challenge:
             self.send_header("WWW-Authenticate", 'Basic realm="Zont cloud runtime"')
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(encoded)
         self.close_connection = True

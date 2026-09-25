@@ -175,6 +175,10 @@ run "gateway_routes_use_the_correct_container" {
     error_message = "Publication and maintenance jobs must invoke the application container."
   }
   assert {
+    condition     = toset(keys(yamldecode(yandex_api_gateway.probe.spec).paths["/login"])) == toset(["get", "post"]) && alltrue([for method in ["get", "post"] : yamldecode(yandex_api_gateway.probe.spec).paths["/login"][method]["x-yc-apigateway-integration"].container_id == "application-container"]) && toset(keys(yamldecode(yandex_api_gateway.probe.spec).paths["/logout"])) == toset(["post"]) && yamldecode(yandex_api_gateway.probe.spec).paths["/logout"]["post"]["x-yc-apigateway-integration"].container_id == "application-container" && !contains(keys(yamldecode(yandex_api_gateway.probe.spec).paths), "/internal/maintenance")
+    error_message = "Login GET/POST and logout POST must target the application, while the private maintenance route stays off the gateway."
+  }
+  assert {
     condition     = yandex_storage_bucket_iam_binding.application_uploader.role == "storage.uploader" && yandex_storage_bucket_iam_binding.application_uploader.bucket == yandex_storage_bucket.publication.bucket && yandex_storage_bucket_iam_binding.probe.role == "storage.viewer"
     error_message = "The runtime needs upload access while the existing viewer binding remains in place."
   }
