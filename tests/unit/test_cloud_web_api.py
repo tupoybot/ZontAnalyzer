@@ -188,3 +188,66 @@ def test_api_body_must_finish_before_runtime_opens(
         time.sleep(0.2)
         assert connection.recv(1024) == b""
     assert calls == []
+
+
+def test_model_accept_uses_approved_docs_transport_without_direct_network(
+    server: CloudServer, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from zont_analyzer.application import ai_maintenance, ai_settings, model_review
+    from zont_analyzer.cloud import user_jobs, web_api
+    from zont_analyzer.cloud.egress import ReportTransport
+
+    requested: list[str] = []
+    decisions: list[tuple[str, str, int]] = []
+
+    def deny_direct(_transport: Any, _request: httpx.Request) -> httpx.Response:
+        raise AssertionError("cloud review used direct network transport")
+
+    def deny_zont(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("cloud review used non-docs transport")
+
+    def official_docs(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET" and request.url.host == "developers.openai.com"
+        requested.append(request.url.path)
+        if request.url.path == "/api/docs/models.md":
+            return httpx.Response(200, text="Model ID gpt-6")
+        if request.url.path == "/api/docs/deprecations.md":
+            return httpx.Response(200, text="| Shutdown date | Deprecated model | Replacement |")
+        if request.url.path == "/api/docs/models/gpt-6.md":
+            return httpx.Response(200, text="Model ID: `gpt-6`")
+        raise AssertionError("unexpected documentation path")
+
+    class Settings:
+        def __init__(self, _db: Any, _config: Any) -> None:
+            return
+
+        def view(self) -> dict[str, Any]:
+            return {"version": 1}
+
+    class Store:
+        def __init__(self, _db: Any, catalog: Any, *, assessments: Any) -> None:
+            self.catalog = catalog
+
+        def decide(self, proposal_id: str, action: str, expected_version: int,
+                   _settings: Any) -> None:
+            self.catalog.fetch(model_ids=("gpt-6",))
+            decisions.append((proposal_id, action, expected_version))
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", deny_direct)
+    monkeypatch.setattr(web_api, "ReportTransport", lambda: ReportTransport(
+        direct=httpx.MockTransport(deny_zont), proxied=httpx.MockTransport(official_docs)))
+    monkeypatch.setattr(web_api, "local_assessments", lambda _runtime: {})
+    monkeypatch.setattr(ai_settings, "AISettingsStore", Settings)
+    monkeypatch.setattr(model_review, "ModelReviewStore", Store)
+    monkeypatch.setattr(web_api, "ModelReviewStore", Store)
+    monkeypatch.setattr(ai_maintenance, "review_state", lambda _runtime: {"running": False})
+    monkeypatch.setattr(user_jobs, "review_status", lambda _runtime: {"status": "idle"})
+
+    status, value = _request(server, "PUT", "/api/ai/review", body={
+        "action": "accept", "proposal_id": "proposal-1", "expected_version": 1,
+    }, extra_headers={"Origin": "https://app.example"})
+    assert status == 200 and value["review"]["job_status"] == "idle"
+    assert decisions == [("proposal-1", "accept", 1)]
+    assert requested == ["/api/docs/models.md", "/api/docs/deprecations.md", "/api/docs/models/gpt-6.md"]

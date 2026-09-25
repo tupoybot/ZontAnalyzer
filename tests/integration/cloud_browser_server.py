@@ -11,6 +11,7 @@ from pathlib import Path
 import httpx
 
 from zont_analyzer.application import publication as publication_module
+from zont_analyzer.application.gas import GasService
 from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.application.publication import publish_reports
 from zont_analyzer.cloud import runtime as cloud_runtime
@@ -75,6 +76,8 @@ try:
         "fields": {"installation_notes": {"value": "<b>synthetic owner note</b>"}},
     })
     analysis = runtime.analysis(no_ai=True)
+    # Preserve synthetic presentation evidence while testing publication and browser routes.
+    GasService.refresh = lambda self, report: report
 
     def save_with_gas(report, volume: float) -> None:
         report.context["gas"] = {
@@ -85,7 +88,20 @@ try:
 
     daily = analysis.analyze_daily(date(2026, 8, 5), use_ai=False)
     daily.summary = "Synthetic <script>unsafe</script> report"
-    save_with_gas(daily, 12.3)
+    # Persisted synthetic metadata exercises provenance without an AI request.
+    daily.ai_used = True
+    daily.context["ai_provenance"] = {
+        "requested_model": "fixture-model", "response_model": "fixture-model",
+        "generated_at": daily.generated_at.isoformat(),
+        "parameters": {"reasoning_effort": "low"},
+        "prompt_version": "fixture-prompt", "schema_version": "fixture-schema",
+    }
+    daily.context["gas"] = {
+        "status": "measured", "volume_m3": 12.3, "coverage_pct": 100,
+        "reliability_index_pct": 80, "observed_days": 1, "complete": True,
+        "cost": {"status": "available", "amounts": [{"currency": "RUB", "amount": "98.40"}]},
+    }
+    runtime.db.save_report(daily, render_text(daily))
     save_with_gas(analysis.analyze_week(2026, 31, use_ai=False), 80)
     save_with_gas(analysis.analyze_month(2026, 7, use_ai=False), 300)
     save_with_gas(analysis.analyze_season(2026, "spring", use_ai=False), 900)

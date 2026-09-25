@@ -44,7 +44,7 @@ docker run -d --name "$app" --network "$network" -p "127.0.0.1:$port:8080" \
     -e PYTHONPATH=/workspace/src:/workspace \
     -e "YDB_ENDPOINT=grpc://$ydb:2136" -e YDB_DATABASE=/local \
     -e YDB_NAMESPACE=cloud_browser -e YDB_ANONYMOUS_CREDENTIALS=1 \
-    -e "CLOUD_PUBLIC_ORIGIN=http://127.0.0.1:$port" \
+    -e "CLOUD_PUBLIC_ORIGIN=http://localhost:$port" \
     --entrypoint python "$image" /workspace/tests/integration/cloud_browser_server.py >/dev/null
 
 attempt=0
@@ -56,4 +56,4 @@ until curl -fsS -u browser:fixture-secret "http://127.0.0.1:$port/ready" >/dev/n
     fi
     sleep 1
 done
-ZONT_CLOUD_BROWSER_URL="http://127.0.0.1:$port" node "$root/tests/integration/cloud_browser.mjs"
+ZONT_CLOUD_BROWSER_URL="http://localhost:$port" node "$root/tests/integration/cloud_browser.mjs"

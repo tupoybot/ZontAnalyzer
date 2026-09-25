@@ -9,7 +9,13 @@ from http import HTTPStatus
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
+
+from zont_analyzer.adapters.openai.model_catalog import OpenAIModelCatalog
+from zont_analyzer.application.ai_maintenance import local_assessments
 from zont_analyzer.application.feedback import MAX_REQUEST_BYTES, feedback_handler_type
+from zont_analyzer.application.model_review import ModelReviewStore
+from zont_analyzer.cloud.egress import ReportTransport
 from zont_analyzer.runtime import Runtime
 
 
@@ -116,6 +122,16 @@ def handle(handler: Any, runtime: Runtime) -> bool:
             from zont_analyzer.cloud.user_jobs import regeneration_status
 
             return regeneration_status(runtime, report_id)
+
+        def _decide_model_review(self, proposal_id: str, action: str,
+                                 expected_version: int, settings: Any) -> None:
+            # Proposal acceptance rechecks official docs through the approved CONNECT route.
+            with httpx.Client(transport=ReportTransport(), trust_env=False,
+                              follow_redirects=False, timeout=8.0) as client:
+                catalog = OpenAIModelCatalog(client=client)
+                ModelReviewStore(runtime.db, catalog, assessments=local_assessments(runtime)).decide(
+                    proposal_id, action, expected_version, settings,
+                )
 
         def _start_review(self) -> None:
             from zont_analyzer.cloud.user_jobs import enqueue_review

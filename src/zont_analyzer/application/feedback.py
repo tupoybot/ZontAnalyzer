@@ -93,11 +93,22 @@ def feedback_handler_type(runtime: Runtime) -> type[BaseHTTPRequestHandler]:
 
             return review_state(runtime)
 
-        def _ai_request(self, *, write: bool = False) -> bool:
+        def _decide_model_review(self, proposal_id: str, action: str,
+                                 expected_version: int, settings: Any) -> None:
             from zont_analyzer.adapters.openai.model_catalog import OpenAIModelCatalog
             from zont_analyzer.application.ai_maintenance import local_assessments
-            from zont_analyzer.application.ai_settings import AISettingsStore
             from zont_analyzer.application.model_review import ModelReviewStore
+
+            catalog = OpenAIModelCatalog()
+            try:
+                ModelReviewStore(runtime.db, catalog, assessments=local_assessments(runtime)).decide(
+                    proposal_id, action, expected_version, settings,
+                )
+            finally:
+                catalog.close()
+
+        def _ai_request(self, *, write: bool = False) -> bool:
+            from zont_analyzer.application.ai_settings import AISettingsStore
 
             path = urlsplit(self.path).path
             if path not in {f"{api_path}/ai", f"{api_path}/ai/review"}:
@@ -128,13 +139,9 @@ def feedback_handler_type(runtime: Runtime) -> type[BaseHTTPRequestHandler]:
                                     or type(payload.get("expected_version")) is not int
                                     or payload.get("action") not in {"accept", "reject", "defer"}):
                                 raise ValueError("Укажите предложение, его версию и действие.")
-                            catalog = OpenAIModelCatalog()
-                            try:
-                                ModelReviewStore(runtime.db, catalog, assessments=local_assessments(runtime)).decide(
-                                    payload["proposal_id"], payload["action"], payload["expected_version"], settings,
-                                )
-                            finally:
-                                catalog.close()
+                            self._decide_model_review(
+                                payload["proposal_id"], payload["action"], payload["expected_version"], settings,
+                            )
                     else:
                         settings.save(payload)
                 value = settings.view()

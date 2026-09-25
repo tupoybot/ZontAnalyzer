@@ -6,7 +6,7 @@ const { chromium } = require("playwright");
 const base = process.env.ZONT_CLOUD_BROWSER_URL ?? "http://127.0.0.1:18087";
 const credentials = { username: "browser", password: "fixture-secret" };
 const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext({ httpCredentials: credentials, viewport: { width: 1280, height: 900 } });
+const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 const page = await context.newPage();
 
 async function drain() {
@@ -23,9 +23,25 @@ try {
   for (const path of ["/", "/latest.html", "/reports.json", "/daily/2026-08-05.html",
     "/api/health", "/za/api/health", "/za/latest.html"]) {
     const response = await anonymous.request.get(`${base}${path}`);
-    assert.equal(response.status(), 401, `${path} must require Basic Auth`);
+    assert.equal(response.status(), 401, `${path} must require a session`);
+    if (path.endsWith(".html") || path === "/") {
+      assert.match(await response.text(), /action=['"]\/login['"]/, "HTML displays the login form");
+    }
   }
+  assert.equal((await anonymous.request.get(`${base}/login`)).status(), 200);
   await anonymous.close();
+
+  await page.goto(`${base}/login`, { waitUntil: "networkidle" });
+  await page.locator('input[name="username"]').fill(credentials.username);
+  await page.locator('input[name="password"]').fill(credentials.password);
+  await Promise.all([
+    page.waitForURL(`${base}/`, { waitUntil: "networkidle" }),
+    page.locator('button[type="submit"]').click(),
+  ]);
+  const sessions = (await context.cookies(base)).filter(cookie => cookie.name === "__Host-zont_session");
+  assert.equal(sessions.length, 1, "login issues one browser session");
+  assert.equal(sessions[0].httpOnly, true);
+  assert.equal(sessions[0].secure, true);
 
   const manifestResponse = await context.request.get(`${base}/reports.json`);
   assert.equal(manifestResponse.status(), 200);
@@ -51,6 +67,10 @@ try {
   assert.doesNotMatch(latest, /<script>unsafe<\/script>/);
   await page.goto(`${base}/latest.html`, { waitUntil: "networkidle" });
   await page.locator("[data-archive-navigation]").waitFor();
+  assert.match(await page.locator(".gas-kpi-money").first().textContent(), /98,40/, "saved gas cost is shown");
+  const provenance = page.locator(".ai-provenance").first();
+  assert.match(await provenance.textContent(), /AI-анализ: fixture-model/, "saved model provenance is shown");
+  assert.match(await provenance.textContent(), /Prompt: fixture-prompt/, "provenance details survive publication");
   assert.equal(await page.locator("[data-owner-forms]").getAttribute("data-device-id"), "browser-synthetic-device");
 
   const hrefs = Object.fromEntries(manifest.reports.map(item => [item.kind, item.href]));
