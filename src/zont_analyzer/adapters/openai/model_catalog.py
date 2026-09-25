@@ -148,14 +148,54 @@ def parse_deprecations_html(html: str, *, source_url: str = DEPRECATIONS_URL) ->
     return result
 
 
-def discover_featured_model_ids(markdown: str, limit: int = 4) -> tuple[str, ...]:
-    """Read only the current, small Featured models section from the catalog."""
-    featured = re.search(r"## Featured models\s+(.+?)(?:\n## |\Z)", markdown, re.S)
-    if featured is None:
-        return ()
-    return tuple(
-        dict.fromkeys(re.findall(r"\(/api/docs/models/([a-z0-9.\-]+)\.md\)", featured.group(1), re.I))
-    )[:limit]
+def parse_deprecation_replacements(markdown: str) -> dict[str, tuple[str, ...]]:
+    """Return explicit model replacements from deprecation table rows."""
+    result: dict[str, tuple[str, ...]] = {}
+    for line in markdown.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 3 or not re.search(r"\d", cells[0]):
+            continue
+        deprecated = tuple(re.findall(r"`(gpt-[a-z0-9.\-]+)`", cells[1], re.I))
+        replacements = tuple(dict.fromkeys(
+            model.lower() for model in re.findall(r"`(gpt-[a-z0-9.\-]+)`", cells[2], re.I)
+        ))
+        for model_id in deprecated:
+            result[model_id.lower()] = replacements
+    return result
+
+
+def _general_model_version(model_id: str) -> tuple[int, ...] | None:
+    """Identify general-purpose GPT aliases and return a sortable release version."""
+    match = re.fullmatch(r"gpt-(\d+(?:\.\d+)*)(?:-([a-z][a-z0-9-]*))?", model_id, re.I)
+    if match is None:
+        return None
+    suffix = match.group(2)
+    if suffix:
+        parts = set(suffix.lower().split("-"))
+        specialized = {
+            "audio", "chat", "codex", "image", "mini", "nano", "pro",
+            "realtime", "search", "transcribe", "tts",
+        }
+        if parts & specialized or any(re.fullmatch(r"\d{4}(?:\d{2}){1,2}", part) for part in parts):
+            return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def discover_candidate_model_ids(markdown: str, limit: int = 4) -> tuple[str, ...]:
+    """Discover the newest general-purpose models from the complete public catalog.
+
+    The Featured section is curated and can temporarily contain only the current
+    family.  Reading all catalog links lets a later family enter a bounded review
+    without requiring an application release for every provider model launch.
+    Specialized, dated, chat, Codex, mini/nano, and pro variants are excluded.
+    """
+    linked = dict.fromkeys(
+        model.lower()
+        for model in re.findall(r"\(/api/docs/models/([a-z0-9.\-]+)\.md\)", markdown, re.I)
+    )
+    candidates = [model for model in linked if _general_model_version(model) is not None]
+    candidates.sort(key=lambda model: (_general_model_version(model) or (), model), reverse=True)
+    return tuple(candidates[:limit])
 
 
 class OpenAIModelCatalog:
@@ -179,10 +219,17 @@ class OpenAIModelCatalog:
         except httpx.HTTPError as exc:
             return CatalogSnapshot(fetched_at, (), (), incomplete=True, error=f"official catalog unavailable: {exc}")
         facts: dict[str, ModelFact] = {}
-        # A review has at most two candidates per profile plus the two configured
-        # models; bounded page reads keep it independent of catalog size.
-        discovered = discover_featured_model_ids(models_response.text)
-        requested = tuple(dict.fromkeys(model_ids + discovered))[:8]
+        # A review reads the configured models, their documented replacements,
+        # and at most four newest general-purpose candidates. Page reads remain
+        # bounded while newly published model families can enter consideration.
+        replacements = parse_deprecation_replacements(deprecations_response.text)
+        replacement_ids = tuple(
+            replacement
+            for model_id in model_ids
+            for replacement in replacements.get(model_id, ())
+        )
+        discovered = discover_candidate_model_ids(models_response.text)
+        requested = tuple(dict.fromkeys(model_ids + replacement_ids + discovered))[:10]
         for model_id in requested:
             url = f"https://developers.openai.com/api/docs/models/{model_id}.md"
             try:

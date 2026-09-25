@@ -9,6 +9,8 @@ from tests.ydb_support import make_database
 from zont_analyzer.adapters.openai.model_catalog import (
     CatalogSnapshot,
     ModelFact,
+    discover_candidate_model_ids,
+    parse_deprecation_replacements,
     parse_deprecations_html,
     parse_model_markdown,
 )
@@ -75,6 +77,31 @@ def test_date_first_deprecation_table_never_marks_replacement_across_rows() -> N
 ### Next notice
 | Dec 12, 2026 | `gpt-other` | `gpt-new` |"""
     assert parse_deprecations_html(page) == {"gpt-old": "Dec 11, 2026", "gpt-other": "Dec 12, 2026"}
+
+
+def test_catalog_discovers_new_general_model_family_outside_featured_section() -> None:
+    page = """## Featured models
+- [Current](/api/docs/models/gpt-5.6.md)
+## Browse our full catalog of models
+- [New family](/api/docs/models/gpt-7-orbit.md)
+- [Pro](/api/docs/models/gpt-6-pro.md)
+- [Codex](/api/docs/models/gpt-6-codex.md)
+- [Dated](/api/docs/models/gpt-6-20260925.md)
+- [Next](/api/docs/models/gpt-6.1.md)
+"""
+    assert discover_candidate_model_ids(page) == (
+        "gpt-7-orbit", "gpt-6.1", "gpt-5.6",
+    )
+
+
+def test_deprecation_replacements_are_bound_to_the_deprecated_model() -> None:
+    page = """| Shutdown date | Model / system | Recommended replacement |
+| --- | --- | --- |
+| Dec 11, 2026 | `gpt-5.6-terra` | `gpt-6-sol` or `gpt-6-luna` |
+"""
+    assert parse_deprecation_replacements(page) == {
+        "gpt-5.6-terra": ("gpt-6-sol", "gpt-6-luna"),
+    }
 
 
 @pytest.mark.parametrize("missing", ["current", "candidate"])
