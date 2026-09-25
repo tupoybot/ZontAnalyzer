@@ -364,3 +364,33 @@ def test_slow_published_get_outlives_input_deadline(
     monkeypatch.setattr("zont_analyzer.cloud.site.serve", serve)
     status, body = _request(instance, credentials, "GET", "/reports.json")
     assert (status, body) == (200, {"reports": []})
+
+
+@pytest.mark.parametrize(
+    ("path", "error", "event", "message"),
+    [
+        ("/api/health", "api_unavailable", "cloud_api", "cloud API failed"),
+        ("/reports.json", "site_unavailable", "cloud_site", "cloud site failed"),
+    ],
+)
+def test_http_failure_exposes_only_error_type(
+    server: Any, caplog: pytest.LogCaptureFixture,
+    path: str, error: str, event: str, message: str,
+) -> None:
+    instance, credentials = server
+    private_message = "fixture-secret-token at /synthetic/private-path"
+
+    def broken_runtime() -> Any:
+        raise RuntimeError(private_message)
+
+    instance.runtime_factory = broken_runtime
+    with caplog.at_level("ERROR", logger="zont_analyzer.cloud.runtime"):
+        status, body = _request(instance, credentials, "GET", path)
+
+    assert (status, body) == (502, {"error": error, "error_type": "RuntimeError"})
+    entries = [json.loads(record.message) for record in caplog.records if record.name == runtime_module.__name__]
+    assert entries == [{
+        "level": "ERROR", "message": message, "event": event, "error_type": "RuntimeError",
+    }]
+    assert private_message not in caplog.text
+    assert private_message not in json.dumps(body)

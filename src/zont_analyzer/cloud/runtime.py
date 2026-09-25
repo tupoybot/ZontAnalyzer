@@ -377,9 +377,13 @@ class CloudHandler(BaseHTTPRequestHandler):
                 if web_api.handle(self, runtime):
                     return
             except Exception as exc:  # noqa: BLE001 - keep private DB/provider errors out of responses
-                logger.warning("cloud API failed: %s", type(exc).__name__)
+                error_type = type(exc).__name__
+                logger.error(json.dumps(
+                    {"level": "ERROR", "message": "cloud API failed", "event": "cloud_api",
+                     "error_type": error_type}, separators=(",", ":"),
+                ))
                 self._finish_input()
-                self._reply(502, {"error": "api_unavailable"})
+                self._reply(502, {"error": "api_unavailable", "error_type": error_type})
                 return
             finally:
                 if runtime is not None:
@@ -396,9 +400,13 @@ class CloudHandler(BaseHTTPRequestHandler):
                 self._finish_input()
                 self._reply_bytes(status, body, content_type)
             except Exception as exc:  # noqa: BLE001 - site errors are redacted
-                logger.warning("cloud site failed: %s", type(exc).__name__)
+                error_type = type(exc).__name__
+                logger.error(json.dumps(
+                    {"level": "ERROR", "message": "cloud site failed", "event": "cloud_site",
+                     "error_type": error_type}, separators=(",", ":"),
+                ))
                 self._finish_input()
-                self._reply(502, {"error": "site_unavailable"})
+                self._reply(502, {"error": "site_unavailable", "error_type": error_type})
             finally:
                 if runtime is not None:
                     runtime.db.close()
