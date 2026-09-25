@@ -133,7 +133,7 @@ def test_detailed_metrics_follow_physical_scope_in_every_report_kind():
         assert "Запуски горелки на отопление" in scoped
 
 
-def test_uptime_gap_is_visible_as_continuity_uncertainty() -> None:
+def test_uptime_gap_does_not_add_continuity_disclaimer() -> None:
     from zont_analyzer.reports.presentation import kpis
     from zont_analyzer.reports.renderers import _metric_label
 
@@ -147,8 +147,9 @@ def test_uptime_gap_is_visible_as_continuity_uncertainty() -> None:
     report = fixture_report()
     report.metrics = [metric]
 
-    assert _metric_label(metric.name, metric.context) == "Аптайм ZONT (непрерывность не подтверждена)"
-    assert "непрерывность не подтверждена из-за пропуска телеметрии" in kpis(report)
+    assert _metric_label(metric.name, metric.context) == "Аптайм ZONT"
+    assert "непрерывность не подтверждена" not in kpis(report)
+    assert "ZONT · на связи · аптайм 1 дн." in kpis(report)
 
 
 def test_recalculated_setpoints_do_not_claim_ai_was_regenerated():

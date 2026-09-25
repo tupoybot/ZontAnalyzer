@@ -422,10 +422,6 @@ def _metric_label(name: str, context: dict[str, Any] | None = None) -> str:
         return f"{label} (нет свежих данных)"
     if offline:
         return f"{label} (офлайн)"
-    if name in {"boiler_uptime_seconds", "zont_uptime_seconds"} and context and context.get(
-        "continuity_uncertain"
-    ) is True:
-        return f"{label} (непрерывность не подтверждена)"
     return label
 
 

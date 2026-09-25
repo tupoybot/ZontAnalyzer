@@ -15,7 +15,7 @@ STYLE = r"""
 
 .gas-daily{min-width:0}
 .gas-daily-scroll{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--elevated)}
-.gas-daily-scroll svg{display:block;width:100%;min-width:680px}
+.gas-daily-scroll svg{display:block;width:auto;min-width:680px;max-width:none}
 .gas-daily-scroll text{font:12px system-ui,sans-serif;fill:var(--secondary)}
 .gas-grid{stroke:var(--border);stroke-width:1}
 .gas-day-measured{fill:#26704c;background:#26704c}

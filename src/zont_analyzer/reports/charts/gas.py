@@ -44,7 +44,7 @@ def render_daily_gas(report: Report) -> str:
             label += " · часть суток"
         rows.append((day.strftime("%d.%m"), status, value, label))
         day += timedelta(days=1)
-    heading = '<section class="gas-daily full-width" id="gas-daily"><h2>Расход газа по дням</h2>'
+    heading = '<section class="gas-daily report-chart full-width" id="gas-daily"><h2>Расход газа по дням</h2>'
     if not rows or not any(value is not None for _, _, value, _ in rows):
         return heading + '<p class="chart-note">Нет дневных данных о расходе газа за этот период.</p></section>'
     width, height = max(680, len(rows) * 38 + 64), 270
@@ -52,7 +52,7 @@ def render_daily_gas(report: Report) -> str:
     step = (width - left - 16) / len(rows)
     maximum = max(value or 0 for _, _, value, _ in rows)
     ceiling = max(1.0, maximum * 1.18)
-    svg = [f'<svg viewBox="0 0 {width} {height}" style="min-width:{width}px" role="img" '
+    svg = [f'<svg viewBox="0 0 {width} {height}" style="width:{width}px" role="img" '
            'aria-labelledby="gas-daily-title gas-daily-desc">'
            '<title id="gas-daily-title">Расход газа по дням, м³</title>'
            '<desc id="gas-daily-desc">Зелёные столбцы — показания счётчика, синие — оценка. '
