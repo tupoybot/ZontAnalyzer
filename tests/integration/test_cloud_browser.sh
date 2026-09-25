@@ -2,7 +2,7 @@
 # Browser acceptance against isolated YDB and a private in-memory S3 transport.
 set -eu
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 image=${ZONT_TEST_IMAGE:-zont-analyzer:test-local}
 port=${ZONT_CLOUD_BROWSER_PORT:-18087}
 prefix="zont-cloud-browser-$$"
