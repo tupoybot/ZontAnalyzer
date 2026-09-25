@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import httpx
-import pytest
 
 from zont_analyzer.adapters.zont_readonly import ZontReadOnlyClient
 from zont_analyzer.adapters.zont_readonly.equipment import equipment_facts
@@ -27,9 +26,9 @@ def test_equipment_contract_retains_only_explicit_geographic_fields() -> None:
     assert "nominal_power_kw" not in facts
 
 
-@pytest.mark.parametrize("loc", [None, [], [1], [True, 2], [float("nan"), 1], [181, 1], [1, 91], "***"])
-def test_unavailable_or_invalid_location_stays_unknown(loc: object) -> None:
-    assert "coordinates" not in equipment_facts({"stationary_location": {"loc": loc}})
+def test_unavailable_or_invalid_location_stays_unknown() -> None:
+    for loc in (None, [], [1], [True, 2], [float("nan"), 1], [181, 1], [1, 91], "***"):
+        assert "coordinates" not in equipment_facts({"stationary_location": {"loc": loc}})
 
 
 def test_ambiguous_adapters_and_diagram_location_are_not_guessed() -> None:

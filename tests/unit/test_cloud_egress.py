@@ -49,19 +49,20 @@ def test_proxy_failure_never_opens_direct_client(monkeypatch):
     assert factory.call_args.kwargs['proxy'] == 'http://127.0.0.1:1080'
 
 
-@pytest.mark.parametrize('url,method', [
-    ('https://my.zont.online/api/set_state', 'POST'),
-    ('https://api.openai.com/v1/responses', 'POST'),
-    ('https://api.openai.com:444/v1/models/x', 'GET'),
-    ('http://api.openai.com/v1/models/x', 'GET'),
-    ('https://user:secret@api.openai.com/v1/models/x', 'GET'),
-    ('https://untrusted.invalid/v1/models/x', 'GET'),
-    ('https://api.openai.com/v1/models/x?secret=value', 'GET'),
-])
-def test_disallowed_destination_never_opens_socket(monkeypatch, url, method):
+def test_disallowed_destination_never_opens_socket(monkeypatch):
     factory, _ = client_mock(monkeypatch)
-    with pytest.raises(ValueError):
-        PolicyClient().request(url, method=method)
+    denied = [
+        ('https://my.zont.online/api/set_state', 'POST'),
+        ('https://api.openai.com/v1/responses', 'POST'),
+        ('https://api.openai.com:444/v1/models/x', 'GET'),
+        ('http://api.openai.com/v1/models/x', 'GET'),
+        ('https://user:secret@api.openai.com/v1/models/x', 'GET'),
+        ('https://untrusted.invalid/v1/models/x', 'GET'),
+        ('https://api.openai.com/v1/models/x?secret=value', 'GET'),
+    ]
+    for url, method in denied:
+        with pytest.raises(ValueError):
+            PolicyClient().request(url, method=method)
     factory.assert_not_called()
 
 
@@ -145,20 +146,22 @@ def test_report_transport_routes_zont_direct_and_responses_through_proxy(monkeyp
                      ('xray', '/v1/responses'), ('xray', '/v1/models/example')]
 
 
-@pytest.mark.parametrize('url,method', [
-    ('https://my.zont.online/api/set_state', 'POST'),
-    ('https://api.openai.com/v1/chat/completions', 'POST'),
-    ('https://api.openai.com/v1/responses', 'GET'),
-    ('https://api.openai.com/v1/responses?foo=bar', 'POST'),
-    ('http://api.openai.com/v1/responses', 'POST'),
-    ('https://other.invalid/api/load_data', 'POST'),
-])
-def test_report_transport_rejects_unlisted_destination(url, method):
+def test_report_transport_rejects_unlisted_destination():
     calls = []
     backend = httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(200))
     transport = ReportTransport(direct=backend, proxied=backend)
-    with httpx.Client(transport=transport) as client, pytest.raises(ValueError, match='destination denied'):
-        client.request(method, url)
+    denied = [
+        ('https://my.zont.online/api/set_state', 'POST'),
+        ('https://api.openai.com/v1/chat/completions', 'POST'),
+        ('https://api.openai.com/v1/responses', 'GET'),
+        ('https://api.openai.com/v1/responses?foo=bar', 'POST'),
+        ('http://api.openai.com/v1/responses', 'POST'),
+        ('https://other.invalid/api/load_data', 'POST'),
+    ]
+    with httpx.Client(transport=transport) as client:
+        for url, method in denied:
+            with pytest.raises(ValueError, match='destination denied'):
+                client.request(method, url)
     assert calls == []
 
 

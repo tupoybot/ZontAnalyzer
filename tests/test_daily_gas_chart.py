@@ -38,11 +38,11 @@ def test_chart_preserves_dates_zero_gaps_and_sources(kind, days):
     assert 'id="gas-daily"' in render_html(r)
 
 
-@pytest.mark.parametrize('value', [-1, True, float('nan'), float('inf'), '<script>'])
-def test_chart_invalid_values_do_not_become_bars(value):
-    chart = render_daily_gas(report(daily=[{'day': '2026-01-01', 'status': 'estimated', 'volume_m3': value}]))
-    assert '<svg' not in chart
-    assert 'Нет дневных данных' in chart
+def test_chart_invalid_values_do_not_become_bars():
+    for value in (-1, True, float('nan'), float('inf'), '<script>'):
+        chart = render_daily_gas(report(daily=[{'day': '2026-01-01', 'status': 'estimated', 'volume_m3': value}]))
+        assert '<svg' not in chart
+        assert 'Нет дневных данных' in chart
 
 
 def test_chart_does_not_fabricate_from_period_total_or_render_on_daily():

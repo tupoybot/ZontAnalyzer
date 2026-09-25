@@ -145,29 +145,29 @@ def test_latest_of_multiple_explicit_corrections_is_active(tmp_path: Path) -> No
     assert [item["after"]["price"] for item in active["corrections"]] == ["8.5", "8.75"]
 
 
-@pytest.mark.parametrize("price", [None, True, "", "nan", "inf", "-0.01", "1e999999", "0.0000001"])
 @pytest.mark.ydb
-def test_price_validation_rejects_unsafe_values(tmp_path: Path, price: object) -> None:
+def test_price_validation_rejects_unsafe_values(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
-    with pytest.raises(ValueError, match="price"):
-        store.save({"price": price, "currency": "RUB", "effective_month": "2026-10"})
+    for price in (None, True, "", "nan", "inf", "-0.01", "1e999999", "0.0000001"):
+        with pytest.raises(ValueError, match="price"):
+            store.save({"price": price, "currency": "RUB", "effective_month": "2026-10"})
 
 
-@pytest.mark.parametrize("currency", [None, "", "BTC", 1])
 @pytest.mark.ydb
-def test_only_supported_currencies_are_accepted(tmp_path: Path, currency: object) -> None:
+def test_only_supported_currencies_are_accepted(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
-    with pytest.raises(ValueError, match="currency"):
-        store.save({"price": 0, "currency": currency, "effective_month": "2026-10"})
+    for currency in (None, "", "BTC", 1):
+        with pytest.raises(ValueError, match="currency"):
+            store.save({"price": 0, "currency": currency, "effective_month": "2026-10"})
     assert CURRENCIES == ("RUB", "USD", "EUR", "GBP", "KZT", "BYN")
 
 
-@pytest.mark.parametrize("month", ["2026-1", "2026-13", "01-2026", "2026-10-01", 202610])
 @pytest.mark.ydb
-def test_effective_month_is_strict(tmp_path: Path, month: object) -> None:
+def test_effective_month_is_strict(tmp_path: Path) -> None:
     _, store = _store(tmp_path)
-    with pytest.raises(ValueError, match="effective_month"):
-        store.save({"price": 8, "currency": "RUB", "effective_month": month})
+    for month in ("2026-1", "2026-13", "01-2026", "2026-10-01", 202610):
+        with pytest.raises(ValueError, match="effective_month"):
+            store.save({"price": 8, "currency": "RUB", "effective_month": month})
 
 
 @pytest.mark.ydb
