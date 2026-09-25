@@ -142,8 +142,13 @@ def test_report_transport_routes_zont_direct_and_responses_through_proxy(monkeyp
         assert client.post('https://my.zont.online/api/raw_events', json={}).status_code == 200
         assert client.post('https://api.openai.com/v1/responses', json={'input': []}).status_code == 200
         assert client.get('https://api.openai.com/v1/models/example').status_code == 200
+        assert client.get('https://developers.openai.com/api/docs/models.md').status_code == 200
+        assert client.get('https://developers.openai.com/api/docs/deprecations.md').status_code == 200
+        assert client.get('https://developers.openai.com/api/docs/models/gpt-6.md').status_code == 200
     assert calls == [('direct', '/api/load_data'), ('direct', '/api/raw_events'),
-                     ('xray', '/v1/responses'), ('xray', '/v1/models/example')]
+                     ('xray', '/v1/responses'), ('xray', '/v1/models/example'),
+                     ('xray', '/api/docs/models.md'), ('xray', '/api/docs/deprecations.md'),
+                     ('xray', '/api/docs/models/gpt-6.md')]
 
 
 def test_report_transport_rejects_unlisted_destination():
@@ -157,6 +162,9 @@ def test_report_transport_rejects_unlisted_destination():
         ('https://api.openai.com/v1/responses?foo=bar', 'POST'),
         ('http://api.openai.com/v1/responses', 'POST'),
         ('https://other.invalid/api/load_data', 'POST'),
+        ('https://developers.openai.com/api/docs/models.md', 'POST'),
+        ('https://developers.openai.com/api/docs/other.md', 'GET'),
+        ('https://developers.openai.com/api/docs/models/gpt-6.md?x=1', 'GET'),
     ]
     with httpx.Client(transport=transport) as client:
         for url, method in denied:

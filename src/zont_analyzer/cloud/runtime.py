@@ -18,9 +18,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 
 MAX_BODY_BYTES = 65_536
 MAX_RESULT_BYTES = 1_048_576
+MAX_SITE_BYTES = 16_777_216
 MAX_INPUT_SECONDS = 5.0
 logger = logging.getLogger(__name__)
 
@@ -189,13 +191,71 @@ def _dispatch_reports(payload: dict[str, Any]) -> dict[str, Any]:
 
     request = dict(payload)
     timeout = request.pop("_runtime_timeout_seconds")
-    return report_jobs.execute(request, timeout_seconds=timeout)
+    result = report_jobs.execute(request, timeout_seconds=timeout)
+    if result.get("status") not in {"busy", "not_due", "import_in_progress"}:
+        _mark_worker_success()
+    return result
+
+
+def _mark_worker_success() -> None:
+    from datetime import UTC, datetime
+
+    from zont_analyzer.runtime import build_runtime
+
+    runtime = build_runtime(None, None)
+    try:
+        runtime.db.set_app_meta("cloud-worker-last-success", datetime.now(UTC).isoformat())
+    finally:
+        runtime.db.close()
+
+
+def _dispatch_maintenance(payload: dict[str, Any]) -> dict[str, Any]:
+    from zont_analyzer.cloud import user_jobs
+
+    request = dict(payload)
+    result = user_jobs.execute(request)
+    _mark_worker_success()
+    return result
+
+
+def _dispatch_publication(payload: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(payload)
+    payload.pop("_runtime_timeout_seconds", None)
+    if payload:
+        raise ValueError("publication payload must be empty")
+    from zont_analyzer.application.publication import publish_reports
+    from zont_analyzer.runtime import build_runtime
+
+    runtime = build_runtime(None, None)
+    try:
+        return publish_reports(runtime, batch_size=8)
+    finally:
+        runtime.db.close()
+
+
+def _cloud_application_runtime() -> Any:
+    """Open YDB for a web request without running startup maintenance on GET."""
+    from zont_analyzer.adapters.ydb.application import Database
+    from zont_analyzer.adapters.ydb.database import YdbConfig
+    from zont_analyzer.config import load_config
+    from zont_analyzer.runtime import Runtime
+
+    loaded = load_config(None, None)
+    db = Database(YdbConfig.from_environment(namespace=loaded.config.storage.namespace))
+    try:
+        db.initialize()
+        return Runtime(loaded, db)
+    except BaseException:
+        db.close()
+        raise
 
 
 DISPATCHERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "analytics": _dispatch_analytics,
     "integrations": _dispatch_integrations,
     "reports": _dispatch_reports,
+    "maintenance": _dispatch_maintenance,
+    "publication": _dispatch_publication,
 }
 
 
@@ -206,7 +266,8 @@ class CloudServer(ThreadingHTTPServer):
     active_job: threading.BoundedSemaphore
 
     def __init__(
-        self, address: tuple[str, int], config: RuntimeConfig, tunnel: Any, telemetry: Any = None
+        self, address: tuple[str, int], config: RuntimeConfig, tunnel: Any, telemetry: Any = None,
+        runtime_factory: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__(address, CloudHandler)
         self.config = config
@@ -216,6 +277,7 @@ class CloudServer(ThreadingHTTPServer):
         self.counters = Counters()
         self.active_job = threading.BoundedSemaphore(1)
         self.stopping = threading.Event()
+        self.runtime_factory = runtime_factory or _cloud_application_runtime
 
     def get_request(self) -> tuple[socket.socket, Any]:
         request, address = super().get_request()
@@ -249,8 +311,12 @@ class CloudHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         self._handle()
 
+    def do_PUT(self) -> None:  # noqa: N802
+        self._handle()
+
     def _handle(self) -> None:
-        if not self._authorized():
+        internal_maintenance = self.command == "POST" and self.path == "/internal/maintenance"
+        if not internal_maintenance and not self._authorized():
             self._finish_input()
             self._reply(401, {"error": "unauthorized"}, basic_challenge=True)
             return
@@ -268,10 +334,49 @@ class CloudHandler(BaseHTTPRequestHandler):
                 "counters": self.server.counters.snapshot(),
             })
             return
+        path = urlsplit(self.path).path
+        if path.startswith(("/api/", "/za/api/")):
+            from zont_analyzer.cloud import web_api
+
+            runtime = None
+            try:
+                runtime = self.server.runtime_factory()
+                if web_api.handle(self, runtime):
+                    return
+            except Exception as exc:  # noqa: BLE001 - keep private DB/provider errors out of responses
+                logger.warning("cloud API failed: %s", type(exc).__name__)
+                self._finish_input()
+                self._reply(502, {"error": "api_unavailable"})
+                return
+            finally:
+                if runtime is not None:
+                    runtime.db.close()
+        if self.command == "GET" and not path.startswith("/jobs/"):
+            from zont_analyzer.cloud import site
+
+            runtime = None
+            try:
+                runtime = self.server.runtime_factory()
+                status, body, content_type = site.serve(runtime, self.path)
+                if len(body) > MAX_SITE_BYTES:
+                    raise ValueError("site artifact exceeds limit")
+                self._finish_input()
+                self._reply_bytes(status, body, content_type)
+            except Exception as exc:  # noqa: BLE001 - site errors are redacted
+                logger.warning("cloud site failed: %s", type(exc).__name__)
+                self._finish_input()
+                self._reply(502, {"error": "site_unavailable"})
+            finally:
+                if runtime is not None:
+                    runtime.db.close()
+            return
         endpoint = {
             "/jobs/analytics": "analytics",
             "/jobs/integrations": "integrations",
             "/jobs/reports": "reports",
+            "/jobs/maintenance": "maintenance",
+            "/jobs/publication": "publication",
+            "/internal/maintenance": "maintenance",
         }.get(self.path)
         if self.command != "POST" or endpoint is None:
             self._finish_input()
@@ -281,9 +386,16 @@ class CloudHandler(BaseHTTPRequestHandler):
             self._finish_input()
             self._reply(503, {"error": "xray_unavailable"})
             return
-        payload = self._json_body()
-        if payload is None:
-            return
+        if internal_maintenance:
+            # Invoker IAM is the perimeter for this exact private timer path.
+            # Timer messages do not select work or alter maintenance bounds.
+            self._finish_input()
+            payload: dict[str, Any] = {}
+        else:
+            parsed_payload = self._json_body()
+            if parsed_payload is None:
+                return
+            payload = parsed_payload
         if not self.server.active_job.acquire(blocking=False):
             self._reply(409, {"error": "job_busy"})
             return
@@ -296,11 +408,11 @@ class CloudHandler(BaseHTTPRequestHandler):
                 request_payload = dict(payload)
                 if endpoint == "analytics":
                     request_payload["period_id"] = job_id
-                if endpoint == "reports":
+                if endpoint in {"reports", "maintenance", "publication"}:
                     request_payload["_runtime_timeout_seconds"] = self.server.config.report_timeout_seconds
                 result = run_bounded(
                     DISPATCHERS[endpoint], request_payload,
-                    (self.server.config.report_timeout_seconds if endpoint == "reports"
+                    (self.server.config.report_timeout_seconds if endpoint in {"reports", "maintenance", "publication"}
                      else self.server.config.job_timeout_seconds), self.server.stopping,
                 )
             except JobTimeoutError:
@@ -377,10 +489,17 @@ class CloudHandler(BaseHTTPRequestHandler):
 
     def _reply(self, status: int, payload: dict[str, Any], *, basic_challenge: bool = False) -> None:
         encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        self._reply_bytes(status, encoded, "application/json; charset=utf-8",
+                          basic_challenge=basic_challenge)
+
+    def _reply_bytes(self, status: int, encoded: bytes, content_type: str, *,
+                     basic_challenge: bool = False) -> None:
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(encoded)))
         self.send_header("Connection", "close")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         if basic_challenge:
             self.send_header("WWW-Authenticate", 'Basic realm="Zont cloud runtime"')
         self.end_headers()

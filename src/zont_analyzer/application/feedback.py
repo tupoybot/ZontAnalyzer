@@ -52,16 +52,50 @@ class FeedbackHttpServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
+def feedback_handler_type(runtime: Runtime) -> type[BaseHTTPRequestHandler]:
+    """Return shared routes for local and cloud HTTP servers."""
     api_path = _api_path(runtime)
     route_prefix = f"{api_path}/recommendations/"
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ZontAnalyzerFeedback/1"
 
+        def _start_review(self) -> None:
+            from zont_analyzer.application.ai_maintenance import start_review
+
+            start_review(runtime, manual=True)
+
+        def _start_regeneration(self, report_id: str, question: str | None) -> dict[str, Any]:
+            return start_regeneration(runtime, report_id, question)
+
+        def _regeneration_status(self, report_id: str) -> dict[str, Any]:
+            return regeneration_status(runtime, report_id)
+
+        def _publish_feedback(self, report_id: str) -> None:
+            publish_feedback_report(runtime, report_id)
+
+        def _publish_profile(self) -> None:
+            publish_reports(runtime)
+
+        def _publish_tariffs(self, start: Any, end: Any) -> None:
+            from zont_analyzer.application.publication import publish_tariff_change
+
+            publish_tariff_change(runtime, start, end)
+
+        def _worker_health(self) -> dict[str, Any]:
+            return worker_health(
+                worker_status_path(runtime),
+                max_age_seconds=max(runtime.config.scheduler.sync_every_minutes * 180, 300),
+            )
+
+        def _review_state(self) -> dict[str, Any]:
+            from zont_analyzer.application.ai_maintenance import review_state
+
+            return review_state(runtime)
+
         def _ai_request(self, *, write: bool = False) -> bool:
             from zont_analyzer.adapters.openai.model_catalog import OpenAIModelCatalog
-            from zont_analyzer.application.ai_maintenance import local_assessments, review_state, start_review
+            from zont_analyzer.application.ai_maintenance import local_assessments
             from zont_analyzer.application.ai_settings import AISettingsStore
             from zont_analyzer.application.model_review import ModelReviewStore
 
@@ -87,7 +121,7 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                         if set(payload) - {"action", "proposal_id", "expected_version"}:
                             raise ValueError("Неизвестные поля действия.")
                         if payload.get("action") == "check":
-                            start_review(runtime, manual=True)
+                            self._start_review()
                             status = HTTPStatus.ACCEPTED
                         else:
                             if (not isinstance(payload.get("proposal_id"), str)
@@ -104,7 +138,7 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                     else:
                         settings.save(payload)
                 value = settings.view()
-                value["review"] = review_state(runtime)
+                value["review"] = self._review_state()
             except KeyError:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "Предложение не найдено."})
                 return True
@@ -144,10 +178,7 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                     if kind == "profiles":
                         self._send_json(HTTPStatus.METHOD_NOT_ALLOWED, {"error": "Укажите устройство."})
                         return True
-                    origin = self.headers.get("Origin")
-                    if (self.headers.get("Sec-Fetch-Site") == "cross-site"
-                            or origin is not None and urlsplit(origin).hostname !=
-                            urlsplit("http://" + self.headers.get("Host", "")).hostname):
+                    if not self._same_origin_write():
                         self._send_json(HTTPStatus.FORBIDDEN, {"error": "Откройте форму на сайте приложения."})
                         return True
                     if self.headers.get_content_type() != "application/json":
@@ -174,12 +205,10 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                                  else store.update_gas(identifier, payload))
                     try:
                         if kind == "tariffs":
-                            from zont_analyzer.application.publication import publish_tariff_change
-
                             if not value.get("idempotent"):
-                                publish_tariff_change(runtime, value["affected_start"], value["affected_end"])
+                                self._publish_tariffs(value["affected_start"], value["affected_end"])
                         elif kind == "profile":
-                            publish_reports(runtime)
+                            self._publish_profile()
                         # Gas writes are already durable. The regular worker
                         # publication reads current readings and refreshes the
                         # archive, including calibrated/comparison contexts.
@@ -252,10 +281,7 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
 
         def do_GET(self) -> None:  # noqa: N802
             if urlsplit(self.path).path == f"{api_path}/worker-health":
-                result = worker_health(
-                    worker_status_path(runtime),
-                    max_age_seconds=max(runtime.config.scheduler.sync_every_minutes * 180, 300),
-                )
+                result = self._worker_health()
                 self._send_json(
                     HTTPStatus.OK if result["ok"] else HTTPStatus.SERVICE_UNAVAILABLE,
                     {"ok": result["ok"]},
@@ -273,7 +299,7 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                 if runtime.db.report(regeneration_id) is None:
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "Отчёт не найден."})
                 else:
-                    self._send_json(HTTPStatus.OK, regeneration_status(runtime, regeneration_id))
+                    self._send_json(HTTPStatus.OK, self._regeneration_status(regeneration_id))
                 return
             recommendation_id = self._recommendation_id()
             if recommendation_id is None:
@@ -293,6 +319,9 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
             recommendation_id = self._recommendation_id()
             if recommendation_id is None:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "Маршрут не найден."})
+                return
+            if not self._same_origin_write():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "Откройте отчёт на сайте приложения."})
                 return
             try:
                 content_length = int(self.headers.get("Content-Length", "0"))
@@ -339,7 +368,7 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                 return
             response = _public_feedback(value)
             try:
-                publish_feedback_report(runtime, str(value["report_id"]))
+                self._publish_feedback(str(value["report_id"]))
             except (OSError, ValueError) as exc:
                 logger.warning("Feedback saved but report republish failed: %s", type(exc).__name__)
                 response["publish_warning"] = "Обратная связь сохранена, HTML обновится в следующем цикле."
@@ -367,11 +396,7 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
                     question = normalize_counterfactual_question(payload.get("question"))
                 else:
                     question = None
-                value = (
-                    start_regeneration(runtime, regeneration_id, question)
-                    if question is not None
-                    else start_regeneration(runtime, regeneration_id)
-                )
+                value = self._start_regeneration(regeneration_id, question)
             except KeyError:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "Отчёт не найден."})
                 return
@@ -383,9 +408,13 @@ def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
         def log_message(self, format_: str, *args: Any) -> None:
             logger.info("feedback http: " + format_, *args)
 
+    return Handler
+
+
+def build_feedback_server(runtime: Runtime) -> FeedbackHttpServer:
     return FeedbackHttpServer(
         (runtime.config.feedback.listen_host, runtime.config.feedback.listen_port),
-        Handler,
+        feedback_handler_type(runtime),
     )
 
 

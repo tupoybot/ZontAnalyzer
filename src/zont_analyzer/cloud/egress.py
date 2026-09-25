@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import socket
 import subprocess
 import tempfile
@@ -43,9 +44,16 @@ class ReportTransport(httpx.BaseTransport):
             "/api/devices", "/api/load_data", "/api/raw_events",
         }:
             transport = self.direct
-        elif target.host == "api.openai.com" and (
-            request.method == "POST" and path == "/v1/responses"
-            or request.method == "GET" and path.startswith("/v1/models/")
+        elif (
+            target.host == "api.openai.com" and (
+                request.method == "POST" and path == "/v1/responses"
+                or request.method == "GET" and path.startswith("/v1/models/")
+            )
+            or target.host == "developers.openai.com" and request.method == "GET" and (
+                path in {"/api/docs/models.md", "/api/docs/deprecations.md"}
+                or (bool(re.fullmatch(r"/api/docs/models/[a-z0-9][a-z0-9.-]{0,99}\.md", path))
+                    and ".." not in path)
+            )
         ):
             transport = self.proxied
         else:
