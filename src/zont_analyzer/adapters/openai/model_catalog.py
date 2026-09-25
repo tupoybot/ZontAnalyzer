@@ -166,8 +166,19 @@ def parse_deprecation_replacements(markdown: str) -> dict[str, tuple[str, ...]]:
 
 def _general_model_version(model_id: str) -> tuple[int, ...] | None:
     """Identify general-purpose GPT aliases and return a sortable release version."""
-    match = re.fullmatch(r"gpt-(\d+(?:\.\d+)*)(?:-(?:astra|sol|terra|luna))?", model_id, re.I)
-    return tuple(int(part) for part in match.group(1).split(".")) if match else None
+    match = re.fullmatch(r"gpt-(\d+(?:\.\d+)*)(?:-([a-z][a-z0-9-]*))?", model_id, re.I)
+    if match is None:
+        return None
+    suffix = match.group(2)
+    if suffix:
+        parts = set(suffix.lower().split("-"))
+        specialized = {
+            "audio", "chat", "codex", "image", "mini", "nano", "pro",
+            "realtime", "search", "transcribe", "tts",
+        }
+        if parts & specialized or any(re.fullmatch(r"\d{4}(?:\d{2}){1,2}", part) for part in parts):
+            return None
+    return tuple(int(part) for part in match.group(1).split("."))
 
 
 def discover_candidate_model_ids(markdown: str, limit: int = 4) -> tuple[str, ...]:

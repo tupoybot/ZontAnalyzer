@@ -81,16 +81,16 @@ def test_date_first_deprecation_table_never_marks_replacement_across_rows() -> N
 
 def test_catalog_discovers_new_general_model_family_outside_featured_section() -> None:
     page = """## Featured models
-- [Terra](/api/docs/models/gpt-5.6-terra.md)
-- [Luna](/api/docs/models/gpt-5.6-luna.md)
+- [Current](/api/docs/models/gpt-5.6.md)
 ## Browse our full catalog of models
-- [Sol](/api/docs/models/gpt-6-sol.md)
+- [New family](/api/docs/models/gpt-7-orbit.md)
 - [Pro](/api/docs/models/gpt-6-pro.md)
 - [Codex](/api/docs/models/gpt-6-codex.md)
+- [Dated](/api/docs/models/gpt-6-20260925.md)
 - [Next](/api/docs/models/gpt-6.1.md)
 """
     assert discover_candidate_model_ids(page) == (
-        "gpt-6.1", "gpt-6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+        "gpt-7-orbit", "gpt-6.1", "gpt-5.6",
     )
 
 
