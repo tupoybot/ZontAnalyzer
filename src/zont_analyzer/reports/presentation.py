@@ -758,14 +758,9 @@ def reliability(report: Report) -> str:
         )
         if data_missing or connection_label:
             duration = "нет данных"
-        continuity_note = (
-            "; непрерывность не подтверждена из-за пропуска телеметрии"
-            if metric.context.get("continuity_uncertain") is True
-            else ""
-        )
         statuses.append(
             f'<span class="{status_class}"><i class="uptime-dot"></i>{esc(name)} · {esc(status)} · '
-            f'аптайм {esc(duration)}{esc(continuity_note)}</span>'
+            f'аптайм {esc(duration)}</span>'
             + debug(metric.model_dump(), "Основание аптайма")
         )
     return '<footer class="kpi-uptime-row" aria-label="Статус и аптаймы">' + "".join(statuses) + "</footer>"

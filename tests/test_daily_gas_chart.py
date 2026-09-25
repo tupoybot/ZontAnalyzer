@@ -36,6 +36,8 @@ def test_chart_preserves_dates_zero_gaps_and_sources(kind, days):
     assert '999' not in chart
     assert '<svg' in render_html(r)
     assert 'id="gas-daily"' in render_html(r)
+    assert 'class="gas-daily report-chart full-width"' in chart
+    assert 'style="width:680px"' in chart if days == 7 else 'style="width:1242px"' in chart
 
 
 def test_chart_invalid_values_do_not_become_bars():
