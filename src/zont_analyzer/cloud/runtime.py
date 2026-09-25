@@ -33,6 +33,9 @@ _HTML_SITE = re.compile(
     r"|za/?|za/(?:index\.html|latest\.html|(?:daily|weekly|monthly|seasonal)/\d{4}-\d{2}-\d{2}\.html))\Z"
 )
 logger = logging.getLogger(__name__)
+# Schema readiness is process-local; requests still open and close their own YDB driver.
+_web_schema_lock = threading.Lock()
+_web_schema_ready: set[tuple[str, str, str, bool]] = set()
 
 
 class JobTimeoutError(RuntimeError):
@@ -249,9 +252,14 @@ def _cloud_application_runtime() -> Any:
     from zont_analyzer.runtime import Runtime
 
     loaded = load_config(None, None)
-    db = Database(YdbConfig.from_environment(namespace=loaded.config.storage.namespace))
+    target = YdbConfig.from_environment(namespace=loaded.config.storage.namespace)
+    schema_key = (target.endpoint, target.database, target.namespace, target.anonymous)
+    db = Database(target)
     try:
-        db.initialize()
+        with _web_schema_lock:
+            if schema_key not in _web_schema_ready:
+                db.initialize()
+                _web_schema_ready.add(schema_key)
         return Runtime(loaded, db)
     except BaseException:
         db.close()

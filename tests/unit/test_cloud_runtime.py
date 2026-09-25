@@ -8,8 +8,10 @@ import os
 import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -394,3 +396,83 @@ def test_http_failure_exposes_only_error_type(
     }]
     assert private_message not in caplog.text
     assert private_message not in json.dumps(body)
+
+
+def _web_runtime_harness(monkeypatch: pytest.MonkeyPatch) -> Any:
+    from zont_analyzer.adapters.ydb.database import YdbConfig
+    from zont_analyzer.runtime import Runtime
+
+    state = SimpleNamespace(
+        target=YdbConfig("grpcs://unit.test:2135", "/unit", namespace="first"),
+        initialize_calls=0, close_calls=0, fail_first=False, initialize_delay=0.0,
+    )
+    calls_lock = threading.Lock()
+
+    class FakeDatabase:
+        def __init__(self, target: YdbConfig) -> None:
+            self.target = target
+
+        def initialize(self) -> None:
+            with calls_lock:
+                state.initialize_calls += 1
+                attempt = state.initialize_calls
+            time.sleep(state.initialize_delay)
+            if state.fail_first and attempt == 1:
+                raise RuntimeError("transient schema failure")
+
+        def close(self) -> None:
+            with calls_lock:
+                state.close_calls += 1
+
+    loaded = SimpleNamespace(config=SimpleNamespace(storage=SimpleNamespace(namespace="application")))
+    monkeypatch.setattr(runtime_module, "_web_schema_ready", set())
+    monkeypatch.setattr("zont_analyzer.config.load_config", lambda *_args: loaded)
+    monkeypatch.setattr("zont_analyzer.adapters.ydb.application.Database", FakeDatabase)
+    monkeypatch.setattr(
+        YdbConfig, "from_environment", classmethod(lambda _cls, *, namespace: state.target),
+    )
+    monkeypatch.setattr(
+        Runtime, "maintain_recommendation_lifecycle",
+        lambda *_args, **_kwargs: pytest.fail("web request must not run startup maintenance"),
+    )
+    return state
+
+
+def test_web_schema_is_initialized_once_for_concurrent_first_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = _web_runtime_harness(monkeypatch)
+    state.initialize_delay = 0.05
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        runtimes = list(workers.map(lambda _: runtime_module._cloud_application_runtime(), range(8)))
+
+    assert state.initialize_calls == 1
+    assert len({id(runtime.db) for runtime in runtimes}) == 8
+    for runtime in runtimes:
+        runtime.db.close()
+    assert state.close_calls == 8
+
+
+def test_web_schema_failure_closes_driver_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = _web_runtime_harness(monkeypatch)
+    state.fail_first = True
+    with pytest.raises(RuntimeError, match="transient schema failure"):
+        runtime_module._cloud_application_runtime()
+    assert state.initialize_calls == state.close_calls == 1
+
+    runtime = runtime_module._cloud_application_runtime()
+    runtime.db.close()
+    assert state.initialize_calls == state.close_calls == 2
+
+
+def test_web_schema_cache_is_scoped_to_database_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    from zont_analyzer.adapters.ydb.database import YdbConfig
+
+    state = _web_runtime_harness(monkeypatch)
+    for _ in range(2):
+        runtime_module._cloud_application_runtime().db.close()
+    assert state.initialize_calls == 1
+
+    state.target = YdbConfig("grpcs://unit.test:2135", "/unit", namespace="second")
+    for _ in range(2):
+        runtime_module._cloud_application_runtime().db.close()
+    assert state.initialize_calls == 2
+    assert state.close_calls == 4
