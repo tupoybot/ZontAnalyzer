@@ -290,6 +290,8 @@ class CloudHandler(BaseHTTPRequestHandler):
 
     def setup(self) -> None:
         super().setup()
+        self._input_lock = threading.Lock()
+        self._input_done = False
         self._input_timer = threading.Timer(MAX_INPUT_SECONDS, self._close_input)
         self._input_timer.daemon = True
         self._input_timer.start()
@@ -299,11 +301,17 @@ class CloudHandler(BaseHTTPRequestHandler):
         super().finish()
 
     def _close_input(self) -> None:
-        with contextlib.suppress(OSError):
-            self.connection.shutdown(socket.SHUT_RDWR)
+        with self._input_lock:
+            if self._input_done:
+                return
+            self._input_done = True
+            with contextlib.suppress(OSError):
+                self.connection.shutdown(socket.SHUT_RDWR)
 
     def _finish_input(self) -> None:
-        self._input_timer.cancel()
+        with self._input_lock:
+            self._input_done = True
+            self._input_timer.cancel()
 
     def do_GET(self) -> None:  # noqa: N802
         self._handle()
@@ -320,6 +328,8 @@ class CloudHandler(BaseHTTPRequestHandler):
             self._finish_input()
             self._reply(401, {"error": "unauthorized"}, basic_challenge=True)
             return
+        if self.command == "GET":
+            self._finish_input()
         if self.command == "GET" and self.path == "/ready":
             self._finish_input()
             self._reply(200 if self.server.tunnel.ready() else 503, {"ready": self.server.tunnel.ready()})
@@ -338,6 +348,8 @@ class CloudHandler(BaseHTTPRequestHandler):
         if path.startswith(("/api/", "/za/api/")):
             from zont_analyzer.cloud import web_api
 
+            if not web_api.prepare_input(self):
+                return
             runtime = None
             try:
                 runtime = self.server.runtime_factory()

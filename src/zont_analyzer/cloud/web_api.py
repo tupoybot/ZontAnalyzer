@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 from datetime import UTC, datetime
 from http import HTTPStatus
@@ -36,6 +37,37 @@ def _same_origin(headers: Any, expected_origin: str | None) -> bool:
     return _origin(origin) is not None and _origin(origin) == _origin(expected)
 
 
+def prepare_input(handler: Any) -> bool:
+    """Finish bounded API request intake before opening YDB or Object Storage."""
+    if handler.headers.get("Transfer-Encoding"):
+        handler._finish_input()
+        handler._reply(400, {"error": "transfer_encoding_denied"})
+        return False
+    if handler.command not in {"PUT", "POST"}:
+        handler._finish_input()
+        return True
+    try:
+        length = int(handler.headers.get("Content-Length", "0"))
+    except ValueError:
+        length = -1
+    if length < 0 or length > MAX_REQUEST_BYTES:
+        handler._finish_input()
+        handler._reply(413, {"error": "invalid_body_size"})
+        return False
+    try:
+        raw = handler.rfile.read(length)
+    except (OSError, TimeoutError):
+        handler._finish_input()
+        handler._reply(408, {"error": "input_timeout"})
+        return False
+    if len(raw) != length:
+        handler._finish_input()
+        handler._reply(400, {"error": "incomplete_body"})
+        return False
+    handler._api_body = raw
+    handler._finish_input()
+    return True
+
 def handle(handler: Any, runtime: Runtime) -> bool:
     """Run existing routes against the live request object, without HTTP proxying."""
     api_path = urlsplit(runtime.config.feedback.public_api_base_url).path.rstrip("/") or "/api"
@@ -49,20 +81,6 @@ def handle(handler: Any, runtime: Runtime) -> bool:
         return False
     if handler.command not in {"GET", "PUT", "POST"}:
         return False
-    if handler.headers.get("Transfer-Encoding"):
-        handler._finish_input()
-        handler._reply(400, {"error": "transfer_encoding_denied"})
-        return True
-    if handler.command in {"PUT", "POST"}:
-        try:
-            length = int(handler.headers.get("Content-Length", "0"))
-        except ValueError:
-            length = -1
-        if length < 0 or length > MAX_REQUEST_BYTES:
-            handler._finish_input()
-            handler._reply(413, {"error": "invalid_body_size"})
-            return True
-
     expected_origin = os.environ.get("CLOUD_PUBLIC_ORIGIN")
     if expected_origin and _origin(expected_origin) is None:
         raise ValueError("invalid CLOUD_PUBLIC_ORIGIN")
@@ -132,7 +150,7 @@ def handle(handler: Any, runtime: Runtime) -> bool:
     delegate.path = normalized_path
     delegate.command = handler.command
     delegate.headers = handler.headers
-    delegate.rfile = handler.rfile
+    delegate.rfile = io.BytesIO(handler._api_body) if handler.command in {"PUT", "POST"} else handler.rfile
     delegate.wfile = handler.wfile
     getattr(delegate, "do_" + handler.command)()
     return True

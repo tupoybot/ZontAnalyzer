@@ -337,3 +337,30 @@ def test_repeated_jobs_close_each_parent_process_handle(monkeypatch: pytest.Monk
         assert run_bounded(_large_result, {}, 2)["data"]
     assert len(processes) == 3
     assert all(process.closed for process in processes)
+
+
+def test_slow_published_get_outlives_input_deadline(
+    server: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance, credentials = server
+    monkeypatch.setattr(runtime_module, "MAX_INPUT_SECONDS", 0.1)
+
+    class Database:
+        def close(self) -> None:
+            return
+
+    class Application:
+        db = Database()
+
+    def open_runtime() -> Application:
+        time.sleep(0.2)
+        return Application()
+
+    def serve(_runtime: Any, _path: str) -> tuple[int, bytes, str]:
+        time.sleep(0.2)
+        return 200, b'{"reports":[]}', "application/json"
+
+    instance.runtime_factory = open_runtime
+    monkeypatch.setattr("zont_analyzer.cloud.site.serve", serve)
+    status, body = _request(instance, credentials, "GET", "/reports.json")
+    assert (status, body) == (200, {"reports": []})

@@ -131,3 +131,60 @@ def test_only_private_timer_route_bypasses_basic_auth(
     assert _request(server, "GET", "/internal/maintenance", authorization=False) == (
         401, {"error": "unauthorized"},
     )
+
+
+def test_api_get_and_complete_put_outlive_input_deadline(
+    server: CloudServer, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    monkeypatch.setattr(cloud_runtime, "MAX_INPUT_SECONDS", 0.1)
+
+    def slow_runtime() -> _Runtime:
+        time.sleep(0.2)
+        return _Runtime()
+
+    def save(self: _Database, recommendation_id: str, status: str,
+             note: str | None, *, experiment: Any = None) -> dict[str, Any]:
+        return {"id": recommendation_id, "report_id": "daily-1", "status": status,
+                "owner_note": note, "updated_at": "2026-09-25T00:00:00+00:00",
+                "experiment": experiment}
+
+    server.runtime_factory = slow_runtime
+    monkeypatch.setattr(_Database, "set_recommendation_feedback", save, raising=False)
+    assert _request(server, "GET", "/api/health") == (200, {"ok": True})
+    status, value = _request(server, "PUT", "/api/recommendations/rec-1/feedback",
+                             body={"status": "applied", "owner_note": "saved"})
+    assert status == 200 and value["owner_note"] == "saved"
+
+
+def test_api_body_must_finish_before_runtime_opens(
+    server: CloudServer, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import socket
+    import time
+
+    monkeypatch.setattr(cloud_runtime, "MAX_INPUT_SECONDS", 0.1)
+    calls = []
+
+    def runtime() -> _Runtime:
+        calls.append(True)
+        return _Runtime()
+
+    server.runtime_factory = runtime
+    authorization = base64.b64encode(b"owner:password").decode()
+    head = ("PUT /api/recommendations/rec-1/feedback HTTP/1.1\r\n"
+            "Host: app.example\r\nAuthorization: Basic " + authorization + "\r\n"
+            "Content-Type: application/json\r\nContent-Length: 30\r\n\r\n").encode()
+
+    with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=2) as connection:
+        connection.sendall(head + b'{}')
+        connection.shutdown(socket.SHUT_WR)
+        assert b" 400 " in connection.recv(1024)
+    assert calls == []
+
+    with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=2) as connection:
+        connection.sendall(head + b'{"status":')
+        time.sleep(0.2)
+        assert connection.recv(1024) == b""
+    assert calls == []
