@@ -36,7 +36,7 @@ class PublicationRepository:
     def audit_page(self, after: str, limit: int = 16) -> list[dict[str, Any]]:
         rows = self.db.execute(
             "DECLARE $after AS Utf8; DECLARE $limit AS Uint64; "
-            "SELECT href,json_stamp,html_stamp FROM publication_items WHERE href>$after "
+            "SELECT href,entry,json_stamp,html_stamp FROM publication_items WHERE href>$after "
             "ORDER BY href LIMIT $limit;",
             {"$after": after, "$limit": _limit(limit)},
         )[0].rows

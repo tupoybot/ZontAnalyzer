@@ -9,7 +9,8 @@ import time
 from pathlib import Path
 
 HOST = "serverless-containers.api.cloud.yandex.net"
-LIMITS = {"zoneInstancesLimit": "1", "zoneRequestsLimit": "1"}
+PROBE_LIMITS = {"zoneInstancesLimit": "1", "zoneRequestsLimit": "1"}
+APPLICATION_LIMITS = {"zoneInstancesLimit": "1", "zoneRequestsLimit": "8"}
 COPY_FIELDS = {
     "description", "resources", "executionTimeout", "serviceAccountId", "concurrency",
     "connectivity", "provisionPolicy", "secrets", "logOptions", "storageMounts", "mounts",
@@ -24,7 +25,7 @@ class CloudError(ValueError):
         self.body = body
 
 
-def revision_request(revision, container_id, inputs, image_key="probe_image"):
+def revision_request(revision, container_id, inputs, image_key="probe_image", limits=PROBE_LIMITS):
     if revision.get("containerId") != container_id or revision.get("status") != "ACTIVE":
         raise ValueError("revision does not match active deployment")
     if set(revision) - COPY_FIELDS - READ_ONLY:
@@ -52,13 +53,13 @@ def revision_request(revision, container_id, inputs, image_key="probe_image"):
         if len(matches) != 1 or matches[0] != expected:
             raise ValueError("conflicting mount representations")
     request["storageMounts"] = legacy
-    request.update(containerId=container_id, imageSpec=image, scalingPolicy=dict(LIMITS))
+    request.update(containerId=container_id, imageSpec=image, scalingPolicy=dict(limits))
     return request
 
 
-def bounded(revision):
+def bounded(revision, limits=PROBE_LIMITS):
     policy = revision.get("scalingPolicy", {})
-    return all(str(policy.get(key)) == value for key, value in LIMITS.items())
+    return all(str(policy.get(key)) == value for key, value in limits.items())
 
 
 def identifier(value):
@@ -122,19 +123,21 @@ def run(private, application=False):
     if len(active) != 1 or revisions.get("nextPageToken"):
         raise ValueError("exactly one active revision required")
     revision = active[0]
-    payload = revision_request(revision, container_id, inputs, image_key)
-    if not bounded(revision):
+    limits = APPLICATION_LIMITS if application else PROBE_LIMITS
+    payload = revision_request(revision, container_id, inputs, image_key, limits)
+    if not bounded(revision, limits):
         operation = request(token, HOST, "/containers/v1/revisions:deploy", payload)
         # Record before polling so an interrupted observation can resume the same operation.
         saved_operation.write_text(json.dumps(operation))
         operation = wait_operation(token, private, operation, prefix)
         revision_id = identifier(operation["response"]["id"])
         revision = request(token, HOST, f"/containers/v1/revisions/{revision_id}")
-    revision_request(revision, container_id, inputs, image_key)
-    if not bounded(revision):
+    revision_request(revision, container_id, inputs, image_key, limits)
+    if not bounded(revision, limits):
         raise ValueError("scaling limits not applied")
     (private / (prefix + "bounded-revision.json")).write_text(json.dumps(revision))
-    print("Active revision scaling verified: one instance and request per zone")
+    requests = limits["zoneRequestsLimit"]
+    print(f"Active revision scaling verified: one instance and up to {requests} requests per zone")
 
 
 if __name__ == "__main__":

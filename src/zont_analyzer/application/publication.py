@@ -4,6 +4,7 @@ from __future__ import annotations
 import fcntl
 import html
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -45,6 +46,15 @@ def publish_reports(
     The lock also covers feedback republishing in other threads/processes.
     """
     checked_at = now or datetime.now(UTC)
+    if os.environ.get("CLOUD_PUBLICATION_BUCKET"):
+        from zont_analyzer.application.incremental_publication import publish_incremental
+        from zont_analyzer.cloud.object_storage import ObjectStorage
+        from zont_analyzer.cloud.publication import CloudPublication
+
+        return publish_incremental(
+            runtime, Path("/"), checked_at, batch_size=batch_size, rebuild=rebuild,
+            cloud=CloudPublication(ObjectStorage.from_environment()),
+        )
     output_dir = reports_directory(runtime)
     output_dir.mkdir(parents=True, exist_ok=True)
     with (output_dir / ".publication.lock").open("a") as lock:
@@ -56,6 +66,9 @@ def publish_reports(
 
 def publish_report(runtime: Runtime, report_id: str, *, now: datetime | None = None) -> dict[str, Any]:
     """Refresh one already stored report without walking or recalculating the archive."""
+    if os.environ.get("CLOUD_PUBLICATION_BUCKET"):
+        # The stored report change is already in the durable publication journal.
+        return publish_reports(runtime, now=now)
     checked_at = now or datetime.now(UTC)
     output_dir = reports_directory(runtime)
     output_dir.mkdir(parents=True, exist_ok=True)

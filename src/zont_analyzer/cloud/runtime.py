@@ -9,6 +9,7 @@ import json
 import logging
 import multiprocessing
 import os
+import re
 import signal
 import socket
 import threading
@@ -18,11 +19,23 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
+
+from zont_analyzer.cloud import auth
 
 MAX_BODY_BYTES = 65_536
 MAX_RESULT_BYTES = 1_048_576
+MAX_SITE_BYTES = 16_777_216
 MAX_INPUT_SECONDS = 5.0
+MAX_LOGIN_BYTES = 4096
+_HTML_SITE = re.compile(
+    r"\A/(?:|index\.html|latest\.html|(?:daily|weekly|monthly|seasonal)/\d{4}-\d{2}-\d{2}\.html"
+    r"|za/?|za/(?:index\.html|latest\.html|(?:daily|weekly|monthly|seasonal)/\d{4}-\d{2}-\d{2}\.html))\Z"
+)
 logger = logging.getLogger(__name__)
+# Schema readiness is process-local; requests still open and close their own YDB driver.
+_web_schema_lock = threading.Lock()
+_web_schema_ready: set[tuple[str, str, str, bool]] = set()
 
 
 class JobTimeoutError(RuntimeError):
@@ -189,13 +202,76 @@ def _dispatch_reports(payload: dict[str, Any]) -> dict[str, Any]:
 
     request = dict(payload)
     timeout = request.pop("_runtime_timeout_seconds")
-    return report_jobs.execute(request, timeout_seconds=timeout)
+    result = report_jobs.execute(request, timeout_seconds=timeout)
+    if result.get("status") not in {"busy", "not_due", "import_in_progress"}:
+        _mark_worker_success()
+    return result
+
+
+def _mark_worker_success() -> None:
+    from datetime import UTC, datetime
+
+    from zont_analyzer.runtime import build_runtime
+
+    runtime = build_runtime(None, None)
+    try:
+        runtime.db.set_app_meta("cloud-worker-last-success", datetime.now(UTC).isoformat())
+    finally:
+        runtime.db.close()
+
+
+def _dispatch_maintenance(payload: dict[str, Any]) -> dict[str, Any]:
+    from zont_analyzer.cloud import user_jobs
+
+    request = dict(payload)
+    result = user_jobs.execute(request)
+    _mark_worker_success()
+    return result
+
+
+def _dispatch_publication(payload: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(payload)
+    payload.pop("_runtime_timeout_seconds", None)
+    if payload:
+        raise ValueError("publication payload must be empty")
+    from zont_analyzer.application.publication import publish_reports
+    from zont_analyzer.runtime import build_runtime
+
+    runtime = build_runtime(None, None)
+    try:
+        return publish_reports(runtime, batch_size=8)
+    finally:
+        runtime.db.close()
+
+
+def _cloud_application_runtime() -> Any:
+    """Open YDB for a web request without running startup maintenance on GET."""
+    from zont_analyzer.adapters.ydb.application import Database
+    from zont_analyzer.adapters.ydb.database import YdbConfig
+    from zont_analyzer.config import load_config
+    from zont_analyzer.runtime import Runtime
+
+    loaded = load_config(None, None)
+    target = YdbConfig.from_environment(namespace=loaded.config.storage.namespace)
+    schema_key = (target.endpoint, target.database, target.namespace, target.anonymous)
+    db = Database(target)
+    try:
+        with _web_schema_lock:
+            if schema_key not in _web_schema_ready:
+                db.initialize()
+                _web_schema_ready.add(schema_key)
+        return Runtime(loaded, db)
+    except BaseException:
+        db.close()
+        raise
 
 
 DISPATCHERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "analytics": _dispatch_analytics,
     "integrations": _dispatch_integrations,
     "reports": _dispatch_reports,
+    "maintenance": _dispatch_maintenance,
+    "publication": _dispatch_publication,
 }
 
 
@@ -206,7 +282,8 @@ class CloudServer(ThreadingHTTPServer):
     active_job: threading.BoundedSemaphore
 
     def __init__(
-        self, address: tuple[str, int], config: RuntimeConfig, tunnel: Any, telemetry: Any = None
+        self, address: tuple[str, int], config: RuntimeConfig, tunnel: Any, telemetry: Any = None,
+        runtime_factory: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__(address, CloudHandler)
         self.config = config
@@ -216,6 +293,7 @@ class CloudServer(ThreadingHTTPServer):
         self.counters = Counters()
         self.active_job = threading.BoundedSemaphore(1)
         self.stopping = threading.Event()
+        self.runtime_factory = runtime_factory or _cloud_application_runtime
 
     def get_request(self) -> tuple[socket.socket, Any]:
         request, address = super().get_request()
@@ -228,6 +306,8 @@ class CloudHandler(BaseHTTPRequestHandler):
 
     def setup(self) -> None:
         super().setup()
+        self._input_lock = threading.Lock()
+        self._input_done = False
         self._input_timer = threading.Timer(MAX_INPUT_SECONDS, self._close_input)
         self._input_timer.daemon = True
         self._input_timer.start()
@@ -237,11 +317,17 @@ class CloudHandler(BaseHTTPRequestHandler):
         super().finish()
 
     def _close_input(self) -> None:
-        with contextlib.suppress(OSError):
-            self.connection.shutdown(socket.SHUT_RDWR)
+        with self._input_lock:
+            if self._input_done:
+                return
+            self._input_done = True
+            with contextlib.suppress(OSError):
+                self.connection.shutdown(socket.SHUT_RDWR)
 
     def _finish_input(self) -> None:
-        self._input_timer.cancel()
+        with self._input_lock:
+            self._input_done = True
+            self._input_timer.cancel()
 
     def do_GET(self) -> None:  # noqa: N802
         self._handle()
@@ -249,11 +335,31 @@ class CloudHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         self._handle()
 
+    def do_PUT(self) -> None:  # noqa: N802
+        self._handle()
+
     def _handle(self) -> None:
-        if not self._authorized():
+        path = urlsplit(self.path).path
+        if path == "/login" and self.command == "GET":
             self._finish_input()
-            self._reply(401, {"error": "unauthorized"}, basic_challenge=True)
+            self._reply_bytes(200, auth.login_page(authenticated=self._authorized()), "text/html; charset=utf-8")
             return
+        if path == "/login" and self.command == "POST":
+            self._login()
+            return
+        if path == "/logout" and self.command == "POST":
+            self._logout()
+            return
+        internal_maintenance = self.command == "POST" and self.path == "/internal/maintenance"
+        if not internal_maintenance and not self._authorized():
+            self._finish_input()
+            if self.command == "GET" and _HTML_SITE.fullmatch(path):
+                self._reply_bytes(401, auth.login_page(), "text/html; charset=utf-8")
+            else:
+                self._reply(401, {"error": "unauthorized"}, basic_challenge=True)
+            return
+        if self.command == "GET":
+            self._finish_input()
         if self.command == "GET" and self.path == "/ready":
             self._finish_input()
             self._reply(200 if self.server.tunnel.ready() else 503, {"ready": self.server.tunnel.ready()})
@@ -268,10 +374,58 @@ class CloudHandler(BaseHTTPRequestHandler):
                 "counters": self.server.counters.snapshot(),
             })
             return
+        if path.startswith(("/api/", "/za/api/")):
+            from zont_analyzer.cloud import web_api
+
+            if not web_api.prepare_input(self):
+                return
+            runtime = None
+            try:
+                runtime = self.server.runtime_factory()
+                if web_api.handle(self, runtime):
+                    return
+            except Exception as exc:  # noqa: BLE001 - keep private DB/provider errors out of responses
+                error_type = type(exc).__name__
+                logger.error(json.dumps(
+                    {"level": "ERROR", "message": "cloud API failed", "event": "cloud_api",
+                     "error_type": error_type}, separators=(",", ":"),
+                ))
+                self._finish_input()
+                self._reply(502, {"error": "api_unavailable", "error_type": error_type})
+                return
+            finally:
+                if runtime is not None:
+                    runtime.db.close()
+        if self.command == "GET" and not path.startswith("/jobs/"):
+            from zont_analyzer.cloud import site
+
+            runtime = None
+            try:
+                runtime = self.server.runtime_factory()
+                status, body, content_type = site.serve(runtime, self.path)
+                if len(body) > MAX_SITE_BYTES:
+                    raise ValueError("site artifact exceeds limit")
+                self._finish_input()
+                self._reply_bytes(status, body, content_type)
+            except Exception as exc:  # noqa: BLE001 - site errors are redacted
+                error_type = type(exc).__name__
+                logger.error(json.dumps(
+                    {"level": "ERROR", "message": "cloud site failed", "event": "cloud_site",
+                     "error_type": error_type}, separators=(",", ":"),
+                ))
+                self._finish_input()
+                self._reply(502, {"error": "site_unavailable", "error_type": error_type})
+            finally:
+                if runtime is not None:
+                    runtime.db.close()
+            return
         endpoint = {
             "/jobs/analytics": "analytics",
             "/jobs/integrations": "integrations",
             "/jobs/reports": "reports",
+            "/jobs/maintenance": "maintenance",
+            "/jobs/publication": "publication",
+            "/internal/maintenance": "maintenance",
         }.get(self.path)
         if self.command != "POST" or endpoint is None:
             self._finish_input()
@@ -281,9 +435,16 @@ class CloudHandler(BaseHTTPRequestHandler):
             self._finish_input()
             self._reply(503, {"error": "xray_unavailable"})
             return
-        payload = self._json_body()
-        if payload is None:
-            return
+        if internal_maintenance:
+            # Invoker IAM is the perimeter for this exact private timer path.
+            # Timer messages do not select work or alter maintenance bounds.
+            self._finish_input()
+            payload: dict[str, Any] = {}
+        else:
+            parsed_payload = self._json_body()
+            if parsed_payload is None:
+                return
+            payload = parsed_payload
         if not self.server.active_job.acquire(blocking=False):
             self._reply(409, {"error": "job_busy"})
             return
@@ -296,11 +457,11 @@ class CloudHandler(BaseHTTPRequestHandler):
                 request_payload = dict(payload)
                 if endpoint == "analytics":
                     request_payload["period_id"] = job_id
-                if endpoint == "reports":
+                if endpoint in {"reports", "maintenance", "publication"}:
                     request_payload["_runtime_timeout_seconds"] = self.server.config.report_timeout_seconds
                 result = run_bounded(
                     DISPATCHERS[endpoint], request_payload,
-                    (self.server.config.report_timeout_seconds if endpoint == "reports"
+                    (self.server.config.report_timeout_seconds if endpoint in {"reports", "maintenance", "publication"}
                      else self.server.config.job_timeout_seconds), self.server.stopping,
                 )
             except JobTimeoutError:
@@ -332,8 +493,62 @@ class CloudHandler(BaseHTTPRequestHandler):
         finally:
             self.server.active_job.release()
 
+    def _login(self) -> None:
+        if not auth.same_origin(self.headers, os.environ.get("CLOUD_PUBLIC_ORIGIN")):
+            self._finish_input()
+            self._reply_bytes(401, auth.login_page(failed=True), "text/html; charset=utf-8")
+            return
+        if self.headers.get("Transfer-Encoding"):
+            self._finish_input()
+            self._reply(400, {"error": "transfer_encoding_denied"})
+            return
+        if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded":
+            self._finish_input()
+            self._reply(415, {"error": "form_content_type_required"})
+            return
+        try:
+            size = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            size = -1
+        if not 1 <= size <= MAX_LOGIN_BYTES:
+            self._finish_input()
+            self._reply(413, {"error": "invalid_body_size"})
+            return
+        try:
+            raw = self.rfile.read(size)
+        except (OSError, TimeoutError):
+            self._finish_input()
+            self._reply(408, {"error": "input_timeout"})
+            return
+        if len(raw) != size:
+            self._finish_input()
+            self._reply(400, {"error": "incomplete_body"})
+            return
+        self._finish_input()
+        credentials = auth.parse_credentials(raw)
+        if credentials is None or not auth.credentials_match(*credentials, self.server.config.authorization):
+            self._reply_bytes(401, auth.login_page(failed=True), "text/html; charset=utf-8")
+            return
+        cookie = auth.session_cookie(auth.issue_session(self.server.config.authorization))
+        self._reply_bytes(303, b"", "text/plain; charset=utf-8",
+                          extra_headers={"Location": "/", "Set-Cookie": cookie})
+
+    def _logout(self) -> None:
+        if not auth.same_origin(self.headers, os.environ.get("CLOUD_PUBLIC_ORIGIN")):
+            self._finish_input()
+            self._reply(403, {"error": "origin_denied"})
+            return
+        if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0":
+            self._finish_input()
+            self._reply(400, {"error": "invalid_body_size"})
+            return
+        self._finish_input()
+        self._reply_bytes(303, b"", "text/plain; charset=utf-8",
+                          extra_headers={"Location": "/login", "Set-Cookie": auth.clear_cookie()})
+
     def _authorized(self) -> bool:
-        return hmac.compare_digest(self.headers.get("Authorization", ""), self.server.config.authorization)
+        return (hmac.compare_digest(self.headers.get("Authorization", ""), self.server.config.authorization)
+                or auth.session_from_headers(self.headers, self.server.config.authorization))
 
     def _json_body(self) -> dict[str, Any] | None:
         if self.headers.get("Transfer-Encoding"):
@@ -377,12 +592,21 @@ class CloudHandler(BaseHTTPRequestHandler):
 
     def _reply(self, status: int, payload: dict[str, Any], *, basic_challenge: bool = False) -> None:
         encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        self._reply_bytes(status, encoded, "application/json; charset=utf-8",
+                          basic_challenge=basic_challenge)
+
+    def _reply_bytes(self, status: int, encoded: bytes, content_type: str, *,
+                     basic_challenge: bool = False, extra_headers: dict[str, str] | None = None) -> None:
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(encoded)))
         self.send_header("Connection", "close")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         if basic_challenge:
             self.send_header("WWW-Authenticate", 'Basic realm="Zont cloud runtime"')
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(encoded)
         self.close_connection = True

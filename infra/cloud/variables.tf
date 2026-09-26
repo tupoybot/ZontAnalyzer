@@ -138,3 +138,13 @@ variable "deletion_protection" {
   type        = bool
   default     = true
 }
+
+variable "enable_maintenance_timer" {
+  description = "Deliver durable web requests and publication work; enable after the M5 smoke."
+  type        = bool
+  default     = false
+  validation {
+    condition     = !var.enable_maintenance_timer || var.grafana_metrics_enabled
+    error_message = "Configure metric export before enabling web job delivery."
+  }
+}
