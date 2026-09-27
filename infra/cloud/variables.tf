@@ -162,3 +162,8 @@ variable "identity" {
     error_message = "Use the public SPA client and official Identity Hub issuer."
   }
 }
+variable "enable_monitoring_timer" {
+  description = "Enable hourly read-only application monitoring without provider calls."
+  type        = bool
+  default     = false
+}

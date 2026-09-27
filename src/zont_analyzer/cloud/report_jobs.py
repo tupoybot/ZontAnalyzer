@@ -32,6 +32,7 @@ from zont_analyzer.adapters.zont_readonly import ZontReadOnlyClient
 from zont_analyzer.application.collection import CollectionService
 from zont_analyzer.cloud.egress import ReportTransport
 from zont_analyzer.domain import Report
+from zont_analyzer.observability import span
 from zont_analyzer.runtime import Runtime, build_runtime
 
 MIN_AI_SECONDS = 135
@@ -305,6 +306,7 @@ class ReportJobRunner:
         self._save_checkpoint(lease, {"phase": "analyze", "input_fingerprint": fingerprint,
                                       "source_revision": source_revision})
         with contextlib.ExitStack() as stack:
+            stack.enter_context(span("zont_analysis"))
             service = self.runtime.analysis(no_ai=not request.use_ai,
                                             job_fence=(lease.job_key, lease.owner, lease.attempt))
             if request.use_ai and service.config.openai.enabled:
@@ -331,6 +333,9 @@ class ReportJobRunner:
                 assert request.year is not None and request.month is not None
                 report = service.analyze_month(request.year, request.month, use_ai=request.use_ai)
         # ReportRepository committed this checkpoint atomically with the report.
+        from zont_analyzer.cloud.monitoring import report_metrics
+
+        report_metrics(report)
         return self._complete(lease, report.id, report.ai_used)
 
     def _complete(self, lease: JobLease, report_id: str, ai_used: bool | None) -> dict[str, Any]:
@@ -361,6 +366,7 @@ class ReportJobRunner:
         )
 
 
+@span("zont_report")
 def execute(payload: dict[str, Any], *, timeout_seconds: float = 180) -> dict[str, Any]:
     runtime = build_runtime(None, None)
     try:

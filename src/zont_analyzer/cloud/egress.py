@@ -15,9 +15,16 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from zont_analyzer.observability import observe, span
+
 MAX_BYTES = 65536
 MAX_REPORT_REQUEST_BYTES = 524_288
 MAX_REPORT_RESPONSE_BYTES = 8_388_608
+
+
+def _destination(host: str | None) -> str:
+    return {"my.zont.online": "zont", "api.openai.com": "openai",
+            "developers.openai.com": "openai_docs"}.get(host or "", "denied")
 
 
 class ReportTransport(httpx.BaseTransport):
@@ -35,9 +42,20 @@ class ReportTransport(httpx.BaseTransport):
         )
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        destination = _destination(request.url.host)
+        try:
+            with span("zont_egress"):
+                return self._handle_request(request)
+        except httpx.TransportError:
+            observe("zont_proxy_failures_total" if destination in {"openai", "openai_docs"}
+                    else "zont_transport_failures_total", destination=destination)
+            raise
+
+    def _handle_request(self, request: httpx.Request) -> httpx.Response:
         target = request.url
         if (target.scheme != "https" or target.port not in (None, 443)
                 or target.username or target.password or target.query or target.fragment):
+            observe("zont_egress_denials_total", reason="destination")
             raise ValueError("destination denied")
         path = target.path
         if target.host == "my.zont.online" and request.method == "POST" and path in {
@@ -57,21 +75,31 @@ class ReportTransport(httpx.BaseTransport):
         ):
             transport = self.proxied
         else:
+            observe("zont_egress_denials_total", reason="destination")
             raise ValueError("destination denied")
+        destination = _destination(target.host)
+        observe("zont_egress_requests_total", destination=destination)
         body = bytearray()
         for chunk in cast(httpx.SyncByteStream, request.stream):
             body.extend(chunk)
             if len(body) > MAX_REPORT_REQUEST_BYTES:
+                observe("zont_egress_limit_total", direction="sent")
                 raise ValueError("request byte limit")
         bounded = httpx.Request(request.method, target, headers=request.headers, content=bytes(body))
+        observe("zont_egress_bytes_total", len(body), destination=destination, direction="sent")
         response = transport.handle_request(bounded)
         try:
             if 300 <= response.status_code < 400:
+                observe("zont_egress_denials_total", reason="redirect")
                 raise ValueError("redirect denied")
+            if response.status_code >= 400:
+                observe("zont_upstream_failures_total", destination=destination)
             content = bytearray()
             for chunk in response.iter_bytes():
+                observe("zont_egress_bytes_total", len(chunk), destination=destination, direction="received")
                 content.extend(chunk)
                 if len(content) > MAX_REPORT_RESPONSE_BYTES:
+                    observe("zont_egress_limit_total", direction="received")
                     raise ValueError("response byte limit")
             return httpx.Response(response.status_code, headers=response.headers,
                                   content=bytes(content), request=request)
@@ -111,31 +139,54 @@ class PolicyClient:
         self, url: str, *, method: str = "GET", headers: dict[str, str] | None = None,
         body: bytes = b"", timeout: float = 5,
     ) -> bytes:
+        destination = _destination(urlsplit(url).hostname)
+        try:
+            with span("zont_egress"):
+                return self._request(url, method=method, headers=headers, body=body, timeout=timeout)
+        except httpx.TransportError:
+            observe("zont_proxy_failures_total" if destination == "openai"
+                    else "zont_transport_failures_total", destination=destination)
+            raise
+
+    def _request(
+        self, url: str, *, method: str = "GET", headers: dict[str, str] | None = None,
+        body: bytes = b"", timeout: float = 5,
+    ) -> bytes:
         target = urlsplit(url)
         if (target.scheme != "https" or target.hostname not in {"api.openai.com", "my.zont.online"}
                 or target.port not in (None, 443) or target.username or target.password
                 or target.fragment or target.query):
+            observe("zont_egress_denials_total", reason="destination")
             raise ValueError("destination denied")
         if target.hostname == "my.zont.online":
             if method != "POST" or target.path != "/api/devices":
+                observe("zont_egress_denials_total", reason="destination")
                 raise ValueError("ZONT smoke is read-only")
             proxy = None
         else:
             if method != "GET" or not target.path.startswith("/v1/models/"):
+                observe("zont_egress_denials_total", reason="destination")
                 raise ValueError("metadata request required")
             proxy = f"http://127.0.0.1:{self.proxy_port}"
         if len(body) > MAX_BYTES or not 0 < timeout <= 10:
+            observe("zont_egress_limit_total", direction="sent")
             raise ValueError("invalid request budget")
+        destination = _destination(target.hostname)
+        observe("zont_egress_requests_total", destination=destination)
+        observe("zont_egress_bytes_total", len(body), destination=destination, direction="sent")
         with (
             httpx.Client(proxy=proxy, trust_env=False, follow_redirects=False, timeout=timeout) as client,
             client.stream(method, url, headers=headers, content=body) as response,
         ):
             if response.status_code != 200:
+                observe("zont_upstream_failures_total", destination=destination)
                 raise UpstreamError(response.status_code)
             result = bytearray()
             for chunk in response.iter_bytes():
+                observe("zont_egress_bytes_total", len(chunk), destination=destination, direction="received")
                 result.extend(chunk)
                 if len(result) > MAX_BYTES:
+                    observe("zont_egress_limit_total", direction="received")
                     raise ValueError("response byte limit")
             return bytes(result)
 

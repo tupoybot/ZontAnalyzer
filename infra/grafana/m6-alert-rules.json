@@ -1,0 +1,1054 @@
+{
+  "rules": [
+    {
+      "uid": "zont-m6-${environment}-sync",
+      "title": "M6: Ошибка синхронизации",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "Alerting",
+      "execErrState": "Alerting",
+      "for": "5m",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "Синхронизация завершилась ошибкой либо измерения отсутствуют 48 часов."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "(1 - min(last_over_time(zont_sync_success{environment=\"${environment}\"}[48h]) and (last_over_time(zont_sync_observed_timestamp_seconds{environment=\"${environment}\"}[48h]) == on (environment) group_left max by (environment) (last_over_time(zont_sync_observed_timestamp_seconds{environment=\"${environment}\"}[48h]))))) or vector(1)",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-stale",
+      "title": "M6: Устаревшая телеметрия",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "Alerting",
+      "execErrState": "Alerting",
+      "for": "5m",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "Возраст телеметрии превышает настроенный порог (по умолчанию 30 часов) либо метрика отсутствует."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "((time() - max(last_over_time(zont_telemetry_timestamp_seconds{environment=\"${environment}\"}[48h]))) and (min(last_over_time(zont_telemetry_present{environment=\"${environment}\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"${environment}\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"${environment}\"}[2h])))) == 1)) or vector(172800)",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    108000
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-job",
+      "title": "M6: Ошибка выполнения задания",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "Alerting",
+      "execErrState": "Alerting",
+      "for": "5m",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "Ошибка задания или отсутствие измерений в течение двух часов; проверить также ошибки и таймауты платформы."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "(1 - min(last_over_time(zont_cloud_job_success{environment=\"${environment}\"}[2h]) and (last_over_time(zont_cloud_job_observed_timestamp_seconds{environment=\"${environment}\"}[2h]) == on (environment, operation) group_left max by (environment, operation) (last_over_time(zont_cloud_job_observed_timestamp_seconds{environment=\"${environment}\"}[2h]))))) or vector(1)",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-loops",
+      "title": "M6: Частые вызовы контейнера",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "OK",
+      "execErrState": "Alerting",
+      "for": "5m",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "Частота вызовов выше настроенного порога (по умолчанию 180 в час). Проверить повторы и расписание."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "sum(increase(zont_invocations_total{environment=\"${environment}\"}[1h]))",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    180
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-tokens",
+      "title": "M6: Рост расхода токенов",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "OK",
+      "execErrState": "Alerting",
+      "for": "5m",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "Более 100000 входных и выходных токенов за час. Кэшированные токены повторно не суммируются."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "sum(increase(zont_openai_tokens_total{environment=\"${environment}\",kind=~\"input|output\"}[1h]))",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    100000
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-egress",
+      "title": "M6: Нарушение ограничений исходящего трафика",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "OK",
+      "execErrState": "Alerting",
+      "for": "0s",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "Сработали запреты или лимиты доступа к внешним API."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "sum(increase({__name__=~\"zont_egress_(denials|limit)_total\",environment=\"${environment}\"}[1h]))",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-fallback",
+      "title": "M6: Разрешён обход прокси",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "Alerting",
+      "execErrState": "Alerting",
+      "for": "0s",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "Недопустимая конфигурация прямого доступа в обход прокси."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "max(last_over_time(zont_direct_fallback_allowed{environment=\"${environment}\"}[2h]))",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-proxy",
+      "title": "M6: Недоступность прокси",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "Alerting",
+      "execErrState": "Alerting",
+      "for": "0s",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "Прокси не готов по последней проверке мониторинга или за час зарегистрированы ошибки прокси. Ошибки внешнего API учитываются отдельно."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "(1 - min(last_over_time(zont_proxy_ready{environment=\"${environment}\"}[2h]) and ignoring (operation) (last_over_time(zont_cloud_job_observed_timestamp_seconds{environment=\"${environment}\",operation=\"monitoring\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_cloud_job_observed_timestamp_seconds{environment=\"${environment}\",operation=\"monitoring\"}[2h]))))) + (sum(increase(zont_proxy_failures_total{environment=\"${environment}\"}[1h])) or vector(0))",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-budget",
+      "title": "M6: месячный бюджет токенов",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "OK",
+      "execErrState": "Alerting",
+      "for": "5m",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "Расход и резерв токенов достигли настроенной доли месячного бюджета (по умолчанию 80%). Это не денежный бюджет облака."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "(max(last_over_time(zont_monthly_ai_tokens{environment=\"${environment}\"}[2h])) + max(last_over_time(zont_monthly_ai_reserved_tokens{environment=\"${environment}\"}[2h]))) / (max(last_over_time(zont_monthly_ai_token_budget{environment=\"${environment}\"}[2h])) > 0)",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0.8
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-monitoring",
+      "title": "M6: Нет успешной проверки мониторинга",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "Alerting",
+      "execErrState": "Alerting",
+      "for": "5m",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "Ежечасная проверка мониторинга отсутствует два часа или завершилась ошибкой. Проверить также отдельное правило чтения состояния."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "(1 - min(last_over_time(zont_cloud_job_success{environment=\"${environment}\",operation=\"monitoring\"}[2h]) and (last_over_time(zont_cloud_job_observed_timestamp_seconds{environment=\"${environment}\",operation=\"monitoring\"}[2h]) == on (environment, operation) group_left max by (environment, operation) (last_over_time(zont_cloud_job_observed_timestamp_seconds{environment=\"${environment}\",operation=\"monitoring\"}[2h]))))) or vector(1)",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-snapshot",
+      "title": "M6: Ошибка чтения состояния",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "Alerting",
+      "execErrState": "Alerting",
+      "for": "5m",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "Чтение состояния не удалось либо отсутствует два часа. Успешный HTTP-вызов не заменяет эту проверку."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "(1 - min(last_over_time(zont_snapshot_success{environment=\"${environment}\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"${environment}\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"${environment}\"}[2h]))))) or vector(1)",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-model-overdue",
+      "title": "M6: Просрочен пересмотр модели",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "OK",
+      "execErrState": "Alerting",
+      "for": "5m",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "Пересмотр модели просрочен более чем на сутки; при отключённом обслуживании оставить правило приостановленным."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "(time() - max(last_over_time(zont_model_review_next_due_timestamp_seconds{environment=\"${environment}\"}[2h]))) and (max(last_over_time(zont_model_review_initialized{environment=\"${environment}\"}[2h])) == 1)",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    86400
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-ydb",
+      "title": "M6: Ошибки хранилища",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "OK",
+      "execErrState": "Alerting",
+      "for": "5m",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "За последний час зарегистрированы ошибки YDB. Проверить результат заданий и чтения состояния."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "sum(increase(zont_ydb_errors_total{environment=\"${environment}\"}[1h]))",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "uid": "zont-m6-${environment}-publication",
+      "title": "M6: Ошибки публикации",
+      "folderUID": "zont-m6",
+      "ruleGroup": "m6-${environment}",
+      "orgId": 1,
+      "condition": "B",
+      "noDataState": "OK",
+      "execErrState": "Alerting",
+      "for": "5m",
+      "isPaused": true,
+      "labels": {
+        "project": "zont-m6",
+        "environment": "${environment}"
+      },
+      "annotations": {
+        "summary": "За последний час зарегистрированы ошибки публикации отчёта."
+      },
+      "data": [
+        {
+          "refId": "A",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 172800,
+            "to": 0
+          },
+          "datasourceUid": "${datasource_uid}",
+          "model": {
+            "expr": "sum(increase(zont_publication_failures_total{environment=\"${environment}\"}[1h]))",
+            "instant": true,
+            "range": false,
+            "refId": "A",
+            "intervalMs": 60000,
+            "maxDataPoints": 1440
+          }
+        },
+        {
+          "refId": "B",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0
+                  ]
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                },
+                "query": {
+                  "params": [
+                    "B"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

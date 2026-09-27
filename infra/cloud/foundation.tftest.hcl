@@ -368,6 +368,35 @@ run "monitored_maintenance_timer" {
   }
 }
 
+run "monitoring_is_private_and_opt_in" {
+  command = plan
+  variables {
+    enable_monitoring_timer = true
+  }
+  override_resource {
+    target          = yandex_serverless_container.probe
+    override_during = plan
+    values = {
+      id = "probe-container"
+    }
+  }
+  override_resource {
+    target          = yandex_serverless_container.application
+    override_during = plan
+    values = {
+      id = "application-container"
+    }
+  }
+  assert {
+    condition     = length(yandex_function_trigger.monitoring) == 1 && yandex_function_trigger.monitoring[0].container[0].path == "/internal/monitoring" && yandex_function_trigger.monitoring[0].timer[0].cron_expression == "0 * * * ? *"
+    error_message = "Monitoring must be hourly and use only the private application endpoint."
+  }
+  assert {
+    condition     = !contains(keys(yamldecode(yandex_api_gateway.probe.spec).paths), "/internal/monitoring")
+    error_message = "The monitoring timer endpoint must not be exposed by the public gateway."
+  }
+}
+
 run "attached_domain_sets_public_origin" {
   command = plan
   variables {

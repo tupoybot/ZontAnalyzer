@@ -1,0 +1,1027 @@
+{
+  "uid": "zont-m6-overview",
+  "title": "ZontAnalyzer — M6",
+  "tags": [
+    "zont-m6"
+  ],
+  "schemaVersion": 39,
+  "version": 0,
+  "editable": true,
+  "refresh": "1m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Метрики",
+        "type": "datasource",
+        "query": "prometheus"
+      },
+      {
+        "name": "environment",
+        "label": "Окружение",
+        "type": "custom",
+        "query": "dev,pilot",
+        "current": {
+          "text": "dev",
+          "value": "dev"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Результат синхронизации (1 — успех)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min(last_over_time(zont_sync_success{environment=\"$environment\"}[48h]) and (last_over_time(zont_sync_observed_timestamp_seconds{environment=\"$environment\"}[48h]) == on (environment) group_left max by (environment) (last_over_time(zont_sync_observed_timestamp_seconds{environment=\"$environment\"}[48h]))))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "title": "Возраст последней телеметрии",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - max(last_over_time(zont_telemetry_timestamp_seconds{environment=\"$environment\"}[48h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "title": "Отставание синхронизации",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(last_over_time(zont_sync_lag_seconds{environment=\"$environment\"}[48h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "title": "Длительность операций",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_cloud_job_duration_seconds{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "title": "Ошибки и таймауты вызовов за час",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (operation, outcome) (increase(zont_invocations_total{environment=\"$environment\",outcome!=\"success\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "title": "Вызовы контейнера за час",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (operation) (increase(zont_invocations_total{environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 7,
+      "title": "Вызовы и ошибки OpenAI за час",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (__name__) (increase({__name__=~\"zont_openai_(calls|failures)_total\",environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 8,
+      "title": "Токены OpenAI за час",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (increase(zont_openai_tokens_total{environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 9,
+      "title": "Ошибки хранилища и публикации за час",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (__name__) (increase({__name__=~\"zont_(ydb_errors|publication_failures)_total\",environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 10,
+      "title": "Трафик внешних API за час",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (destination, direction) (increase(zont_egress_bytes_total{environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 11,
+      "title": "Отказы прокси и внешних API за час",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (__name__, destination) (increase({__name__=~\"zont_(proxy_failures|upstream_failures)_total\",environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 12,
+      "title": "Запреты и лимиты исходящего трафика за час",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (__name__) (increase({__name__=~\"zont_egress_(denials|limit)_total\",environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 13,
+      "title": "Разрешён прямой обход прокси (должен быть 0)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(last_over_time(zont_direct_fallback_allowed{environment=\"$environment\"}[2h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 14,
+      "title": "Результаты заданий",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min by (operation) (last_over_time(zont_cloud_job_success{environment=\"$environment\"}[2h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 15,
+      "title": "Срок следующего пересмотра модели",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_model_review_next_due_timestamp_seconds{environment=\"$environment\"} * 1000",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 16,
+      "title": "Последний успешный пересмотр модели",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_model_review_last_success_timestamp_seconds{environment=\"$environment\"} * 1000",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 17,
+      "title": "Попытки пересмотра модели",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 64,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_model_review_attempts{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 18,
+      "title": "Ошибка пересмотра модели",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 64,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_model_review_error{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 19,
+      "title": "Предложения по моделям",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_model_review_proposals{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 20,
+      "title": "Расход токенов за месяц",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 72,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_monthly_ai_tokens{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 21,
+      "title": "Месячный бюджет токенов",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 80,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_monthly_ai_token_budget{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 22,
+      "title": "Результат чтения состояния",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 80,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_snapshot_success{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 23,
+      "title": "Зарезервированные токены за месяц",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 88,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_monthly_ai_reserved_tokens{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{component}} {{quality}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 24,
+      "title": "Пересмотр модели настроен",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 88,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_model_review_initialized{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{component}} {{quality}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 25,
+      "title": "Непрерывная работа по последнему отчёту",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 96,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_reliability_uptime_seconds{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{component}} {{quality}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 26,
+      "title": "Качество доказательств непрерывной работы",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 96,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_reliability_evidence{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{component}} {{quality}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 27,
+      "title": "Время формирования последнего отчёта",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 104,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_report_generated_timestamp_seconds{environment=\"$environment\"} * 1000",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{component}} {{quality}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 28,
+      "title": "Наличие телеметрии (1 — есть)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 104,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_telemetry_present{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 29,
+      "title": "Ежечасная проверка мониторинга",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 112,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_cloud_job_success{environment=\"$environment\",operation=\"monitoring\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 30,
+      "title": "Готовность прокси (1 — готов)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 112,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_proxy_ready{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    }
+  ]
+}

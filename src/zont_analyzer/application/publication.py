@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from zont_analyzer.application.pilot import atomic_write_text as atomic_write_text
 from zont_analyzer.application.pilot import reports_directory
 from zont_analyzer.domain import Report
+from zont_analyzer.observability import observe, span
 from zont_analyzer.reports import render_html as render_html
 from zont_analyzer.reports.chart_data import cached_chart_data as cached_chart_data
 
@@ -36,6 +37,18 @@ def _write_changed(path: Path, content: str) -> None:
 
 
 def publish_reports(
+    runtime: Runtime, *, now: datetime | None = None, batch_size: int = 8, rebuild: bool = False,
+) -> dict[str, Any]:
+    """Publish a bounded batch and record terminal publication failures."""
+    try:
+        with span("zont_publication"):
+            return _publish_reports(runtime, now=now, batch_size=batch_size, rebuild=rebuild)
+    except Exception:
+        observe("zont_publication_failures_total")
+        raise
+
+
+def _publish_reports(
     runtime: Runtime, *, now: datetime | None = None, batch_size: int = 8, rebuild: bool = False,
 ) -> dict[str, Any]:
     """Commit complete artifacts before advertising URLs, with serialized writers.
@@ -65,10 +78,19 @@ def publish_reports(
 
 
 def publish_report(runtime: Runtime, report_id: str, *, now: datetime | None = None) -> dict[str, Any]:
+    try:
+        with span("zont_publication"):
+            return _publish_report(runtime, report_id, now=now)
+    except Exception:
+        observe("zont_publication_failures_total")
+        raise
+
+
+def _publish_report(runtime: Runtime, report_id: str, *, now: datetime | None = None) -> dict[str, Any]:
     """Refresh one already stored report without walking or recalculating the archive."""
     if os.environ.get("CLOUD_PUBLICATION_BUCKET"):
         # The stored report change is already in the durable publication journal.
-        return publish_reports(runtime, now=now)
+        return _publish_reports(runtime, now=now)
     checked_at = now or datetime.now(UTC)
     output_dir = reports_directory(runtime)
     output_dir.mkdir(parents=True, exist_ok=True)
