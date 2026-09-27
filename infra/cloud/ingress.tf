@@ -22,7 +22,7 @@ resource "yandex_api_gateway" "probe" {
           "x-yc-apigateway-authorizer" = {
             type            = "jwt"
             jwksUri         = "https://auth.yandex.cloud/oauth/jwks/keys"
-            identitySource  = { in = "cookie", name = "__Host-zont_oidc" }
+            identitySource  = { in = "header", name = "Authorization", prefix = "Bearer " }
             issuers         = [var.identity.issuer]
             audiences       = [var.identity.client_id]
             requiredClaims  = ["sub", "exp", "iat"]
@@ -251,7 +251,6 @@ resource "yandex_api_gateway" "probe" {
   depends_on = [
     yandex_serverless_container_iam_binding.timer,
     yandex_serverless_container_iam_binding.application_invoker,
-    yandex_function_iam_binding.auth,
     yandex_storage_bucket_iam_binding.probe,
   ]
 }

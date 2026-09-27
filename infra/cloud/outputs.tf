@@ -59,8 +59,3 @@ output "application_revision_id" {
   value     = yandex_serverless_container.application.revision_id
   sensitive = true
 }
-
-output "auth_function_id" {
-  value     = var.identity == null ? null : yandex_function.auth[0].id
-  sensitive = true
-}

@@ -41,7 +41,7 @@ run "isolated_defaults" {
   command = plan
 
   assert {
-    condition     = var.identity == null && length(yandex_function.auth) == 0 && length(yandex_function_iam_binding.auth) == 0 && !contains(keys(yandex_serverless_container.application.image[0].environment), "CLOUD_OIDC_ISSUER")
+    condition     = var.identity == null && !contains(keys(yandex_serverless_container.application.image[0].environment), "CLOUD_OIDC_ISSUER")
     error_message = "Null identity must preserve the original isolated scope without an auth function or OIDC configuration."
   }
 
@@ -97,14 +97,9 @@ run "identity_protects_native_publication" {
   variables {
     attach_domain = true
     identity = {
-      client_id             = "test-oidc-client"
-      issuer                = "https://issuer.example/test-pool"
-      auth_service_account  = "test-auth-account"
-      client_secret_id      = "test-client-secret"
-      client_secret_version = "test-client-version"
-      transaction_secret_id = "test-transaction-secret"
-      transaction_version   = "test-transaction-version"
-      code_sha256           = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      client_id = "test-oidc-client"
+      issuer    = "https://auth.yandex.cloud"
+      mode      = "spa"
     }
   }
   override_resource {
@@ -117,23 +112,19 @@ run "identity_protects_native_publication" {
     override_during = plan
     values          = { id = "test-application" }
   }
-  override_resource {
-    target          = yandex_function.auth[0]
-    override_during = plan
-    values          = { id = "test-auth-function" }
-  }
 
   assert {
     condition = (
       yamldecode(yandex_api_gateway.probe.spec).components.securitySchemes.identityHub["x-yc-apigateway-authorizer"].type == "jwt" &&
-      yamldecode(yandex_api_gateway.probe.spec).components.securitySchemes.identityHub["x-yc-apigateway-authorizer"].identitySource.in == "cookie" &&
-      yamldecode(yandex_api_gateway.probe.spec).components.securitySchemes.identityHub["x-yc-apigateway-authorizer"].identitySource.name == "__Host-zont_oidc" &&
+      yamldecode(yandex_api_gateway.probe.spec).components.securitySchemes.identityHub["x-yc-apigateway-authorizer"].identitySource.in == "header" &&
+      yamldecode(yandex_api_gateway.probe.spec).components.securitySchemes.identityHub["x-yc-apigateway-authorizer"].identitySource.name == "Authorization" &&
+      yamldecode(yandex_api_gateway.probe.spec).components.securitySchemes.identityHub["x-yc-apigateway-authorizer"].identitySource.prefix == "Bearer " &&
       jsonencode(yamldecode(yandex_api_gateway.probe.spec).components.securitySchemes.identityHub["x-yc-apigateway-authorizer"].issuers) == jsonencode([var.identity.issuer]) &&
       jsonencode(yamldecode(yandex_api_gateway.probe.spec).components.securitySchemes.identityHub["x-yc-apigateway-authorizer"].audiences) == jsonencode([var.identity.client_id]) &&
       yamldecode(yandex_api_gateway.probe.spec).components.securitySchemes.identityHub["x-yc-apigateway-authorizer"].jwksUri == "https://auth.yandex.cloud/oauth/jwks/keys" &&
       toset(yamldecode(yandex_api_gateway.probe.spec).components.securitySchemes.identityHub["x-yc-apigateway-authorizer"].requiredClaims) == toset(["sub", "exp", "iat"])
     )
-    error_message = "The gateway must verify the host-only OIDC cookie against exactly the configured issuer and audience."
+    error_message = "The gateway must verify the OIDC bearer token against exactly the configured issuer and audience."
   }
   assert {
     condition = alltrue([for path, object in {
@@ -165,51 +156,28 @@ run "identity_protects_native_publication" {
     error_message = "Every application API method must carry the same JWT perimeter as private report content."
   }
   assert {
-    condition = alltrue([for path, method in { "/auth/login" = "get", "/auth/callback" = "get", "/auth/logout" = "post" } : (
-      yamldecode(yandex_api_gateway.probe.spec).paths[path][method]["x-yc-apigateway-integration"].type == "cloud_functions" &&
-      yamldecode(yandex_api_gateway.probe.spec).paths[path][method]["x-yc-apigateway-integration"].function_id == "test-auth-function" &&
-      yamldecode(yandex_api_gateway.probe.spec).paths[path][method]["x-yc-apigateway-integration"].service_account_id == var.timer_service_account_id
+    condition = alltrue([for path in ["/auth/login", "/auth/callback", "/auth/logout", "/login"] : (
+      yamldecode(yandex_api_gateway.probe.spec).paths[path].get["x-yc-apigateway-integration"].type == "dummy" &&
+      yamldecode(yandex_api_gateway.probe.spec).paths[path].get["x-yc-apigateway-integration"].content["*"] == local.site_shell
     )])
-    error_message = "Authentication routes must invoke the dedicated private function through the gateway account."
+    error_message = "Login and callback must execute solely in the browser."
   }
   assert {
     condition = (
-      yandex_function.auth[0].folder_id == var.folder_id &&
-      yandex_function.auth[0].service_account_id == var.identity.auth_service_account &&
-      yandex_function.auth[0].user_hash == var.identity.code_sha256 &&
-      yandex_function_iam_binding.auth[0].function_id == "test-auth-function" &&
-      yandex_function_iam_binding.auth[0].role == "functions.functionInvoker" &&
-      toset(yandex_function_iam_binding.auth[0].members) == toset(["serviceAccount:${var.timer_service_account_id}"]) &&
-      length(yandex_function.auth[0].secrets) == 2 &&
-      toset([for secret in yandex_function.auth[0].secrets : secret.key]) == toset(["client_secret", "transaction_key"]) &&
-      alltrue([for secret in yandex_function.auth[0].secrets : (
-        secret.key == "client_secret" ? (secret.id == var.identity.client_secret_id && secret.version_id == var.identity.client_secret_version && secret.environment_variable == "OIDC_CLIENT_SECRET") :
-        secret.key == "transaction_key" && secret.id == var.identity.transaction_secret_id && secret.version_id == var.identity.transaction_version && secret.environment_variable == "OIDC_TRANSACTION_KEY"
-      )])
-    )
-    error_message = "The auth function must use its own account and pinned secrets, with gateway-only invocation."
-  }
-  assert {
-    condition = (
-      yandex_function.auth[0].environment.OIDC_PUBLIC_ORIGIN == "https://${var.test_domain}" &&
-      yandex_function.auth[0].environment.OIDC_ISSUER == var.identity.issuer &&
-      yandex_function.auth[0].environment.OIDC_CLIENT_ID == var.identity.client_id &&
-      !contains(keys(yandex_function.auth[0].environment), "OIDC_CLIENT_SECRET") &&
-      !contains(keys(yandex_function.auth[0].environment), "OIDC_TRANSACTION_KEY") &&
       yandex_serverless_container.application.image[0].environment.CLOUD_OIDC_ISSUER == var.identity.issuer &&
       yandex_serverless_container.application.image[0].environment.CLOUD_OIDC_AUDIENCE == var.identity.client_id &&
       yandex_serverless_container.application.image[0].environment.CLOUD_OIDC_JWKS_URI == "https://auth.yandex.cloud/oauth/jwks/keys"
     )
-    error_message = "App and function must agree on OIDC identity without exposing auth secrets in ordinary environment variables."
+    error_message = "The application must independently verify the same OIDC identity."
   }
   assert {
     condition = (
       !strcontains(lower(yandex_api_gateway.probe.spec), "basic") &&
       !strcontains(lower(yandex_api_gateway.probe.spec), "www-authenticate") &&
-      yamldecode(yandex_api_gateway.probe.spec).paths["/login"].get["x-yc-apigateway-integration"].http_code == 303 &&
-      yamldecode(yandex_api_gateway.probe.spec).paths["/login"].get["x-yc-apigateway-integration"].http_headers.Location == "/auth/login"
+      !strcontains(yandex_api_gateway.probe.spec, "cloud_functions") &&
+      !strcontains(yandex_api_gateway.probe.spec, "__Host-zont_oidc")
     )
-    error_message = "Browser content must use OIDC login redirects and must never emit a Basic challenge."
+    error_message = "Browser content must not invoke functions or accept legacy cookies/Basic."
   }
 }
 

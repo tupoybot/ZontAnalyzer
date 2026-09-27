@@ -150,16 +150,15 @@ variable "enable_maintenance_timer" {
 }
 
 variable "identity" {
-  description = "Private Identity Hub integration. Null retains the isolated pre-OIDC probe configuration."
+  description = "Private Identity Hub SPA integration. Null is for isolated pre-OIDC probes only."
   type = object({
-    client_id             = string
-    issuer                = string
-    auth_service_account  = string
-    client_secret_id      = string
-    client_secret_version = string
-    transaction_secret_id = string
-    transaction_version   = string
-    code_sha256           = string
+    client_id = string
+    issuer    = string
+    mode      = string
   })
   default = null
+  validation {
+    condition     = var.identity == null ? true : var.identity.mode == "spa" && var.identity.issuer == "https://auth.yandex.cloud" && can(regex("^[a-zA-Z0-9_-]+$", var.identity.client_id))
+    error_message = "Use the public SPA client and official Identity Hub issuer."
+  }
 }

@@ -29,12 +29,8 @@ if [ "$ACTION" = plan ] || [ "$ACTION" = plan-foundation ]; then
         [ -f "$ROOT/infra/cloud/$(basename "$file")" ] || rm -- "$file"
     done
     cp "$ROOT"/infra/cloud/*.tf "$ROOT/infra/cloud/.terraform.lock.hcl" "$PRIVATE/cloud-work/"
-    mkdir -p "$PRIVATE/static" "$PRIVATE/auth"
+    mkdir -p "$PRIVATE/static"
     cp "$ROOT/infra/static/site.html" "$PRIVATE/static/site.html"
-    docker run --rm --network none --user "$(id -u):$(id -g)" \
-        --mount "type=bind,src=$ROOT/infra/auth,dst=/source,readonly" \
-        --mount "type=bind,src=$PRIVATE,dst=/private" \
-        "$TOOLS" python /source/package.py /source /private/auth/auth.zip /private/cloud-work/inputs.tfvars.json
 fi
 
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -70,7 +66,6 @@ docker run --rm --user "$(id -u):$(id -g)" \
       if [ "$M1_ACTION" = apply-foundation ]; then
         exit 0
       fi
-      python /scripts/bound_auth.py /private > /private/auth-scaling.log 2>&1
       python /scripts/bound_revision.py /private > /private/scaling.log 2>&1
       python /scripts/bound_revision.py /private application > /private/application_scaling.log 2>&1
       terraform plan -refresh-only -input=false -no-color -lock-timeout=30s \

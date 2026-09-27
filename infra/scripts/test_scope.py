@@ -79,14 +79,9 @@ class ScopeTest(unittest.TestCase):
             self.check()
 
     def enable_identity(self):
-        identity = {
-            "client_id": "client", "issuer": "https://issuer.example/",
-            "auth_service_account": "auth", "client_secret_id": "client-secret",
-            "client_secret_version": "client-version", "transaction_secret_id": "transaction-secret",
-            "transaction_version": "transaction-version",
-        }
+        identity = {"client_id": "client", "issuer": "https://auth.yandex.cloud", "mode": "spa"}
         self.scope["allowed_environment_identity"] = {"dev": identity.copy()}
-        self.inputs["identity"] = {**identity, "code_sha256": "a" * 64}
+        self.inputs["identity"] = identity.copy()
 
     def test_identity_disabled_preserves_existing_scope(self):
         self.inputs["identity"] = None
@@ -138,27 +133,33 @@ class ScopeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.check()
 
-    def test_allowlist_cannot_reuse_existing_accounts_or_combine_secrets(self):
-        for key, value in (("auth_service_account", "runtime"), ("auth_service_account", "timer"),
-                           ("transaction_secret_id", "client-secret")):
-            with self.subTest(key=key, value=value):
-                self.enable_identity()
-                self.inputs["identity"][key] = value
-                self.scope["allowed_environment_identity"]["dev"][key] = value
-                with self.assertRaises(ValueError):
-                    self.check()
-
-    def test_identity_artifact_and_shape_validation(self):
-        for digest in (None, "latest", "a" * 63, "a" * 65, "g" * 64, "a" * 64 + "\n"):
-            with self.subTest(digest=digest):
-                self.enable_identity()
-                self.inputs["identity"]["code_sha256"] = digest
-                with self.assertRaises(ValueError):
-                    self.check()
-        for identity in (False, "identity", []):
-            self.inputs["identity"] = identity
+    def test_retirement_requires_exact_function_environment_and_spa(self):
+        self.enable_identity()
+        self.scope["allowed_auth_function_retirement"] = {"dev": "old-function"}
+        plan = {"format_version": "1.2", "variables": {
+            key: {"value": value} for key, value in self.inputs.items()
+        }, "resource_changes": [{"address": "yandex_function.auth[0]", "change": {
+            "actions": ["delete"], "before": {"id": "old-function"}}}]}
+        self.check(plan)
+        for allowed in ({}, {"pilot": "old-function"}, {"dev": "different"}):
+            self.scope["allowed_auth_function_retirement"] = allowed
             with self.assertRaises(ValueError):
-                self.check()
+                self.check(plan)
+        self.scope["allowed_auth_function_retirement"] = {"dev": "old-function"}
+        plan["resource_changes"][0]["change"]["actions"] = ["delete", "create"]
+        with self.assertRaises(ValueError):
+            self.check(plan)
+
+    def test_old_secret_configuration_and_wrong_provider_are_rejected(self):
+        self.enable_identity()
+        self.inputs["identity"]["client_secret_id"] = "secret"
+        with self.assertRaises(ValueError):
+            self.check()
+        self.enable_identity()
+        self.inputs["identity"]["issuer"] = "https://other.example"
+        self.scope["allowed_environment_identity"]["dev"]["issuer"] = "https://other.example"
+        with self.assertRaises(ValueError):
+            self.check()
 
 
 if __name__ == "__main__":

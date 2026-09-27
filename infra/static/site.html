@@ -3,91 +3,284 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
   <title>Отчёты ZontAnalyzer</title>
   <style>
-    body{font:16px/1.5 system-ui,sans-serif;max-width:48rem;margin:10vh auto;padding:0 1rem;color:#17212b}
-    [role=status]{padding:1rem;background:#f2f5f8;border-radius:.5rem;overflow-wrap:anywhere}
+    body{font:16px/1.5 system-ui,sans-serif;margin:0;color:#17212b}
+    .site-front{max-width:48rem;margin:10vh auto;padding:0 1rem}
+    [role=status],[role=alert]{padding:1rem;background:#f2f5f8;border-radius:.5rem}
+    button{font:inherit;cursor:pointer}
   </style>
 </head>
 <body>
-  <main>
-    <h1>Отчёты ZontAnalyzer</h1>
-    <p id="site-status" role="status" aria-live="polite">Загрузка отчёта…</p>
-  </main>
+  <main class="site-front"><h1>Отчёты ZontAnalyzer</h1><p role="status">Подготовка входа…</p></main>
+  <script id="zont-oidc-config" type="application/json">__ZONT_OIDC_CONFIG__</script>
   <script>
   (() => {
     "use strict";
-    const status = document.querySelector("#site-status");
-    const pathPattern = /^(?:daily|weekly|monthly|seasonal)\/\d{4}-\d{2}-\d{2}\.html$/;
-    const reportKeyPattern = /^publication\/reports\/[a-f0-9]{64}\.html$/;
-    const jsonKeyPattern = /^publication\/reports\/[a-f0-9]{64}\.json$/;
-    const latestKeyPattern = /^publication\/latest\/[a-f0-9]{64}\.html$/;
-    const manifestKeyPattern = /^publication\/manifests\/[a-f0-9]{64}\.json$/;
-    const isKey = (value, pattern) => typeof value === "string" && pattern.test(value);
-    const errorText = value => {
-      status.textContent = value;
-      status.setAttribute("role", "alert");
+    // Only a public client ID and the fixed provider issuer are configuration.
+    let config;
+    try { config = JSON.parse(document.querySelector("#zont-oidc-config").textContent); } catch (_) { config = {}; }
+    const issuer = "https://auth.yandex.cloud";
+    const nativeFetch = window.fetch.bind(window);
+    const transactionKey = "zont.oidc.transaction";
+    const continueKey = "zont.oidc.continue";
+    const redirectUri = location.origin + "/auth/callback";
+    const maxAge = 600000;
+    const reportPath = /^(?:daily|weekly|monthly|seasonal)\/\d{4}-\d{2}-\d{2}\.(?:html|json)$/;
+    const isKey = (value, kind, extension) => typeof value === "string"
+      && new RegExp("^publication/" + kind + "/[a-f0-9]{64}\\." + extension + "$").test(value);
+    const normalize = path => path.replace(/^\/za(?=\/|$)/, "") || "/";
+    const isReportPath = path => ["/", "/index.html", "/latest.html"].includes(normalize(path))
+      || reportPath.test(normalize(path).slice(1));
+    const protectedPath = path => {
+      const normalized = normalize(path);
+      return normalized === "/reports.json" || normalized.startsWith("/api/")
+        || normalized.startsWith("/objects/publication/");
     };
-    const login = () => { window.location.replace("/auth/login"); };
-    const fetchJson = async url => {
-      const response = await fetch(url, {credentials: "same-origin", cache: "no-store", headers: {Accept: "application/json"}});
-      if (response.status === 401 || response.status === 403) { login(); return null; }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const bytes = value => Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
+    const base64url = value => btoa(String.fromCharCode(...new Uint8Array(value))).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+    const random = () => base64url(crypto.getRandomValues(new Uint8Array(32)));
+    let token = "";
+    let expiresAt = 0;
+    let expiryTimer;
+    let generation = 0;
+    let entries = new Map();
+
+    const forget = () => {
+      token = "";
+      expiresAt = 0;
+      clearTimeout(expiryTimer);
+      generation++;
+      entries.clear();
+      sessionStorage.removeItem(transactionKey);
+      sessionStorage.removeItem(continueKey);
+    };
+    const front = message => {
+      // Replaces all report content on logout or authentication failure.
+      document.body.replaceChildren();
+      const main = document.createElement("main");
+      main.className = "site-front";
+      const title = document.createElement("h1");
+      title.textContent = "Отчёты ZontAnalyzer";
+      const status = document.createElement("p");
+      status.id = "site-status";
+      status.setAttribute("role", "status");
+      status.textContent = message;
+      const button = document.createElement("button");
+      button.id = "site-login";
+      button.textContent = "Войти через Identity Hub";
+      button.addEventListener("click", () => {
+        button.disabled = true;
+        login(true).catch(() => { forget(); front("Вход недоступен. Попробуйте ещё раз."); });
+      });
+      main.append(title, status, button);
+      document.body.append(main);
+    };
+    const authFailure = () => {
+      forget();
+      front("Сессия завершилась или доступ не разрешён. Войдите снова.");
+    };
+    const login = async (explicit = false) => {
+      if (config.issuer !== issuer || typeof config.clientId !== "string" || !/^[a-zA-Z0-9_-]+$/.test(config.clientId)) throw Error("Configuration");
+      const verifier = random();
+      const transaction = {state:random(), nonce:random(), verifier, created:Date.now(),
+        path:isReportPath(location.pathname) ? location.pathname + location.search + location.hash : "/"};
+      const challenge = base64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+      sessionStorage.setItem(transactionKey, JSON.stringify(transaction));
+      const target = new URL(issuer + "/oauth/authorize");
+      target.search = new URLSearchParams({client_id:config.clientId, redirect_uri:redirectUri,
+        response_type:"code", scope:"openid", state:transaction.state, nonce:transaction.nonce,
+        code_challenge:challenge, code_challenge_method:"S256"});
+      if (explicit) target.searchParams.set("prompt", "login");
+      location.assign(target.href);
+    };
+    const providerJson = async (path, options = {}) => {
+      const response = await nativeFetch(issuer + path, {...options, credentials:"omit", redirect:"error",
+        cache:"no-store", referrerPolicy:"no-referrer", signal:AbortSignal.timeout(15000)});
+      if (!response.ok) throw Error("Provider");
+      const limit = path === "/oauth/jwks/keys" ? 65536 : 262144;
+      const reader = response.body.getReader();
+      const chunks = [];
+      let size = 0;
+      for (;;) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > limit) { await reader.cancel(); throw Error("Provider response too large"); }
+        chunks.push(value);
+      }
+      const data = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) { data.set(chunk, offset); offset += chunk.byteLength; }
+      return JSON.parse(new TextDecoder().decode(data));
+    };
+    const validate = async (jwt, nonce) => {
+      if (typeof jwt !== "string" || jwt.length > 8192) throw Error("Token");
+      const parts = jwt.split(".");
+      if (parts.length !== 3 || parts.some(part => !/^[A-Za-z0-9_-]+$/.test(part))) throw Error("JWT");
+      const header = JSON.parse(new TextDecoder().decode(bytes(parts[0])));
+      const claims = JSON.parse(new TextDecoder().decode(bytes(parts[1])));
+      if (header.alg !== "RS256" || typeof header.kid !== "string" || !header.kid || header.crit) throw Error("Algorithm");
+      const jwks = await providerJson("/oauth/jwks/keys");
+      if (!Array.isArray(jwks.keys) || jwks.keys.length > 128) throw Error("Keys");
+      const keys = jwks.keys.filter(key => key.kid === header.kid && key.kty === "RSA"
+        && (!key.alg || key.alg === "RS256") && (!key.use || key.use === "sig")
+        && (!key.key_ops || key.key_ops.includes("verify")));
+      if (keys.length !== 1) throw Error("Key");
+      const key = await crypto.subtle.importKey("jwk", keys[0], {name:"RSASSA-PKCS1-v1_5", hash:"SHA-256"}, false, ["verify"]);
+      if (!await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, bytes(parts[2]), new TextEncoder().encode(parts[0] + "." + parts[1]))) throw Error("Signature");
+      const now = Date.now() / 1000;
+      const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+      if (claims.iss !== issuer || !audiences.includes(config.clientId)
+          || (audiences.length > 1 && claims.azp !== config.clientId)
+          || (claims.azp !== undefined && claims.azp !== config.clientId)
+          || claims.nonce !== nonce || typeof claims.sub !== "string" || !claims.sub
+          || !Number.isFinite(claims.exp) || !Number.isFinite(claims.iat)
+          || claims.exp <= now || claims.iat > now + 60 || claims.exp <= claims.iat
+          || (claims.nbf !== undefined && (!Number.isFinite(claims.nbf) || claims.nbf > now + 60))) throw Error("Claims");
+      return claims.exp * 1000;
+    };
+    const callback = async () => {
+      const params = new URLSearchParams(location.search);
+      const raw = sessionStorage.getItem(transactionKey);
+      // Consume the transaction and remove credentials from the address bar before any I/O.
+      sessionStorage.removeItem(transactionKey);
+      history.replaceState(null, "", "/");
+      const transaction = JSON.parse(raw || "null");
+      if (!transaction || !Number.isFinite(transaction.created) || Date.now() - transaction.created > maxAge
+          || transaction.created > Date.now() || params.getAll("state").length !== 1
+          || params.get("state") !== transaction.state || params.has("error")
+          || params.getAll("code").length !== 1 || !params.get("code")
+          || typeof transaction.verifier !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(transaction.verifier)
+          || typeof transaction.nonce !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(transaction.nonce)) throw Error("Transaction");
+      const destination = new URL(transaction.path, location.origin);
+      if (destination.origin !== location.origin || !isReportPath(destination.pathname)) throw Error("Return path");
+      const response = await providerJson("/oauth/token", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"},
+        body:new URLSearchParams({grant_type:"authorization_code", client_id:config.clientId, code:params.get("code"),
+          redirect_uri:redirectUri, code_verifier:transaction.verifier})});
+      expiresAt = await validate(response.id_token, transaction.nonce);
+      token = response.id_token;
+      expiryTimer = setTimeout(authFailure, Math.min(expiresAt - Date.now(), 2147483647));
+      sessionStorage.setItem(continueKey, "1");
+      history.replaceState(null, "", destination.pathname + destination.search + destination.hash);
+    };
+    // Existing report forms keep using fetch. Only protected, same-origin routes receive the ID token.
+    window.fetch = async (input, options) => {
+      const request = new Request(input, options);
+      const url = new URL(request.url);
+      if (url.origin !== location.origin || !protectedPath(url.pathname)) return nativeFetch(request);
+      if (!token || Date.now() >= expiresAt) { authFailure(); throw Error("Session expired"); }
+      const headers = new Headers(request.headers);
+      headers.set("Authorization", "Bearer " + token);
+      const epoch = generation;
+      const response = await nativeFetch(new Request(request, {headers, credentials:"omit", redirect:"error",
+        cache:"no-store", referrerPolicy:"no-referrer"}));
+      if (epoch !== generation) throw Error("Session changed");
+      if (response.status === 401 || response.status === 403) { authFailure(); throw Error("Access denied"); }
+      return response;
+    };
+    const objectUrl = key => "/objects/" + key;
+    const json = async url => {
+      const response = await fetch(url);
+      if (!response.ok) throw Error("Report index");
       return response.json();
     };
-    const objectUrl = key => "/objects/" + key.split("/").map(encodeURIComponent).join("/");
-    const entryIsSafe = entry => entry && typeof entry === "object"
-      && pathPattern.test(entry.href)
-      && isKey(entry.html_key, reportKeyPattern)
-      && isKey(entry.json_key, jsonKeyPattern);
-    const shellPath = location.pathname.replace(/^\/za(?=\/|$)/, "") || "/";
-
+    const download = async (key, filename = normalize(location.pathname).split("/").pop()) => {
+      const epoch = generation;
+      const response = await fetch(objectUrl(key));
+      if (!response.ok || !(response.headers.get("content-type") || "").startsWith("application/json")) throw Error("JSON report");
+      const blob = await response.blob();
+      if (epoch !== generation || !token) return;
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+    const account = () => {
+      const nav = document.createElement("nav");
+      nav.setAttribute("aria-label", "Учётная запись");
+      nav.style.cssText = "text-align:right;padding:.5rem 1rem;background:#f2f5f8";
+      const button = document.createElement("button");
+      button.id = "site-logout";
+      button.textContent = "Выйти";
+      button.onclick = () => { forget(); front("Вы вышли из приложения. Для продолжения войдите снова."); };
+      nav.append(button);
+      document.body.prepend(nav);
+    };
+    const render = async () => {
+      const epoch = generation;
+      const index = await json("/reports.json");
+      if (!index || index.version !== 1 || !isKey(index.manifest_key, "manifests", "json")
+          || !(index.latest_key === "" || isKey(index.latest_key, "latest", "html")) || !Array.isArray(index.reports)) throw Error("Index");
+      entries = new Map();
+      for (const entry of index.reports) {
+        if (!entry || typeof entry.href !== "string" || !reportPath.test(entry.href) || !entry.href.endsWith(".html")
+            || !isKey(entry.html_key, "reports", "html") || !isKey(entry.json_key, "reports", "json") || entries.has(entry.href)) throw Error("Index entry");
+        entries.set(entry.href, entry);
+      }
+      const path = normalize(location.pathname);
+      const isJson = path.endsWith(".json");
+      let key;
+      if (["/", "/index.html", "/latest.html"].includes(path)) key = index.latest_key;
+      else {
+        const entry = entries.get(path.slice(1).replace(/\.json$/, ".html"));
+        if (!entry) throw Error("Missing report");
+        key = isJson ? entry.json_key : entry.html_key;
+      }
+      if (!key) throw Error("No report");
+      if (isJson) {
+        await download(key);
+        front("JSON-отчёт скачан.");
+        document.querySelector("#site-login").remove();
+        account();
+        return;
+      }
+      const response = await fetch(objectUrl(key));
+      if (!response.ok || !(response.headers.get("content-type") || "").toLowerCase().startsWith("text/html")) throw Error("HTML report");
+      const report = await response.text();
+      if (epoch !== generation || !token) return;
+      // Report scripts run at their original top-level path; fetch retains its private token closure.
+      document.open();
+      document.write(report);
+      document.close();
+      account();
+      document.addEventListener("click", event => {
+        const anchor = event.target.closest("a[href]");
+        if (!anchor || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || anchor.target || anchor.download) return;
+        const url = new URL(anchor.href);
+        if (url.origin !== location.origin || !isReportPath(url.pathname) || !url.pathname.endsWith(".json")) return;
+        event.preventDefault();
+        const entry = entries.get(normalize(url.pathname).slice(1).replace(/\.json$/, ".html"));
+        if (entry) download(entry.json_key, url.pathname.split("/").pop()).catch(reportFailure);
+      });
+    };
+    const reportFailure = () => {
+      if (!token) return;
+      front("Отчёт сейчас недоступен. Обновите страницу позже.");
+      document.querySelector("#site-login").remove();
+      account();
+    };
     (async () => {
+      let authenticated = false;
       try {
-        const index = await fetchJson("/reports.json");
-        if (!index) return;
-        if (!index || index.version !== 1 || !isKey(index.manifest_key, manifestKeyPattern)
-            || !(index.latest_key === "" || isKey(index.latest_key, latestKeyPattern)) || !Array.isArray(index.reports)) {
-          throw new Error("Неверный формат каталога отчётов.");
-        }
-        const entries = new Map();
-        for (const entry of index.reports) {
-          if (!entryIsSafe(entry) || entries.has(entry.href)) continue;
-          entries.set(entry.href, entry);
-        }
-        let key;
-        if (["/", "/index.html", "/latest.html"].includes(shellPath)) {
-          if (!isKey(index.latest_key, latestKeyPattern)) throw new Error("Последний отчёт пока не опубликован.");
-          key = index.latest_key;
-        } else {
-          const href = shellPath.startsWith("/") ? shellPath.slice(1) : "";
-          const entry = entries.get(href);
-          if (!entry) throw new Error("Такого опубликованного отчёта нет.");
-          key = entry.html_key;
-        }
-        const response = await fetch(objectUrl(key), {credentials: "same-origin", cache: "no-store"});
-        if (response.status === 401 || response.status === 403) { login(); return; }
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const type = response.headers.get("content-type") || "";
-        if (!type.toLowerCase().startsWith("text/html")) throw new Error("Сервер вернул не HTML-отчёт.");
-        const report = await response.text();
-        document.open();
-        document.write(report);
-        document.close();
-        const account = document.createElement("nav");
-        account.setAttribute("aria-label", "Учётная запись");
-        account.style.cssText = "text-align:right;padding:.5rem 1rem;background:#f2f5f8";
-        const logout = document.createElement("form");
-        logout.method = "post";
-        logout.action = "/auth/logout";
-        const button = document.createElement("button");
-        button.type = "submit";
-        button.textContent = "Выйти";
-        logout.append(button);
-        account.append(logout);
-        document.body.prepend(account);
-      } catch (_error) {
-        errorText("Отчёт сейчас недоступен. Обновите страницу позже.");
+        if (config.issuer !== issuer || typeof config.clientId !== "string" || !/^[a-zA-Z0-9_-]+$/.test(config.clientId)) throw Error("Configuration");
+        if (location.pathname === "/auth/logout") {
+          forget();
+          history.replaceState(null, "", "/");
+          front("Вы вышли из приложения. Для продолжения войдите снова.");
+        } else if (location.pathname === "/auth/callback") {
+          await callback();
+          authenticated = true;
+          await render();
+        } else if (sessionStorage.getItem(continueKey) === "1") {
+          await login();
+        } else front("Войдите, чтобы открыть отчёты и настройки.");
+      } catch (_) {
+        if (token) reportFailure();
+        else if (!authenticated) { forget(); front("Не удалось завершить вход. Попробуйте войти снова."); }
       }
     })();
   })();

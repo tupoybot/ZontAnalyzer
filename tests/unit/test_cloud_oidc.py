@@ -43,7 +43,7 @@ def _token(key: Any, *, claims: dict[str, Any] | None = None, kid: str = "first"
 
 def _headers(token: str) -> Message:
     headers = Message()
-    headers.add_header("Cookie", f"{auth.OIDC_COOKIE_NAME}={token}")
+    headers.add_header("Authorization", f"Bearer {token}")
     return headers
 
 
@@ -74,7 +74,7 @@ def test_oidc_configuration_is_all_or_none_and_pins_official_endpoints(monkeypat
             auth.OidcConfig(issuer, audience, jwks)
 
 
-def test_oidc_verifies_signature_claims_and_bounded_unambiguous_cookie(keys: tuple[Any, Any]) -> None:
+def test_oidc_verifies_signature_claims_and_bounded_unambiguous_bearer(keys: tuple[Any, Any]) -> None:
     first, second = keys
     requests = []
 
@@ -104,11 +104,35 @@ def test_oidc_verifies_signature_claims_and_bounded_unambiguous_cookie(keys: tup
     assert not verifier.authorized(_headers(jwt.encode(_claims(), "fixture-secret" * 4, algorithm="HS256",
                                                         headers={"kid": "first"})))
     duplicate = _headers(token)
-    duplicate.add_header("Cookie", f"{auth.OIDC_COOKIE_NAME}={token}")
+    duplicate.add_header("Authorization", f"Bearer {token}")
     assert not verifier.authorized(duplicate)
     assert not verifier.authorized(_headers("x" * (auth.MAX_OIDC_TOKEN_BYTES + 1)))
     assert not verifier.authorized(_headers("malformed.token"))
     assert len(requests) == 1
+
+
+def test_oidc_requires_single_bearer_header_without_cookie_fallback(keys: tuple[Any, Any]) -> None:
+    key = keys[0]
+    requests = []
+
+    def jwks(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"keys": [_jwk(key)]})
+
+    verifier = auth.OidcVerifier(CONFIG, transport=httpx.MockTransport(jwks))
+    token = _token(key)
+    for value in (None, "", "Bearer", "Bearer ", f"Basic {token}", f"Bearer  {token}",
+                  f"Bearer\t{token}", f" Bearer {token}", f"Bearer {token} ",
+                  f"Bearer {token}, Bearer {token}"):
+        headers = Message()
+        headers.add_header("Cookie", f"__Host-zont_oidc={token}")
+        if value is not None:
+            headers.add_header("Authorization", value)
+        assert not verifier.authorized(headers)
+    assert requests == []
+    headers = Message()
+    headers.add_header("Authorization", f"bEaReR {token}")
+    assert verifier.authorized(headers)
 
 
 def test_oidc_cache_bounds_fetches_rotates_and_never_uses_expired_keys(keys: tuple[Any, Any]) -> None:
@@ -242,12 +266,12 @@ def test_oidc_http_boundary_disables_legacy_auth_and_keeps_basic_operations(
     legacy_cookie = f"{auth.COOKIE_NAME}={auth.issue_session(server.config.authorization)}"
     basic = {"Authorization": server.config.authorization}
     for path in ("/", "/latest.html", "/reports.json", "/api/health", "/za/api/health"):
-        for headers in (basic, {"Cookie": legacy_cookie}, {}):
+        for headers in (basic, {"Cookie": legacy_cookie}, {"Cookie": f"__Host-zont_oidc={_token(keys[0])}"}, {}):
             status, response_headers, body = _request(server, "GET", path, headers)
             assert status == 401 and json.loads(body) == {"error": "unauthorized"}
             assert "WWW-Authenticate" not in response_headers and "Set-Cookie" not in response_headers
     assert calls == []
-    oidc = {"Cookie": f"{auth.OIDC_COOKIE_NAME}={_token(keys[0])}"}
+    oidc = {"Authorization": f"Bearer {_token(keys[0])}"}
     assert _request(server, "GET", "/latest.html", oidc)[0] == 200
     for path in ("/ready", "/diagnostics"):
         assert _request(server, "GET", path, oidc)[0] == 401
@@ -272,7 +296,7 @@ def test_oidc_mutations_require_explicit_same_origin_before_opening_database(
         return {"report_id": report_id, "status": "queued"}
 
     monkeypatch.setattr("zont_analyzer.cloud.user_jobs.enqueue_regeneration", enqueue)
-    headers = {"Cookie": f"{auth.OIDC_COOKIE_NAME}={_token(keys[0])}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {_token(keys[0])}", "Content-Type": "application/json"}
     for origin in ({}, {"Origin": "https://other.example"}, {"Origin": "null"},
                    {"Origin": "https://app.example", "Sec-Fetch-Site": "cross-site"}):
         assert _request(server, "POST", "/api/reports/daily-1/regenerate", {**headers, **origin}, b"{}")[0] == 403

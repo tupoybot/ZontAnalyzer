@@ -24,9 +24,7 @@ SESSION_SECONDS = 12 * 60 * 60
 MAX_COOKIE_BYTES = 4096
 MAX_TOKEN_BYTES = 512
 _TOKEN = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
-OIDC_COOKIE_NAME = "__Host-zont_oidc"
 MAX_OIDC_TOKEN_BYTES = 8192
-MAX_OIDC_COOKIE_BYTES = 16384
 MAX_JWKS_BYTES = 65536
 MAX_JWKS_KEYS = 128
 JWKS_CACHE_SECONDS = 300
@@ -61,19 +59,12 @@ class OidcConfig:
         return cls(str(values[0]), str(values[1]), str(values[2]))
 
 
-def _cookie_value(headers: Any, name: str, maximum: int) -> str | None:
-    cookie_headers = headers.get_all("Cookie", [])
-    if sum(len(value) for value in cookie_headers) > maximum:
+def _bearer_token(headers: Any) -> str | None:
+    values = headers.get_all("Authorization", [])
+    if len(values) != 1 or len(values[0]) > MAX_OIDC_TOKEN_BYTES + len("Bearer "):
         return None
-    values = []
-    for header in cookie_headers:
-        for field in header.split(";"):
-            key, separator, value = field.strip().partition("=")
-            if key == name:
-                if not separator:
-                    return None
-                values.append(value)
-    return values[0] if len(values) == 1 else None
+    scheme, separator, token = values[0].partition(" ")
+    return token if separator and scheme.lower() == "bearer" else None
 
 
 class OidcVerifier:
@@ -90,7 +81,7 @@ class OidcVerifier:
         self._next_fetch = 0.0
 
     def authorized(self, headers: Any) -> bool:
-        token = _cookie_value(headers, OIDC_COOKIE_NAME, MAX_OIDC_COOKIE_BYTES)
+        token = _bearer_token(headers)
         if not token or len(token) > MAX_OIDC_TOKEN_BYTES or _JWT.fullmatch(token) is None:
             return False
         try:
