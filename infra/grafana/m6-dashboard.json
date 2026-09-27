@@ -101,7 +101,7 @@
     },
     {
       "id": 3,
-      "title": "Отставание синхронизации",
+      "title": "Возраст полученных точек при сборе",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -116,7 +116,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(last_over_time(zont_sync_lag_seconds{environment=\"$environment\"}[48h]))",
+          "expr": "max(last_over_time(zont_telemetry_lag_seconds{environment=\"$environment\"}[48h]))",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -149,12 +149,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "zont_cloud_job_duration_seconds{environment=\"$environment\"}",
+          "expr": "{__name__=~\"zont_(cloud_job|analysis|report)_duration_seconds\",environment=\"$environment\"}",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+          "legendFormat": "{{__name__}} {{operation}}"
         }
       ],
       "fieldConfig": {
