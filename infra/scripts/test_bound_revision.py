@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from bound_revision import bounded, revision_request
+from bound_revision import APPLICATION_LIMITS, PROBE_LIMITS, bounded, revision_request
 
 
 class RevisionTest(unittest.TestCase):
@@ -51,7 +51,28 @@ class RevisionTest(unittest.TestCase):
     def test_limits_must_both_match(self):
         self.assertFalse(bounded(self.revision))
         self.assertFalse(bounded({"scalingPolicy": {"zoneInstancesLimit": 1}}))
-        self.assertTrue(bounded({"scalingPolicy": {"zoneInstancesLimit": 1, "zoneRequestsLimit": 1}}))
+        self.assertTrue(
+            bounded({"scalingPolicy": {"zoneInstancesLimit": 1, "zoneRequestsLimit": 1}}, PROBE_LIMITS)
+        )
+        self.assertTrue(
+            bounded({"scalingPolicy": {"zoneInstancesLimit": 1, "zoneRequestsLimit": 8}}, APPLICATION_LIMITS)
+        )
+        self.assertFalse(
+            bounded({"scalingPolicy": {"zoneInstancesLimit": 2, "zoneRequestsLimit": 8}}, APPLICATION_LIMITS)
+        )
+        self.assertFalse(
+            bounded({"scalingPolicy": {"zoneInstancesLimit": 1, "zoneRequestsLimit": 7}}, APPLICATION_LIMITS)
+        )
+
+    def test_application_queue_limit_does_not_change_runtime_caps(self):
+        self.revision["resources"] = {"memory": "536870912"}
+        self.revision["concurrency"] = 1
+        payload = revision_request(self.revision, "container", self.inputs, limits=APPLICATION_LIMITS)
+        self.assertEqual(payload["scalingPolicy"], {"zoneInstancesLimit": "1", "zoneRequestsLimit": "8"})
+        self.assertEqual(payload["resources"], {"memory": "536870912"})
+        self.assertEqual(payload["concurrency"], 1)
+        self.assertTrue(bounded(payload, APPLICATION_LIMITS))
+        self.assertFalse(bounded(payload, PROBE_LIMITS))
 
     def test_only_exact_legacy_mount_duplicate_is_removed(self):
         self.revision["storageMounts"] = [{"mountPointPath": "/publication", "bucketId": "bucket",

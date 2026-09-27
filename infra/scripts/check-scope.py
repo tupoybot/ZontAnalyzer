@@ -8,7 +8,18 @@ def check(scope_path, inputs_path, backend_path=None):
     scope = json.loads(Path(scope_path).read_text())
     inputs = json.loads(Path(inputs_path).read_text())
     if "format_version" in inputs and "variables" in inputs:
-        inputs = {key: value["value"] for key, value in inputs["variables"].items()}
+        plan = inputs
+        inputs = {key: value["value"] for key, value in plan["variables"].items()}
+        for resource in plan.get("resource_changes", []):
+            if (resource.get("address", "").startswith("yandex_function.auth[")
+                    and "delete" in resource.get("change", {}).get("actions", [])):
+                change = resource["change"]
+                retired = scope.get("allowed_auth_function_retirement", {}).get(inputs.get("environment"))
+                identity = inputs.get("identity")
+                if (not retired or change.get("actions") != ["delete"]
+                        or (change.get("before") or {}).get("id") != retired
+                        or not isinstance(identity, dict) or identity.get("mode") != "spa"):
+                    raise ValueError("removing deployed identity is outside ordinary deployment scope")
     allowed_cloud = scope.get("allowed_cloud_id")
     if not allowed_cloud or inputs.get("cloud_id") != allowed_cloud:
         raise ValueError("cloud scope mismatch")
@@ -20,6 +31,19 @@ def check(scope_path, inputs_path, backend_path=None):
     for key in ("runtime_service_account_id", "timer_service_account_id"):
         if not accounts.get(key) or inputs.get(key) != accounts[key]:
             raise ValueError("service account scope mismatch")
+    identity = inputs.get("identity")
+    if identity is None and scope.get("allowed_environment_identity", {}).get(inputs["environment"]):
+        raise ValueError("configured identity cannot be silently disabled")
+    if identity is not None:
+        allowed_identity = scope.get("allowed_environment_identity", {}).get(inputs["environment"], {})
+        identity_keys = {"client_id", "issuer", "mode"}
+        if not isinstance(identity, dict) or set(identity) != identity_keys:
+            raise ValueError("identity input scope mismatch")
+        for key in identity_keys:
+            if not isinstance(identity[key], str) or not identity[key] or identity[key] != allowed_identity.get(key):
+                raise ValueError("identity resource scope mismatch")
+        if identity["mode"] != "spa" or identity["issuer"] != "https://auth.yandex.cloud":
+            raise ValueError("public Identity Hub SPA required")
     if backend_path is not None:
         backend = json.loads(Path(backend_path).read_text())
         if not scope.get("allowed_state_bucket") or backend.get("bucket") != scope["allowed_state_bucket"]:

@@ -138,6 +138,8 @@ class ReportJobRunner:
             return {"status": "not_due", "job_key": period.job_key, "due_at": due.isoformat()}
         imported = self._imported_artifact(period, refresh=request.refresh)
         if imported is not None:
+            if imported.get("status") == "stored_imported":
+                self._publish(imported)
             return imported
         deadline = self.monotonic() + timeout_seconds - 5
         owner = str(uuid.uuid4())
@@ -151,8 +153,10 @@ class ReportJobRunner:
                 report_exists = isinstance(report_id, str) and self.runtime.db.report(report_id) is not None
                 if (checkpoint.get("input_fingerprint") == fingerprint
                         and report_exists):
-                    return {"status": "done", "job_key": period.job_key,
-                            "report_id": report_id, "reused": True}
+                    result = {"status": "done", "job_key": period.job_key,
+                              "report_id": report_id, "reused": True}
+                    self._publish(result)
+                    return result
                 lease = self.jobs.reopen_completed(
                     period.job_key, owner, math.ceil(timeout_seconds) + 30,
                     existing.checkpoint, fingerprint, force=not report_exists,
@@ -330,10 +334,19 @@ class ReportJobRunner:
         return self._complete(lease, report.id, report.ai_used)
 
     def _complete(self, lease: JobLease, report_id: str, ai_used: bool | None) -> dict[str, Any]:
+        result: dict[str, Any] = {"status": "done", "job_key": lease.job_key, "report_id": report_id,
+                                  "ai_used": ai_used, "reused": False}
+        # The report and checkpoint already exist; retries resume publication.
+        self._publish(result)
         if not self.jobs.complete(lease.job_key, lease.owner, lease.attempt):
             raise RuntimeError("report job ownership expired")
-        return {"status": "done", "job_key": lease.job_key, "report_id": report_id,
-                "ai_used": ai_used, "reused": False}
+        return result
+
+    def _publish(self, result: dict[str, Any]) -> None:
+        if os.environ.get("CLOUD_PUBLICATION_BUCKET"):
+            from zont_analyzer.application.publication import publish_reports
+
+            result["publication"] = publish_reports(self.runtime)
 
     def _live_client(self) -> ZontReadOnlyClient:
         token = self.runtime.loaded.secrets.zont_token

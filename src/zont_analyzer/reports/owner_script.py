@@ -10,9 +10,12 @@ OWNER_SCRIPT = r"""
   const configured = document.body.dataset.feedbackApiBase || '/api';
   const api = ['/api','/za/api'].includes(configured) ? root + 'api' : configured;
   const reportId = form.dataset.reportId;
+  const offline = window.location.protocol === "file:";
   let deviceId = form.dataset.deviceId;
   let profiles = initial.profiles || [];
   const changed = new Set();
+  let profilesLoaded = false;
+  let profilesLoading = false;
   const fieldNodes = [...form.querySelectorAll('[data-field]')];
   const profileMessage = form.querySelector('[data-profile-message]');
   const gasMessage = form.querySelector('[data-gas-message]');
@@ -107,9 +110,39 @@ OWNER_SCRIPT = r"""
     selector.value = deviceId;
     selector.parentElement.hidden = profiles.length < 2;
     form.dataset.deviceId = deviceId;
-    form.querySelectorAll('[data-profile-save],.owner-reset').forEach(button => button.disabled = !deviceId);
+    form.querySelectorAll('[data-profile-save],.owner-reset').forEach(button => button.disabled = !deviceId || profilesLoading);
     applyProfile(profiles.find(p => p.device_id === deviceId));
   }
+  async function loadProfiles() {
+    if (offline || profilesLoaded || profilesLoading) return;
+    profilesLoading = true;
+    const controls = [...form.querySelectorAll('#system-profile input, #system-profile select')];
+    const wasDisabled = controls.map(control => control.disabled);
+    controls.forEach(control => control.disabled = true);
+    form.querySelectorAll('[data-profile-save],.owner-reset').forEach(button => button.disabled = true);
+    message(profileMessage, 'Загружаем профиль…');
+    try {
+      const data = await request('/equipment');
+      selectProfiles(data.profiles || []);
+      profilesLoaded = true;
+      message(profileMessage, 'Профиль загружен.');
+    } catch (error) {
+      message(profileMessage, error.message, true);
+    } finally {
+      profilesLoading = false;
+      controls.forEach((control, index) => control.disabled = wasDisabled[index]);
+      form.querySelectorAll('[data-profile-save],.owner-reset').forEach(button => button.disabled = !deviceId);
+    }
+  }
+  function loadProfilesBeforeEditing() {
+    if (!profilesLoaded && !profilesLoading && !offline) loadProfiles();
+  }
+  form.querySelector('#system-profile > summary')?.addEventListener('click', () => {
+    if (!form.querySelector('#system-profile')?.open) loadProfilesBeforeEditing();
+  });
+  form.querySelector('#system-profile')?.addEventListener('toggle', event => {
+    if (event.currentTarget.open) loadProfilesBeforeEditing();
+  });
   form.querySelector('[data-device-select]').addEventListener('change', event => {
     deviceId = event.target.value; form.dataset.deviceId = deviceId; changed.clear();
     applyProfile(profiles.find(p => p.device_id === deviceId));
@@ -121,9 +154,14 @@ OWNER_SCRIPT = r"""
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   };
-  let isLatestReport = false;
+  const currentPath = window.location.pathname.replace(/\/za(?=\/|$)/, "") || "/";
+  let isLatestReport = ["/", "/index.html", "/latest.html"].includes(currentPath);
+  if (isLatestReport) {
+    gasDate.value = localToday();
+    gasValue.value = '';
+  }
   const gasDefaultDay = () => isLatestReport ? localToday() : initial.report_day;
-  let gasState = {reading: null, loading: false, sequence: 0};
+  let gasState = {reading: null, loading: false, sequence: 0, initialized: false};
   const gasControls = () => form.querySelectorAll('[data-gas-save],[data-gas-delete],[data-gas-edit],[data-gas-new]');
   function setGasLoading(value) {
     gasState.loading = value;
@@ -178,22 +216,25 @@ OWNER_SCRIPT = r"""
       ? 'Показание относится к новому участку учёта после замены/сброса. Разность через границу не рассчитывается.' : '';
   }
   async function loadGas(day, preserveInputs = false, discoverLatest = false) {
-    if (!initial.daily) return;
+    if (!initial.daily || offline) return false;
     const sequence = ++gasState.sequence;
     setGasLoading(true);
     try {
       const data = await request('/reports/' + encodeURIComponent(reportId) + '/gas?day=' + encodeURIComponent(day));
       if (sequence !== gasState.sequence) return;
       applyGas(data, preserveInputs);
+      gasState.initialized = true;
       if (discoverLatest && data.is_latest_report && day !== localToday()) {
         // The first response identifies the newest report.  Only then choose
         // browser-local today; never derive it from a UTC ISO string.
         gasDate.value = localToday(); gasValue.value = ''; gasState.reading = null;
         gasSummary(null, gasDate.value);
-        loadGas(gasDate.value);
+        return await loadGas(gasDate.value);
       }
+      return true;
     } catch (error) {
       if (sequence === gasState.sequence) message(gasMessage, error.message, true);
+      return false;
     } finally {
       if (sequence === gasState.sequence) setGasLoading(false);
     }
@@ -219,7 +260,7 @@ OWNER_SCRIPT = r"""
     profiles = profiles.map(p => p.device_id === deviceId ? updated : p);
     applyProfile(updated); changed.clear();
     message(profileMessage, node || 'Профиль сохранён.');
-    if (initial.daily) loadGas(gasDate.value, true);
+    if (initial.daily && gasState.initialized && !offline) loadGas(gasDate.value, true);
   }
   form.querySelector('[data-profile-save]').addEventListener('click', async () => {
     try {
@@ -295,14 +336,27 @@ OWNER_SCRIPT = r"""
     } catch (error) { message(gasMessage, error.message, true); }
     finally { setGasLoading(false); }
   });
+  function loadGasBeforeEditing() {
+    if (!gasState.initialized && !gasState.loading && !offline) {
+      loadGas(initial.report_day, false, true);
+    }
+  }
   form.querySelector('[data-gas-edit]')?.addEventListener('click', () => {
     const editor = form.querySelector('#gas-editor');
     if (!editor) return;
+    if (!editor.open) loadGasBeforeEditing();
     editor.open = !editor.open;
     form.querySelector('[data-gas-edit]').setAttribute('aria-expanded', String(editor.open));
     if (editor.open) form.querySelector('[name=gas-value]')?.focus();
   });
-  form.querySelector('[data-gas-new]')?.addEventListener('click', () => {
+  form.querySelector('#gas-editor > summary')?.addEventListener('click', () => {
+    if (!form.querySelector('#gas-editor')?.open) loadGasBeforeEditing();
+  });
+  async function startNewGasReading() {
+    if (!gasState.initialized && !offline) {
+      const loaded = await loadGas(gasDefaultDay(), false, true);
+      if (!loaded) return;
+    }
     gasState.reading = null;
     gasDate.value = gasDefaultDay(); gasValue.value = ''; gasReset.checked = false;
     gasSummary(null, gasDate.value);
@@ -310,7 +364,8 @@ OWNER_SCRIPT = r"""
     if (editor) editor.open = true;
     form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'true');
     gasValue.focus();
-  });
+  }
+  form.querySelector('[data-gas-new]')?.addEventListener('click', startNewGasReading);
   form.querySelector('[data-gas-history]')?.addEventListener('click', event => {
     const button = event.target.closest('[data-gas-reading]');
     if (!button || gasState.loading) return;
@@ -332,16 +387,21 @@ OWNER_SCRIPT = r"""
     });
   }
   selectProfiles(profiles);
-  const offline = window.location.protocol === "file:";
   if (initial.daily && offline) {
     applyGas({...initial.gas, selected_day: initial.report_day});
-  } else if (initial.daily) {
-    // Rendered data belongs to the report day and must not briefly impersonate
-    // a new reading for today's browser date on the newest report.
-    gasDate.value = initial.report_day; gasValue.value = ''; gasState.reading = null;
-    gasSummary(null, initial.report_day);
-    loadGas(initial.report_day, false, true);
+    gasState.initialized = true;
   }
+  form.querySelector('#gas-editor')?.addEventListener('toggle', event => {
+    if (event.currentTarget.open && !gasState.initialized && !gasState.loading && !offline) {
+      loadGas(initial.report_day, false, true);
+    }
+  });
+  form.querySelector('.owner-gas-history > summary')?.addEventListener('click', () => {
+    if (!form.querySelector('.owner-gas-history')?.open) loadGasBeforeEditing();
+  });
+  form.querySelector('.owner-gas-history')?.addEventListener('toggle', event => {
+    if (event.currentTarget.open) loadGasBeforeEditing();
+  });
   const tariffMessage = form.querySelector('[data-tariff-message]');
   let tariffItems = [];
   const tariffMonth = form.querySelector('[data-tariff-month]');
@@ -354,6 +414,33 @@ OWNER_SCRIPT = r"""
   const monthLabel = item => item.effective_month || new Intl.DateTimeFormat('sv-SE', {
     timeZone: initial.timezone || 'UTC', year:'numeric', month:'2-digit'
   }).format(new Date(item.effective_from));
+  let tariffsLoaded = false;
+  let tariffsLoading = false;
+  let tariffsPromise = null;
+  async function loadTariffs() {
+    if (offline || tariffsLoaded) return;
+    if (tariffsPromise) return tariffsPromise;
+    tariffsLoading = true;
+    const controls = [...form.querySelectorAll('.owner-tariffs input, .owner-tariffs select, .owner-tariffs button')];
+    const wasDisabled = controls.map(control => control.disabled);
+    controls.forEach(control => control.disabled = true);
+    message(tariffMessage, 'Загружаем историю тарифов…');
+    tariffsPromise = (async () => {
+      try {
+        const data = await request('/gas-tariffs');
+        applyTariffs(data.history || []);
+        tariffsLoaded = true;
+        message(tariffMessage, 'История тарифов загружена.');
+      } catch (error) {
+        message(tariffMessage, error.message, true);
+      } finally {
+        tariffsLoading = false;
+        tariffsPromise = null;
+        controls.forEach((control, index) => control.disabled = wasDisabled[index]);
+      }
+    })();
+    return tariffsPromise;
+  }
   function applyTariffs(items) {
     const history = form.querySelector('[data-tariff-history]');
     const selector = form.querySelector('[data-tariff-correction]');
@@ -386,6 +473,10 @@ OWNER_SCRIPT = r"""
     if (!items.length) history.textContent = 'История пуста.';
   }
   async function saveTariff(correct) {
+    if (!tariffsLoaded && !offline) {
+      await loadTariffs();
+      if (!tariffsLoaded) return;
+    }
     const buttons = [...form.querySelectorAll('[data-tariff-save],[data-tariff-correct]')];
     buttons.forEach(button => button.disabled = true);
     try {
@@ -418,15 +509,24 @@ OWNER_SCRIPT = r"""
   });
   form.querySelector('[data-tariff-edit]')?.addEventListener('click', () => {
     const editor = form.querySelector('#tariff-editor');
+    if (!editor.open) loadTariffs();
     editor.open = !editor.open;
     form.querySelector('[data-tariff-edit]').setAttribute('aria-expanded', String(editor.open));
     if (editor.open) form.querySelector('[data-tariff-price]').focus();
   });
+  form.querySelector('#tariff-editor > summary')?.addEventListener('click', () => {
+    if (!form.querySelector('#tariff-editor')?.open) loadTariffs();
+  });
+  form.querySelector('#tariff-editor')?.addEventListener('toggle', event => {
+    if (event.currentTarget.open) loadTariffs();
+  });
+  form.querySelector('[data-tariff-history]')?.closest('details')?.addEventListener('toggle', event => {
+    if (event.currentTarget.open) loadTariffs();
+  });
+  form.querySelector('[data-tariff-history]')?.closest('details')?.querySelector(':scope > summary')?.addEventListener('click', event => {
+    const details = event.currentTarget.parentElement;
+    if (!details.open) loadTariffs();
+  });
   applyTariffs(initial.tariffs || []);
-  if (offline) return;
-  if (initial.daily) request('/gas-tariffs').then(data => applyTariffs(data.history || []))
-    .catch(error => message(tariffMessage, error.message, true));
-  request('/equipment').then(data => selectProfiles(data.profiles || []))
-    .catch(error => message(profileMessage, error.message, true));
 })();
 """

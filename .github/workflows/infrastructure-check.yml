@@ -30,6 +30,9 @@ jobs:
       - run: terraform -chdir=infra/cloud init -backend=false -input=false -lockfile=readonly
       - run: terraform -chdir=infra/cloud validate
       - run: terraform -chdir=infra/cloud test
+      - run: terraform -chdir=infra/identity init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/identity validate
+      - run: terraform -chdir=infra/identity test
   probe:
     runs-on: ubuntu-latest
     timeout-minutes: 20

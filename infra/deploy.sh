@@ -29,6 +29,8 @@ if [ "$ACTION" = plan ] || [ "$ACTION" = plan-foundation ]; then
         [ -f "$ROOT/infra/cloud/$(basename "$file")" ] || rm -- "$file"
     done
     cp "$ROOT"/infra/cloud/*.tf "$ROOT/infra/cloud/.terraform.lock.hcl" "$PRIVATE/cloud-work/"
+    mkdir -p "$PRIVATE/static"
+    cp "$ROOT/infra/static/site.html" "$PRIVATE/static/site.html"
 fi
 
 docker run --rm --user "$(id -u):$(id -g)" \

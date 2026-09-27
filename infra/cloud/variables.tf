@@ -138,3 +138,27 @@ variable "deletion_protection" {
   type        = bool
   default     = true
 }
+
+variable "enable_maintenance_timer" {
+  description = "Deliver durable web requests and publication work; enable after the M5 smoke."
+  type        = bool
+  default     = false
+  validation {
+    condition     = !var.enable_maintenance_timer || var.grafana_metrics_enabled
+    error_message = "Configure metric export before enabling web job delivery."
+  }
+}
+
+variable "identity" {
+  description = "Private Identity Hub SPA integration. Null is for isolated pre-OIDC probes only."
+  type = object({
+    client_id = string
+    issuer    = string
+    mode      = string
+  })
+  default = null
+  validation {
+    condition     = var.identity == null ? true : var.identity.mode == "spa" && var.identity.issuer == "https://auth.yandex.cloud" && can(regex("^[a-zA-Z0-9_-]+$", var.identity.client_id))
+    error_message = "Use the public SPA client and official Identity Hub issuer."
+  }
+}

@@ -14,7 +14,23 @@ resource "yandex_api_gateway" "probe" {
   execution_timeout = "210"
   spec = yamlencode({
     openapi = "3.0.0"
-    info    = { title = "Isolated probe and YDB application", version = "4.0" }
+    info    = { title = "Isolated reports and application", version = "5.0" }
+    components = {
+      securitySchemes = var.identity == null ? {} : {
+        identityHub = {
+          type = "openIdConnect"
+          "x-yc-apigateway-authorizer" = {
+            type            = "jwt"
+            jwksUri         = "https://auth.yandex.cloud/oauth/jwks/keys"
+            identitySource  = { in = "header", name = "Authorization", prefix = "Bearer " }
+            issuers         = [var.identity.issuer]
+            audiences       = [var.identity.client_id]
+            requiredClaims  = ["sub", "exp", "iat"]
+            jwkTtlInSeconds = 300
+          }
+        }
+      }
+    }
     paths = merge(
       {
         for path in ["/api/probe", "/private/probe.txt"] : path => {
@@ -52,6 +68,173 @@ resource "yandex_api_gateway" "probe" {
           }
         }
       },
+      {
+        for path in ["/", "/index.html", "/latest.html", "/reports.json"] : path => {
+          get = {
+            responses = { "200" = { description = "Protected published application content" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+      },
+      {
+        for path in ["/daily/{file}", "/weekly/{file}", "/monthly/{file}", "/seasonal/{file}"] : path => {
+          parameters = [{
+            name     = "file"
+            in       = "path"
+            required = true
+            schema   = { type = "string" }
+          }]
+          get = {
+            responses = { "200" = { description = "Protected published application content" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+      },
+      {
+        "/za/" = {
+          get = {
+            responses = { "200" = { description = "Protected legacy application page" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+        "/za/{path+}" = {
+          parameters = [{
+            name     = "path"
+            in       = "path"
+            required = true
+            schema   = { type = "string" }
+          }]
+          get = {
+            responses = { "200" = { description = "Protected legacy application page" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+        "/za/api/{path+}" = {
+          parameters = [{
+            name     = "path"
+            in       = "path"
+            required = true
+            schema   = { type = "string" }
+          }]
+          get = {
+            responses = { "200" = { description = "Protected legacy application API" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+          put = {
+            responses = { "200" = { description = "Protected legacy application API" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+          post = {
+            responses = { "200" = { description = "Protected legacy application API" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+      },
+      {
+        "/login" = {
+          get = {
+            responses = { "200" = { description = "Login form" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+          post = {
+            responses = { "200" = { description = "Login response" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+        "/logout" = {
+          post = {
+            responses = { "200" = { description = "Logout response" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+      },
+      {
+        "/api/{path+}" = {
+          parameters = [{
+            name     = "path"
+            in       = "path"
+            required = true
+            schema   = { type = "string" }
+          }]
+          get = {
+            responses = { "200" = { description = "Protected application API" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+          put = {
+            responses = { "200" = { description = "Protected application API" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+          post = {
+            responses = { "200" = { description = "Protected application API" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+      },
+      {
+        for path in ["/jobs/publication", "/jobs/maintenance"] : path => {
+          post = {
+            responses = { "200" = { description = "Durable application job accepted" } }
+            "x-yc-apigateway-integration" = {
+              type               = "serverless_containers"
+              container_id       = yandex_serverless_container.application.id
+              service_account_id = var.timer_service_account_id
+            }
+          }
+        }
+      },
+      local.identity_paths,
     )
   })
   dynamic "custom_domains" {
@@ -68,6 +251,7 @@ resource "yandex_api_gateway" "probe" {
   depends_on = [
     yandex_serverless_container_iam_binding.timer,
     yandex_serverless_container_iam_binding.application_invoker,
+    yandex_storage_bucket_iam_binding.probe,
   ]
 }
 

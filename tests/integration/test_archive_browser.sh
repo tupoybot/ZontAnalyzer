@@ -8,6 +8,7 @@ backend="zont-archive-backend-$suffix"
 ydb="zont-archive-ydb-$suffix"
 network="zont-archive-$suffix"
 fixture_dir=$(mktemp -d)
+image=${ZONT_ARCHIVE_TEST_IMAGE:-zont-analyzer:stage18-candidate}
 
 cleanup() {
     docker rm -f "$backend" "$proxy" "$ydb" >/dev/null 2>&1 || true
@@ -29,7 +30,7 @@ docker run -d --name "$ydb" --hostname "$ydb" --network "$network" --memory 5g \
     -e GRPC_PORT=2136 -e MON_PORT=8765 -e YDB_USE_IN_MEMORY_PDISKS=true \
     -e YDB_DEFAULT_LOG_LEVEL=WARN \
     ydbplatform/local-ydb@sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402 >/dev/null
-docker run --rm --network "$network" --entrypoint python zont-analyzer:stage18-candidate -c '
+docker run --rm --network "$network" --entrypoint python "$image" -c '
 import socket,sys,time
 deadline=time.monotonic()+90
 while time.monotonic()<deadline:
@@ -38,7 +39,7 @@ while time.monotonic()<deadline:
     except OSError: time.sleep(1)
 else: raise SystemExit("YDB did not become ready")
 ' "$ydb"
-sh "$project_root/deploy/assert-ydb-memory.sh" "$ydb" zont-analyzer:stage18-candidate
+sh "$project_root/deploy/assert-ydb-memory.sh" "$ydb" "$image"
 
 install -d "$fixture_dir/data" "$fixture_dir/publish"
 # The production image runs as the unprivileged zont UID; these are disposable
@@ -90,15 +91,15 @@ docker run --rm --network "$network" --entrypoint python \
     -v "$fixture_dir/data:/data" -v "$fixture_dir/publish:/publish" \
     -v "$fixture_dir/config.yaml:/config/config.yaml:ro" \
     -v "$project_root/tests/integration/archive_browser_fixture.py:/fixture.py:ro" \
-    zont-analyzer:stage18-candidate /fixture.py
+    "$image" /fixture.py
 
-docker run -d --rm --name "$backend" --network "container:$proxy" \
+docker run -d --name "$backend" --network "container:$proxy" \
     -e "YDB_ENDPOINT=grpc://$ydb:2136" -e YDB_DATABASE=/local \
     -e YDB_NAMESPACE=browser_fixture -e YDB_ANONYMOUS_CREDENTIALS=1 \
     -v "$fixture_dir/data:/data" -v "$fixture_dir/publish:/publish" \
     -v "$fixture_dir/config.yaml:/config/config.yaml:ro" \
     -v "$project_root/tests/integration/archive_browser_feedback_server.py:/feedback-server.py:ro" \
-    --entrypoint python zont-analyzer:stage18-candidate /feedback-server.py >/dev/null
+    --entrypoint python "$image" /feedback-server.py >/dev/null
 
 attempt=0
 until curl -fsS -u stage18:stage18-secret http://127.0.0.1:18086/api/health >/dev/null 2>&1; do

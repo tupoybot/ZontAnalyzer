@@ -1557,6 +1557,8 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
     card.querySelector("[data-feedback-save-note]").hidden = !["applied", "rejected"].includes(status);
   }}
 
+  const loadedCards = new WeakSet();
+  const loadingCards = new WeakMap();
   async function request(card, options) {{
     const id = card.dataset.recommendationId;
     const response = await fetch(`${{apiBase}}/recommendations/${{encodeURIComponent(id)}}/feedback`, {{
@@ -1569,12 +1571,46 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
     applyState(card, payload);
     return payload;
   }}
+  function ensureState(card) {{
+    if (loadedCards.has(card)) return Promise.resolve();
+    if (loadingCards.has(card)) return loadingCards.get(card);
+    const controls = [...card.querySelectorAll(
+      ".feedback-controls button, .feedback-controls input, .feedback-controls select, .feedback-controls textarea"
+    )];
+    const wasDisabled = controls.map((control) => control.disabled);
+    controls.forEach((control) => control.disabled = true);
+    const pending = request(card, {{method: "GET"}})
+      .then(() => loadedCards.add(card))
+      .finally(() => {{
+      controls.forEach((control, index) => control.disabled = wasDisabled[index]);
+      loadingCards.delete(card);
+    }});
+    loadingCards.set(card, pending);
+    return pending;
+  }}
+  function loadStateOnOpen(card) {{
+    if (loadedCards.has(card)) return;
+    const message = card.querySelector(".feedback-message");
+    message.textContent = "Загружаю сохранённую обратную связь…";
+    ensureState(card).then(() => {{ message.textContent = ""; }}).catch(() => {{
+      message.className = "feedback-message error";
+      message.textContent = "Не удалось обновить сохранённую обратную связь.";
+    }});
+  }}
 
   if (window.location.protocol === "file:") return;
   document.querySelectorAll(".recommendation[data-recommendation-id]").forEach((card) => {{
     const id = card.dataset.recommendationId;
     if (!id) return;
     const message = card.querySelector(".feedback-message");
+    card.querySelectorAll(".feedback-comment, .feedback-experiment").forEach((details) => {{
+      details.querySelector(":scope > summary")?.addEventListener("click", () => {{
+        if (!details.open) loadStateOnOpen(card);
+      }});
+      details.addEventListener("toggle", () => {{
+        if (details.open) loadStateOnOpen(card);
+      }});
+    }});
     card.querySelectorAll("button[data-feedback-status], button[data-feedback-save-note]").forEach((button) => {{
       button.addEventListener("click", async () => {{
         const buttons = card.querySelectorAll("button[data-feedback-status], button[data-feedback-save-note]");
@@ -1582,6 +1618,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
         message.className = "feedback-message";
         message.textContent = "Сохраняю…";
         try {{
+          await ensureState(card);
           const status = button.dataset.feedbackStatus || card.querySelector(".feedback-status").dataset.status;
           const experiment = {{}};
           let experimentChanged = false;
@@ -1610,10 +1647,6 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
           buttons.forEach((item) => item.disabled = false);
         }}
       }});
-    }});
-    request(card, {{method: "GET"}}).catch((error) => {{
-      message.className = "feedback-message error";
-      message.textContent = "Не удалось обновить статус. Показаны сохранённые данные отчёта.";
     }});
   }});
 }})();
