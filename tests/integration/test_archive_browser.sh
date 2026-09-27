@@ -93,7 +93,7 @@ docker run --rm --network "$network" --entrypoint python \
     -v "$project_root/tests/integration/archive_browser_fixture.py:/fixture.py:ro" \
     "$image" /fixture.py
 
-docker run -d --rm --name "$backend" --network "container:$proxy" \
+docker run -d --name "$backend" --network "container:$proxy" \
     -e "YDB_ENDPOINT=grpc://$ydb:2136" -e YDB_DATABASE=/local \
     -e YDB_NAMESPACE=browser_fixture -e YDB_ANONYMOUS_CREDENTIALS=1 \
     -v "$fixture_dir/data:/data" -v "$fixture_dir/publish:/publish" \

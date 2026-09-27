@@ -154,7 +154,12 @@ OWNER_SCRIPT = r"""
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   };
-  let isLatestReport = false;
+  const currentPath = window.location.pathname.replace(/\/za(?=\/|$)/, "") || "/";
+  let isLatestReport = ["/", "/index.html", "/latest.html"].includes(currentPath);
+  if (isLatestReport) {
+    gasDate.value = localToday();
+    gasValue.value = '';
+  }
   const gasDefaultDay = () => isLatestReport ? localToday() : initial.report_day;
   let gasState = {reading: null, loading: false, sequence: 0, initialized: false};
   const gasControls = () => form.querySelectorAll('[data-gas-save],[data-gas-delete],[data-gas-edit],[data-gas-new]');

@@ -371,6 +371,8 @@ try {
   await page.reload({ waitUntil: "networkidle" });
   const reloadedLatestGas = page.locator("[data-owner-gas]");
   assert.equal(await reloadedLatestGas.locator("[name=gas-date]").inputValue(), browserToday);
+  await reloadedLatestGas.locator("[data-gas-edit]").click();
+  await page.waitForFunction(() => document.querySelector('[data-owner-gas] [name=gas-value]').value === "20");
   assert.equal(await reloadedLatestGas.locator("[name=gas-value]").inputValue(), "20",
     "a reading for a day without a report persists after reload");
   await reloadedLatestGas.locator(".owner-gas-history > summary").click();
@@ -437,18 +439,44 @@ try {
   assert.match(await page.locator(".recommendation .feedback-status").first().textContent(), /Выполнено/);
 
   await page.goto(`${baseURL}/latest.html`, { waitUntil: "networkidle" });
-  await page.locator("[data-regeneration-status] > summary").click();
   const regenerate = page.locator(".regenerate-report");
-  await regenerate.waitFor();
   const counterfactual = page.locator(".counterfactual-question");
+  let releaseInitialPoll;
+  let notifyInitialPoll;
+  const initialPollStarted = new Promise((resolve, reject) => {
+    notifyInitialPoll = resolve;
+    setTimeout(() => reject(new Error("initial regeneration poll did not start")), 10000);
+  });
+  let holdInitialPoll = true;
+  await page.route("**/api/reports/*/regenerate", async route => {
+    if (holdInitialPoll && route.request().method() === "GET") {
+      holdInitialPoll = false;
+      const response = await route.fetch();
+      notifyInitialPoll();
+      await new Promise(resolve => { releaseInitialPoll = resolve; });
+      await route.fulfill({response});
+      return;
+    }
+    await route.continue();
+  });
+  await page.locator("[data-regeneration-status] > summary").click();
+  await regenerate.waitFor();
   await counterfactual.waitFor();
   await assert.equal(await counterfactual.getAttribute("maxlength"), "500");
+  await initialPollStarted;
   const regenerationReload = page.waitForEvent("load", {timeout: 30000});
+  const regenerationAccepted = page.waitForResponse(response =>
+    response.request().method() === "POST" && response.url().includes("/regenerate")
+  );
   await regenerate.click();
   await assert.equal(await regenerate.isDisabled(), true, "duplicate regeneration click is disabled while active");
+  assert.equal((await regenerationAccepted).status(), 202);
+  releaseInitialPoll();
   await regenerationReload;
+  await page.unroute("**/api/reports/*/regenerate");
   await page.waitForLoadState("networkidle");
   await page.waitForURL("**/latest.html");
+  await page.locator("[data-regeneration-status] > summary").click();
   await page.locator(".regenerate-report").waitFor();
   await page.locator("[data-owner-forms]").waitFor();
   assert.equal(await page.locator("[data-owner-gas] [name=gas-date]").inputValue(), browserToday);
@@ -458,6 +486,11 @@ try {
     `${baseURL}/api/reports/${encodeURIComponent(dayFiveReportId)}/gas?day=2026-08-05`
   )).json();
   assert.equal(gasAfterRegeneration.reading.value_m3, "10", "dated gas reading survives regeneration");
+  const regeneratedCard = page.locator(".recommendation[data-recommendation-id]").first();
+  await regeneratedCard.locator(".feedback-comment > summary").click();
+  await page.waitForFunction(expected => document.querySelector(
+    ".recommendation[data-recommendation-id] .feedback-note"
+  )?.value === expected, note + " edited");
   assert.equal(await page.locator(".recommendation .feedback-note").first().inputValue(), note + " edited", "feedback survives regeneration");
 
   await page.locator("#system-profile > summary").click();
@@ -495,9 +528,11 @@ try {
   assert.equal(planned.price, '9', 'last monthly price wins');
   assert.equal(planned.corrections.length, 1, 'previous price remains audited');
   await page.reload({waitUntil:'networkidle'});
+  await page.locator('[data-tariff-edit]').click();
+  await page.locator('[data-tariff-message]').filter({hasText:'История тарифов загружена'}).waitFor();
   assert.match(await page.locator('[data-tariff-planned]').textContent(), /9 RUB/);
   await page.setViewportSize({width:390,height:844});
-  await page.locator('[data-tariff-edit]').click();
+  assert.equal(await page.locator('#tariff-editor').evaluate(node => node.open), true);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 
   await page.goto(`${baseURL}/za/daily/2026-08-05.html`, { waitUntil: "networkidle" });

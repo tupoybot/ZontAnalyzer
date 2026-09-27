@@ -9,6 +9,10 @@ def check(scope_path, inputs_path, backend_path=None):
     scope = json.loads(Path(scope_path).read_text())
     inputs = json.loads(Path(inputs_path).read_text())
     if "format_version" in inputs and "variables" in inputs:
+        for resource in inputs.get("resource_changes", []):
+            if (resource.get("address", "").startswith("yandex_function.auth[")
+                    and "delete" in resource.get("change", {}).get("actions", [])):
+                raise ValueError("removing deployed identity is outside ordinary deployment scope")
         inputs = {key: value["value"] for key, value in inputs["variables"].items()}
     allowed_cloud = scope.get("allowed_cloud_id")
     if not allowed_cloud or inputs.get("cloud_id") != allowed_cloud:

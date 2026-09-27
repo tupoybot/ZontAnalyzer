@@ -42,6 +42,14 @@ class ScopeTest(unittest.TestCase):
             key: {"value": value} for key, value in self.inputs.items()
         }})
 
+    def test_old_environment_inputs_cannot_delete_deployed_identity(self):
+        plan = {"format_version": "1.2", "variables": {
+            key: {"value": value} for key, value in self.inputs.items()
+        }, "resource_changes": [{"address": "yandex_function.auth[0]",
+                                 "change": {"actions": ["delete"]}}]}
+        with self.assertRaisesRegex(ValueError, "removing deployed identity"):
+            self.check(plan)
+
     def test_missing_and_wrong_scope_values(self):
         for key in self.inputs:
             for replacement in (None, "other"):

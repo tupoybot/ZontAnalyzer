@@ -34,7 +34,7 @@ def render_regeneration(report: object, feedback_api_base_url: str = "/api") -> 
 @media(max-width:560px){{.regeneration-fields{{grid-template-columns:1fr}}.regeneration-fields .regenerate-report{{width:100%}}}}
 </style>
 <script>(function() {{
-  const root = document.currentScript.previousElementSibling;
+  const root = document.currentScript.parentElement.querySelector('.report-regeneration');
   const panel = root.querySelector('[data-regeneration-status]');
   const button = root.querySelector('.regenerate-report');
   const question = root.querySelector('.counterfactual-question');
@@ -46,26 +46,56 @@ def render_regeneration(report: object, feedback_api_base_url: str = "/api") -> 
   const url = api + '/reports/' + encodeURIComponent(id) + '/regenerate';
   let requested = false;
   let timer = null;
-  let polling = false;
+  let pollInFlight = null;
+  let pollVersion = 0;
+  let submitting = false;
   const show = (s, error) => {{ status.textContent = s === 'queued' ? 'В очереди…' : s === 'running' ? 'Выполняется…' : s === 'success' ? 'Готово' : s === 'error' ? ('Ошибка пересчёта' + (error ? ': ' + error : '')) : ''; }};
-  const poll = async () => {{
-    if (!panel.open || polling) return;
-    polling = true;
+  const poll = () => {{
+    if (!panel.open || submitting) return Promise.resolve();
+    if (pollInFlight) return pollInFlight;
+    const version = pollVersion;
+    const pending = (async () => {{
+      try {{
+        const r = await fetch(url, {{credentials:'same-origin', cache:'no-store'}});
+        const v = await r.json();
+        if (version !== pollVersion) return;
+        if (!r.ok) throw new Error(v.error || 'HTTP ' + r.status);
+        show(v.status, v.error);
+        if (v.status === 'queued' || v.status === 'running') timer = setTimeout(poll, 1000);
+        else {{ button.disabled = false; if (requested && v.status === 'success') window.location.reload(); }}
+      }} catch (error) {{
+        if (version === pollVersion) {{ show('error', error.message); button.disabled = false; }}
+      }}
+    }})();
+    const wrapped = pending.finally(() => {{ if (pollInFlight === wrapped) pollInFlight = null; }});
+    pollInFlight = wrapped;
+    return wrapped;
+  }};
+  panel.addEventListener('toggle', () => {{
+    if (panel.open) {{
+      const pending = pollInFlight;
+      if (pending) pending.then(() => {{ if (panel.open && !submitting) poll(); }});
+      else poll();
+    }} else {{ ++pollVersion; clearTimeout(timer); timer = null; }}
+  }});
+  button.addEventListener('click', async () => {{
+    ++pollVersion;
+    submitting = true;
+    clearTimeout(timer); timer = null;
+    requested = true; button.disabled = true; show('queued');
     try {{
-      const r = await fetch(url, {{credentials:'same-origin', cache:'no-store'}});
+      const text = question.value.trim();
+      const body = text ? JSON.stringify({{question:text}}) : '{{}}';
+      const r = await fetch(url, {{method:'POST', credentials:'same-origin', body:body,
+        headers:{{'Content-Type':'application/json'}}}});
       const v = await r.json();
       if (!r.ok) throw new Error(v.error || 'HTTP ' + r.status);
       show(v.status, v.error);
-      if (v.status === 'queued' || v.status === 'running') timer = setTimeout(poll, 1000);
-      else {{ button.disabled = false; if (requested && v.status === 'success') window.location.reload(); }}
-    }} catch (error) {{ show('error', error.message); button.disabled = false; }}
-    finally {{ polling = false; }}
-  }};
-  panel.addEventListener('toggle', () => {{
-    if (panel.open) poll();
-    else {{ clearTimeout(timer); timer = null; }}
+    }} catch (error) {{ submitting = false; show('error', error.message); button.disabled = false; return; }}
+    submitting = false;
+    if (pollInFlight) await pollInFlight;
+    poll();
   }});
-  button.addEventListener('click', async () => {{ requested = true; button.disabled = true; show('queued'); try {{ const text = question.value.trim(); const body = text ? JSON.stringify({{question:text}}) : '{{}}'; const r = await fetch(url, {{method:'POST', credentials:'same-origin', body:body, headers:{{'Content-Type':'application/json'}}}}); const v = await r.json(); if (!r.ok) throw new Error(v.error || 'HTTP ' + r.status); show(v.status, v.error); }} catch (error) {{ show('error', error.message); button.disabled = false; return; }} poll(); }});
 }})();</script>'''
 
 
