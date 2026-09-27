@@ -117,6 +117,7 @@ def test_monitoring_dispatch_reads_without_providers_and_closes_runtime(monkeypa
     events = []
     with capture(events.append):
         assert runtime._dispatch_monitoring({}) == {"status": "observed"}
+    factory.assert_called_once_with(initialize=False)
     assert ("zont_telemetry_present", float(latest is not None), {}) in events
     timestamps = [value for name, value, _ in events if name == "zont_telemetry_timestamp_seconds"]
     assert timestamps == ([] if latest is None else [latest.timestamp()])

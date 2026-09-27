@@ -263,7 +263,7 @@ def _dispatch_monitoring(payload: dict[str, Any]) -> dict[str, Any]:
     if payload:
         raise ValueError("monitoring payload must be empty")
     from zont_analyzer.cloud.monitoring import snapshot
-    runtime = _cloud_application_runtime()
+    runtime = _cloud_application_runtime(initialize=False)
     try:
         snapshot(runtime)
         return {"status": "observed"}
@@ -271,7 +271,7 @@ def _dispatch_monitoring(payload: dict[str, Any]) -> dict[str, Any]:
         runtime.db.close()
 
 
-def _cloud_application_runtime() -> Any:
+def _cloud_application_runtime(*, initialize: bool = True) -> Any:
     """Open YDB for a web request without running startup maintenance on GET."""
     from zont_analyzer.adapters.ydb.application import Database
     from zont_analyzer.adapters.ydb.database import YdbConfig
@@ -284,7 +284,7 @@ def _cloud_application_runtime() -> Any:
     db = Database(target)
     try:
         with _web_schema_lock:
-            if schema_key not in _web_schema_ready:
+            if initialize and schema_key not in _web_schema_ready:
                 db.initialize()
                 _web_schema_ready.add(schema_key)
         return Runtime(loaded, db)
