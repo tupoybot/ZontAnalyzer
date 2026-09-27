@@ -1,5 +1,43 @@
 mock_provider "yandex" {}
 
+run "production_database_is_separate_and_capped" {
+  command = plan
+  variables {
+    enable_production_database              = true
+    production_ydb_request_units_per_second = 1000
+    application_writes_enabled              = false
+  }
+  override_resource {
+    target          = yandex_ydb_database_serverless.production[0]
+    override_during = plan
+    values = {
+      id               = "test-production-database"
+      database_path    = "/test/production"
+      ydb_api_endpoint = "production.example:2135"
+    }
+  }
+  assert {
+    condition     = yandex_ydb_database_serverless.production[0].deletion_protection && one(yandex_ydb_database_serverless.production[0].serverless_database).throttling_rcu_limit == 1000 && one(yandex_ydb_database_serverless.production[0].serverless_database).provisioned_rcu_limit == 0
+    error_message = "Production must be protected, capped and billed on demand."
+  }
+  assert {
+    condition     = yandex_serverless_container.application.image[0].environment.YDB_DATABASE == "/test/production" && yandex_serverless_container.application.image[0].environment.YDB_ENDPOINT == "grpcs://production.example:2135" && yandex_ydb_database_iam_binding.application.database_id == "test-production-database"
+    error_message = "Application credentials and connection must select the same production database."
+  }
+  assert {
+    condition     = yandex_ydb_database_serverless.probe.name == "zont-dev-isolated" && yandex_serverless_container.application.image[0].environment.CLOUD_WRITES_ENABLED == "false" && length(yandex_function_trigger.scheduler) == 0
+    error_message = "Creating production must retain development data and permit a closed write gate."
+  }
+}
+
+run "production_quota_increase_is_not_implicit" {
+  command = plan
+  variables {
+    production_ydb_request_units_per_second = 50000
+  }
+  expect_failures = [var.production_ydb_request_units_per_second]
+}
+
 override_data {
   target = data.yandex_resourcemanager_folder.project
   values = {

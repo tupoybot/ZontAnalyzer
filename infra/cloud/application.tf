@@ -31,8 +31,8 @@ resource "yandex_serverless_container" "application" {
       CLOUD_PUBLICATION_BUCKET      = yandex_storage_bucket.publication.bucket
       CLOUD_PUBLICATION_PREFIX      = var.application_publication_prefix
       CLOUD_PUBLIC_ORIGIN           = var.attach_domain ? "https://${var.test_domain}" : ""
-      YDB_ENDPOINT                  = "grpcs://${yandex_ydb_database_serverless.probe.ydb_api_endpoint}"
-      YDB_DATABASE                  = yandex_ydb_database_serverless.probe.database_path
+      YDB_ENDPOINT                  = "grpcs://${local.application_database.ydb_api_endpoint}"
+      YDB_DATABASE                  = local.application_database.database_path
       YDB_NAMESPACE                 = var.application_ydb_namespace
       YDB_METADATA_CREDENTIALS      = "1"
       }, var.identity == null ? {} : {
@@ -117,7 +117,7 @@ resource "yandex_storage_bucket_iam_binding" "application_uploader" {
 }
 
 resource "yandex_ydb_database_iam_binding" "application" {
-  database_id = yandex_ydb_database_serverless.probe.id
+  database_id = local.application_database.id
   role        = "ydb.editor"
   members     = ["serviceAccount:${var.runtime_service_account_id}"]
 }

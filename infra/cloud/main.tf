@@ -1,5 +1,6 @@
 locals {
-  name = "zont-${var.environment}"
+  name                 = "zont-${var.environment}"
+  application_database = var.enable_production_database ? yandex_ydb_database_serverless.production[0] : yandex_ydb_database_serverless.probe
 }
 
 resource "yandex_container_registry" "project" {
@@ -39,6 +40,19 @@ resource "yandex_ydb_database_serverless" "probe" {
     provisioned_rcu_limit       = 0
     throttling_rcu_limit        = var.ydb_request_units_per_second
     storage_size_limit          = var.ydb_storage_size_limit_gib
+  }
+}
+
+resource "yandex_ydb_database_serverless" "production" {
+  count               = var.enable_production_database ? 1 : 0
+  folder_id           = data.yandex_resourcemanager_folder.project.id
+  name                = var.production_database_name
+  deletion_protection = true
+  serverless_database {
+    enable_throttling_rcu_limit = true
+    provisioned_rcu_limit       = 0
+    throttling_rcu_limit        = var.production_ydb_request_units_per_second
+    storage_size_limit          = var.production_ydb_storage_size_limit_gib
   }
 }
 

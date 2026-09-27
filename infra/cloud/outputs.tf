@@ -50,6 +50,15 @@ output "application_url" {
   sensitive = true
 }
 
+output "application_database" {
+  value = {
+    id       = local.application_database.id
+    endpoint = "grpcs://${local.application_database.ydb_api_endpoint}"
+    path     = local.application_database.database_path
+  }
+  sensitive = true
+}
+
 output "application_container_id" {
   value     = yandex_serverless_container.application.id
   sensitive = true

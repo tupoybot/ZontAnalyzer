@@ -161,6 +161,42 @@ variable "application_publication_prefix" {
   }
 }
 
+variable "enable_production_database" {
+  description = "Create a separate production database and select it for the application; retain development data during cutover."
+  type        = bool
+  default     = false
+}
+
+variable "production_database_name" {
+  description = "Name of the separate production database."
+  type        = string
+  default     = "zont-prod"
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{1,61}[a-z0-9]$", var.production_database_name))
+    error_message = "Use a safe database resource name."
+  }
+}
+
+variable "production_ydb_request_units_per_second" {
+  description = "Production on-demand throughput cap; this does not request a cloud quota increase."
+  type        = number
+  default     = 50
+  validation {
+    condition     = var.production_ydb_request_units_per_second >= 10 && var.production_ydb_request_units_per_second <= 1000 && floor(var.production_ydb_request_units_per_second) == var.production_ydb_request_units_per_second
+    error_message = "Use an integer throughput cap between 10 and 1000 request units per second."
+  }
+}
+
+variable "production_ydb_storage_size_limit_gib" {
+  description = "Production storage cap including isolated recovery copies."
+  type        = number
+  default     = 2
+  validation {
+    condition     = var.production_ydb_storage_size_limit_gib >= 1 && var.production_ydb_storage_size_limit_gib <= 100 && floor(var.production_ydb_storage_size_limit_gib) == var.production_ydb_storage_size_limit_gib
+    error_message = "Use an integer storage cap between 1 and 100 GiB."
+  }
+}
+
 variable "ydb_request_units_per_second" {
   description = "Explicit serverless throughput cap for the accepted workload, including migration."
   type        = number
