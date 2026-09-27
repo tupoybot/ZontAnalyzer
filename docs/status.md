@@ -6,6 +6,16 @@
 
 ## Текущая работа
 
+- Следующий этап — [М6: эксплуатационный мониторинг](./cloud/cloud_first_milestone.md#m6--cloud-observability-и-ограничения-стоимости),
+  [задача #17](https://github.com/tupoybot/ZontAnalyzer/issues/17). Выбор платформы
+  мониторинга независим от необязательной визуализации телеметрии в М7;
+  пригодность существующей Grafana предстоит проверить. М6 ещё не начат.
+
+- Запланирован обязательный [М9: автодеплой production](./cloud/cloud_first_milestone.md#m9--автодеплой-production-после-merge-в-main),
+  [задача #51](https://github.com/tupoybot/ZontAnalyzer/issues/51): после М8 merge
+  в `main` должен автоматически проверять, выпускать и развёртывать новый
+  production; устаревшие workflow подлежат удалению. Реализация не начата.
+
 - [М5: публикация и защищённый сайт](./cloud/cloud_first_m5.md) принят владельцем
   2026-09-27; результат — [PR #49](https://github.com/tupoybot/ZontAnalyzer/pull/49).
   Развёрнуты закрытый Object Storage, браузерный вход через Identity Hub и
