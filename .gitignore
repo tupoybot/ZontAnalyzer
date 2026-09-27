@@ -29,3 +29,5 @@ build/
 *.tfstate.*
 *.tfplan
 /.local/
+# Locally packaged Cloud Function; deployment artifact is rebuilt from source.
+infra/auth/*.zip

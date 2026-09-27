@@ -23,7 +23,9 @@ try {
   await page.evaluate(() => {
     let reviewPolls = 0;
     window.actions = [];
+    window.fetches = [];
     window.fetch = async (url, options = {}) => {
+      window.fetches.push([url, options.method || "GET"]);
       if (url.endsWith("/api/ai/review")) {
         if (options.method !== "PUT") throw new Error("review action must use PUT");
         window.actions.push(JSON.parse(options.body));
@@ -41,6 +43,7 @@ try {
       throw new Error(`unexpected ${url}`);
     };
   });
+  assert.deepEqual(await page.evaluate(() => window.fetches), [], "AI API reads wait until the settings disclosure opens");
   await page.locator("#ai-settings > summary").click();
   await page.locator("[data-ai-accept]").click();
   await page.waitForTimeout(1100);

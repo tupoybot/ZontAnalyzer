@@ -121,6 +121,8 @@ try {
   const tariffs = (await (await context.request.get(`${base}/api/gas-tariffs`)).json()).history;
   assert.equal(tariffs.find(item => item.effective_month === plannedMonth).price, "9");
   await page.reload({ waitUntil: "networkidle" });
+  await page.locator("[data-tariff-edit]").click();
+  await page.locator("[data-tariff-message]").filter({ hasText: "История тарифов загружена" }).waitFor();
   assert.match(await page.locator("[data-tariff-planned]").textContent(), /9 RUB/);
 
   const card = page.locator(".recommendation[data-recommendation-id]").first();
@@ -137,6 +139,12 @@ try {
   await card.locator(".feedback-message").filter({ hasText: "сохранена" }).waitFor();
   await drain();
   await page.reload({ waitUntil: "networkidle" });
+  const savedCard = page.locator(".recommendation[data-recommendation-id]").first();
+  await savedCard.locator(".feedback-comment > summary").click();
+  await page.waitForFunction(() => document.querySelector(
+    ".recommendation[data-recommendation-id] .feedback-note"
+  )?.value === "Cloud feedback persists");
+  await savedCard.locator(".feedback-experiment > summary").click();
   assert.equal(await page.locator(".recommendation .feedback-note").first().inputValue(), "Cloud feedback persists");
   assert.equal(await page.locator('[data-experiment-field="category"]').first().inputValue(), "firmware_update");
 

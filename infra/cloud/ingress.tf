@@ -14,7 +14,23 @@ resource "yandex_api_gateway" "probe" {
   execution_timeout = "210"
   spec = yamlencode({
     openapi = "3.0.0"
-    info    = { title = "Isolated probe and YDB application", version = "4.0" }
+    info    = { title = "Isolated reports and application", version = "5.0" }
+    components = {
+      securitySchemes = var.identity == null ? {} : {
+        identityHub = {
+          type = "openIdConnect"
+          "x-yc-apigateway-authorizer" = {
+            type            = "jwt"
+            jwksUri         = "https://auth.yandex.cloud/oauth/jwks/keys"
+            identitySource  = { in = "cookie", name = "__Host-zont_oidc" }
+            issuers         = [var.identity.issuer]
+            audiences       = [var.identity.client_id]
+            requiredClaims  = ["sub", "exp", "iat"]
+            jwkTtlInSeconds = 300
+          }
+        }
+      }
+    }
     paths = merge(
       {
         for path in ["/api/probe", "/private/probe.txt"] : path => {
@@ -218,6 +234,7 @@ resource "yandex_api_gateway" "probe" {
           }
         }
       },
+      local.identity_paths,
     )
   })
   dynamic "custom_domains" {
@@ -234,6 +251,8 @@ resource "yandex_api_gateway" "probe" {
   depends_on = [
     yandex_serverless_container_iam_binding.timer,
     yandex_serverless_container_iam_binding.application_invoker,
+    yandex_function_iam_binding.auth,
+    yandex_storage_bucket_iam_binding.probe,
   ]
 }
 

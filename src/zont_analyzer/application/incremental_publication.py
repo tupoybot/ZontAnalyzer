@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from zont_analyzer.cloud.publication import CloudPublication
     from zont_analyzer.runtime import Runtime
 
-VERSION = "publication-v1"
+VERSION = "publication-v2"
 RENDER, GAS, COST = 1, 2, 4
 AUDIT_SIZE = 16
 LEASE_SECONDS = 240
@@ -172,7 +172,12 @@ def publish_incremental(runtime: Runtime, output: Path, now: datetime, *,
     if lease is None:
         raise RuntimeError("another publisher holds the YDB publication lease")
     try:
-        return _run(repository, runtime, output, now, batch_size, rebuild, owner, lease.attempt, cloud)
+        result = _run(repository, runtime, output, now, batch_size, rebuild, owner, lease.attempt, cloud)
+        if cloud is not None:
+            # The index is a repairable projection: only publish freshly read,
+            # committed pointers after the fenced save, including on idle retries.
+            cloud.update_site_index(repository)
+        return result
     finally:
         runtime.db.jobs.release("publication", owner, lease.attempt)
 
@@ -199,7 +204,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
     config_values = (VERSION, runtime.config.home.model_dump(), runtime.config.home.effective_timezone,
                      runtime.config.preferences.model_dump(), runtime.config.analysis.model_dump(),
                      runtime.config.feedback.public_api_base_url)
-    storage_target = _digest((cloud.storage.bucket, cloud.storage.prefix)) if cloud else ""
+    storage_target = cloud.storage_target if cloud else ""
     config_digest = _digest(config_values + (storage_target,) if cloud else config_values)
     review_digest = _digest(ai_review)
     meta_hint = repository.load_meta()

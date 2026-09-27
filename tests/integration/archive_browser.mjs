@@ -30,7 +30,14 @@ try {
     assert.match(await response.text(), /archive-nojs[\s\S]*latest\.html/, `${path} retains a no-JS latest fallback`);
   }
 
+  const eagerApiReads = [];
+  page.on("request", request => {
+    if (/\/api\/(equipment|gas-tariffs|reports\/|ai|recommendations\/)/.test(new URL(request.url()).pathname)) {
+      eagerApiReads.push(request.url());
+    }
+  });
   await page.goto(`${baseURL}/`, { waitUntil: "networkidle" });
+  assert.deepEqual(eagerApiReads, [], "owner, feedback, AI, and job status reads wait for their forms");
   assert.match(page.url(), /\/$/, "root keeps its stable landing URL");
   await page.locator("[data-archive-navigation]").waitFor();
   assert.equal(await page.locator('[data-archive-action="latest"][href]').count(), 0);
@@ -151,6 +158,7 @@ try {
     assert.match(await periodGas.textContent(), /Покрытие/);
   }
   await page.goto(`${baseURL}/daily/2026-08-05.html`, { waitUntil: "networkidle" });
+  await page.locator("[data-regeneration-status] > summary").click();
   const questionBox = page.locator(".counterfactual-question");
   const buttonBox = page.locator(".regenerate-report");
   const desktopGeometry = await page.evaluate(() => {
@@ -429,6 +437,7 @@ try {
   assert.match(await page.locator(".recommendation .feedback-status").first().textContent(), /Выполнено/);
 
   await page.goto(`${baseURL}/latest.html`, { waitUntil: "networkidle" });
+  await page.locator("[data-regeneration-status] > summary").click();
   const regenerate = page.locator(".regenerate-report");
   await regenerate.waitFor();
   const counterfactual = page.locator(".counterfactual-question");

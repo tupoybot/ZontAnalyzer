@@ -58,7 +58,7 @@ def valid_key(key: str) -> bool:
 
 
 class ObjectStorage:
-    """Only immutable PUT, bounded GET and HEAD; no anonymous or redirect fallback."""
+    """Immutable artifacts and explicit CAS writes; no anonymous or redirect fallback."""
 
     def __init__(self, bucket: str, prefix: str = "reports", *,
                  token: Callable[[], str] | None = None, transport: httpx.BaseTransport | None = None) -> None:
@@ -74,7 +74,8 @@ class ObjectStorage:
     def from_environment(cls) -> ObjectStorage:
         return cls(os.environ["CLOUD_PUBLICATION_BUCKET"], os.environ.get("CLOUD_PUBLICATION_PREFIX", "reports"))
 
-    def _request(self, method: str, key: str, body: bytes = b"", content_type: str = "") -> StoredObject | None:
+    def _request(self, method: str, key: str, body: bytes = b"", content_type: str = "", *,
+                 conditional: bool = False, expected_etag: str | None = None) -> StoredObject | None:
         if not valid_key(key):
             raise ValueError("invalid publication key")
         if len(body) > MAX_OBJECT_BYTES:
@@ -82,14 +83,19 @@ class ObjectStorage:
         url = f"https://storage.yandexcloud.net/{self.bucket}/{quote(self.prefix + '/' + key, safe='/')}"
         headers = {"Authorization": "Bearer " + self.token(), "Accept-Encoding": "identity"}
         if method == "PUT":
-            headers.update({"Content-Type": content_type, "If-None-Match": "*",
-                            "Cache-Control": "private, no-store"})
+            headers.update({"Content-Type": content_type, "Cache-Control": "private, no-store"})
+            if conditional and expected_etag is not None:
+                headers["If-Match"] = expected_etag
+            else:
+                headers["If-None-Match"] = "*"
         try:
             with (
                 httpx.Client(transport=self.transport, trust_env=False, follow_redirects=False, timeout=10) as client,
                 client.stream(method, url, headers=headers, content=body) as response,
             ):
                 if response.status_code == 404 and method in {"GET", "HEAD"}:
+                    return None
+                if conditional and response.status_code in {409, 412}:
                     return None
                 if response.status_code == 412 and method == "PUT":
                     # An identical retry is safe; a conflicting immutable object is not.
@@ -125,3 +131,13 @@ class ObjectStorage:
         result = self._request("PUT", key, body, content_type)
         assert result is not None
         return result.etag
+
+    def compare_and_swap(self, key: str, body: bytes, content_type: str, *, expected_etag: str | None) -> bool:
+        """Create only if absent, or replace exactly the object read by the caller."""
+        if expected_etag is not None and (
+            not expected_etag or expected_etag == "*" or expected_etag.startswith("W/")
+            or "\r" in expected_etag or "\n" in expected_etag
+        ):
+            raise ValueError("invalid conditional publication ETag")
+        return self._request("PUT", key, body, content_type,
+                             conditional=True, expected_etag=expected_etag) is not None

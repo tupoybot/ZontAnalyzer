@@ -35,10 +35,16 @@ def object_request(request: httpx.Request) -> httpx.Response:
     with object_lock:
         existing = objects.get(key)
         if request.method == "PUT":
-            assert request.headers.get("If-None-Match") == "*"
             assert request.headers.get("Cache-Control") == "private, no-store"
-            if existing is not None:
-                return httpx.Response(412)
+            match = request.headers.get("If-Match")
+            if match is not None:
+                assert key == "site-index.json" and "If-None-Match" not in request.headers
+                if existing is None or existing[2] != match:
+                    return httpx.Response(412)
+            else:
+                assert request.headers.get("If-None-Match") == "*"
+                if existing is not None:
+                    return httpx.Response(412)
             body = request.content
             etag = hashlib.sha256(body).hexdigest()
             content_type = request.headers.get("Content-Type", "application/octet-stream")

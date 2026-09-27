@@ -20,7 +20,7 @@ resource "yandex_serverless_container" "application" {
   image {
     url    = var.application_image
     digest = split("@", var.application_image)[1]
-    environment = {
+    environment = merge({
       CLOUD_ENVIRONMENT             = var.environment
       CLOUD_REVISION                = var.application_revision
       CLOUD_JOB_TIMEOUT_SECONDS     = "15"
@@ -34,7 +34,11 @@ resource "yandex_serverless_container" "application" {
       YDB_DATABASE                  = yandex_ydb_database_serverless.probe.database_path
       YDB_NAMESPACE                 = var.application_ydb_namespace
       YDB_METADATA_CREDENTIALS      = "1"
-    }
+      }, var.identity == null ? {} : {
+      CLOUD_OIDC_ISSUER   = var.identity.issuer
+      CLOUD_OIDC_AUDIENCE = var.identity.client_id
+      CLOUD_OIDC_JWKS_URI = "https://auth.yandex.cloud/oauth/jwks/keys"
+    })
   }
 
   secrets {

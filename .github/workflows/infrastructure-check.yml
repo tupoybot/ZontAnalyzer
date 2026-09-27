@@ -29,7 +29,12 @@ jobs:
       - run: terraform -chdir=infra/bootstrap validate
       - run: terraform -chdir=infra/cloud init -backend=false -input=false -lockfile=readonly
       - run: terraform -chdir=infra/cloud validate
+      - run: zip -j infra/auth/auth.zip infra/auth/index.js
       - run: terraform -chdir=infra/cloud test
+      - run: terraform -chdir=infra/identity init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/identity validate
+      - run: terraform -chdir=infra/identity test
+      - run: node --test infra/auth/test_auth.cjs
   probe:
     runs-on: ubuntu-latest
     timeout-minutes: 20

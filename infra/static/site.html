@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Отчёты ZontAnalyzer</title>
+  <style>
+    body{font:16px/1.5 system-ui,sans-serif;max-width:48rem;margin:10vh auto;padding:0 1rem;color:#17212b}
+    [role=status]{padding:1rem;background:#f2f5f8;border-radius:.5rem;overflow-wrap:anywhere}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Отчёты ZontAnalyzer</h1>
+    <p id="site-status" role="status" aria-live="polite">Загрузка отчёта…</p>
+  </main>
+  <script>
+  (() => {
+    "use strict";
+    const status = document.querySelector("#site-status");
+    const pathPattern = /^(?:daily|weekly|monthly|seasonal)\/\d{4}-\d{2}-\d{2}\.html$/;
+    const reportKeyPattern = /^publication\/reports\/[a-f0-9]{64}\.html$/;
+    const jsonKeyPattern = /^publication\/reports\/[a-f0-9]{64}\.json$/;
+    const latestKeyPattern = /^publication\/latest\/[a-f0-9]{64}\.html$/;
+    const manifestKeyPattern = /^publication\/manifests\/[a-f0-9]{64}\.json$/;
+    const isKey = (value, pattern) => typeof value === "string" && pattern.test(value);
+    const errorText = value => {
+      status.textContent = value;
+      status.setAttribute("role", "alert");
+    };
+    const login = () => { window.location.replace("/auth/login"); };
+    const fetchJson = async url => {
+      const response = await fetch(url, {credentials: "same-origin", cache: "no-store", headers: {Accept: "application/json"}});
+      if (response.status === 401 || response.status === 403) { login(); return null; }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    };
+    const objectUrl = key => "/objects/" + key.split("/").map(encodeURIComponent).join("/");
+    const entryIsSafe = entry => entry && typeof entry === "object"
+      && pathPattern.test(entry.href)
+      && isKey(entry.html_key, reportKeyPattern)
+      && isKey(entry.json_key, jsonKeyPattern);
+    const shellPath = location.pathname.replace(/^\/za(?=\/|$)/, "") || "/";
+
+    (async () => {
+      try {
+        const index = await fetchJson("/reports.json");
+        if (!index) return;
+        if (!index || index.version !== 1 || !isKey(index.manifest_key, manifestKeyPattern)
+            || !(index.latest_key === "" || isKey(index.latest_key, latestKeyPattern)) || !Array.isArray(index.reports)) {
+          throw new Error("Неверный формат каталога отчётов.");
+        }
+        const entries = new Map();
+        for (const entry of index.reports) {
+          if (!entryIsSafe(entry) || entries.has(entry.href)) continue;
+          entries.set(entry.href, entry);
+        }
+        let key;
+        if (["/", "/index.html", "/latest.html"].includes(shellPath)) {
+          if (!isKey(index.latest_key, latestKeyPattern)) throw new Error("Последний отчёт пока не опубликован.");
+          key = index.latest_key;
+        } else {
+          const href = shellPath.startsWith("/") ? shellPath.slice(1) : "";
+          const entry = entries.get(href);
+          if (!entry) throw new Error("Такого опубликованного отчёта нет.");
+          key = entry.html_key;
+        }
+        const response = await fetch(objectUrl(key), {credentials: "same-origin", cache: "no-store"});
+        if (response.status === 401 || response.status === 403) { login(); return; }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const type = response.headers.get("content-type") || "";
+        if (!type.toLowerCase().startsWith("text/html")) throw new Error("Сервер вернул не HTML-отчёт.");
+        const report = await response.text();
+        document.open();
+        document.write(report);
+        document.close();
+        const account = document.createElement("nav");
+        account.setAttribute("aria-label", "Учётная запись");
+        account.style.cssText = "text-align:right;padding:.5rem 1rem;background:#f2f5f8";
+        const logout = document.createElement("form");
+        logout.method = "post";
+        logout.action = "/auth/logout";
+        const button = document.createElement("button");
+        button.type = "submit";
+        button.textContent = "Выйти";
+        logout.append(button);
+        account.append(logout);
+        document.body.prepend(account);
+      } catch (_error) {
+        errorText("Отчёт сейчас недоступен. Обновите страницу позже.");
+      }
+    })();
+  })();
+  </script>
+</body>
+</html>

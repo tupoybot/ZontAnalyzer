@@ -121,7 +121,7 @@ resource "yandex_serverless_container" "probe" {
 resource "yandex_storage_bucket_iam_binding" "probe" {
   bucket  = yandex_storage_bucket.publication.bucket
   role    = "storage.viewer"
-  members = ["serviceAccount:${var.runtime_service_account_id}"]
+  members = var.identity == null ? ["serviceAccount:${var.runtime_service_account_id}"] : ["serviceAccount:${var.runtime_service_account_id}", "serviceAccount:${var.timer_service_account_id}"]
 }
 
 resource "yandex_storage_object" "probe" {

@@ -59,6 +59,7 @@ class RuntimeConfig:
     authorization: str
     xray_proxy_port: int = 1080
     report_timeout_seconds: float = 180
+    oidc: auth.OidcConfig | None = None
 
     @classmethod
     def from_environment(cls) -> RuntimeConfig:
@@ -86,6 +87,7 @@ class RuntimeConfig:
             revision=revision,
             authorization="Basic " + base64.b64encode(credentials.encode("utf-8")).decode("ascii"),
             report_timeout_seconds=report_timeout,
+            oidc=auth.OidcConfig.from_environment(),
         )
 
 
@@ -294,6 +296,7 @@ class CloudServer(ThreadingHTTPServer):
         self.active_job = threading.BoundedSemaphore(1)
         self.stopping = threading.Event()
         self.runtime_factory = runtime_factory or _cloud_application_runtime
+        self.oidc_verifier = auth.OidcVerifier(config.oidc) if config.oidc is not None else None
 
     def get_request(self) -> tuple[socket.socket, Any]:
         request, address = super().get_request()
@@ -340,6 +343,13 @@ class CloudHandler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         path = urlsplit(self.path).path
+        oidc_enabled = self.server.config.oidc is not None
+        if self.command == "GET":
+            self._finish_input()
+        if oidc_enabled and path in {"/login", "/logout"}:
+            self._finish_input()
+            self._reply(404, {"error": "not_found"})
+            return
         if path == "/login" and self.command == "GET":
             self._finish_input()
             self._reply_bytes(200, auth.login_page(authenticated=self._authorized()), "text/html; charset=utf-8")
@@ -353,10 +363,17 @@ class CloudHandler(BaseHTTPRequestHandler):
         internal_maintenance = self.command == "POST" and self.path == "/internal/maintenance"
         if not internal_maintenance and not self._authorized():
             self._finish_input()
-            if self.command == "GET" and _HTML_SITE.fullmatch(path):
+            if not oidc_enabled and self.command == "GET" and _HTML_SITE.fullmatch(path):
                 self._reply_bytes(401, auth.login_page(), "text/html; charset=utf-8")
             else:
-                self._reply(401, {"error": "unauthorized"}, basic_challenge=True)
+                self._reply(401, {"error": "unauthorized"},
+                            basic_challenge=not oidc_enabled or self._operational_route())
+            return
+        if (oidc_enabled and self.command in {"PUT", "POST"}
+                and not internal_maintenance and not self._operational_route()
+                and not auth.same_origin(self.headers, os.environ.get("CLOUD_PUBLIC_ORIGIN"))):
+            self._finish_input()
+            self._reply(403, {"error": "origin_denied"})
             return
         if self.command == "GET":
             self._finish_input()
@@ -547,8 +564,15 @@ class CloudHandler(BaseHTTPRequestHandler):
                           extra_headers={"Location": "/login", "Set-Cookie": auth.clear_cookie()})
 
     def _authorized(self) -> bool:
+        if self.server.config.oidc is not None:
+            if self._operational_route():
+                return hmac.compare_digest(self.headers.get("Authorization", ""), self.server.config.authorization)
+            return self.server.oidc_verifier is not None and self.server.oidc_verifier.authorized(self.headers)
         return (hmac.compare_digest(self.headers.get("Authorization", ""), self.server.config.authorization)
                 or auth.session_from_headers(self.headers, self.server.config.authorization))
+
+    def _operational_route(self) -> bool:
+        return self.path in {"/ready", "/diagnostics"} or urlsplit(self.path).path.startswith("/jobs/")
 
     def _json_body(self) -> dict[str, Any] | None:
         if self.headers.get("Transfer-Encoding"):

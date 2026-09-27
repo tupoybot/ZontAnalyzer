@@ -148,3 +148,18 @@ variable "enable_maintenance_timer" {
     error_message = "Configure metric export before enabling web job delivery."
   }
 }
+
+variable "identity" {
+  description = "Private Identity Hub integration. Null retains the isolated pre-OIDC probe configuration."
+  type = object({
+    client_id             = string
+    issuer                = string
+    auth_service_account  = string
+    client_secret_id      = string
+    client_secret_version = string
+    transaction_secret_id = string
+    transaction_version   = string
+    code_sha256           = string
+  })
+  default = null
+}

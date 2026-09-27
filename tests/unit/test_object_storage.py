@@ -32,6 +32,55 @@ def test_immutable_upload_and_retry_do_not_overwrite():
     assert methods == ['PUT', 'PUT', 'GET', 'PUT', 'GET']
 
 
+def test_conditional_create_and_replace_reject_stale_etag_without_overwrite():
+    current = None
+    requests = []
+
+    def respond(request):
+        nonlocal current
+        requests.append(request)
+        assert request.method == 'PUT'
+        assert request.headers['authorization'] == 'Bearer test-token'
+        assert request.headers['accept-encoding'] == 'identity'
+        assert request.headers['cache-control'] == 'private, no-store'
+        assert request.url.path == '/test-bucket/reports/site-index.json'
+        expected = request.headers.get('if-match')
+        if expected is None:
+            assert request.headers['if-none-match'] == '*'
+            if current is not None:
+                return httpx.Response(412)
+        else:
+            assert 'if-none-match' not in request.headers
+            if current is None or expected != current[0]:
+                return httpx.Response(412)
+        current = (f'"revision-{len(requests)}"', request.content)
+        return httpx.Response(200, headers={'ETag': current[0]})
+
+    storage = ObjectStorage('test-bucket', token=lambda: 'test-token', transport=httpx.MockTransport(respond))
+    assert storage.compare_and_swap('site-index.json', b'first', 'application/json', expected_etag=None)
+    assert not storage.compare_and_swap('site-index.json', b'old-create', 'application/json', expected_etag=None)
+    assert storage.compare_and_swap('site-index.json', b'newest', 'application/json', expected_etag='"revision-1"')
+    assert not storage.compare_and_swap('site-index.json', b'stale', 'application/json', expected_etag='"revision-1"')
+    assert current == ('"revision-3"', b'newest')
+    assert len(requests) == 4
+    for invalid in ('', '*', 'W/"weak"', 'etag\nheader'):
+        with pytest.raises(ValueError, match='ETag'):
+            storage.compare_and_swap('site-index.json', b'unsafe', 'application/json', expected_etag=invalid)
+    assert len(requests) == 4
+
+
+def test_conditional_request_conflict_is_retryable_but_other_failures_are_errors():
+    for status in (409, 412, 403, 500):
+        storage = ObjectStorage('test-bucket', token=lambda: 'secret', transport=httpx.MockTransport(
+            lambda request, code=status: httpx.Response(code, content=b'private-provider-error')
+        ))
+        if status in (409, 412):
+            assert not storage.compare_and_swap('site-index.json', b'index', 'application/json', expected_etag=None)
+        else:
+            with pytest.raises(StorageError, match='request failed'):
+                storage.compare_and_swap('site-index.json', b'index', 'application/json', expected_etag=None)
+
+
 def test_storage_rejects_paths_redirects_and_redacts_errors():
     requests = []
 
