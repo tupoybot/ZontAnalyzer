@@ -150,6 +150,7 @@ class AnalysisService:
         job_fence: tuple[str, str, int] | None = None,
     ):
         self.job_fence = job_fence
+        self.report_write_fence: tuple[str, str, int] | None = None
         from zont_analyzer.application.timezone import apply_device_timezone
 
         apply_device_timezone(db, config)
@@ -168,9 +169,11 @@ class AnalysisService:
     def report_id_for(kind: str, start: datetime) -> str:
         return f"report:{kind}:{int(start.timestamp())}:report-v2"
 
-    def analyze_daily(self, selected: date, *, use_ai: bool = True, kind: str = "daily") -> Report:
+    def analyze_daily(
+        self, selected: date, *, use_ai: bool = True, kind: str = "daily", persist: bool = True,
+    ) -> Report:
         start, end = self.local_day_window(selected)
-        return self._analyze(start, end, kind=kind, use_ai=use_ai)
+        return self._analyze(start, end, kind=kind, use_ai=use_ai, persist=persist)
 
     def analyze_initial(self, *, use_ai: bool = True, days: int | None = None) -> Report:
         if days is not None and not 1 <= days <= 365:
@@ -218,8 +221,9 @@ class AnalysisService:
     def analyze_season(self, year: int, season: str, *, use_ai: bool = True) -> Report:
         return self.analyze_period(self.seasonal_period(year, season), use_ai=use_ai)
 
-    def analyze_period(self, period: Period, *, use_ai: bool = True) -> Report:
-        return self._analyze(period.start, period.observed_end, kind=period.kind, use_ai=use_ai, period=period)
+    def analyze_period(self, period: Period, *, use_ai: bool = True, persist: bool = True) -> Report:
+        return self._analyze(period.start, period.observed_end, kind=period.kind, use_ai=use_ai,
+                             period=period, persist=persist)
 
     def regenerate(self, report: Report, *, request_nonce: str | None = None, question: str | None = None) -> Report:
         if self.config.openai.enabled and self.analyst is None:
@@ -876,7 +880,8 @@ class AnalysisService:
         if self.db.source_revision() != source_revision:
             raise ValueError("inputs changed while report was calculated")
         if persist:
-            self.db.save_report(report, render_text(report), source_revision=source_revision, job_fence=self.job_fence)
+            self.db.save_report(report, render_text(report), source_revision=source_revision,
+                                job_fence=self.job_fence, write_fence=self.report_write_fence)
         return report
 
     def _temporal_evidence(

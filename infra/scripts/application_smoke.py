@@ -57,22 +57,37 @@ def run(private):
     before = invoke(host, "/diagnostics", authorization)
     assert before[0] == 200
     assert json.loads(before[1])["revision"] == inputs["application_revision"]
-    first = invoke(host, "/jobs/analytics", authorization, SAMPLE)
-    second = invoke(host, "/jobs/analytics", authorization, SAMPLE)
-    assert first[0] == second[0] == 200
-    one, two = json.loads(first[1]), json.loads(second[1])
-    assert one["result"]["quality"] == two["result"]["quality"]
-    assert one["job_id"] != two["job_id"]
-    invalid = invoke(host, "/jobs/analytics", authorization, {"invalid": True})
-    assert invalid[0] == 400
+    writes_enabled = inputs.get("application_writes_enabled", True)
+    assert json.loads(before[1])["writes_enabled"] is writes_enabled
+    assert invoke(host, "/jobs/analytics", body=SAMPLE)[0] == 401
+    if writes_enabled:
+        first = invoke(host, "/jobs/analytics", authorization, SAMPLE)
+        second = invoke(host, "/jobs/analytics", authorization, SAMPLE)
+        assert first[0] == second[0] == 200
+        one, two = json.loads(first[1]), json.loads(second[1])
+        assert one["result"]["quality"] == two["result"]["quality"]
+        assert one["job_id"] != two["job_id"]
+        invalid = invoke(host, "/jobs/analytics", authorization, {"invalid": True})
+        assert invalid[0] == 400
+        checks = {"first_job": one["job_id"], "second_job": two["job_id"], "validation_http": 400}
+    else:
+        blocked = invoke(host, "/jobs/analytics", authorization, SAMPLE)
+        assert blocked[0] == 503 and json.loads(blocked[1]) == {"error": "maintenance"}
+        # An unknown API operation cannot mutate state even if the gate regresses.
+        api = invoke(host, "/api/maintenance-smoke", authorization, {})
+        if inputs.get("identity"):
+            assert api[0] in {401, 403}
+        else:
+            assert api[0] == 503 and json.loads(api[1]) == {"error": "maintenance"}
+        checks = {"maintenance_http": 503, "api_probe_http": api[0]}
     direct = target(outputs["application_url"]["value"])
     assert invoke(direct, "/ready")[0] == 403
     result = {"revision": inputs["application_revision"], "image": inputs["application_image"],
               "ready_http": 200, "anonymous_gateway_http": 401, "anonymous_container_http": 403,
-              "first_job": one["job_id"], "second_job": two["job_id"], "validation_http": 400,
+              "writes_enabled": writes_enabled, **checks,
               "external_api_requests": 0}
     (private / "application-smoke.json").write_text(json.dumps(result))
-    print("M2 cloud smoke passed: auth, readiness, repeated analytics, validation and private ingress")
+    print("Cloud smoke passed: auth, readiness, configured write gate and private ingress")
 
 
 if __name__ == "__main__":

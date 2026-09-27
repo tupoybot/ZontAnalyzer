@@ -37,8 +37,8 @@ resource "yandex_ydb_database_serverless" "probe" {
   serverless_database {
     enable_throttling_rcu_limit = true
     provisioned_rcu_limit       = 0
-    throttling_rcu_limit        = 10
-    storage_size_limit          = 1
+    throttling_rcu_limit        = var.ydb_request_units_per_second
+    storage_size_limit          = var.ydb_storage_size_limit_gib
   }
 }
 
@@ -165,6 +165,23 @@ resource "yandex_function_trigger" "maintenance" {
     id                 = yandex_serverless_container.application.id
     service_account_id = var.timer_service_account_id
     path               = "/internal/maintenance"
+    retry_attempts     = 1
+    retry_interval     = 10
+  }
+  depends_on = [yandex_serverless_container_iam_binding.application_invoker]
+}
+
+resource "yandex_function_trigger" "scheduler" {
+  count     = var.enable_scheduler_timer ? 1 : 0
+  folder_id = data.yandex_resourcemanager_folder.project.id
+  name      = "${local.name}-scheduler"
+  timer {
+    cron_expression = "* * * * ? *"
+  }
+  container {
+    id                 = yandex_serverless_container.application.id
+    service_account_id = var.timer_service_account_id
+    path               = "/internal/scheduler"
     retry_attempts     = 1
     retry_interval     = 10
   }

@@ -13,6 +13,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -121,6 +122,115 @@ def test_all_routes_require_basic_auth_and_ready_is_local(server: Any) -> None:
     status, body = _request(instance, credentials, "GET", "/diagnostics")
     assert body["revision"] == "test-revision"
     assert body["counters"] == {"successes": 0, "failures": 0, "timeouts": 0}
+    assert body["writes_enabled"] is True
+
+
+@pytest.mark.parametrize("value", [None, "true", "false"])
+def test_write_gate_environment(monkeypatch: pytest.MonkeyPatch, value: str | None) -> None:
+    monkeypatch.setenv("CLOUD_ENVIRONMENT", "dev")
+    monkeypatch.setenv("CLOUD_WEB_CREDENTIALS", "test-user:test-password")
+    if value is None:
+        monkeypatch.delenv("CLOUD_WRITES_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("CLOUD_WRITES_ENABLED", value)
+    assert RuntimeConfig.from_environment().writes_enabled is (value != "false")
+
+
+@pytest.mark.parametrize("value", ["", "TRUE", "False", "1", "0", " false ", "invalid"])
+def test_write_gate_rejects_invalid_environment(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("CLOUD_ENVIRONMENT", "dev")
+    monkeypatch.setenv("CLOUD_WRITES_ENABLED", value)
+    with pytest.raises(ValueError, match="CLOUD_WRITES_ENABLED must be true or false"):
+        RuntimeConfig.from_environment()
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [(method, prefix + "/settings") for method in ("POST", "PUT") for prefix in ("/api", "/za/api")]
+    + [("POST", "/jobs/" + job) for job in
+       ("analytics", "integrations", "reports", "maintenance", "publication", "scheduler")]
+    + [("POST", "/internal/maintenance"), ("POST", "/internal/scheduler")],
+)
+def test_maintenance_blocks_writes_before_database_or_dispatch(
+    server: Any, monkeypatch: pytest.MonkeyPatch, method: str, path: str,
+) -> None:
+    instance, credentials = server
+    instance.config = replace(instance.config, writes_enabled=False)
+    instance.runtime_factory = Mock(side_effect=AssertionError("database must not open"))
+    dispatch = Mock(side_effect=AssertionError("jobs must not run"))
+    monkeypatch.setattr(runtime_module, "run_bounded", dispatch)
+    # The private timer endpoint must be blocked even without Basic credentials.
+    if path.startswith("/internal/"):
+        credentials = "wrong"
+    assert _request(instance, credentials, method, path, {}) == (503, {"error": "maintenance"})
+    instance.runtime_factory.assert_not_called()
+    dispatch.assert_not_called()
+
+
+def test_maintenance_keeps_authentication_and_diagnostics(server: Any) -> None:
+    instance, credentials = server
+    instance.config = replace(instance.config, writes_enabled=False)
+    assert _request(instance, "wrong", "PUT", "/api/settings", {}) == (401, {"error": "unauthorized"})
+    status, body = _request(instance, credentials, "GET", "/diagnostics")
+    assert status == 200
+    assert body["writes_enabled"] is False
+
+
+def test_maintenance_keeps_login_and_logout(server: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    instance, _credentials = server
+    instance.config = replace(instance.config, writes_enabled=False)
+    monkeypatch.delenv("CLOUD_PUBLIC_ORIGIN", raising=False)
+    origin = f"https://127.0.0.1:{instance.server_address[1]}"
+    connection = http.client.HTTPConnection("127.0.0.1", instance.server_address[1], timeout=5)
+    try:
+        connection.request("POST", "/login", "username=test-user&password=test-password", {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": origin,
+        })
+        response = connection.getresponse()
+        response.read()
+        assert response.status == 303
+        assert response.getheader("Set-Cookie")
+        connection.request("POST", "/logout", headers={"Content-Length": "0", "Origin": origin})
+        response = connection.getresponse()
+        response.read()
+        assert response.status == 303
+        assert "Max-Age=0" in (response.getheader("Set-Cookie") or "")
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("path", ["/jobs/monitoring", "/internal/monitoring"])
+def test_maintenance_allows_read_only_monitoring(
+    server: Any, monkeypatch: pytest.MonkeyPatch, path: str,
+) -> None:
+    instance, credentials = server
+    instance.config = replace(instance.config, writes_enabled=False)
+    instance.tunnel.is_ready = False
+    dispatch = Mock(return_value={"healthy": True})
+    monkeypatch.setattr(runtime_module, "run_bounded", dispatch)
+    status, body = _request(instance, credentials, "POST", path, {})
+    assert status == 200
+    assert body["result"] == {"healthy": True}
+    assert dispatch.call_args.args[0] is DISPATCHERS["monitoring"]
+
+
+@pytest.mark.parametrize("path", ["/api/health", "/za/api/health"])
+def test_maintenance_allows_api_reads(server: Any, monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    instance, credentials = server
+    instance.config = replace(instance.config, writes_enabled=False)
+    application = SimpleNamespace(db=Mock())
+    instance.runtime_factory = Mock(return_value=application)
+
+    def handle(handler: Any, runtime: Any) -> bool:
+        assert runtime is application
+        handler._reply(200, {"healthy": True})
+        return True
+
+    monkeypatch.setattr("zont_analyzer.cloud.web_api.handle", handle)
+    assert _request(instance, credentials, "GET", path) == (200, {"healthy": True})
+    instance.runtime_factory.assert_called_once()
+    application.db.close.assert_called_once()
 
 
 def test_analytics_job_is_repeatable_and_rejects_malformed_input(
@@ -211,6 +321,29 @@ def test_reports_route_uses_separate_bounded_budget_and_authorization(
     assert calls == [({**request, "_runtime_timeout_seconds": 180}, 180)]
     _request(instance, credentials, "POST", "/jobs/analytics", _payload())
     assert calls[1][1] == 3
+
+
+@pytest.mark.parametrize("path", ["/jobs/scheduler", "/internal/scheduler"])
+def test_scheduler_uses_report_budget_and_private_timer_ignores_payload(
+    server: Any, monkeypatch: pytest.MonkeyPatch, path: str,
+) -> None:
+    instance, credentials = server
+    instance.config = replace(instance.config, report_timeout_seconds=120)
+    dispatch = Mock(return_value={"status": "idle"})
+    monkeypatch.setattr(runtime_module, "run_bounded", dispatch)
+    if path == "/jobs/scheduler":
+        assert _request(instance, "wrong", "POST", path, {})[0] == 401
+        dispatch.assert_not_called()
+        payload = {}
+    else:
+        credentials = "wrong"
+        payload = {"untrusted_timer_data": "must be ignored", "_runtime_timeout_seconds": 999}
+    status, body = _request(instance, credentials, "POST", path, payload)
+    assert status == 200
+    assert body["result"] == {"status": "idle"}
+    dispatch.assert_called_once_with(
+        DISPATCHERS["scheduler"], {"_runtime_timeout_seconds": 120}, 120, instance.stopping,
+    )
 
 
 def test_job_rejects_concurrency_and_recovers_after_timeout(server: Any, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -113,6 +113,22 @@ def _already_current(previous: Report | None, period: Period, signature: str) ->
     return period.kind == "seasonal" and not period.complete and previous.period_end >= period.observed_end
 
 
+def seasonal_daily_signature(analysis: AnalysisService, period: Period) -> str | None:
+    """Track deterministic daily inputs consumed by long-season aggregation.
+
+    AI text and model provenance are not inputs to that aggregation. Old
+    imported seasonal reports without this marker retain their old contract;
+    newly calculated seasons can subsequently detect repaired daily facts.
+    """
+    if period.kind != "seasonal" or period.observed_end - period.start <= timedelta(days=31):
+        return None
+    from zont_analyzer.application.reasoning_context import report_facts_fingerprint
+
+    inputs = [(report.id, report_facts_fingerprint(report))
+              for report in analysis.db.daily_reports(period.start, period.observed_end)]
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+
+
 def run_period_schedule(
     runtime: Runtime, analysis: AnalysisService, today: date,
     analysis_factory: Callable[[], AnalysisService] | None = None, *, limit: int = 1,

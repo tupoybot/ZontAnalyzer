@@ -223,7 +223,7 @@ resource "yandex_api_gateway" "probe" {
         }
       },
       {
-        for path in ["/jobs/publication", "/jobs/maintenance"] : path => {
+        for path in ["/jobs/publication", "/jobs/maintenance", "/jobs/scheduler"] : path => {
           post = {
             responses = { "200" = { description = "Durable application job accepted" } }
             "x-yc-apigateway-integration" = {

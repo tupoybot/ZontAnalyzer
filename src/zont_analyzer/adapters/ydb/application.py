@@ -215,6 +215,7 @@ class Database:
     def save_report(
         self, report: Report, rendered_text: str, *, source_revision: int | None = None,
         job_fence: tuple[str, str, int] | None = None,
+        write_fence: tuple[str, str, int] | None = None,
     ) -> None:
         for index, recommendation in enumerate(report.recommendations, start=1):
             if recommendation.id is None:
@@ -224,7 +225,7 @@ class Database:
             {"$id": report.id},
         )[0].rows
         self.reports.save_report(report, rendered_text, expected_revision=int(rows[0].revision) if rows else 0,
-                                 source_revision=source_revision, job_fence=job_fence)
+                                 source_revision=source_revision, job_fence=job_fence, write_fence=write_fence)
 
     def prior_reports(self, before: datetime, *, limit: int = 7) -> list[Report]:
         return self.reports.prior_reports(before, limit=limit)
@@ -419,18 +420,21 @@ class Database:
         return self.reports.replace_context(original, refreshed,
                                             f"report-marker-upgrade:{report_id}:{':'.join(path)}", old_value)
 
-    def seed_source_event_report_baselines(self) -> int:
+    def seed_source_event_report_baselines(self, *, batch_size: int | None = None) -> int:
         completion = "source-event-report-baselines:v1:complete"
         if self.get_app_meta(completion) == "1":
             return 0
         source_revision = self.source_revision()
-        after, after_id, count = -1, "", 0
+        cursor = json.loads(self.get_app_meta(completion + ":cursor") or "[-1,\"\"]")
+        after, after_id, count = int(cursor[0]), str(cursor[1]), 0
+        if batch_size is not None and not 1 <= batch_size <= 100:
+            raise ValueError("invalid baseline batch size")
         revisions: dict[int, str] = {}
         while True:
             rows = self.storage.execute(
                 "DECLARE $after AS Int64; DECLARE $id AS Utf8; SELECT id,period_end FROM reports "
                 "WHERE period_end > $after OR (period_end=$after AND id > $id) "
-                "ORDER BY period_end,id LIMIT 100;", {"$after": after, "$id": after_id},
+                f"ORDER BY period_end,id LIMIT {batch_size or 100};", {"$after": after, "$id": after_id},
             )[0].rows
             for row in rows:
                 key = f"source-event-report-baseline:v1:{row.id}"
@@ -456,8 +460,11 @@ class Database:
                         )
                 self.storage.transaction(write)
                 count += 1
-            if len(rows) < 100:
+            if len(rows) < (batch_size or 100):
                 break
             after, after_id = int(rows[-1].period_end), str(rows[-1].id)
+            if batch_size is not None:
+                self.set_app_meta(completion + ":cursor", json.dumps([after, after_id]))
+                return count
         self.set_app_meta(completion, "1")
         return count

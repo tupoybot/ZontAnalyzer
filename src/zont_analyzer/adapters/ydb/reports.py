@@ -199,6 +199,7 @@ class ReportRepository:
         telemetry_revision: int | None = None,
         source_revision: int | None = None,
         job_fence: tuple[str, str, int] | None = None,
+        write_fence: tuple[str, str, int] | None = None,
     ) -> int:
         if expected_revision < 0:
             raise ValueError("expected_revision must be non-negative")
@@ -224,6 +225,16 @@ class ReportRepository:
 
         def save(tx: Transaction) -> int:
             job_checkpoint: dict[str, Any] | None = None
+            if write_fence is not None:
+                lock_key, lock_owner, lock_attempt = write_fence
+                lock = _first(tx.execute(
+                    "DECLARE $key AS Utf8; SELECT owner,attempt,state,lease_until "
+                    "FROM jobs WHERE job_key=$key;", {"$key": lock_key},
+                ))
+                if (lock_key != "report-write:" + normalized.id or lock is None
+                        or _text(lock["owner"]) != lock_owner or int(lock["attempt"]) != lock_attempt
+                        or _text(lock["state"]) != "active" or int(lock["lease_until"]) <= self.clock()):
+                    raise ValueError("report write ownership expired before report commit")
             if job_fence is not None:
                 job_key, owner, attempt = job_fence
                 job = _first(tx.execute(

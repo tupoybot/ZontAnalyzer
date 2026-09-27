@@ -83,8 +83,12 @@ run "isolated_defaults" {
     error_message = "The application must use the private publication bucket, reports prefix, and origin matching its attached domain configuration."
   }
   assert {
-    condition     = length([for trigger in yandex_function_trigger.timer : trigger if trigger.container[0].id == yandex_serverless_container.application.id]) == 0
-    error_message = "M2 application must not have a scheduler."
+    condition     = length(yandex_function_trigger.scheduler) == 0 && !var.enable_scheduler_timer
+    error_message = "A new environment must not start the application scheduler."
+  }
+  assert {
+    condition     = yandex_serverless_container.application.image[0].environment.CLOUD_WRITES_ENABLED == "true" && !contains([for secret in yandex_serverless_container.application.secrets : secret.key], "application_config_json")
+    error_message = "Compatibility defaults enable writes without requiring an application configuration secret."
   }
   assert {
     condition     = alltrue([for expected in ["xray_config", "web_credentials", "zont_token", "zont_client_email", "openai_api_key"] : contains([for secret in yandex_serverless_container.application.secrets : secret.key], expected)])
@@ -417,5 +421,124 @@ run "explicit_test_teardown" {
   assert {
     condition     = !yandex_ydb_database_serverless.probe.deletion_protection && !yandex_cm_certificate.probe.deletion_protection
     error_message = "An explicitly selected test stack must support controlled teardown."
+  }
+}
+
+run "scheduler_requires_metrics" {
+  command = plan
+  variables {
+    enable_scheduler_timer            = true
+    application_config_secret_enabled = true
+  }
+  expect_failures = [var.enable_scheduler_timer]
+}
+
+run "scheduler_requires_writes" {
+  command = plan
+  variables {
+    enable_scheduler_timer            = true
+    grafana_metrics_enabled           = true
+    application_config_secret_enabled = true
+    application_writes_enabled        = false
+  }
+  expect_failures = [var.enable_scheduler_timer]
+}
+
+run "scheduler_requires_configuration" {
+  command = plan
+  variables {
+    enable_scheduler_timer  = true
+    grafana_metrics_enabled = true
+  }
+  expect_failures = [var.enable_scheduler_timer]
+}
+
+run "configured_scheduler_is_private" {
+  command = plan
+  variables {
+    enable_scheduler_timer            = true
+    grafana_metrics_enabled           = true
+    application_config_secret_enabled = true
+  }
+  override_resource {
+    target          = yandex_serverless_container.application
+    override_during = plan
+    values          = { id = "application-container" }
+  }
+  override_resource {
+    target          = yandex_serverless_container.probe
+    override_during = plan
+    values          = { id = "probe-container" }
+  }
+  assert {
+    condition     = length(yandex_function_trigger.scheduler) == 1 && yandex_function_trigger.scheduler[0].container[0].id == "application-container" && yandex_function_trigger.scheduler[0].container[0].path == "/internal/scheduler"
+    error_message = "The configured scheduler must invoke the private application scheduler route."
+  }
+  assert {
+    condition     = !contains(keys(yamldecode(yandex_api_gateway.probe.spec).paths), "/internal/scheduler") && yamldecode(yandex_api_gateway.probe.spec).paths["/jobs/scheduler"].post["x-yc-apigateway-integration"].container_id == "application-container"
+    error_message = "The private timer route must stay off the gateway and the operational scheduler route must target the application."
+  }
+  assert {
+    condition     = length([for secret in yandex_serverless_container.application.secrets : secret if secret.key == "application_config_json" && secret.environment_variable == "ZONT_ANALYZER_CONFIG_JSON" && secret.version_id == var.secret_version_id]) == 1
+    error_message = "The application configuration must come from the selected Lockbox secret version."
+  }
+}
+
+run "maintenance_disables_writes" {
+  command = plan
+  variables {
+    application_writes_enabled = false
+  }
+  assert {
+    condition     = yandex_serverless_container.application.image[0].environment.CLOUD_WRITES_ENABLED == "false" && length(yandex_function_trigger.scheduler) == 0
+    error_message = "Maintenance must disable runtime writes and leave the scheduler off."
+  }
+}
+
+run "migration_capacity_remains_capped" {
+  command = plan
+  variables {
+    ydb_request_units_per_second = 100
+    ydb_storage_size_limit_gib   = 5
+  }
+  assert {
+    condition     = one(yandex_ydb_database_serverless.probe.serverless_database).enable_throttling_rcu_limit && one(yandex_ydb_database_serverless.probe.serverless_database).throttling_rcu_limit == 100 && one(yandex_ydb_database_serverless.probe.serverless_database).storage_size_limit == 5 && one(yandex_ydb_database_serverless.probe.serverless_database).provisioned_rcu_limit == 0
+    error_message = "Migration capacity must remain explicitly capped without provisioned idle capacity."
+  }
+}
+
+run "uncapped_capacity_rejected" {
+  command = plan
+  variables {
+    ydb_request_units_per_second = 0
+    ydb_storage_size_limit_gib   = 0
+  }
+  expect_failures = [var.ydb_request_units_per_second, var.ydb_storage_size_limit_gib]
+}
+
+run "production_publication_is_isolated" {
+  command = plan
+  variables {
+    application_publication_prefix = "production"
+    attach_domain                  = true
+    identity = {
+      client_id = "test-oidc-client"
+      issuer    = "https://auth.yandex.cloud"
+      mode      = "spa"
+    }
+  }
+  override_resource {
+    target          = yandex_serverless_container.application
+    override_during = plan
+    values          = { id = "test-application" }
+  }
+  override_resource {
+    target          = yandex_serverless_container.probe
+    override_during = plan
+    values          = { id = "test-probe" }
+  }
+  assert {
+    condition     = yandex_serverless_container.application.image[0].environment.CLOUD_PUBLICATION_PREFIX == "production" && yamldecode(yandex_api_gateway.probe.spec).paths["/reports.json"].get["x-yc-apigateway-integration"].object == "production/site-index.json" && yamldecode(yandex_api_gateway.probe.spec).paths["/objects/publication/{path+}"].get["x-yc-apigateway-integration"].object == "production/publication/{path}"
+    error_message = "Publisher and protected gateway must switch to the same isolated object prefix."
   }
 }

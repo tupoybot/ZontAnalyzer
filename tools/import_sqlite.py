@@ -399,6 +399,102 @@ def _legacy_usage(row: Mapping[str, Any] | None) -> tuple[str, int] | None:
     return month, count
 
 
+_BATCH_IMPORT_TABLES = frozenset({
+    "config_snapshots", "source_events", "app_meta", "analysis_periods", "metric_values", "detected_events",
+})
+
+
+def _bounded_mapping_pages(connection: sqlite3.Connection, table: str,
+                           batch_size: int) -> Iterator[list[dict[str, Any]]]:
+    """Bound source+mapped payloads; a larger individual row is processed alone."""
+    page: list[dict[str, Any]] = []
+    size = 0
+    for raw in connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid'):
+        row = dict(raw)
+        _, target = _target(table, row)
+        row_size = len(_json(row).encode()) + len(_json(target).encode()) + 512
+        if page and (len(page) >= batch_size or size + row_size > 1024 * 1024):
+            yield page
+            page, size = [], 0
+        page.append(row)
+        size += row_size
+    if page:
+        yield page
+
+
+def _import_mapping_page(db: YdbDatabase, table: str, page: list[dict[str, Any]],
+                         pk: tuple[str, ...]) -> int:
+    """Atomic bulk writes only for mappings without row-specific side effects."""
+    if table not in _BATCH_IMPORT_TABLES:
+        raise ValueError("table is not approved for batched import")
+    prepared = []
+    for row in page:
+        _, target = _target(table, row)
+        prepared.append((_identity(row, pk), _checksum(row), _json(row),
+                         _json(_target_key(table, target)), target))
+    columns = _columns(table)
+    target_pk = tuple(_target_key(table, prepared[0][4]))
+    lookup_type = ydb.StructType()
+    for name in target_pk:
+        lookup_type.add_member(name, getattr(ydb.PrimitiveType, columns[name]))
+    lookup = [_target_key(table, item[4]) for item in prepared]
+    fields = ",".join(f"{name}:{columns[name]}" for name in target_pk)
+    joins = " AND ".join(f"t.{name}=k.{name}" for name in target_pk)
+
+    def write(tx: Transaction) -> int:
+        manifests = tx.execute(
+            "DECLARE $table AS Utf8; DECLARE $keys AS List<Utf8>; "
+            "SELECT source_key,checksum,target_table,target_key FROM migration_records "
+            "WHERE source_table=$table AND source_key IN $keys;",
+            {"$table": table, "$keys": ydb.TypedValue([item[0] for item in prepared],
+                                                       ydb.ListType(ydb.PrimitiveType.Utf8))},
+        )[0].rows
+        old = {_text(item.source_key): item for item in manifests}
+        rows = tx.execute(
+            f"DECLARE $keys AS List<Struct<{fields}>>; "
+            f"SELECT t.* FROM AS_TABLE($keys) AS k INNER JOIN `{table}` AS t ON {joins};",
+            {"$keys": ydb.TypedValue(lookup, ydb.ListType(lookup_type))},
+        )[0].rows
+        existing = {_json({name: _text(row[name]) if isinstance(row[name], bytes) else row[name]
+                           for name in target_pk}): row for row in rows}
+        changed = []
+        for item in prepared:
+            source_key, checksum, _, target_key, target = item
+            previous = old.get(source_key)
+            found = existing.get(target_key)
+            if (previous is not None and _text(previous.checksum) == checksum
+                    and _text(previous.target_table) == table and _text(previous.target_key) == target_key
+                    and found is not None and all(
+                        (_text(found[name]) if isinstance(found[name], bytes) else found[name]) == value
+                        for name, value in target.items())):
+                continue
+            if previous is not None and (_text(previous.target_table) != table
+                                         or _text(previous.target_key) != target_key):
+                _delete(tx, _text(previous.target_table), json.loads(_text(previous.target_key)))
+            changed.append(item)
+        if not changed:
+            return 0
+        row_type = ydb.StructType()
+        for name in prepared[0][4]:
+            primitive = getattr(ydb.PrimitiveType, columns[name])
+            row_type.add_member(name, primitive if name in target_pk else ydb.OptionalType(primitive))
+        tx.execute(f"UPSERT INTO `{table}` SELECT * FROM AS_TABLE($rows);", {
+            "$rows": ydb.TypedValue([item[4] for item in changed], ydb.ListType(row_type)),
+        })
+        manifest_type = ydb.StructType()
+        for name in ("source_table", "source_key", "target_table", "target_key", "checksum", "payload"):
+            manifest_type.add_member(name, ydb.PrimitiveType.Utf8)
+        tx.execute("UPSERT INTO migration_records SELECT * FROM AS_TABLE($rows);", {
+            "$rows": ydb.TypedValue([
+                {"source_table": table, "source_key": item[0], "checksum": item[1], "payload": item[2],
+                 "target_table": table, "target_key": item[3]} for item in changed
+            ], ydb.ListType(manifest_type)),
+        })
+        return len(changed)
+
+    return int(db.transaction(write))
+
+
 def _adjust_legacy_budget(
     tx: Transaction, old: Mapping[str, Any] | None, new: Mapping[str, Any] | None,
 ) -> None:
@@ -480,13 +576,21 @@ def _enrich(connection: sqlite3.Connection, table: str, row: dict[str, Any],
     return row
 
 
-def _inventory(connection: sqlite3.Connection) -> tuple[str, ...]:
+def _inventory(connection: sqlite3.Connection, *, require_complete_schema: bool = False,
+               expected_schema_revision: str | None = None) -> tuple[str, ...]:
     tables = {row[0] for row in connection.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
     )}
     unexpected = tables - SOURCE_TABLES
     if unexpected:
         raise ValueError(f"unmapped SQLite tables: {sorted(unexpected)}")
+    if require_complete_schema and tables != SOURCE_TABLES:
+        raise ValueError(f"missing SQLite tables: {sorted(SOURCE_TABLES - tables)}")
+    if expected_schema_revision is not None:
+        revisions = (connection.execute("SELECT version_num FROM alembic_version").fetchall()
+                     if "alembic_version" in tables else [])
+        if len(revisions) != 1 or revisions[0][0] != expected_schema_revision:
+            raise ValueError("unexpected SQLite schema revision")
     missing_target = sorted((tables - {"alembic_version"}) - set(TABLES))
     if missing_target or "migration_records" not in TABLES:
         missing = missing_target + ([] if "migration_records" in TABLES else ["migration_records"])
@@ -494,8 +598,8 @@ def _inventory(connection: sqlite3.Connection) -> tuple[str, ...]:
     return tuple(table for table in TABLE_ORDER if table in tables)
 
 
-def _import_chart_cache(connection: sqlite3.Connection, db: YdbDatabase, directory: Path) -> int:
-    """Validate old report-bound packets and move their data to YDB app_meta."""
+def _chart_cache_entries(connection: sqlite3.Connection, directory: Path) -> list[tuple[Path, str, str, str]]:
+    """Validate report-bound packets without writing to the target."""
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("chart cache bundle must be a directory, not a symlink")
     expected: dict[str, tuple[str, str, str]] = {}
@@ -519,6 +623,12 @@ def _import_chart_cache(connection: sqlite3.Connection, db: YdbDatabase, directo
         pending.append((path, hashlib.sha256(raw).hexdigest(), target_key,
                         _json({"schema_version": CHART_DATA_SCHEMA_VERSION,
                                "report_digest": target_digest, "data": packet["data"]})))
+    return pending
+
+
+def _import_chart_cache(connection: sqlite3.Connection, db: YdbDatabase, directory: Path) -> int:
+    """Validate old report-bound packets and move their data to YDB app_meta."""
+    pending = _chart_cache_entries(connection, directory)
     changed = 0
     for path, digest, key, value in pending:
         if _file_sha256(path) != digest:
@@ -640,7 +750,7 @@ def _valid_ledger_entry(key: str, entry: Any) -> dict[str, Any]:
     return dict(entry)
 
 
-def _import_ai_ledger(db: YdbDatabase, path: Path) -> int:
+def _ledger_entries(path: Path) -> tuple[str, dict[str, dict[str, Any]]]:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 16 * 1024 * 1024:
         raise ValueError("AI ledger must be a closed regular file of at most 16 MiB")
     digest = _file_sha256(path)
@@ -648,6 +758,39 @@ def _import_ai_ledger(db: YdbDatabase, path: Path) -> int:
     if not isinstance(state, dict) or set(state) != {"entries"} or not isinstance(state["entries"], dict):
         raise ValueError("invalid AI ledger structure")
     entries = {key: _valid_ledger_entry(key, entry) for key, entry in state["entries"].items()}
+    return digest, entries
+
+
+def _ledger_targets(key: str, entry: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    created_at = int(entry["created_at"] * 1_000_000)
+    state_name = "unknown" if entry["status"] == "pending" else entry["status"]
+    call = {
+        "call_key": key, "job_key": "legacy-ai-ledger", "state": state_name,
+        "payload": _json(entry), "created_at": created_at, "updated_at": created_at,
+        "sent_at": None if entry["status"] == "pending" else created_at,
+    }
+    cache = None
+    if entry["status"] == "success":
+        result = entry["result"]
+        provenance = result.get("provenance") if isinstance(result.get("provenance"), dict) else {}
+        cache = {
+            "fingerprint": key, "payload": _json(result), "provenance": _json(provenance),
+            "settings_version": str(provenance.get("settings_version") or "legacy-unrecorded"),
+            "model": str(provenance.get("requested_model") or "legacy-unrecorded"),
+            "created_at": created_at,
+        }
+    return call, cache
+
+
+def _ledger_cache_matches(tx: Transaction, key: str, cache: Mapping[str, Any] | None) -> bool:
+    return (_matches(tx, "ai_response_cache", cache) if cache is not None else not tx.execute(
+        "DECLARE $key AS Utf8; SELECT fingerprint FROM ai_response_cache WHERE fingerprint=$key;",
+        {"$key": key},
+    )[0].rows)
+
+
+def _import_ai_ledger(db: YdbDatabase, path: Path) -> int:
+    digest, entries = _ledger_entries(path)
     changed = 0
     for key, entry in entries.items():
         source_key = _json([key])
@@ -659,25 +802,15 @@ def _import_ai_ledger(db: YdbDatabase, path: Path) -> int:
         ) -> bool:
             old = _manifest_row(tx, "ai_ledger", source_key)
             previous = json.loads(_text(old.payload)) if old else None
-            if old and old.checksum == checksum:
+            call, cache = _ledger_targets(key, entry)
+            cache_matches = _ledger_cache_matches(tx, key, cache)
+            if (old and old.checksum == checksum and _matches(tx, "llm_calls", call)
+                    and cache_matches):
                 return False
-            created_at = int(entry["created_at"] * 1_000_000)
-            state_name = "unknown" if entry["status"] == "pending" else entry["status"]
-            _upsert(tx, "llm_calls", {
-                "call_key": key, "job_key": "legacy-ai-ledger", "state": state_name,
-                "payload": _json(entry), "created_at": created_at, "updated_at": created_at,
-                "sent_at": None if entry["status"] == "pending" else created_at,
-            })
-            if entry["status"] == "success":
-                result = entry["result"]
-                provenance = result.get("provenance") if isinstance(result.get("provenance"), dict) else {}
-                _upsert(tx, "ai_response_cache", {
-                    "fingerprint": key, "payload": _json(result), "provenance": _json(provenance),
-                    "settings_version": str(provenance.get("settings_version") or "legacy-unrecorded"),
-                    "model": str(provenance.get("requested_model") or "legacy-unrecorded"),
-                    "created_at": created_at,
-                })
-            elif previous and previous["status"] == "success":
+            _upsert(tx, "llm_calls", call)
+            if cache is not None:
+                _upsert(tx, "ai_response_cache", cache)
+            else:
                 _delete(tx, "ai_response_cache", {"fingerprint": key})
             _adjust_ledger_budget(tx, previous, entry)
             _upsert(tx, "migration_records", {
@@ -722,7 +855,8 @@ def _import_ai_ledger(db: YdbDatabase, path: Path) -> int:
 
 def import_backup(path: Path, db: YdbDatabase, *, batch_size: int = 100,
                   pause_seconds: float = 0.0, chart_cache: Path | None = None,
-                  ai_ledger: Path | None = None) -> dict[str, int]:
+                  ai_ledger: Path | None = None, require_complete_schema: bool = False,
+                  expected_schema_revision: str | None = None) -> dict[str, int]:
     """Import a closed SQLite online backup; repeat safely for changed backups.
 
     A committed row and its manifest checksum share one YDB transaction. A
@@ -745,7 +879,8 @@ def import_backup(path: Path, db: YdbDatabase, *, batch_size: int = 100,
             raise ValueError("SQLite backup failed integrity_check")
         if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
             raise ValueError("SQLite backup failed foreign_key_check")
-        tables = _inventory(connection)
+        tables = _inventory(connection, require_complete_schema=require_complete_schema,
+                            expected_schema_revision=expected_schema_revision)
         db.transaction(lambda tx: _upsert(tx, "metadata", {
             "name": "sqlite_import_state",
             "value": _json({"state": "running", "source_sha256": source_digest}),
@@ -754,7 +889,14 @@ def import_backup(path: Path, db: YdbDatabase, *, batch_size: int = 100,
         for table in tables:
             pk = _primary_key(connection, table)
             count = 0
-            for page in _source_rows(connection, table, batch_size=batch_size):
+            pages = (_bounded_mapping_pages(connection, table, batch_size) if table in _BATCH_IMPORT_TABLES
+                     else _source_rows(connection, table, batch_size=batch_size))
+            for page in pages:
+                if table in _BATCH_IMPORT_TABLES:
+                    count += _import_mapping_page(db, table, page, pk)
+                    if pause_seconds:
+                        time.sleep(pause_seconds)
+                    continue
                 if table == "telemetry_samples":
                     count += _import_samples_page(db, page, pk)
                     if pause_seconds:
@@ -891,13 +1033,17 @@ def main() -> None:
     parser.add_argument("--pause-seconds", type=float, default=0.0)
     parser.add_argument("--chart-cache", type=Path, help="closed legacy chart-data-cache bundle")
     parser.add_argument("--ai-ledger", type=Path, help="closed legacy .ai-ledger.json snapshot")
+    parser.add_argument("--require-complete-schema", action="store_true")
+    parser.add_argument("--expected-schema-revision")
     args = parser.parse_args()
     db = YdbDatabase(YdbConfig.from_environment())
     try:
         db.initialize()
         counts = import_backup(args.backup, db, batch_size=args.batch_size,
                                pause_seconds=args.pause_seconds, chart_cache=args.chart_cache,
-                               ai_ledger=args.ai_ledger)
+                               ai_ledger=args.ai_ledger,
+                               require_complete_schema=args.require_complete_schema,
+                               expected_schema_revision=args.expected_schema_revision)
         print(_json({"changed_or_removed_rows": counts}))
     finally:
         db.close()

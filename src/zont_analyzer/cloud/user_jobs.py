@@ -129,6 +129,19 @@ def review_status(runtime: Runtime) -> dict[str, Any]:
 
 
 def _run_regeneration(runtime: Runtime, lease: JobLease, payload: dict[str, Any]) -> dict[str, Any]:
+    key = "report-write:" + str(payload["report_id"])
+    write = runtime.db.jobs.acquire(key, lease.owner, 210)
+    if write is None:
+        raise ReviewLeaseBusy()
+    try:
+        return _regenerate_owned(runtime, lease, payload, write)
+    finally:
+        runtime.db.jobs.release(key, write.owner, write.attempt)
+
+
+def _regenerate_owned(
+    runtime: Runtime, lease: JobLease, payload: dict[str, Any], write: JobLease,
+) -> dict[str, Any]:
     report_id = str(payload["report_id"])
     old = runtime.db.report(report_id)
     if old is None:
@@ -171,7 +184,8 @@ def _run_regeneration(runtime: Runtime, lease: JobLease, payload: dict[str, Any]
     # same YDB transaction as the report write.
     runtime.db.save_report(candidate, render_text(candidate),
                            source_revision=source_revision,
-                           job_fence=(lease.job_key, lease.owner, lease.attempt))
+                           job_fence=(lease.job_key, lease.owner, lease.attempt),
+                           write_fence=(write.job_key, write.owner, write.attempt))
     return {"report_id": report_id, "status": "success", "updated_at": _now(),
             "generated_at": candidate.generated_at.isoformat(),
             **({"question": payload["question"]} if "question" in payload else {})}
@@ -192,6 +206,29 @@ def _run_review(runtime: Runtime, _lease: JobLease, payload: dict[str, Any]) -> 
     if result is None:
         raise ReviewLeaseBusy()
     return {"kind": "review", "status": "success", "updated_at": _now()}
+
+
+def scheduled_review(runtime: Runtime, *, deadline: float | None = None) -> dict[str, Any]:
+    """Synchronous scheduled review; the review store owns its durable claim.
+
+    The catalog adapter only performs bounded read requests. Unlike manual
+    review, this respects the configured interval and disabled-review setting.
+    """
+    # Catalog.fetch reads two indexes and at most ten model pages. Reserve
+    # time for the durable review result even when every page times out.
+    remaining = deadline - time.monotonic() if deadline is not None else 180
+    if remaining < 20:
+        return {"status": "pending"}
+    timeout = min(15.0, (remaining - 15) / 12)
+    with httpx.Client(transport=ReportTransport(), follow_redirects=False,
+                      trust_env=False, timeout=timeout) as client:
+        settings = AISettingsStore(runtime.db, runtime.config).snapshot()
+        store = ModelReviewStore(runtime.db, OpenAIModelCatalog(client=client),
+                                 assessments=local_assessments(runtime))
+        if not store.due(settings):
+            return {"status": "not_due"}
+        result = store.run_if_due(settings, trigger="scheduled")
+        return {"status": "done" if result is not None else "busy"}
 
 
 def _pending_keys(runtime: Runtime) -> list[str]:
