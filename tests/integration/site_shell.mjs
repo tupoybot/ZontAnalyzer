@@ -50,6 +50,10 @@ async function fixture(options = {}) {
       assert.equal(headers.cookie, undefined);
       if (url.pathname === "/oauth/authorize") {
         authorize = url.searchParams;
+        if (options.interrupted) {
+          await route.fulfill({contentType:"text/html", body:"<p id=provider-error>Provider error</p>"});
+          return;
+        }
         assert.equal(authorize.get("response_type"), "code");
         assert.equal(authorize.get("code_challenge_method"), "S256");
         assert.equal(authorize.get("scope"), "openid");
@@ -101,12 +105,31 @@ async function fixture(options = {}) {
   });
   const login = async (path="/daily/2026-09-26.html") => {
     await page.goto("https://example.test" + path);
-    await page.locator("#site-login").click();
   };
   return {context,page,requests,login, tokenRequests:()=>tokenRequests,
     lastCallback:()=>lastCallback, apiStatus:value=>apiStatus=value, currentIndex:value=>currentIndex=value};
 }
 try {
+  const root = await fixture();
+  await root.login("/");
+  await root.page.locator("#report").waitFor();
+  assert.equal(root.tokenRequests(), 1, "fresh visit logs in without a click");
+  assert.equal(new URL(root.requests.find(r => r.url.includes("/oauth/authorize")).url).searchParams.has("prompt"), false, "reuse existing provider session");
+  await root.context.close(); passed++;
+
+  const interrupted = await fixture({interrupted:true});
+  await interrupted.login("/");
+  await interrupted.page.locator("#provider-error").waitFor();
+  await interrupted.page.goto("https://example.test/");
+  await interrupted.page.locator("#site-login").waitFor();
+  await interrupted.page.reload();
+  await interrupted.page.locator("#site-login").waitFor();
+  assert.equal(interrupted.requests.filter(r => r.url.includes("/oauth/authorize")).length, 1, "interrupted login does not loop");
+  await interrupted.page.locator("#site-login").click();
+  await interrupted.page.locator("#provider-error").waitFor();
+  assert.equal(interrupted.requests.filter(r => r.url.includes("/oauth/authorize")).length, 2, "manual retry remains available");
+  await interrupted.context.close(); passed++;
+
   const f = await fixture();
   await f.login("/za/daily/2026-09-26.html");
   await f.page.locator("#report").waitFor();
@@ -114,7 +137,7 @@ try {
   await f.page.locator("#api").click();
   await f.page.waitForFunction(() => document.querySelector("#api").textContent === "200");
   const stored = await f.page.evaluate(() => ({local:{...localStorage}, session:{...sessionStorage}, cookie:document.cookie}));
-  assert.deepEqual(stored, {local:{}, session:{"zont.oidc.continue":"1"}, cookie:""});
+  assert.deepEqual(stored, {local:{}, session:{}, cookie:""});
   await f.page.evaluate(() => fetch("https://external.test/public"));
   const downloadEvent = f.page.waitForEvent("download");
   await f.page.locator("#json").click();
@@ -139,8 +162,11 @@ try {
     await f.page.waitForFunction(() => document.querySelector("#site-status")?.textContent.includes("Не удалось"));
     assert.equal(f.requests.some(request => request.url.includes("/reports.json")), false, "invalid login cannot read reports");
     if (options.badState) assert.equal(f.tokenRequests(), 0);
-    assert.deepEqual(await f.page.evaluate(() => ({...sessionStorage})), {});
+    assert.deepEqual(await f.page.evaluate(() => ({...sessionStorage})), {"zont.oidc.paused":"1"});
     assert.equal(new URL(f.page.url()).search, "");
+    await f.page.reload();
+    await f.page.locator("#site-login").waitFor();
+    assert.equal(f.requests.filter(r => r.url.includes("/oauth/authorize")).length, 1, "invalid callback does not loop on reload");
     await f.context.close(); passed++;
   }
   for (const options of [{index:{...index, reports:[{...index.reports[0], html_key:"../private.html"}]}},
@@ -167,9 +193,8 @@ try {
   await apiDenied.context.close(); passed++;
 
   const jsonDirect = await fixture();
-  await jsonDirect.page.goto("https://example.test/za/daily/2026-09-26.json");
   const directDownload = jsonDirect.page.waitForEvent("download");
-  await jsonDirect.page.locator("#site-login").click();
+  await jsonDirect.page.goto("https://example.test/za/daily/2026-09-26.json");
   assert.equal((await directDownload).suggestedFilename(), "2026-09-26.json");
   await jsonDirect.context.close(); passed++;
 
@@ -195,7 +220,7 @@ try {
   await logoutRoute.page.goto("https://example.test/auth/logout");
   await logoutRoute.page.locator("#site-login").waitFor();
   assert.equal(logoutRoute.tokenRequests(), 1);
-  assert.deepEqual(await logoutRoute.page.evaluate(() => ({...sessionStorage})), {});
+  assert.deepEqual(await logoutRoute.page.evaluate(() => ({...sessionStorage})), {"zont.oidc.paused":"1"});
   await logoutRoute.context.close(); passed++;
 
   console.log(`site_shell: ${passed} browser scenarios passed`);

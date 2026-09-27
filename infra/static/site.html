@@ -24,7 +24,7 @@
     const issuer = "https://auth.yandex.cloud";
     const nativeFetch = window.fetch.bind(window);
     const transactionKey = "zont.oidc.transaction";
-    const continueKey = "zont.oidc.continue";
+    const pausedKey = "zont.oidc.paused";
     const redirectUri = location.origin + "/auth/callback";
     const maxAge = 600000;
     const reportPath = /^(?:daily|weekly|monthly|seasonal)\/\d{4}-\d{2}-\d{2}\.(?:html|json)$/;
@@ -54,7 +54,7 @@
       generation++;
       entries.clear();
       sessionStorage.removeItem(transactionKey);
-      sessionStorage.removeItem(continueKey);
+      sessionStorage.setItem(pausedKey, "1");
     };
     const front = message => {
       // Replaces all report content on logout or authentication failure.
@@ -87,6 +87,7 @@
       const transaction = {state:random(), nonce:random(), verifier, created:Date.now(),
         path:isReportPath(location.pathname) ? location.pathname + location.search + location.hash : "/"};
       const challenge = base64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+      sessionStorage.removeItem(pausedKey);
       sessionStorage.setItem(transactionKey, JSON.stringify(transaction));
       const target = new URL(issuer + "/oauth/authorize");
       target.search = new URLSearchParams({client_id:config.clientId, redirect_uri:redirectUri,
@@ -162,7 +163,7 @@
       expiresAt = await validate(response.id_token, transaction.nonce);
       token = response.id_token;
       expiryTimer = setTimeout(authFailure, Math.min(expiresAt - Date.now(), 2147483647));
-      sessionStorage.setItem(continueKey, "1");
+      sessionStorage.removeItem(pausedKey);
       history.replaceState(null, "", destination.pathname + destination.search + destination.hash);
     };
     // Existing report forms keep using fetch. Only protected, same-origin routes receive the ID token.
@@ -275,9 +276,10 @@
           await callback();
           authenticated = true;
           await render();
-        } else if (sessionStorage.getItem(continueKey) === "1") {
-          await login();
-        } else front("Войдите, чтобы открыть отчёты и настройки.");
+        } else if (sessionStorage.getItem(pausedKey) === "1" || sessionStorage.getItem(transactionKey)) {
+          // An interrupted login or explicit logout must not trigger a redirect loop.
+          front("Для продолжения войдите снова.");
+        } else await login();
       } catch (_) {
         if (token) reportFailure();
         else if (!authenticated) { forget(); front("Не удалось завершить вход. Попробуйте войти снова."); }
