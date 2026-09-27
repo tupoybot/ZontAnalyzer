@@ -990,12 +990,21 @@ def import_backup(path: Path, db: YdbDatabase, *, batch_size: int = 100,
                         f'SELECT 1 FROM "{table}" WHERE {predicate} LIMIT 1', values
                     ).fetchone():
                         continue
+                    target_key = json.loads(_text(manifest.target_key))
+                    # SQLite keys publication changes by revision, while YDB
+                    # coalesces by scope/identifier. A newer source revision
+                    # may already have replaced this target during this scan.
+                    preserve_target = (table == "publication_changes" and connection.execute(
+                        "SELECT 1 FROM publication_changes WHERE scope=? AND identifier=? LIMIT 1",
+                        (target_key["scope"], target_key["identifier"]),
+                    ).fetchone() is not None)
 
                     def remove(
                         tx: Transaction, table: str = table, after: str = after,
-                        manifest: Any = manifest,
+                        manifest: Any = manifest, preserve_target: bool = preserve_target,
                     ) -> None:
-                        _delete(tx, _text(manifest.target_table), json.loads(_text(manifest.target_key)))
+                        if not preserve_target:
+                            _delete(tx, _text(manifest.target_table), json.loads(_text(manifest.target_key)))
                         if table == "llm_calls":
                             previous = _manifest_row(tx, table, after)
                             if previous:

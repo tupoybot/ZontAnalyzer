@@ -49,7 +49,7 @@ OWNER_TABLES = frozenset({
 })
 
 BATCHED_TABLES = frozenset({
-    "devices", "entities", "config_snapshots", "telemetry_series", "telemetry_samples",
+    "app_meta", "devices", "entities", "config_snapshots", "telemetry_series", "telemetry_samples",
     "source_events", "ingestion_cursors", "data_gaps", "analysis_periods", "metric_values",
     "detected_events", "interventions", "intervention_experiments", "publication_changes",
 })

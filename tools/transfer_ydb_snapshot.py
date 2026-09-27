@@ -177,7 +177,9 @@ def export_snapshot(db: YdbDatabase, directory: Path, sqlite_backup: Path, *,
                           expected_schema_revision=expected_schema_revision,
                           ai_ledger=ai_ledger, chart_cache=chart_cache)
     if not proof["ok"]:
-        raise ValueError("local SQLite import verification failed")
+        # Aggregate evidence is safe to retain and avoids repeating a full scan
+        # merely to discover which part of the source comparison failed.
+        raise ValueError("local SQLite import verification failed: " + json.dumps(proof, sort_keys=True))
     _check_schema(db)
     source_digest = _digest(sqlite_backup)
     directory.mkdir(mode=0o700, parents=True)

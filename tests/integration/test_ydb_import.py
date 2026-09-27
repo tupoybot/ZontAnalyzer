@@ -587,3 +587,37 @@ def test_batch_import_analysis_facts_preserves_legacy_schema(
     for table in expected:
         assert _rows(ydb_database, f"SELECT * FROM `{table}`;") == []
     assert verify_backup(backup, ydb_database)["ok"] is True
+
+
+@pytest.mark.ydb
+def test_publication_revision_coalesce_preserves_new_target_and_deletes_removed_key(
+    tmp_path: Path, ydb_database: YdbDatabase,
+) -> None:
+    backup = tmp_path / "coalesced-publication.sqlite"
+    with sqlite3.connect(backup) as connection:
+        connection.executescript("""
+            CREATE TABLE publication_changes(
+                revision INTEGER PRIMARY KEY, scope TEXT NOT NULL, identifier TEXT NOT NULL,
+                UNIQUE(scope,identifier));
+            INSERT INTO publication_changes VALUES(1,'report','same');
+            INSERT INTO publication_changes VALUES(2,'report','removed');
+        """)
+    import_backup(backup, ydb_database)
+    assert verify_backup(backup, ydb_database)["ok"] is True
+
+    with sqlite3.connect(backup) as connection:
+        connection.execute(
+            "UPDATE publication_changes SET revision=3 WHERE scope='report' AND identifier='same';"
+        )
+        connection.execute("DELETE FROM publication_changes WHERE identifier='removed';")
+    changed = import_backup(backup, ydb_database)
+    assert changed["publication_changes"] == 3  # new row and two stale source manifests
+    rows = _rows(ydb_database, "SELECT scope,identifier,revision FROM publication_changes;")
+    assert [(row.scope, row.identifier, row.revision) for row in rows] == [("report", "same", 3)]
+    manifests = _rows(ydb_database, "SELECT source_key FROM migration_records "
+                                      "WHERE source_table='publication_changes';")
+    assert [json.loads(row.source_key) for row in manifests] == [[3]]
+    proof = verify_backup(backup, ydb_database)
+    assert proof["ok"] is True
+    assert proof["mismatches"] == 0
+    assert all(value == 0 for value in import_backup(backup, ydb_database).values())

@@ -24,6 +24,10 @@ def test_export_stream_and_independent_target_comparison(
     backup = tmp_path / "closed.sqlite"
     _source(backup)
     with sqlite3.connect(backup) as connection:
+        connection.execute("CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT)")
+        connection.executemany("INSERT INTO app_meta VALUES(?,?)",
+                               [(f"entry-{index:04d}", None if index % 2 else str(index))
+                                for index in range(601)])
         connection.executemany(
             "INSERT INTO telemetry_samples VALUES(?,?,?,?,?,?)",
             [(47, 1735689600 + offset, float(offset), None, "valid", "2025-01-01 00:00:00")
@@ -34,6 +38,7 @@ def test_export_stream_and_independent_target_comparison(
     exported = export_snapshot(ydb_database, artifact, backup, require_complete_schema=False,
                                require_sidecars=False)
     assert exported["tables"]["telemetry_samples"] == 602
+    assert exported["tables"]["app_meta"] == 601
     assert exported["total_rows"] >= 602
     assert exported["total_jsonl_bytes"] > 0
     assert verify_snapshot(ydb_database, artifact)["ok"] is True
@@ -66,6 +71,9 @@ def test_export_stream_and_independent_target_comparison(
     )
     compared = verify_snapshot(ydb_database, artifact)
     assert compared["tables"]["telemetry_samples"]["extra"] == 1
+    with pytest.raises(ValueError, match='"target_mismatches": 1'):
+        export_snapshot(ydb_database, tmp_path / "rejected-artifact", backup,
+                        require_complete_schema=False, require_sidecars=False)
 
 
 @pytest.mark.ydb
