@@ -70,6 +70,22 @@ def generate(output: Path) -> None:
                            {"expr": expressions["proxy"], "eval_time": time,
                             "exp_samples": [{"labels": "{}", "value": value}]}
                            for time, value in (("0m", 1), ("1m", 0))]})
+    model_series = []
+    for instance, enabled, observed, due in (("old", "1 1 1 1", "100 100 100 100", "0 0 0 0"),
+                                           ("new", "_ 0 1 1", "_ 200 300 400", "_ 0 0 600")):
+        labels = '{environment="pilot",instance="' + instance + '"}'
+        for metric, values in (("zont_model_review_enabled", enabled),
+                               ("zont_snapshot_observed_timestamp_seconds", observed),
+                               ("zont_model_review_next_due_timestamp_seconds", due)):
+            model_series.append({"series": metric + labels, "values": values})
+    tests.append({"name": "model disabled on newest boot then enabled and deadline changed", "interval": "1m",
+                  "input_series": model_series, "promql_expr_test": [
+                      {"expr": expressions["model-overdue"], "eval_time": time,
+                       "exp_samples": [] if value is None else [{"labels": "{}", "value": value}]}
+                      for time, value in (("0m", 0), ("1m", None), ("2m", 120), ("3m", -420))]})
+    tests.append({"name": "model missing state belongs to snapshot alert", "interval": "1m", "input_series": [],
+                  "promql_expr_test": [{"expr": expressions["model-overdue"], "eval_time": "1m",
+                                        "exp_samples": []}]})
     (output / "tests.json").write_text(json.dumps({"rule_files": ["rules.json"], "evaluation_interval": "1m",
                                                  "tests": tests}, indent=2))
 

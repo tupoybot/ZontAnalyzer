@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -15,8 +15,13 @@ from zont_analyzer.config import AppConfig
 from zont_analyzer.observability import capture
 
 
-def _application(*, budget=None, state=None, proposals=(), latest=None):
+def _application(*, budget=None, state=None, proposals=(), latest=None, overrides=None):
     storage = Mock()
+    transaction = Mock()
+    transaction.execute.return_value = [SimpleNamespace(rows=[] if overrides is None else [
+        SimpleNamespace(version=1, effective_at=0, payload=json.dumps({"overrides": overrides})),
+    ])]
+    storage.transaction.side_effect = lambda callback: callback(transaction)
     storage.execute.side_effect = [
         [SimpleNamespace(rows=[] if latest is None else [SimpleNamespace(id=1)])],
         *([] if latest is None else [[SimpleNamespace(rows=[SimpleNamespace(timestamp_utc=latest.timestamp())])]]),
@@ -193,3 +198,72 @@ def test_snapshot_series_limit_fails_before_reading_any_samples():
     assert ("zont_snapshot_success", 0.0, {}) in events
     app.db.storage.execute.assert_called_once_with("SELECT id FROM telemetry_series LIMIT 65;")
     assert not any(name == "zont_telemetry_timestamp_seconds" for name, _, _ in events)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_effective_review_schedule_honors_overrides_without_mutating_state(enabled):
+    last_success = datetime(2026, 9, 1, tzinfo=UTC)
+    app = _application(
+        state={"last_success_at": last_success.isoformat(),
+               "next_due_at": (last_success + timedelta(days=60)).isoformat()},
+        overrides={"review_enabled": enabled, "review_interval_days": 7},
+    )
+    events = []
+    with capture(events.append):
+        monitoring.snapshot(app)
+    assert ("zont_snapshot_success", 1.0, {}) in events
+    assert ("zont_model_review_enabled", float(enabled), {}) in events
+    due = [value for name, value, _ in events if name == "zont_model_review_next_due_timestamp_seconds"]
+    assert due == ([(last_success + timedelta(days=7)).timestamp()] if enabled else [])
+    assert app.db.storage.transaction.call_count == 1
+
+
+def test_review_retry_schedule_keeps_runner_backoff_instead_of_interval():
+    last_success = datetime(2026, 9, 1, tzinfo=UTC)
+    retry_at = last_success + timedelta(hours=6)
+    app = _application(
+        state={"last_success_at": last_success.isoformat(), "last_error": "temporary failure",
+               "next_due_at": retry_at.isoformat()},
+        overrides={"review_interval_days": 7},
+    )
+    events = []
+    with capture(events.append):
+        monitoring.snapshot(app)
+    assert ("zont_model_review_next_due_timestamp_seconds", retry_at.timestamp(), {}) in events
+
+
+@pytest.mark.ydb
+def test_effective_review_overrides_match_runner_with_native_storage(tmp_path):
+    from tests.ydb_support import make_database
+    from zont_analyzer.application.ai_settings import AISettingsStore
+    from zont_analyzer.application.model_review import ModelReviewStore
+
+    db = make_database(tmp_path)
+    config = AppConfig()
+    settings = AISettingsStore(db, config)
+    last_success = datetime(2026, 9, 1, tzinfo=UTC)
+    state = {"last_success_at": last_success.isoformat(),
+             "next_due_at": (last_success + timedelta(days=60)).isoformat()}
+    db.storage.execute(
+        "DECLARE $payload AS Utf8; UPSERT INTO model_review_state(scope,payload,version) "
+        "VALUES ('installation',$payload,1);", {"$payload": json.dumps(state)},
+    )
+    app = SimpleNamespace(db=db, config=config)
+    for enabled in (True, False):
+        # Seed a persisted owner override; the monitoring snapshot itself remains read-only.
+        settings.save({"expected_version": settings.snapshot()["version"],
+                       "values": {"review_enabled": enabled, "review_interval_days": 7}})
+        before = settings.snapshot()
+        events = []
+        with capture(events.append):
+            monitoring.snapshot(app)
+        assert ("zont_snapshot_success", 1.0, {}) in events
+        assert ("zont_model_review_enabled", float(enabled), {}) in events
+        due = [value for name, value, _ in events if name == "zont_model_review_next_due_timestamp_seconds"]
+        expected = ModelReviewStore._next_due(state, before["effective"])
+        assert due == ([expected.timestamp()] if enabled else [])
+        assert settings.snapshot() == before
+        persisted = db.storage.execute(
+            "SELECT payload,version FROM model_review_state WHERE scope='installation';",
+        )[0].rows[0]
+        assert persisted.version == 1 and json.loads(persisted.payload) == state

@@ -5,6 +5,8 @@ import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from zont_analyzer.application.ai_settings import AISettingsStore
+from zont_analyzer.application.model_review import ModelReviewStore
 from zont_analyzer.observability import observe, span
 
 if TYPE_CHECKING:
@@ -51,12 +53,17 @@ def _snapshot(runtime: Runtime) -> None:
     observe("zont_model_review_initialized", float(bool(rows)))
     observe("zont_model_review_attempts", state.get("attempts", 0))
     observe("zont_model_review_error", float(bool(state.get("last_error"))))
-    for key, metric in (
-        ("next_due_at", "zont_model_review_next_due_timestamp_seconds"),
-        ("last_success_at", "zont_model_review_last_success_timestamp_seconds"),
-    ):
-        if state.get(key):
-            observe(metric, datetime.fromisoformat(state[key]).timestamp())
+    effective = AISettingsStore(runtime.db, runtime.config).snapshot()["effective"]
+    review_enabled = bool(effective.get("review_enabled", True))
+    observe("zont_model_review_enabled", float(review_enabled))
+    if state.get("last_success_at"):
+        observe("zont_model_review_last_success_timestamp_seconds",
+                datetime.fromisoformat(state["last_success_at"]).timestamp())
+    # Reuse scheduling rules without state(), which can supersede proposals.
+    if rows and review_enabled:
+        next_due = ModelReviewStore._next_due(state, effective)
+        if next_due is not None:
+            observe("zont_model_review_next_due_timestamp_seconds", next_due.timestamp())
     rows = runtime.db.storage.execute(
         "SELECT payload FROM model_review_proposals LIMIT 1001;",
     )[0].rows

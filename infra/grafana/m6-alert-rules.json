@@ -853,7 +853,7 @@
           },
           "datasourceUid": "${datasource_uid}",
           "model": {
-            "expr": "(time() - max(last_over_time(zont_model_review_next_due_timestamp_seconds{environment=\"${environment}\"}[2h]))) and (max(last_over_time(zont_model_review_initialized{environment=\"${environment}\"}[2h])) == 1)",
+            "expr": "(time() - min(last_over_time(zont_model_review_next_due_timestamp_seconds{environment=\"${environment}\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"${environment}\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"${environment}\"}[2h]))))) and (min(last_over_time(zont_model_review_enabled{environment=\"${environment}\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"${environment}\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"${environment}\"}[2h])))) == 1)",
             "instant": true,
             "range": false,
             "refId": "A",

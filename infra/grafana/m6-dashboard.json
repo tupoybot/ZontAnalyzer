@@ -512,7 +512,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "zont_model_review_next_due_timestamp_seconds{environment=\"$environment\"} * 1000",
+          "expr": "(min(last_over_time(zont_model_review_next_due_timestamp_seconds{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h])))) and (min(last_over_time(zont_model_review_enabled{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h])))) == 1)) * 1000",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -794,7 +794,7 @@
     },
     {
       "id": 24,
-      "title": "Пересмотр модели настроен",
+      "title": "Пересмотр модели включён (1 — да)",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -809,7 +809,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "zont_model_review_initialized{environment=\"$environment\"}",
+          "expr": "min(last_over_time(zont_model_review_enabled{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]))))",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
