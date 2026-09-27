@@ -54,6 +54,7 @@ class Telemetry:
         self.started = time.time_ns()
         self._lock = threading.Lock()
         self._values: dict[tuple[str, tuple[tuple[str, str], ...]], tuple[float, int]] = {}
+        self._first: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
         self._exported: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
 
     def record(self, measurement: Measurement) -> None:
@@ -63,13 +64,16 @@ class Telemetry:
             if key not in self._values and len(self._values) >= 256:
                 return
             previous = self._values.get(key, (0.0, 0))[0]
-            self._values[key] = (previous + value if name.endswith("_total") else value, time.time_ns())
+            stamp = time.time_ns()
+            self._first.setdefault(key, stamp)
+            self._values[key] = (previous + value if name.endswith("_total") else value, stamp)
 
     def payload(self) -> dict[str, Any]:
         stamp = time.time_ns()
         grouped: dict[str, dict[str, Any]] = {}
         with self._lock:
             values = dict(self._values)
+            first = dict(self._first)
             exported = set(self._exported)
         for (name, labels), (value, observed) in values.items():
             counter = name.endswith("_total")
@@ -82,10 +86,13 @@ class Telemetry:
             }
             if counter:
                 metric[kind].update(aggregationTemporality=2, isMonotonic=True)
-                point["startTimeUnixNano"] = str(self.started)
+                # Prometheus uses millisecond precision. A boot-time zero could
+                # be outside the alert window when a warm process first fails.
+                baseline = first[(name, labels)] - 1_000_000
+                point["startTimeUnixNano"] = str(min(self.started, baseline))
                 if (name, labels) not in exported:
                     metric[kind]["dataPoints"].append({
-                        **point, "timeUnixNano": str(self.started), "asDouble": 0.0,
+                        **point, "timeUnixNano": str(baseline), "asDouble": 0.0,
                     })
             metric[kind]["dataPoints"].append(point)
         return {"resourceMetrics": [{"resource": {"attributes": [
@@ -111,7 +118,13 @@ class Telemetry:
             if process.exitcode != 0:
                 raise RuntimeError("metrics export failed")
             with self._lock:
-                self._exported.update(self._values)
+                for metric in body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]:
+                    for point in metric.get("sum", metric.get("gauge", {}))["dataPoints"]:
+                        labels = tuple(sorted(
+                            (item["key"], item["value"]["stringValue"])
+                            for item in point["attributes"] if item["key"] != "environment"
+                        ))
+                        self._exported.add((metric["name"], labels))
         finally:
             if process.is_alive():
                 process.kill()

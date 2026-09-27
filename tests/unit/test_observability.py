@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -58,6 +59,34 @@ def test_otlp_counters_accumulate_per_boot_and_gauges_keep_observation_time() ->
     counter = metrics["zont_openai_calls_total"]["sum"]
     assert counter["aggregationTemporality"] == 2 and counter["isMonotonic"]
     assert [point["asDouble"] for point in counter["dataPoints"]] == [0, 3]
-    assert counter["dataPoints"][0]["startTimeUnixNano"] == str(telemetry.started)
+    assert int(counter["dataPoints"][0]["startTimeUnixNano"]) <= telemetry.started
     assert first["scopeMetrics"][0]["metrics"][1] == second["scopeMetrics"][0]["metrics"][1]
     assert first["resource"]["attributes"][1]["value"]["stringValue"] == telemetry.instance
+
+
+def test_first_counter_after_long_idle_has_a_recent_distinct_zero() -> None:
+    telemetry = Telemetry(json.dumps({
+        "endpoint": "https://otlp-gateway-test.grafana.net/otlp", "username": "123", "token": "test",
+    }), "dev")
+    telemetry.started -= 2 * 3600 * 1_000_000_000
+    before = time.time_ns()
+    telemetry.record(("zont_ydb_errors_total", 1, {}))
+    points = telemetry.payload()["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["sum"]["dataPoints"]
+    assert before - 1_000_000 <= int(points[0]["timeUnixNano"])
+    assert int(points[0]["timeUnixNano"]) // 1_000_000 < int(points[1]["timeUnixNano"]) // 1_000_000
+
+
+def test_export_does_not_acknowledge_concurrently_recorded_series(monkeypatch: pytest.MonkeyPatch) -> None:
+    telemetry = Telemetry(json.dumps({
+        "endpoint": "https://otlp-gateway-test.grafana.net/otlp", "username": "123", "token": "test",
+    }), "dev")
+    process = SimpleNamespace(
+        start=lambda: None, close=lambda: None, is_alive=lambda: False, exitcode=0,
+        join=lambda _: telemetry.record(("zont_ydb_errors_total", 1, {})),
+    )
+    monkeypatch.setattr("zont_analyzer.cloud.telemetry.multiprocessing.get_context",
+                        lambda _: SimpleNamespace(Process=lambda **_: process))
+    telemetry.send(True, 1)
+    metrics = telemetry.payload()["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+    points = next(m for m in metrics if m["name"] == "zont_ydb_errors_total")["sum"]["dataPoints"]
+    assert [p["asDouble"] for p in points] == [0, 1]
