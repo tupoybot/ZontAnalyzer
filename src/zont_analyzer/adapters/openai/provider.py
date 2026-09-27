@@ -22,6 +22,7 @@ from zont_analyzer.domain.reasoning import (
     TimeInterval,
     Unknown,
 )
+from zont_analyzer.observability import observe, span
 
 PROMPT_VERSION = "analyst-v8.5"
 SCHEMA_VERSION = "analysis-result-v1"
@@ -436,22 +437,25 @@ class OpenAIAnalyst:
         try:
             if self.client is None:
                 self.client = OpenAI(api_key=self._api_key, max_retries=0, timeout=120.0)
-            response = self.client.responses.parse(
-                model=model,
-                reasoning={"effort": reasoning_effort},
-                input=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": encoded},
-                ],
-                text_format=_StructuredAnalysisResult,
-                store=False,
-                max_output_tokens=6000,
-            )
+            observe("zont_openai_calls_total")
+            with span("zont_openai"):
+                response = self.client.responses.parse(
+                    model=model,
+                    reasoning={"effort": reasoning_effort},
+                    input=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": encoded},
+                    ],
+                    text_format=_StructuredAnalysisResult,
+                    store=False,
+                    max_output_tokens=6000,
+                )
             parsed = response.output_parsed
             if parsed is None:
                 raise RuntimeError("OpenAI response did not contain parsed output")
             result = _validate_structured_result(parsed, packet)
         except Exception as exc:
+            observe("zont_openai_failures_total")
             usage = getattr(response, "usage", None)
             input_tokens, cached_tokens, output_tokens = _usage_values(usage)
             if response is None:
@@ -488,11 +492,15 @@ class OpenAIAnalyst:
 
 def _usage_values(usage: Any) -> tuple[int, int, int]:
     input_details = getattr(usage, "input_tokens_details", None)
-    return (
+    values = (
         int(getattr(usage, "input_tokens", 0) or 0),
         int(getattr(input_details, "cached_tokens", 0) or 0),
         int(getattr(usage, "output_tokens", 0) or 0),
     )
+    if usage is not None:
+        for kind, value in zip(("input", "cached", "output"), values, strict=True):
+            observe("zont_openai_tokens_total", value, kind=kind)
+    return values
 
 
 def _report_id_from_packet(packet: dict[str, Any]) -> str | None:

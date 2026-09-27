@@ -5,10 +5,15 @@ import base64
 import json
 import multiprocessing
 import sys
+import threading
 import time
+import uuid
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+
+from zont_analyzer.observability import Measurement
 
 
 def _export(url: str, authorization: str, body: dict[str, object]) -> None:
@@ -45,19 +50,61 @@ class Telemetry:
         self.url = f"https://{endpoint.hostname}/otlp/v1/metrics"
         self.authorization = "Basic " + base64.b64encode(f"{username}:{token}".encode()).decode()
         self.environment = environment
+        self.instance = str(uuid.uuid4())
+        self.started = time.time_ns()
+        self._lock = threading.Lock()
+        self._values: dict[tuple[str, tuple[tuple[str, str], ...]], tuple[float, int]] = {}
+        self._first: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
+        self._exported: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+
+    def record(self, measurement: Measurement) -> None:
+        name, value, labels = measurement
+        key = name, tuple(sorted(labels.items()))
+        with self._lock:
+            if key not in self._values and len(self._values) >= 256:
+                return
+            previous = self._values.get(key, (0.0, 0))[0]
+            stamp = time.time_ns()
+            self._first.setdefault(key, stamp)
+            self._values[key] = (previous + value if name.endswith("_total") else value, stamp)
+
+    def payload(self) -> dict[str, Any]:
+        stamp = time.time_ns()
+        grouped: dict[str, dict[str, Any]] = {}
+        with self._lock:
+            values = dict(self._values)
+            first = dict(self._first)
+            exported = set(self._exported)
+        for (name, labels), (value, observed) in values.items():
+            counter = name.endswith("_total")
+            kind = "sum" if counter else "gauge"
+            metric = grouped.setdefault(name, {"name": name, kind: {"dataPoints": []}})
+            point: dict[str, Any] = {
+                "timeUnixNano": str(stamp if counter else observed), "asDouble": value,
+                "attributes": [{"key": key, "value": {"stringValue": item}}
+                               for key, item in (("environment", self.environment), *labels)],
+            }
+            if counter:
+                metric[kind].update(aggregationTemporality=2, isMonotonic=True)
+                # Prometheus uses millisecond precision. A boot-time zero could
+                # be outside the alert window when a warm process first fails.
+                baseline = first[(name, labels)] - 1_000_000
+                point["startTimeUnixNano"] = str(min(self.started, baseline))
+                if (name, labels) not in exported:
+                    metric[kind]["dataPoints"].append({
+                        **point, "timeUnixNano": str(baseline), "asDouble": 0.0,
+                    })
+            metric[kind]["dataPoints"].append(point)
+        return {"resourceMetrics": [{"resource": {"attributes": [
+            {"key": "service.name", "value": {"stringValue": "zont-cloud-runtime"}},
+            {"key": "service.instance.id", "value": {"stringValue": self.instance}},
+        ]}, "scopeMetrics": [{"scope": {"name": "zont-cloud-jobs"},
+                              "metrics": list(grouped.values())}]}]}
 
     def send(self, success: bool, duration: float) -> None:
-        stamp = str(time.time_ns())
-        metrics = [{"name": name, "unit": unit, "gauge": {"dataPoints": [{
-            "timeUnixNano": stamp, "asDouble": value,
-            "attributes": [{"key": "environment", "value": {"stringValue": self.environment}}],
-        }]}} for name, unit, value in (
-            ("zont_cloud_job_success", "", float(success)),
-            ("zont_cloud_job_duration_seconds", "s", duration),
-        )]
-        body = {"resourceMetrics": [{"resource": {"attributes": [
-            {"key": "service.name", "value": {"stringValue": "zont-cloud-runtime"}},
-        ]}, "scopeMetrics": [{"scope": {"name": "zont-cloud-jobs"}, "metrics": metrics}]}]}
+        self.record(("zont_cloud_job_success", float(success), {}))
+        self.record(("zont_cloud_job_duration_seconds", duration, {}))
+        body = self.payload()
         process = multiprocessing.get_context("spawn").Process(
             target=_export, args=(self.url, self.authorization, body),
         )
@@ -70,6 +117,14 @@ class Telemetry:
                 raise TimeoutError("metrics deadline exceeded")
             if process.exitcode != 0:
                 raise RuntimeError("metrics export failed")
+            with self._lock:
+                for metric in body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]:
+                    for point in metric.get("sum", metric.get("gauge", {}))["dataPoints"]:
+                        labels = tuple(sorted(
+                            (item["key"], item["value"]["stringValue"])
+                            for item in point["attributes"] if item["key"] != "environment"
+                        ))
+                        self._exported.add((metric["name"], labels))
         finally:
             if process.is_alive():
                 process.kill()

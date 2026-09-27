@@ -13,6 +13,8 @@ from typing import Any, TypeVar
 
 import ydb  # type: ignore[import-untyped]
 
+from zont_analyzer.observability import observe, span
+
 T = TypeVar("T")
 
 
@@ -75,6 +77,7 @@ class YdbDatabase:
         try:
             self.driver.wait(timeout=10, fail_fast=True)
         except Exception:
+            observe("zont_ydb_errors_total")
             self.driver.stop()
             raise
         self.pool = ydb.QuerySessionPool(self.driver, size=8)
@@ -84,6 +87,14 @@ class YdbDatabase:
         self.driver.stop()
 
     def execute(self, query: str, parameters: dict[str, Any] | None = None) -> list[Any]:
+        try:
+            with span("zont_ydb_query"):
+                return self._execute(query, parameters)
+        except Exception:
+            observe("zont_ydb_errors_total")
+            raise
+
+    def _execute(self, query: str, parameters: dict[str, Any] | None = None) -> list[Any]:
         merged: dict[int, Any] = {}
         for part in self.pool.execute_with_retries(self.prefix + query, parameters=parameters):
             if part.truncated:
@@ -102,8 +113,14 @@ class YdbDatabase:
                 raw.commit()
                 return value
 
-        result: T = self.pool.retry_operation_sync(run)
-        return result
+        try:
+            with span("zont_ydb_transaction"):
+                result: T = self.pool.retry_operation_sync(run)
+                return result
+        except Exception:
+            # Count only terminal failures, never replayable callback attempts.
+            observe("zont_ydb_errors_total")
+            raise
 
     def initialize(self) -> None:
         from .schema import TABLES

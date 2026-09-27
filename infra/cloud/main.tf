@@ -170,3 +170,20 @@ resource "yandex_function_trigger" "maintenance" {
   }
   depends_on = [yandex_serverless_container_iam_binding.application_invoker]
 }
+
+resource "yandex_function_trigger" "monitoring" {
+  count     = var.enable_monitoring_timer ? 1 : 0
+  folder_id = data.yandex_resourcemanager_folder.project.id
+  name      = "${local.name}-monitoring"
+  timer {
+    cron_expression = "0 * * * ? *"
+  }
+  container {
+    id                 = yandex_serverless_container.application.id
+    service_account_id = var.timer_service_account_id
+    path               = "/internal/monitoring"
+    retry_attempts     = 1
+    retry_interval     = 10
+  }
+  depends_on = [yandex_serverless_container_iam_binding.application_invoker]
+}

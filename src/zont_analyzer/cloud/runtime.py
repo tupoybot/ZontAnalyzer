@@ -110,8 +110,12 @@ class Counters:
 def _child_entry(
     result_pipe: Any, callable_: Callable[[dict[str, Any]], dict[str, Any]], payload: dict[str, Any]
 ) -> None:
+    from zont_analyzer.observability import capture
+
     try:
-        encoded = json.dumps(callable_(payload), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        with capture(lambda measurement: result_pipe.send(("metric", measurement))):
+            result = callable_(payload)
+        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(encoded) > MAX_RESULT_BYTES:
             result_pipe.send(("failure", "ResultTooLargeError"))
         else:
@@ -151,6 +155,12 @@ def run_bounded(
                     status, value = receiver.recv()
                 except EOFError as exc:
                     raise JobFailureError("ChildExitError") from exc
+                if status == "metric":
+                    from zont_analyzer.observability import observe
+
+                    name, measurement, labels = value
+                    observe(name, measurement, **labels)
+                    continue
                 break
             if process.exitcode is not None:
                 raise JobFailureError("ChildExitError")
@@ -218,6 +228,9 @@ def _mark_worker_success() -> None:
     runtime = build_runtime(None, None)
     try:
         runtime.db.set_app_meta("cloud-worker-last-success", datetime.now(UTC).isoformat())
+        from zont_analyzer.cloud.monitoring import snapshot
+
+        snapshot(runtime)
     finally:
         runtime.db.close()
 
@@ -246,7 +259,19 @@ def _dispatch_publication(payload: dict[str, Any]) -> dict[str, Any]:
         runtime.db.close()
 
 
-def _cloud_application_runtime() -> Any:
+def _dispatch_monitoring(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload:
+        raise ValueError("monitoring payload must be empty")
+    from zont_analyzer.cloud.monitoring import snapshot
+    runtime = _cloud_application_runtime(initialize=False)
+    try:
+        snapshot(runtime)
+        return {"status": "observed"}
+    finally:
+        runtime.db.close()
+
+
+def _cloud_application_runtime(*, initialize: bool = True) -> Any:
     """Open YDB for a web request without running startup maintenance on GET."""
     from zont_analyzer.adapters.ydb.application import Database
     from zont_analyzer.adapters.ydb.database import YdbConfig
@@ -259,7 +284,7 @@ def _cloud_application_runtime() -> Any:
     db = Database(target)
     try:
         with _web_schema_lock:
-            if schema_key not in _web_schema_ready:
+            if initialize and schema_key not in _web_schema_ready:
                 db.initialize()
                 _web_schema_ready.add(schema_key)
         return Runtime(loaded, db)
@@ -274,6 +299,7 @@ DISPATCHERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "reports": _dispatch_reports,
     "maintenance": _dispatch_maintenance,
     "publication": _dispatch_publication,
+    "monitoring": _dispatch_monitoring,
 }
 
 
@@ -342,6 +368,16 @@ class CloudHandler(BaseHTTPRequestHandler):
         self._handle()
 
     def _handle(self) -> None:
+        from zont_analyzer.observability import capture
+
+        collector = getattr(self.server.telemetry, "record", None)
+        if collector is None:
+            self._handle_observed()
+            return
+        with capture(collector):
+            self._handle_observed()
+
+    def _handle_observed(self) -> None:
         path = urlsplit(self.path).path
         oidc_enabled = self.server.config.oidc is not None
         if self.command == "GET":
@@ -360,7 +396,9 @@ class CloudHandler(BaseHTTPRequestHandler):
         if path == "/logout" and self.command == "POST":
             self._logout()
             return
-        internal_maintenance = self.command == "POST" and self.path == "/internal/maintenance"
+        internal_maintenance = self.command == "POST" and self.path in {
+            "/internal/maintenance", "/internal/monitoring",
+        }
         if not internal_maintenance and not self._authorized():
             self._finish_input()
             if not oidc_enabled and self.command == "GET" and _HTML_SITE.fullmatch(path):
@@ -443,12 +481,23 @@ class CloudHandler(BaseHTTPRequestHandler):
             "/jobs/maintenance": "maintenance",
             "/jobs/publication": "publication",
             "/internal/maintenance": "maintenance",
+            "/internal/monitoring": "monitoring",
+            "/jobs/monitoring": "monitoring",
         }.get(self.path)
         if self.command != "POST" or endpoint is None:
             self._finish_input()
             self._reply(404, {"error": "not_found"})
             return
-        if not self.server.tunnel.ready():
+        from zont_analyzer.observability import observe
+
+        proxy_ready = self.server.tunnel.ready()
+        observe("zont_proxy_ready", float(proxy_ready))
+        if endpoint != "monitoring" and not proxy_ready:
+            observe("zont_proxy_failures_total", destination="openai")
+            observe("zont_invocations_total", operation=endpoint, outcome="failure")
+            observe("zont_cloud_job_observed_timestamp_seconds", time.time(), operation=endpoint)
+            observe("zont_cloud_job_success", 0, operation=endpoint)
+            self._send_telemetry(False, 0)
             self._finish_input()
             self._reply(503, {"error": "xray_unavailable"})
             return
@@ -482,11 +531,13 @@ class CloudHandler(BaseHTTPRequestHandler):
                      else self.server.config.job_timeout_seconds), self.server.stopping,
                 )
             except JobTimeoutError:
+                outcome = "timeout"
                 self.server.counters.record("timeouts")
                 self._log_job(job_id, "timeout")
                 response_status, response = 504, {"error": "job_timeout", "job_id": job_id}
                 telemetry_success = False
             except JobValidationError as exc:
+                outcome = "invalid"
                 self.server.counters.record("failures")
                 self._log_job(job_id, "invalid", type(exc).__name__)
                 response_status, response = 400, {
@@ -494,6 +545,7 @@ class CloudHandler(BaseHTTPRequestHandler):
                 }
                 telemetry_success = False
             except Exception as exc:  # noqa: BLE001 - response/log deliberately excludes exception details
+                outcome = "failure"
                 self.server.counters.record("failures")
                 self._log_job(job_id, "failed", type(exc).__name__)
                 response_status, response = 502, {
@@ -501,10 +553,16 @@ class CloudHandler(BaseHTTPRequestHandler):
                 }
                 telemetry_success = False
             else:
+                outcome = "success"
                 self.server.counters.record("successes")
                 self._log_job(job_id, "ok")
                 response_status, response = 200, {"job_id": job_id, "result": result}
                 telemetry_success = True
+            observe("zont_invocations_total", operation=endpoint, outcome=outcome)
+            observe("zont_cloud_job_observed_timestamp_seconds", time.time(), operation=endpoint)
+            observe("zont_cloud_job_success", float(telemetry_success), operation=endpoint)
+            observe("zont_cloud_job_duration_seconds", time.monotonic() - started, operation=endpoint)
+            observe("zont_direct_fallback_allowed", 0)
             self._send_telemetry(telemetry_success, time.monotonic() - started)
             self._reply(response_status, response)
         finally:

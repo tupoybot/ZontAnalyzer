@@ -8,6 +8,7 @@ from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.adapters.zont_readonly import ZontReadOnlyClient
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import SourceEvent, TelemetryPoint
+from zont_analyzer.observability import observe, span
 
 
 class CollectionService:
@@ -19,11 +20,35 @@ class CollectionService:
         max_requests: int = 24, replay_recent: bool = False,
         coverage_prefix: str = "", device_ids: set[str] | None = None,
     ) -> dict[str, Any]:
+        try:
+            with span("zont_collection"):
+                result = self._ensure_period(
+                    start, end, now=now, max_requests=max_requests, replay_recent=replay_recent,
+                    coverage_prefix=coverage_prefix, device_ids=device_ids,
+                )
+        except Exception:
+            observe("zont_sync_observed_timestamp_seconds", datetime.now(UTC).timestamp())
+            observe("zont_sync_success", 0)
+            observe("zont_collection_runs_total", outcome="failure")
+            raise
+        observe("zont_sync_observed_timestamp_seconds", datetime.now(UTC).timestamp())
+        observe("zont_sync_success", float(not result["failed_windows"]))
+        outcome = "failure" if result["failed_windows"] else "pending" if result["pending"] else "success"
+        observe("zont_collection_runs_total", outcome=outcome)
+        observe("zont_collection_failed_windows_total", result["failed_windows"])
+        return result
+
+    def _ensure_period(
+        self, start: datetime, end: datetime, *, now: datetime | None = None,
+        max_requests: int = 24, replay_recent: bool = False,
+        coverage_prefix: str = "", device_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
         reference = (now or datetime.now(UTC)).astimezone(UTC).replace(microsecond=0)
         start, end = start.astimezone(UTC).replace(microsecond=0), min(end, reference).replace(microsecond=0)
         if start >= end or not 1 <= max_requests <= 100:
             raise ValueError("invalid bounded collection interval")
         requests = samples = events = unavailable = 0
+        latest_timestamp: float | None = None
         errors: list[str] = []
         pending = False
         entities: dict[str, dict[str, Any]] = {}
@@ -112,6 +137,9 @@ class CollectionService:
                                                    start=lo, end=hi,
                                                    points=points, events=values,
                                                    roles=roles, state="complete" if points or values else "empty")
+                    if points:
+                        latest = max(point.timestamp_utc.timestamp() for point in points)
+                        latest_timestamp = max(latest_timestamp or latest, latest)
                     samples += len(points)
                     events += len(values)
                 except Exception as exc:
@@ -129,6 +157,9 @@ class CollectionService:
                 role=str(override.get("role", entity["role"])), unit=entity["unit"],
                 confidence=float(entity["confidence"]), provenance="ZONT history metadata",
             )
+        if latest_timestamp is not None:
+            observe("zont_telemetry_timestamp_seconds", latest_timestamp)
+            observe("zont_telemetry_lag_seconds", max(0.0, reference.timestamp() - latest_timestamp))
         return {"samples": samples, "source_events": events, "requests": requests,
                 "complete": not pending and not errors, "pending": pending,
                 "failed_windows": len(errors), "unavailable_intervals": unavailable, "errors": errors[:10]}
