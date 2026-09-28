@@ -34,208 +34,8 @@
   },
   "panels": [
     {
-      "id": 31,
-      "title": "Ожидают публикации",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 0,
-        "w": 6,
-        "h": 5
-      },
-      "description": "Последний успешный снимок, не старше 15 минут. Ошибка последнего чтения скрывает прежние значения. При ограниченном чтении число является нижней границей; см. точность снимка. Число отчётов в сформированной очереди; ещё не обработанные изменения журнала не включены.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(last_over_time(zont_queue_items{environment=\"$environment\",kind=\"publication\",status=\"pending\"}[2h]) and ignoring (status) (((last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment,kind) group_left max by (environment,kind) (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) > time() - 900)) and (last_over_time(zont_queue_snapshot_success{environment=\"$environment\"}[2h]) == 1)))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "Ожидают публикации",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "noValue": "Нет свежих данных"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none"
-      }
-    },
-    {
-      "id": 32,
-      "title": "Ручные задания: ожидают",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 6,
-        "y": 0,
-        "w": 6,
-        "h": 5
-      },
-      "description": "Последний успешный снимок, не старше 15 минут. Ошибка последнего чтения скрывает прежние значения. При ограниченном чтении число является нижней границей; см. точность снимка.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(last_over_time(zont_queue_items{environment=\"$environment\",kind=\"manual\",status=\"pending\"}[2h]) and ignoring (status) (((last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment,kind) group_left max by (environment,kind) (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) > time() - 900)) and (last_over_time(zont_queue_snapshot_success{environment=\"$environment\"}[2h]) == 1)))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "Ручные задания: ожидают",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "noValue": "Нет свежих данных"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none"
-      }
-    },
-    {
-      "id": 33,
-      "title": "Ручные задания: выполняются",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 0,
-        "w": 6,
-        "h": 5
-      },
-      "description": "Последний успешный снимок, не старше 15 минут. Ошибка последнего чтения скрывает прежние значения. При ограниченном чтении число является нижней границей; см. точность снимка.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(last_over_time(zont_queue_items{environment=\"$environment\",kind=\"manual\",status=\"running\"}[2h]) and ignoring (status) (((last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment,kind) group_left max by (environment,kind) (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) > time() - 900)) and (last_over_time(zont_queue_snapshot_success{environment=\"$environment\"}[2h]) == 1)))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "Ручные задания: выполняются",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "noValue": "Нет свежих данных"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none"
-      }
-    },
-    {
-      "id": 34,
-      "title": "Ручные задания: требуют разбора",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 18,
-        "y": 0,
-        "w": 6,
-        "h": 5
-      },
-      "description": "Последний успешный снимок, не старше 15 минут. Ошибка последнего чтения скрывает прежние значения. При ограниченном чтении число является нижней границей; см. точность снимка.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(last_over_time(zont_queue_items{environment=\"$environment\",kind=\"manual\",status=\"blocked\"}[2h]) and ignoring (status) (((last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment,kind) group_left max by (environment,kind) (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) > time() - 900)) and (last_over_time(zont_queue_snapshot_success{environment=\"$environment\"}[2h]) == 1)))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "Ручные задания: требуют разбора",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "noValue": "Нет свежих данных"
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none"
-      }
-    },
-    {
-      "id": 35,
-      "title": "Очереди: изменение размера",
+      "id": 1,
+      "title": "Результат синхронизации (1 — успех)",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -243,11 +43,209 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 5,
+        "y": 0,
         "w": 12,
         "h": 8
       },
-      "description": "Последний успешный снимок, не старше 15 минут. Ошибка последнего чтения скрывает прежние значения. При ограниченном чтении число является нижней границей; см. точность снимка.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min(last_over_time(zont_sync_success{environment=\"$environment\"}[48h]) and (last_over_time(zont_sync_observed_timestamp_seconds{environment=\"$environment\"}[48h]) == on (environment) group_left max by (environment) (last_over_time(zont_sync_observed_timestamp_seconds{environment=\"$environment\"}[48h]))))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "title": "Возраст последней телеметрии",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - max(last_over_time(zont_telemetry_timestamp_seconds{environment=\"$environment\"}[48h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "title": "Возраст полученных точек при сборе",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(last_over_time(zont_telemetry_lag_seconds{environment=\"$environment\"}[48h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "title": "Длительность операций",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{__name__=~\"zont_(cloud_job|analysis|report)_duration_seconds\",environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{__name__}} {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "title": "Ошибки и таймауты вызовов за час",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (operation, outcome) (increase(zont_invocations_total{environment=\"$environment\",outcome!=\"success\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "title": "Вызовы контейнера за час",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (operation) (increase(zont_invocations_total{environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 35,
+      "title": "Очереди заданий",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 8
+      },
+      "description": "Ожидающие публикации отчёты и ручные задания по состояниям. Последние замеры; отсутствие или ошибка свежих данных не означают пустую очередь. При ограниченном чтении — нижняя граница числа заданий.",
       "targets": [
         {
           "refId": "A",
@@ -298,7 +296,7 @@
         "defaults": {
           "unit": "none",
           "decimals": 0,
-          "noValue": "Нет свежих данных"
+          "noValue": "Нет данных"
         },
         "overrides": []
       },
@@ -311,530 +309,6 @@
           "mode": "multi"
         }
       }
-    },
-    {
-      "id": 36,
-      "title": "Возраст старейшего состояния в очереди",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 5,
-        "w": 12,
-        "h": 8
-      },
-      "description": "Публикация: время ожидания отчёта. Ручные задания: возраст последнего изменения состояния самого старого задания, включая выполнение и требующее разбора. Показывается только при полном чтении и известном времени; это не обязательно время первого нажатия.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "time() - max by (kind) ((last_over_time(zont_queue_oldest_timestamp_seconds{environment=\"$environment\"}[2h]) and ignoring (status) (((last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment,kind) group_left max by (environment,kind) (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) > time() - 900)) and (last_over_time(zont_queue_snapshot_success{environment=\"$environment\"}[2h]) == 1)) ) > 0)",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{kind}}",
-          "instant": false,
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "decimals": 0,
-          "noValue": "Нет свежих данных"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "publication"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Публикация"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "manual"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Ручные задания"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      }
-    },
-    {
-      "id": 37,
-      "title": "Возраст последнего снимка очередей",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 13,
-        "w": 8,
-        "h": 5
-      },
-      "description": "Время после последней попытки измерения. Размер очереди скрывается при ошибке чтения или возрасте снимка более 15 минут.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "time() - max by (kind) (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{kind}}",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "decimals": 0,
-          "noValue": "Нет свежих данных"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "publication"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Публикация"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "manual"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Ручные задания"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none"
-      }
-    },
-    {
-      "id": 38,
-      "title": "Состояние чтения очередей",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 8,
-        "y": 13,
-        "w": 8,
-        "h": 5
-      },
-      "description": "1 — успешно, 0 — ошибка; отсутствие данных не означает пустую очередь.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "min by (kind) (last_over_time(zont_queue_snapshot_success{environment=\"$environment\"}[2h]) and ((last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment,kind) group_left max by (environment,kind) (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) > time() - 900)))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{kind}}",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "noValue": "Нет свежих данных",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "Ошибка",
-                  "color": "red"
-                },
-                "1": {
-                  "text": "Успешно",
-                  "color": "green"
-                }
-              }
-            }
-          ]
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "publication"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Публикация"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "manual"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Ручные задания"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none"
-      }
-    },
-    {
-      "id": 39,
-      "title": "Точность снимка очередей",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 13,
-        "w": 8,
-        "h": 5
-      },
-      "description": "Полное чтение даёт точное число. Ограниченное чтение даёт нижнюю границу и скрывает возраст старейшего задания.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max by (kind) (last_over_time(zont_queue_truncated{environment=\"$environment\"}[2h]) and ignoring (status) (((last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment,kind) group_left max by (environment,kind) (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) > time() - 900)) and (last_over_time(zont_queue_snapshot_success{environment=\"$environment\"}[2h]) == 1)))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{kind}}",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "noValue": "Нет свежих данных",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "Точно",
-                  "color": "green"
-                },
-                "1": {
-                  "text": "Нижняя граница",
-                  "color": "orange"
-                }
-              }
-            }
-          ]
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "publication"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Публикация"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "manual"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Ручные задания"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none"
-      }
-    },
-    {
-      "id": 1,
-      "title": "Результат синхронизации (1 — успех)",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 18,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "min(last_over_time(zont_sync_success{environment=\"$environment\"}[48h]) and (last_over_time(zont_sync_observed_timestamp_seconds{environment=\"$environment\"}[48h]) == on (environment) group_left max by (environment) (last_over_time(zont_sync_observed_timestamp_seconds{environment=\"$environment\"}[48h]))))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 2,
-      "title": "Возраст последней телеметрии",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 18,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "time() - max(last_over_time(zont_telemetry_timestamp_seconds{environment=\"$environment\"}[48h]))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 3,
-      "title": "Возраст полученных точек при сборе",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 26,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(last_over_time(zont_telemetry_lag_seconds{environment=\"$environment\"}[48h]))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 4,
-      "title": "Длительность операций",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 26,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "{__name__=~\"zont_(cloud_job|analysis|report)_duration_seconds\",environment=\"$environment\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{__name__}} {{operation}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 5,
-      "title": "Ошибки и таймауты вызовов за час",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 34,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (operation, outcome) (increase(zont_invocations_total{environment=\"$environment\",outcome!=\"success\"}[1h]))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 6,
-      "title": "Вызовы контейнера за час",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 34,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (operation) (increase(zont_invocations_total{environment=\"$environment\"}[1h]))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
     },
     {
       "id": 7,
@@ -846,7 +320,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 32,
         "w": 12,
         "h": 8
       },
@@ -879,7 +353,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 42,
+        "y": 32,
         "w": 12,
         "h": 8
       },
@@ -912,7 +386,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 50,
+        "y": 40,
         "w": 12,
         "h": 8
       },
@@ -945,7 +419,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 50,
+        "y": 40,
         "w": 12,
         "h": 8
       },
@@ -978,7 +452,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 58,
+        "y": 48,
         "w": 12,
         "h": 8
       },
@@ -1011,7 +485,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 58,
+        "y": 48,
         "w": 12,
         "h": 8
       },
@@ -1044,7 +518,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 66,
+        "y": 56,
         "w": 12,
         "h": 8
       },
@@ -1077,7 +551,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 66,
+        "y": 56,
         "w": 12,
         "h": 8
       },
@@ -1110,7 +584,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 74,
+        "y": 64,
         "w": 12,
         "h": 8
       },
@@ -1143,7 +617,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 74,
+        "y": 64,
         "w": 12,
         "h": 8
       },
@@ -1176,7 +650,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 82,
+        "y": 72,
         "w": 12,
         "h": 8
       },
@@ -1209,7 +683,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 82,
+        "y": 72,
         "w": 12,
         "h": 8
       },
@@ -1242,7 +716,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 90,
+        "y": 80,
         "w": 12,
         "h": 8
       },
@@ -1275,7 +749,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 90,
+        "y": 80,
         "w": 12,
         "h": 8
       },
@@ -1308,7 +782,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 98,
+        "y": 88,
         "w": 12,
         "h": 8
       },
@@ -1341,7 +815,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 98,
+        "y": 88,
         "w": 12,
         "h": 8
       },
@@ -1374,7 +848,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 106,
+        "y": 96,
         "w": 12,
         "h": 8
       },
@@ -1407,7 +881,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 106,
+        "y": 96,
         "w": 12,
         "h": 8
       },
@@ -1440,7 +914,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 114,
+        "y": 104,
         "w": 12,
         "h": 8
       },
@@ -1473,7 +947,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 114,
+        "y": 104,
         "w": 12,
         "h": 8
       },
@@ -1506,7 +980,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 122,
+        "y": 112,
         "w": 12,
         "h": 8
       },
@@ -1539,7 +1013,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 122,
+        "y": 112,
         "w": 12,
         "h": 8
       },
@@ -1572,7 +1046,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 130,
+        "y": 120,
         "w": 12,
         "h": 8
       },
@@ -1605,7 +1079,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 130,
+        "y": 120,
         "w": 12,
         "h": 8
       },
