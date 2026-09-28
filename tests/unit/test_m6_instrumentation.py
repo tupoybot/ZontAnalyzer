@@ -66,6 +66,7 @@ def test_openai_dispatch_failure_counted_once_and_cache_never_dispatches(monkeyp
     monkeypatch.setattr(provider, "observe", observe)
     analyst = object.__new__(provider.OpenAIAnalyst)
     analyst.config = AppConfig()
+    analyst.dispatch_deadline = None
     analyst.ledger = Mock()
     analyst.ledger.cached.return_value = None
     analyst.ledger.reserve.return_value = None
@@ -158,6 +159,7 @@ def test_openai_known_usage_counts_actual_tokens_on_invalid_response(monkeypatch
     monkeypatch.setattr(provider, "observe", observe)
     analyst = object.__new__(provider.OpenAIAnalyst)
     analyst.config = AppConfig()
+    analyst.dispatch_deadline = None
     analyst.ledger = Mock()
     analyst.ledger.cached.return_value = None
     analyst.ledger.reserve.return_value = None

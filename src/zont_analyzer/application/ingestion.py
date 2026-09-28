@@ -318,6 +318,8 @@ class IngestionService:
     def sync(
         self, *, backfill: timedelta | None = None, now: datetime | None = None,
         max_requests: int = 24,
+        deadline: float | None = None, replay_checked_after: datetime | None = None,
+        start_at: datetime | None = None,
     ) -> dict[str, Any]:
         from zont_analyzer.application.collection import CollectionService
 
@@ -341,6 +343,8 @@ class IngestionService:
                 state = _load_connection_recovery(self.db, str(device["id"]))
                 if state["pending_replay_start"] is not None:
                     start = min(start, state["pending_replay_start"] - overlap)
+        if start_at is not None:
+            start = min(start, start_at)
         collector = CollectionService(self.db, self.client, self.config)
         result: dict[str, Any] = {"samples": 0, "source_events": 0, "requests": 0,
                                   "complete": True, "pending": False, "failed_windows": 0,
@@ -369,6 +373,7 @@ class IngestionService:
                 replay_start - overlap, min(reference, restored + overlap), now=reference,
                 max_requests=max_requests - result["requests"], device_ids={device_id},
                 coverage_prefix=f"recovery:{int(restored.timestamp())}:",
+                deadline=deadline,
             )
             combine(part)
             if part["complete"] and self.db.fetch_device_sample_timestamps(
@@ -384,6 +389,7 @@ class IngestionService:
             combine(collector.ensure_period(
                 start, reference, now=reference, max_requests=max_requests - result["requests"],
                 replay_recent=backfill is None,
+                deadline=deadline, replay_checked_after=replay_checked_after,
             ))
         else:
             result["complete"], result["pending"] = False, True

@@ -76,6 +76,18 @@ variable "application_revision" {
   }
 }
 
+variable "application_writes_enabled" {
+  description = "Allow API mutations and background jobs; disable during cutover maintenance."
+  type        = bool
+  default     = true
+}
+
+variable "application_config_secret_enabled" {
+  description = "Load the application configuration JSON from the selected Lockbox secret version."
+  type        = bool
+  default     = false
+}
+
 variable "application_ydb_namespace" {
   description = "Explicit isolated application schema selected for import and runtime."
   type        = string
@@ -137,6 +149,92 @@ variable "deletion_protection" {
   description = "Protect the database and certificate; disable explicitly before tearing down an isolated test stack."
   type        = bool
   default     = true
+}
+
+variable "application_publication_prefix" {
+  description = "Isolate production publication from rehearsal objects during cutover."
+  type        = string
+  default     = "reports"
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9_-]{0,63}$", var.application_publication_prefix))
+    error_message = "Use a single safe publication prefix."
+  }
+}
+
+variable "enable_production_database" {
+  description = "Create a separate production database and select it for the application; retain development data during cutover."
+  type        = bool
+  default     = false
+}
+
+variable "retain_development_database" {
+  description = "Keep the original development database after switching the application to production."
+  type        = bool
+  default     = true
+  validation {
+    condition     = var.retain_development_database || var.enable_production_database
+    error_message = "The development database can be omitted only when the production database is enabled."
+  }
+}
+
+variable "production_database_name" {
+  description = "Name of the separate production database."
+  type        = string
+  default     = "zont-prod"
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{1,61}[a-z0-9]$", var.production_database_name))
+    error_message = "Use a safe database resource name."
+  }
+}
+
+variable "production_ydb_request_units_per_second" {
+  description = "Production on-demand throughput cap; this does not request a cloud quota increase."
+  type        = number
+  default     = 50
+  validation {
+    condition     = var.production_ydb_request_units_per_second >= 10 && var.production_ydb_request_units_per_second <= 1000 && floor(var.production_ydb_request_units_per_second) == var.production_ydb_request_units_per_second
+    error_message = "Use an integer throughput cap between 10 and 1000 request units per second."
+  }
+}
+
+variable "production_ydb_storage_size_limit_gib" {
+  description = "Production storage cap including isolated recovery copies."
+  type        = number
+  default     = 2
+  validation {
+    condition     = var.production_ydb_storage_size_limit_gib >= 1 && var.production_ydb_storage_size_limit_gib <= 100 && floor(var.production_ydb_storage_size_limit_gib) == var.production_ydb_storage_size_limit_gib
+    error_message = "Use an integer storage cap between 1 and 100 GiB."
+  }
+}
+
+variable "ydb_request_units_per_second" {
+  description = "Explicit serverless throughput cap for the accepted workload, including migration."
+  type        = number
+  default     = 10
+  validation {
+    condition     = var.ydb_request_units_per_second >= 10 && var.ydb_request_units_per_second <= 1000 && floor(var.ydb_request_units_per_second) == var.ydb_request_units_per_second
+    error_message = "Use an integer throughput cap between 10 and 1000 request units per second."
+  }
+}
+
+variable "ydb_storage_size_limit_gib" {
+  description = "Explicit storage cap including migration metadata and recovery copies."
+  type        = number
+  default     = 1
+  validation {
+    condition     = var.ydb_storage_size_limit_gib >= 1 && var.ydb_storage_size_limit_gib <= 100 && floor(var.ydb_storage_size_limit_gib) == var.ydb_storage_size_limit_gib
+    error_message = "Use an integer storage cap between 1 and 100 GiB."
+  }
+}
+
+variable "enable_scheduler_timer" {
+  description = "Run the production scheduler after the verified M8 cutover."
+  type        = bool
+  default     = false
+  validation {
+    condition     = !var.enable_scheduler_timer || (var.grafana_metrics_enabled && var.application_writes_enabled && var.application_config_secret_enabled)
+    error_message = "Production scheduling requires monitoring, enabled writes and explicit application configuration."
+  }
 }
 
 variable "enable_maintenance_timer" {

@@ -131,10 +131,10 @@ def _dependents(items: dict[str, dict[str, Any]], report: Report, now: datetime)
 
 
 def _telemetry(items: dict[str, dict[str, Any]], repository: PublicationRepository,
-               runtime: Runtime, hours: list[str], now: datetime) -> None:
+               runtime: Runtime, hours: list[str], calibration_hours: set[str], now: datetime) -> None:
     if not hours:
         return
-    earliest, latest = repository.reading_span()
+    earliest, latest = repository.reading_span() if calibration_hours else (None, None)
     calibration: tuple[float, float] | None = None
     if earliest and latest and earliest != latest:
         zone = ZoneInfo(runtime.config.home.effective_timezone)
@@ -145,7 +145,7 @@ def _telemetry(items: dict[str, dict[str, Any]], repository: PublicationReposito
     for hour in hours:
         start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
         end = start + 3600
-        if calibration and start < calibration[1] and end > calibration[0]:
+        if hour in calibration_hours and calibration and start < calibration[1] and end > calibration[0]:
             _enqueue(items, GAS, now)
             return
         _enqueue(items, GAS, now, lambda item: item["lo"] < end and item["hi"] > start)  # noqa: B023
@@ -278,10 +278,19 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                          lambda item: item["lo"] + 900 < end and item["hi"] - 900 > start)  # noqa: B023
             elif scope.startswith("tariff:"):
                 _enqueue(items, COST, now)
-            elif scope.startswith(("owner-profile:", "owner-gas:", "device:", "series:", "telemetry:")):
+            elif scope.startswith(("owner-profile:", "owner-gas:", "series:", "telemetry:")):
                 _enqueue(items, GAS, now)
+            # Raw device snapshots also change on ordinary discovery (timestamps,
+            # online state). Equipment facts and device membership are covered by
+            # the profile digest below; effective timezone is in the config digest.
+        telemetry_changes = [c for c in changes if c["scope"] in {"telemetry", "telemetry-gas"}]
+        # Old releases wrote no dependency information. Retain their broad
+        # calibration invalidation until their journal entries are consumed.
+        calibration_hours = {str(c["identifier"]) for c in telemetry_changes
+                             if c["scope"] == "telemetry-gas"
+                             or json.loads(c["payload"]).get("calibration") is not False}
         _telemetry(items, repository, runtime,
-                   [str(c["identifier"]) for c in changes if c["scope"] == "telemetry"], now)
+                   sorted({str(c["identifier"]) for c in telemetry_changes}), calibration_hours, now)
 
     # A lost local publication directory is reconciled from canonical YDB.
     # Ordinary polls examine only sixteen paths and do no full archive walk.

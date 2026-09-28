@@ -233,6 +233,18 @@ def load_config(config_path: Path | None = None, data_dir: Path | None = None) -
             raise ValueError("config.yaml root must be a mapping")
         raw = loaded
         sources["overrides"] = str(config_path)
+    inline = os.getenv("ZONT_ANALYZER_CONFIG_JSON")
+    if inline is not None:
+        if config_path is not None:
+            raise ValueError("use either a configuration file or ZONT_ANALYZER_CONFIG_JSON")
+        try:
+            decoded = json.loads(inline)
+        except json.JSONDecodeError:
+            raise ValueError("invalid ZONT_ANALYZER_CONFIG_JSON") from None
+        if not isinstance(decoded, dict):
+            raise ValueError("ZONT_ANALYZER_CONFIG_JSON must be an object")
+        raw = decoded
+        sources["overrides"] = "ZONT_ANALYZER_CONFIG_JSON"
     config = AppConfig.model_validate(raw)
     token = os.getenv("ZONT_TOKEN")
     client_email = os.getenv("ZONT_CLIENT_EMAIL")

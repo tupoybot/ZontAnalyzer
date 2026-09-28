@@ -22,8 +22,11 @@ from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from zont_analyzer.adapters.openai.provider import (
+    AI_POST_REQUEST_RESERVE_SECONDS,
+    OPENAI_REQUEST_TIMEOUT_SECONDS,
     PROMPT_VERSION,
     SCHEMA_VERSION,
+    AIRequestDeferred,
     AIRequestPending,
     OpenAIAnalyst,
 )
@@ -31,11 +34,14 @@ from zont_analyzer.adapters.ydb.jobs import JobLease, JobLeaseRepository
 from zont_analyzer.adapters.zont_readonly import ZontReadOnlyClient
 from zont_analyzer.application.collection import CollectionService
 from zont_analyzer.cloud.egress import ReportTransport
+from zont_analyzer.cloud.heavy_work import HeavyWorkLease
+from zont_analyzer.cloud.limits import DEFAULT_LONG_JOB_SECONDS, MAX_LONG_JOB_SECONDS
 from zont_analyzer.domain import Report
+from zont_analyzer.domain.periods import Period as CalendarPeriod
 from zont_analyzer.observability import span
 from zont_analyzer.runtime import Runtime, build_runtime
 
-MIN_AI_SECONDS = 135
+MIN_AI_SECONDS = OPENAI_REQUEST_TIMEOUT_SECONDS + AI_POST_REQUEST_RESERVE_SECONDS
 MIN_COLLECTION_SECONDS = 20
 
 
@@ -96,6 +102,18 @@ class Period:
     job_key: str
 
 
+@dataclass(frozen=True)
+class ScheduledRequest:
+    period: CalendarPeriod
+    use_ai: bool
+    max_requests: int = 4
+    refresh: bool = True
+
+    @property
+    def kind(self) -> str:
+        return self.period.kind
+
+
 class ReportJobRunner:
     """One invocation owns at most one phase and never starts work after its deadline."""
 
@@ -105,11 +123,13 @@ class ReportJobRunner:
         jobs: JobLeaseRepository | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         monotonic: Callable[[], float] = time.monotonic,
+        publish: bool = True,
     ) -> None:
         self.runtime = runtime
         self.client_factory = client_factory or self._live_client
         self.jobs = jobs or runtime.db.jobs
         self.now, self.monotonic = now, monotonic
+        self.publish = publish
 
     def period(self, request: ReportRequest) -> Period:
         service = self.runtime.analysis(no_ai=True)
@@ -127,11 +147,26 @@ class ReportJobRunner:
         key = f"report:{request.kind}:{int(start.timestamp())}:{int(end.timestamp())}:{mode}:report-v2"
         return Period(request.kind, start, end, key)
 
-    def run(self, payload: dict[str, Any], *, timeout_seconds: float = 180) -> dict[str, Any]:
+    def run(
+        self, payload: dict[str, Any], *, timeout_seconds: float = DEFAULT_LONG_JOB_SECONDS,
+    ) -> dict[str, Any]:
         request = ReportRequest.model_validate(payload)
-        if not 1 <= timeout_seconds <= 180:
+        return self._run(request, self.period(request), timeout_seconds=timeout_seconds)
+
+    def run_scheduled(
+        self, period: CalendarPeriod, *, use_ai: bool,
+        timeout_seconds: float = DEFAULT_LONG_JOB_SECONDS,
+    ) -> dict[str, Any]:
+        key = f"scheduled:{period.kind}:{int(period.start.timestamp())}:{int(period.observed_end.timestamp())}:v1"
+        return self._run(ScheduledRequest(period, use_ai),
+                         Period(period.kind, period.start, period.observed_end, key),
+                         timeout_seconds=timeout_seconds)
+
+    def _run(
+        self, request: ReportRequest | ScheduledRequest, period: Period, *, timeout_seconds: float,
+    ) -> dict[str, Any]:
+        if not 1 <= timeout_seconds <= MAX_LONG_JOB_SECONDS:
             raise ValueError("invalid report timeout")
-        period = self.period(request)
         reference = self.now().astimezone(UTC)
         due = period.end + (timedelta(minutes=self.runtime.config.pilot.daily_report_delay_minutes)
                             if request.kind == "daily" else timedelta())
@@ -149,7 +184,7 @@ class ReportJobRunner:
             existing = self.jobs.get(period.job_key)
             if existing is not None and existing.state == "done":
                 checkpoint = self._checkpoint(existing)
-                fingerprint, _revision = self._input_state()
+                fingerprint, _revision = self._input_state(request)
                 report_id = checkpoint.get("report_id")
                 report_exists = isinstance(report_id, str) and self.runtime.db.report(report_id) is not None
                 if (checkpoint.get("input_fingerprint") == fingerprint
@@ -165,12 +200,23 @@ class ReportJobRunner:
             if lease is None:
                 return {"status": "busy", "job_key": period.job_key}
         try:
+            report_id = self.runtime.analysis(no_ai=True).report_id_for(period.kind, period.start)
+            write = self.jobs.acquire("report-write:" + report_id, owner, math.ceil(timeout_seconds) + 30)
+            if write is None:
+                return {"status": "busy", "job_key": period.job_key}
             try:
-                return self._advance(request, period, lease, deadline)
-            except AIRequestPending as exc:
-                return {"status": "reconciliation_required", "phase": "analyze",
-                        "job_key": period.job_key, "request_key": exc.request_key,
-                        "request_status": exc.status}
+                self._write_fence = (write.job_key, write.owner, write.attempt)
+                try:
+                    return self._advance(request, period, lease, deadline)
+                except AIRequestDeferred:
+                    return {"status": "pending", "phase": "analyze",
+                            "job_key": period.job_key, "reason": "insufficient_time"}
+                except AIRequestPending as exc:
+                    return {"status": "reconciliation_required", "phase": "analyze",
+                            "job_key": period.job_key, "request_key": exc.request_key,
+                            "request_status": exc.status}
+            finally:
+                self.jobs.release(write.job_key, owner, write.attempt)
         finally:
             # A killed child cannot run this; the lease then expires and a later
             # invocation resumes from durable coverage and the last checkpoint.
@@ -259,8 +305,14 @@ class ReportJobRunner:
 
         return self.runtime.db.storage.transaction(read)
 
-    def _input_state(self) -> tuple[str, int]:
-        """Snapshot source revisions without output-only publication revisions."""
+    def _input_state(self, request: ReportRequest | ScheduledRequest | None = None) -> tuple[str, int]:
+        """Snapshot sources and any report facts used as aggregation inputs.
+
+        Publication itself is not an input. Completed daily reports are inputs
+        to long seasons, however, and their deterministic repair may change no
+        telemetry revision. Include exactly those facts in all job-cache and
+        saved-checkpoint comparisons, as well as in the pre-analysis snapshot.
+        """
         def read(tx: Any) -> tuple[list[tuple[str, int]], int]:
             rows = tx.execute("SELECT scope,revision FROM revisions ORDER BY scope;")[0].rows
             scopes = [(str(row.scope), int(row.revision)) for row in rows]
@@ -269,17 +321,26 @@ class ReportJobRunner:
 
         sources, publication = self.runtime.db.storage.transaction(read)
         config = self.runtime.config.model_dump(mode="json")
-        encoded = json.dumps({"sources": sources, "config": config,
-                              "prompt_version": PROMPT_VERSION, "schema_version": SCHEMA_VERSION},
+        inputs = {"sources": sources, "config": config,
+                  "prompt_version": PROMPT_VERSION, "schema_version": SCHEMA_VERSION}
+        if isinstance(request, ScheduledRequest):
+            from zont_analyzer.application.period_schedule import seasonal_daily_signature
+
+            daily_signature = seasonal_daily_signature(self.runtime.analysis(no_ai=True), request.period)
+            if daily_signature is not None:
+                inputs["daily_facts"] = daily_signature
+        encoded = json.dumps(inputs,
                              sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         return hashlib.sha256(encoded.encode()).hexdigest(), publication
 
-    def _advance(self, request: ReportRequest, period: Period, lease: JobLease, deadline: float) -> dict[str, Any]:
+    def _advance(
+        self, request: ReportRequest | ScheduledRequest, period: Period, lease: JobLease, deadline: float,
+    ) -> dict[str, Any]:
         checkpoint = self._checkpoint(lease)
         phase = checkpoint["phase"]
         if phase == "saved":
             report_id = checkpoint.get("report_id")
-            fingerprint, _revision = self._input_state()
+            fingerprint, _revision = self._input_state(request)
             if (checkpoint.get("input_fingerprint") == fingerprint and isinstance(report_id, str)
                     and self.runtime.db.report(report_id) is not None):
                 return self._complete(lease, report_id, checkpoint.get("ai_used"))
@@ -292,6 +353,7 @@ class ReportJobRunner:
                     self.runtime.db.save_devices(client.discover_devices())
                 result = CollectionService(self.runtime.db, client, self.runtime.config).ensure_period(
                     period.start, period.end, now=self.now(), max_requests=request.max_requests,
+                    deadline=deadline, monotonic=self.monotonic,
                 )
             if not result["complete"]:
                 self._save_checkpoint(lease, {"phase": "collect", "last_collection": result})
@@ -300,31 +362,62 @@ class ReportJobRunner:
             self._save_checkpoint(lease, {"phase": "analyze", "last_collection": result})
             return {"status": "pending", "phase": "analyze", "job_key": period.job_key,
                     "collection": result}
-        if deadline - self.monotonic() < (MIN_AI_SECONDS if request.use_ai else MIN_COLLECTION_SECONDS):
+        from zont_analyzer.application.ai_settings import AISettingsStore
+
+        ai_enabled = AISettingsStore(self.runtime.db, self.runtime.config).effective_config().openai.enabled
+        if deadline - self.monotonic() < (MIN_AI_SECONDS if request.use_ai and ai_enabled else MIN_COLLECTION_SECONDS):
             return {"status": "pending", "phase": "analyze", "job_key": period.job_key}
-        fingerprint, source_revision = self._input_state()
+        fingerprint, source_revision = self._input_state(request)
         self._save_checkpoint(lease, {"phase": "analyze", "input_fingerprint": fingerprint,
                                       "source_revision": source_revision})
         with contextlib.ExitStack() as stack:
             stack.enter_context(span("zont_analysis"))
             service = self.runtime.analysis(no_ai=not request.use_ai,
                                             job_fence=(lease.job_key, lease.owner, lease.attempt))
+            service.report_write_fence = self._write_fence
             if request.use_ai and service.config.openai.enabled:
                 if not isinstance(service.analyst, OpenAIAnalyst):
                     raise RuntimeError("OpenAI is enabled but no API key is configured")
                 if os.environ.get("CLOUD_OPENAI_ACCESS_CONFIRMED") != "true":
                     raise PermissionError("OpenAI access conditions are not confirmed")
+                service.analyst.dispatch_deadline = deadline
                 transport = ReportTransport()
                 http_client = stack.enter_context(httpx.Client(
-                    transport=transport, follow_redirects=False, trust_env=False, timeout=120.0,
+                    transport=transport, follow_redirects=False, trust_env=False,
+                    timeout=OPENAI_REQUEST_TIMEOUT_SECONDS,
                 ))
                 api_key = self.runtime.loaded.secrets.openai_api_key
                 assert api_key is not None
                 service.analyst.client = OpenAI(
-                    api_key=api_key.get_secret_value(), max_retries=0, timeout=120.0,
+                    api_key=api_key.get_secret_value(), max_retries=0,
+                    timeout=OPENAI_REQUEST_TIMEOUT_SECONDS,
                     http_client=http_client,
                 )
-            if request.kind == "daily":
+            if isinstance(request, ScheduledRequest):
+                from zont_analyzer.application.period_schedule import schedule_signature, seasonal_daily_signature
+                from zont_analyzer.application.reasoning_context import reuse_ai_interpretation
+                from zont_analyzer.reports import render_text
+
+                previous = self.runtime.db.report(service.report_id_for(period.kind, period.start))
+                # A retry after a committed save must never buy the same period again.
+                use_ai = request.use_ai and (previous is None or (
+                    period.kind == "seasonal" and previous.period_end < period.end
+                ))
+                report = service.analyze_period(request.period, use_ai=use_ai, persist=False)
+                if (previous is not None and previous.ai_used and not use_ai
+                        and previous.context.get("recommendation_policy")
+                        == report.context.get("recommendation_policy")):
+                    report = reuse_ai_interpretation(previous, report)
+                if period.kind != "daily":
+                    report.context["schedule_signature"] = schedule_signature(service, request.period)
+                daily_signature = seasonal_daily_signature(service, request.period)
+                if daily_signature is not None:
+                    report.context["scheduler_daily_signature"] = daily_signature
+                self.runtime.db.save_report(
+                    report, render_text(report), source_revision=source_revision,
+                    job_fence=(lease.job_key, lease.owner, lease.attempt), write_fence=self._write_fence,
+                )
+            elif request.kind == "daily":
                 report = service.analyze_daily(request.selected_date(), use_ai=request.use_ai)
             elif request.kind == "weekly":
                 assert request.year is not None and request.week is not None
@@ -348,7 +441,7 @@ class ReportJobRunner:
         return result
 
     def _publish(self, result: dict[str, Any]) -> None:
-        if os.environ.get("CLOUD_PUBLICATION_BUCKET"):
+        if self.publish and os.environ.get("CLOUD_PUBLICATION_BUCKET"):
             from zont_analyzer.application.publication import publish_reports
 
             result["publication"] = publish_reports(self.runtime)
@@ -367,9 +460,29 @@ class ReportJobRunner:
 
 
 @span("zont_report")
-def execute(payload: dict[str, Any], *, timeout_seconds: float = 180) -> dict[str, Any]:
+def execute(
+    payload: dict[str, Any], *, timeout_seconds: float = DEFAULT_LONG_JOB_SECONDS,
+) -> dict[str, Any]:
+    if not 1 <= timeout_seconds <= MAX_LONG_JOB_SECONDS:
+        raise ValueError("invalid report timeout")
+    started = time.monotonic()
+    deadline = started + timeout_seconds
     runtime = build_runtime(None, None)
+    heavy = None
     try:
-        return ReportJobRunner(runtime).run(payload, timeout_seconds=timeout_seconds)
+        remaining = deadline - time.monotonic()
+        if remaining < 1:
+            raise TimeoutError("report startup exhausted invocation budget")
+        heavy = HeavyWorkLease.acquire(runtime, deadline=deadline)
+        if heavy is None:
+            return {"status": "busy"}
+        remaining = deadline - time.monotonic()
+        if remaining < 1:
+            return {"status": "busy"}
+        return ReportJobRunner(runtime).run(payload, timeout_seconds=remaining)
     finally:
-        runtime.db.close()
+        try:
+            if heavy is not None:
+                heavy.release()
+        finally:
+            runtime.db.close()

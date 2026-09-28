@@ -33,6 +33,33 @@ def test_unknown_yaml_fields_are_rejected(tmp_path: Path, monkeypatch: pytest.Mo
         load_config(config, tmp_path / "data")
 
 
+def test_cloud_configuration_preserves_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ZONT_ANALYZER_CONFIG_JSON", json.dumps({
+        "scheduler": {"sync_every_minutes": 30}, "dhw": {"recirculation_present": False},
+        "openai": {"enabled": True, "monthly_token_budget": 12345},
+    }))
+    config = load_config(data_dir=tmp_path).config
+    assert config.scheduler.sync_every_minutes == 30
+    assert config.dhw.recirculation_present is False
+    assert config.openai.enabled and config.openai.monthly_token_budget == 12345
+    path = tmp_path / "config.yaml"
+    path.write_text("{}")
+    with pytest.raises(ValueError, match="either"):
+        load_config(path, tmp_path)
+
+
+@pytest.mark.parametrize("value", ["", "{private-value", "[]", "null"])
+def test_invalid_cloud_configuration_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ZONT_ANALYZER_CONFIG_JSON", value)
+    with pytest.raises(ValueError, match="ZONT_ANALYZER_CONFIG_JSON") as error:
+        load_config(data_dir=tmp_path)
+    assert "private-value" not in str(error.value)
+
+
 def test_token_file_must_be_private(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     token = tmp_path / "zontaccesstoken.json"

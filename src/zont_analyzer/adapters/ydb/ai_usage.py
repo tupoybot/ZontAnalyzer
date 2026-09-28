@@ -42,6 +42,18 @@ DECLARE $key AS Utf8;
 SELECT call_key,job_key,state,payload,updated_at,created_at,sent_at
 FROM llm_calls WHERE call_key=$key;
 """
+_GET_PENDING_FOR_JOB = """
+DECLARE $job AS Utf8;
+SELECT call_key,state FROM llm_calls
+WHERE job_key=$job AND state IN ('sent','unknown')
+ORDER BY created_at LIMIT 1;
+"""
+_GET_OTHER_PENDING_FOR_JOB = """
+DECLARE $job AS Utf8; DECLARE $key AS Utf8;
+SELECT call_key,state FROM llm_calls
+WHERE job_key=$job AND call_key!=$key AND state IN ('sent','unknown')
+ORDER BY created_at LIMIT 1;
+"""
 _PUT_CALL = """
 DECLARE $key AS Utf8; DECLARE $job AS Utf8; DECLARE $state AS Utf8;
 DECLARE $payload AS Utf8; DECLARE $updated AS Int64; DECLARE $created AS Int64;
@@ -102,6 +114,19 @@ class AiUsageRepository:
 
         return self.db.transaction(read)
 
+    def pending_for_job(self, job_key: str) -> dict[str, str] | None:
+        """Find a dispatched call whose result is unresolved for this report/job."""
+        if not job_key:
+            raise ValueError("job_key is required")
+
+        def read(tx: Transaction) -> dict[str, str] | None:
+            row = _row(tx.execute(_GET_PENDING_FOR_JOB, {"$job": job_key}))
+            if row is None:
+                return None
+            return {"key": _text(row.call_key), "status": _text(row.state)}
+
+        return self.db.transaction(read)
+
     def reserve(
         self, key: str, job_key: str, request_payload: dict[str, Any], *,
         budget: int, estimate: int, billing_month: str,
@@ -123,6 +148,10 @@ class AiUsageRepository:
                 if existing["job_key"] != job_key:
                     raise ValueError("request key belongs to a different job")
                 return {"status": existing["status"], "error": existing["payload"].get("error")}
+            unresolved = _row(tx.execute(_GET_PENDING_FOR_JOB, {"$job": job_key}))
+            if unresolved is not None:
+                return {"key": _text(unresolved.call_key), "status": _text(unresolved.state),
+                        "error": "another request for this job has an unresolved result"}
             budget_row = _row(tx.execute(_GET_BUDGET, {"$month": billing_month}))
             reserved = int(budget_row.reserved_tokens) if budget_row else 0
             charged = int(budget_row.charged_tokens) if budget_row else 0
@@ -142,6 +171,12 @@ class AiUsageRepository:
                 raise KeyError(key)
             old = self._entry(row)
             if old["status"] != "prepared":
+                return False
+            unresolved = _row(tx.execute(
+                _GET_OTHER_PENDING_FOR_JOB,
+                {"$job": old["job_key"], "$key": key},
+            ))
+            if unresolved is not None:
                 return False
             now = self.clock()
             self._put_call(tx, key, old["job_key"], "sent", old["payload"],

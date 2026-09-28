@@ -101,7 +101,13 @@ class ReportTransport(httpx.BaseTransport):
                 if len(content) > MAX_REPORT_RESPONSE_BYTES:
                     observe("zont_egress_limit_total", direction="received")
                     raise ValueError("response byte limit")
-            return httpx.Response(response.status_code, headers=response.headers,
+            # iter_bytes() transparently decompresses encoded responses. Do not
+            # forward metadata that describes the compressed upstream body.
+            headers = [
+                (name, value) for name, value in response.headers.multi_items()
+                if name.lower() not in {"content-encoding", "content-length", "transfer-encoding"}
+            ]
+            return httpx.Response(response.status_code, headers=headers,
                                   content=bytes(content), request=request)
         finally:
             response.close()

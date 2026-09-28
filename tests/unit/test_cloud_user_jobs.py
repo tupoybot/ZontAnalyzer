@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -88,7 +90,7 @@ def test_expired_worker_is_reclaimed_and_result_remains_durable(
     storage.rows[lease.job_key] = JobLease(
         lease.job_key, lease.owner, lease.attempt, 0, "active", lease.checkpoint,
     )
-    monkeypatch.setattr(user_jobs, "_run_regeneration", lambda *_args: {
+    monkeypatch.setattr(user_jobs, "_run_regeneration", lambda *_args, **_kwargs: {
         "report_id": "daily-1", "status": "success", "updated_at": "2026-09-25T00:00:00+00:00",
     })
     result = user_jobs.drain(runtime, timeout_seconds=145, max_jobs=1)
@@ -96,6 +98,32 @@ def test_expired_worker_is_reclaimed_and_result_remains_durable(
     assert user_jobs.regeneration_status(_Runtime(storage), "daily-1")["status"] == "success"
     again = user_jobs.enqueue_regeneration(_Runtime(storage), "daily-1")
     assert again["status"] == "queued"
+
+
+def test_reconciliation_required_job_does_not_starve_next_pending_key(
+    storage: _Storage, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _Runtime(storage)
+    unresolved_key = "m5:regenerate:a"
+    ready_key = "m5:regenerate:b"
+    storage.rows[unresolved_key] = JobLease(
+        unresolved_key, "", 1, 0, "released",
+        json.dumps({"report_id": "a", "status": "reconciliation_required"}),
+    )
+    storage.rows[ready_key] = JobLease(
+        ready_key, "", 1, 0, "released", json.dumps({"report_id": "b", "status": "queued"}),
+    )
+    processed: list[str] = []
+
+    def run(_runtime: Any, lease: JobLease, payload: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        processed.append(lease.job_key)
+        return {"report_id": payload["report_id"], "status": "success"}
+
+    monkeypatch.setattr(user_jobs, "_run_regeneration", run)
+    result = user_jobs.drain(runtime, timeout_seconds=145, max_jobs=1)
+
+    assert result["processed"] == 1
+    assert processed == [ready_key]
 
 
 def test_failed_work_exposes_generic_status_and_can_be_requeued(
@@ -112,6 +140,27 @@ def test_failed_work_exposes_generic_status_and_can_be_requeued(
     assert status["status"] == "error"
     assert "private provider credential" not in str(status)
     assert user_jobs.enqueue_regeneration(_Runtime(storage), "daily-1")["status"] == "queued"
+
+
+def test_ai_time_deferral_keeps_original_request_queued(
+    storage: _Storage, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _Runtime(storage)
+    user_jobs.enqueue_regeneration(runtime, "daily-1")
+    key = "m5:regenerate:daily-1"
+    nonce = json.loads(storage.rows[key].checkpoint or "{}")["request_nonce"]
+
+    def defer(*_args: Any, **_kwargs: Any) -> Any:
+        raise user_jobs.AIRequestDeferred("too little time")
+
+    monkeypatch.setattr(user_jobs, "_run_regeneration", defer)
+    result = user_jobs.drain(runtime, timeout_seconds=145, max_jobs=1)
+    checkpoint = json.loads(storage.rows[key].checkpoint or "{}")
+
+    assert result["jobs"][0]["status"] == "pending"
+    assert storage.rows[key].state == "released"
+    assert checkpoint["status"] == "queued"
+    assert checkpoint["request_nonce"] == nonce
 
 
 def test_busy_model_review_stays_queued_for_later_timer_retry(
@@ -155,6 +204,7 @@ def test_regeneration_ai_uses_proxy_and_stable_request_nonce(
 
     class Analyst:
         client: Any = None
+        ledger: Any = SimpleNamespace(pending_for_job=lambda _report_id: None)
 
     class Service:
         config = SimpleNamespace(openai=SimpleNamespace(enabled=True))
@@ -190,3 +240,156 @@ def test_regeneration_ai_uses_proxy_and_stable_request_nonce(
     assert isinstance(observed["transport"], httpx.MockTransport)
     assert observed["retries"] == 0
     assert observed["fence"] == (key, "worker", lease.attempt)
+
+
+def test_drain_accepts_570_and_lease_covers_tail_and_grace(
+    storage: _Storage, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _Runtime(storage)
+    user_jobs.enqueue_regeneration(runtime, "daily-1")
+    acquired: list[tuple[str, int]] = []
+    original_acquire = runtime.db.jobs.acquire
+
+    def acquire(key: str, owner: str, lease_seconds: int) -> JobLease | None:
+        acquired.append((key, lease_seconds))
+        return original_acquire(key, owner, lease_seconds)
+
+    monkeypatch.setattr(runtime.db.jobs, "acquire", acquire)
+    monkeypatch.setattr(user_jobs.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(user_jobs, "_run_regeneration", lambda *_args, **_kwargs: {"status": "success"})
+
+    result = user_jobs.drain(runtime, timeout_seconds=570, max_jobs=1)
+    assert result["processed"] == 1
+    assert acquired[0][0] == "m5:regenerate:daily-1"
+    assert acquired[0][1] == 645  # 570 seconds plus publication tail and expiry grace.
+    with pytest.raises(ValueError, match="invalid maintenance bounds"):
+        user_jobs.drain(runtime, timeout_seconds=571, max_jobs=1)
+
+
+def test_report_write_lease_tracks_remaining_parent_lease(
+    storage: _Storage, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _Runtime(storage)
+    report_id = "daily-1"
+    key = "m5:regenerate:" + report_id
+    checkpoint = json.dumps({"phase": "saved", "report_id": report_id})
+    parent = JobLease(key, "worker", 1, time.time_ns() // 1_000 + 300_500_000,
+                      "active", checkpoint)
+    runtime.db.report = lambda _report_id: SimpleNamespace(
+        id=report_id, generated_at=datetime(2026, 9, 25, tzinfo=UTC),
+    )
+    acquired_ttls: list[int] = []
+    original_acquire = runtime.db.jobs.acquire
+
+    def acquire(job_key: str, owner: str, lease_seconds: int) -> JobLease | None:
+        acquired_ttls.append(lease_seconds)
+        return original_acquire(job_key, owner, lease_seconds)
+
+    monkeypatch.setattr(runtime.db.jobs, "acquire", acquire)
+    fixed_now_ns = time.time_ns()
+    monkeypatch.setattr(user_jobs.time, "time_ns", lambda: fixed_now_ns)
+    result = user_jobs._run_regeneration(runtime, parent, json.loads(checkpoint))
+
+    assert result["status"] == "success"
+    assert acquired_ttls == [316]  # ceil(300.5s remaining) plus 15s.
+
+
+def test_execute_counts_startup_reserves_publication_and_defaults_to_one_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: None, set_app_meta=Mock()))
+    monkeypatch.setattr(user_jobs, "open_runtime", lambda *_args: runtime)
+    monkeypatch.setattr(user_jobs.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
+    monkeypatch.setattr(user_jobs.time, "monotonic", Mock(side_effect=[0.0, 10.0, 511.0]))
+    drain = Mock(return_value={"processed": 1, "jobs": [{"status": "success"}]})
+    monkeypatch.setattr(user_jobs, "drain", drain)
+    publish = Mock(return_value={"pending_reports": 0})
+    monkeypatch.setattr("zont_analyzer.application.publication.publish_reports", publish)
+
+    result = user_jobs.execute({})
+
+    drain.assert_called_once_with(runtime, timeout_seconds=500.0, max_jobs=1)
+    publish.assert_not_called()
+    assert result["publication"] == {"status": "deferred"}
+    runtime.db.set_app_meta.assert_called_once()
+    assert runtime.db.set_app_meta.call_args.args[0] == "cloud-worker-last-success"
+
+
+def test_execute_defers_when_startup_leaves_less_than_publication_reserve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[bool] = []
+    runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: closed.append(True), set_app_meta=Mock()))
+    monkeypatch.setattr(user_jobs, "open_runtime", lambda *_args: runtime)
+    monkeypatch.setattr(user_jobs.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
+    monkeypatch.setattr(user_jobs.time, "monotonic", Mock(side_effect=[0.0, 511.0]))
+    drain = Mock()
+    monkeypatch.setattr(user_jobs, "drain", drain)
+    publish = Mock()
+    monkeypatch.setattr("zont_analyzer.application.publication.publish_reports", publish)
+
+    result = user_jobs.execute({"_runtime_timeout_seconds": 570, "max_jobs": 2})
+
+    assert result == {"processed": 0, "jobs": [], "publication": {"status": "deferred"}}
+    drain.assert_not_called()
+    publish.assert_not_called()
+    assert closed == [True]
+
+
+def test_execute_publishes_batch_when_exactly_60_seconds_remain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: None, set_app_meta=Mock()))
+    monkeypatch.setattr(user_jobs, "open_runtime", lambda *_args: runtime)
+    monkeypatch.setattr(user_jobs.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
+    monkeypatch.setattr(user_jobs.time, "monotonic", Mock(side_effect=[100.0, 110.0, 610.0]))
+    drain = Mock(return_value={"processed": 1, "jobs": [{"status": "success"}]})
+    monkeypatch.setattr(user_jobs, "drain", drain)
+    publish = Mock(return_value={"pending_reports": 0})
+    monkeypatch.setattr("zont_analyzer.application.publication.publish_reports", publish)
+
+    result = user_jobs.execute({"_runtime_timeout_seconds": 570, "max_jobs": 2})
+
+    drain.assert_called_once_with(runtime, timeout_seconds=500.0, max_jobs=2)
+    publish.assert_called_once_with(runtime, batch_size=8)
+    assert result["publication"] == {"pending_reports": 0}
+    runtime.db.set_app_meta.assert_called_once()
+
+
+@pytest.mark.parametrize("busy", [False, True])
+def test_execute_does_not_mark_success_on_busy_or_failed_work(monkeypatch, busy):
+    runtime = SimpleNamespace(db=Mock())
+    monkeypatch.setattr(user_jobs, "open_runtime", Mock(return_value=runtime))
+    heavy = Mock()
+    monkeypatch.setattr(user_jobs.HeavyWorkLease, "acquire", Mock(return_value=None if busy else heavy))
+    monkeypatch.setattr(user_jobs, "drain", Mock(side_effect=RuntimeError("fixture failure")))
+    if busy:
+        assert user_jobs.execute({})["status"] == "busy"
+        heavy.release.assert_not_called()
+    else:
+        with pytest.raises(RuntimeError, match="fixture failure"):
+            user_jobs.execute({})
+        heavy.release.assert_called_once()
+    runtime.db.set_app_meta.assert_not_called()
+    runtime.db.close.assert_called_once()
+
+
+def test_execute_rejects_571_before_opening_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build = Mock()
+    monkeypatch.setattr(user_jobs, "open_runtime", build)
+    with pytest.raises(ValueError, match="invalid maintenance timeout"):
+        user_jobs.execute({"_runtime_timeout_seconds": 571})
+    build.assert_not_called()
+
+
+@pytest.mark.parametrize("max_jobs", [0, 9])
+def test_execute_rejects_invalid_job_count_before_opening_runtime(
+    monkeypatch: pytest.MonkeyPatch, max_jobs: int,
+) -> None:
+    build = Mock()
+    monkeypatch.setattr(user_jobs, "open_runtime", build)
+    with pytest.raises(ValueError, match="invalid maintenance bounds"):
+        user_jobs.execute({"max_jobs": max_jobs})
+    build.assert_not_called()

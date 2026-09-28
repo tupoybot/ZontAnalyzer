@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, TypeVar
@@ -119,6 +119,45 @@ class YdbDatabase:
                 return result
         except Exception:
             # Count only terminal failures, never replayable callback attempts.
+            observe("zont_ydb_errors_total")
+            raise
+
+    def read_table(
+        self, table: str, *, columns: list[str], key_range: Any,
+        consume: Callable[[Iterator[Any]], T],
+    ) -> T:
+        """Consume a bounded key range without materializing raw rows.
+
+        The consumer must only decode rows: a failed stream is retried from its
+        beginning, and no partial result may escape a failed attempt.
+        """
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", table):
+            raise ValueError("invalid table name")
+
+        def read() -> T:
+            session = self.driver.table_client.session().create(
+                settings=ydb.BaseRequestSettings().with_timeout(10),
+            )
+            try:
+                stream = session.read_table(
+                    self.path + "/" + table, columns=columns, key_range=key_range,
+                    ordered=True, use_snapshot=True,
+                    settings=ydb.BaseRequestSettings().with_timeout(60),
+                )
+                try:
+                    return consume(row for part in stream for row in part.rows)
+                finally:
+                    stream.cancel()
+            finally:
+                session.delete(settings=ydb.BaseRequestSettings().with_timeout(10))
+
+        try:
+            with span("zont_ydb_query"):
+                result: T = ydb.retry_operation_sync(
+                    read, ydb.RetrySettings(max_retries=3, idempotent=True),
+                )
+                return result
+        except Exception:
             observe("zont_ydb_errors_total")
             raise
 

@@ -48,8 +48,8 @@ def test_saved_checkpoint_resumes_after_worker_death_without_reanalysis(
     user_jobs.enqueue_regeneration(runtime, report.id)
     run = user_jobs._run_regeneration
 
-    def killed_after_commit(*args):
-        outcome = run(*args)
+    def killed_after_commit(*args, **kwargs):
+        outcome = run(*args, **kwargs)
         assert outcome["status"] == "success"
         raise _Killed
 

@@ -7,12 +7,14 @@ import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from tools.import_sqlite import import_backup
+from tools.verify_sqlite_import import _bounded_pages, verify_backup
 from zont_analyzer.adapters.ydb.ai_usage import AiUsageRepository
-from zont_analyzer.adapters.ydb.database import YdbDatabase
+from zont_analyzer.adapters.ydb.database import Transaction, YdbDatabase
 from zont_analyzer.domain import QualityResult, Report
 from zont_analyzer.reports.chart_data import _cache_key
 
@@ -142,11 +144,19 @@ def test_telemetry_pages_resume_and_repair_target(tmp_path: Path, ydb_database: 
              for offset in range(1, 503)],
         )
     assert import_backup(backup, ydb_database, batch_size=500)["telemetry_samples"] == 503
+    verified = verify_backup(backup, ydb_database)
+    assert verified["ok"] is True
+    assert verified["tables"]["telemetry_samples"]["source_rows"] == 503
     assert import_backup(backup, ydb_database, batch_size=500)["telemetry_samples"] == 0
     ydb_database.execute(
         "UPSERT INTO telemetry_samples (series_id,timestamp_utc,value_num) "
         "VALUES (47,1735689601,-1.0);"
     )
+    verified = verify_backup(backup, ydb_database)
+    assert verified["ok"] is False
+    assert verified["tables"]["telemetry_samples"]["target_mismatches"] == 1
+    assert _rows(ydb_database, "SELECT value_num FROM telemetry_samples "
+                 "WHERE series_id=47 AND timestamp_utc=1735689601;")[0].value_num == -1.0
     assert import_backup(backup, ydb_database, batch_size=500)["telemetry_samples"] == 1
     assert _rows(ydb_database, "SELECT value_num FROM telemetry_samples "
                  "WHERE series_id=47 AND timestamp_utc=1735689601;")[0].value_num == 1.0
@@ -280,6 +290,15 @@ def test_optional_chart_cache_bundle_preserves_matching_packet(tmp_path: Path, y
     stored = _rows(ydb_database, f"SELECT value FROM app_meta WHERE key='{key}';")[0]
     assert json.loads(stored.value) == {**packet, "report_digest": digest}
     assert import_backup(backup, ydb_database, chart_cache=bundle)["chart_cache"] == 0
+    verified = verify_backup(backup, ydb_database, chart_cache=bundle)
+    assert verified["ok"] is True
+    assert verified["sidecars"]["chart_cache"]["source_rows"] == 1
+    ydb_database.execute(f"DELETE FROM app_meta WHERE key='{key}';")
+    verified = verify_backup(backup, ydb_database, chart_cache=bundle)
+    assert verified["ok"] is False
+    assert verified["sidecars"]["chart_cache"]["target_mismatches"] == 1
+    assert _rows(ydb_database, f"SELECT value FROM app_meta WHERE key='{key}';") == []
+    assert import_backup(backup, ydb_database, chart_cache=bundle)["chart_cache"] == 1
     packet["report_digest"] = "stale"
     (bundle / name).write_text(json.dumps(packet), encoding="utf-8")
     with pytest.raises(ValueError, match="does not match accepted report"):
@@ -363,3 +382,242 @@ def test_ai_ledger_rejects_invalid_entry_before_bundle_writes(
     assert json.loads(state.value)["state"] == "complete"
     budget = _rows(ydb_database, "SELECT month,reserved_tokens FROM ai_budget_months;")[0]
     assert (budget.month, budget.reserved_tokens) == ("2025-01", 5)
+
+
+@pytest.mark.ydb
+def test_strict_schema_rejected_before_any_target_write(tmp_path: Path, ydb_database: YdbDatabase) -> None:
+    backup = tmp_path / "incomplete.sqlite"
+    with sqlite3.connect(backup) as connection:
+        connection.execute("CREATE TABLE alembic_version(version_num TEXT PRIMARY KEY)")
+        connection.execute("INSERT INTO alembic_version VALUES ('fixture-version')")
+    with pytest.raises(ValueError, match="missing SQLite tables"):
+        import_backup(backup, ydb_database, require_complete_schema=True)
+    with pytest.raises(ValueError, match="unexpected SQLite schema revision"):
+        import_backup(backup, ydb_database, expected_schema_revision="different-version")
+    assert _rows(ydb_database, "SELECT * FROM migration_records;") == []
+    assert _rows(ydb_database, "SELECT * FROM metadata WHERE name='sqlite_import_state';") == []
+    import_backup(backup, ydb_database, expected_schema_revision="fixture-version")
+
+
+@pytest.mark.ydb
+def test_verifier_reports_damage_without_repair(tmp_path: Path, ydb_database: YdbDatabase) -> None:
+    backup = tmp_path / "verify.sqlite"
+    _source(backup)
+    import_backup(backup, ydb_database)
+    assert verify_backup(backup, ydb_database)["ok"] is True
+    ydb_database.execute("UPSERT INTO ai_settings_revisions (scope,version,payload) "
+                         "VALUES ('default',99,'{}');")
+    result = verify_backup(backup, ydb_database)
+    assert result["ok"] is False
+    assert result["extra_owner_rows"]["ai_settings_revisions"] == 1
+    ydb_database.execute("DELETE FROM ai_settings_revisions;")
+    ydb_database.execute("UPDATE telemetry_samples SET value_num=-99.0 WHERE series_id=47;")
+    result = verify_backup(backup, ydb_database)
+    assert result["ok"] is False
+    assert result["tables"]["telemetry_samples"]["target_mismatches"] == 1
+    assert _rows(ydb_database, "SELECT value_num FROM telemetry_samples;")[0].value_num == -99.0
+    import_backup(backup, ydb_database)
+    assert verify_backup(backup, ydb_database)["ok"] is True
+    with sqlite3.connect(backup) as connection:
+        connection.execute("DELETE FROM telemetry_samples")
+    result = verify_backup(backup, ydb_database)
+    assert result["tables"]["telemetry_samples"]["stale_manifest_rows"] == 1
+    assert len(_rows(ydb_database, "SELECT * FROM telemetry_samples;")) == 1
+
+
+@pytest.mark.ydb
+def test_ai_ledger_repeat_repairs_target_and_cache(tmp_path: Path, ydb_database: YdbDatabase) -> None:
+    backup = tmp_path / "ledger.sqlite"
+    with sqlite3.connect(backup) as connection:
+        connection.execute("CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT)")
+    key = "d" * 64
+    bundle = tmp_path / "ledger.json"
+    bundle.write_text(json.dumps({"entries": {key: {
+        "status": "success", "created_at": 1735689600.0,
+        "result": {"summary": "Preserved result"},
+    }}}))
+    assert import_backup(backup, ydb_database, ai_ledger=bundle)["ai_ledger"] == 1
+    ydb_database.execute("DELETE FROM ai_response_cache;")
+    verified = verify_backup(backup, ydb_database, ai_ledger=bundle)
+    assert verified["ok"] is False
+    assert verified["sidecars"]["ai_ledger"]["source_rows"] == 1
+    assert verified["sidecars"]["ai_ledger"]["target_mismatches"] == 1
+    assert _rows(ydb_database, "SELECT * FROM ai_response_cache;") == []
+    assert import_backup(backup, ydb_database, ai_ledger=bundle)["ai_ledger"] == 1
+    assert AiUsageRepository(ydb_database).cached(key)["result"]["summary"] == "Preserved result"
+    ydb_database.execute("UPDATE llm_calls SET state='failure';")
+    assert import_backup(backup, ydb_database, ai_ledger=bundle)["ai_ledger"] == 1
+    assert _rows(ydb_database, "SELECT state FROM llm_calls;")[0].state == "success"
+    assert import_backup(backup, ydb_database, ai_ledger=bundle)["ai_ledger"] == 0
+    assert verify_backup(backup, ydb_database, ai_ledger=bundle)["ok"] is True
+    bundle.write_text(json.dumps({"entries": {}}))
+    verified = verify_backup(backup, ydb_database, ai_ledger=bundle)
+    assert verified["ok"] is False
+    assert verified["sidecars"]["ai_ledger"]["stale_manifest_rows"] == 1
+    assert len(_rows(ydb_database, "SELECT * FROM ai_response_cache;")) == 1
+
+
+def test_verifier_pages_bound_large_payloads(tmp_path: Path) -> None:
+    backup = tmp_path / "bounded.sqlite"
+    with sqlite3.connect(backup) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("CREATE TABLE config_snapshots(id INTEGER PRIMARY KEY,device_id TEXT,"
+                           "content_hash TEXT,payload_json TEXT,captured_at TEXT)")
+        connection.executemany("INSERT INTO config_snapshots VALUES(?,?,?,?,?)", [
+            (index, "fixture", str(index), json.dumps({"value": "x" * 300_000}), "2025-01-01 00:00:00")
+            for index in range(3)
+        ])
+        pages = list(_bounded_pages(connection, "config_snapshots"))
+    assert [len(page) for page in pages] == [1, 1, 1]
+
+
+@pytest.mark.ydb
+def test_generic_verifier_batches_composite_keys(tmp_path: Path, ydb_database: YdbDatabase) -> None:
+    backup = tmp_path / "generic.sqlite"
+    with sqlite3.connect(backup) as connection:
+        connection.executescript("""
+            CREATE TABLE config_snapshots(id INTEGER PRIMARY KEY,device_id TEXT,content_hash TEXT,
+                payload_json TEXT,captured_at TEXT);
+            CREATE TABLE source_events(id TEXT PRIMARY KEY,device_id TEXT,event_type TEXT,
+                timestamp_utc INTEGER,duration_seconds INTEGER,details_json TEXT,important INTEGER);
+            CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT);
+            INSERT INTO app_meta VALUES('fixture','original');
+        """)
+        connection.executemany("INSERT INTO config_snapshots VALUES(?,?,?,?,?)", [
+            (index, "fixture", str(index), '{"value":1}', "2025-01-01 00:00:00") for index in range(501)
+        ])
+        connection.execute("INSERT INTO source_events VALUES('event','fixture','test',1735689600,1,'{}',0)")
+    import_backup(backup, ydb_database)
+    assert verify_backup(backup, ydb_database)["ok"] is True
+    ydb_database.execute("UPDATE config_snapshots SET payload='{}' WHERE device_id='fixture' "
+                         "AND content_hash='500';")
+    ydb_database.execute("DELETE FROM source_events;")
+    verified = verify_backup(backup, ydb_database)
+    assert verified["ok"] is False
+    assert verified["tables"]["config_snapshots"]["target_mismatches"] == 1
+    assert verified["tables"]["source_events"]["target_mismatches"] == 1
+    assert _rows(ydb_database, "SELECT * FROM source_events;") == []
+    repaired = import_backup(backup, ydb_database, batch_size=500)
+    assert repaired["config_snapshots"] == repaired["source_events"] == 1
+    assert all(value == 0 for value in import_backup(backup, ydb_database, batch_size=500).values())
+    with sqlite3.connect(backup) as connection:
+        connection.execute("UPDATE config_snapshots SET content_hash='changed' WHERE id=500")
+        connection.execute("DELETE FROM source_events")
+        connection.execute("UPDATE app_meta SET value=NULL WHERE key='fixture'")
+    changed = import_backup(backup, ydb_database, batch_size=500)
+    assert changed["config_snapshots"] == changed["source_events"] == changed["app_meta"] == 1
+    assert _rows(ydb_database, "SELECT * FROM config_snapshots WHERE content_hash='500';") == []
+    assert _rows(ydb_database, "SELECT * FROM source_events;") == []
+    assert _rows(ydb_database, "SELECT value FROM app_meta WHERE key='fixture';")[0].value is None
+    assert verify_backup(backup, ydb_database)["ok"] is True
+
+
+@pytest.mark.ydb
+def test_batch_import_target_and_manifest_roll_back_together(
+    tmp_path: Path, ydb_database: YdbDatabase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backup = tmp_path / "atomic.sqlite"
+    with sqlite3.connect(backup) as connection:
+        connection.execute("CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT)")
+        connection.executemany("INSERT INTO app_meta VALUES(?,?)", [("one", "1"), ("two", "2")])
+    original = Transaction.execute
+
+    def fail_manifest(self: Transaction, query: str,
+                      parameters: dict[str, Any] | None = None) -> list[Any]:
+        if query.startswith("UPSERT INTO migration_records SELECT"):
+            raise RuntimeError("fixture interrupted manifest write")
+        return original(self, query, parameters)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Transaction, "execute", fail_manifest)
+        with pytest.raises(RuntimeError, match="interrupted manifest"):
+            import_backup(backup, ydb_database)
+    assert _rows(ydb_database, "SELECT * FROM app_meta;") == []
+    assert _rows(ydb_database, "SELECT * FROM migration_records;") == []
+    assert import_backup(backup, ydb_database)["app_meta"] == 2
+    assert import_backup(backup, ydb_database)["app_meta"] == 0
+    assert verify_backup(backup, ydb_database)["ok"] is True
+
+
+@pytest.mark.ydb
+def test_batch_import_analysis_facts_preserves_legacy_schema(
+    tmp_path: Path, ydb_database: YdbDatabase,
+) -> None:
+    backup = tmp_path / "facts.sqlite"
+    # Legacy schema, including real foreign keys, optional event end and JSON
+    # context. Synthetic values only; compare payloads independently of mapper.
+    with sqlite3.connect(backup) as connection:
+        connection.executescript("""
+            PRAGMA foreign_keys=ON;
+            CREATE TABLE analysis_periods(id VARCHAR PRIMARY KEY NOT NULL,kind VARCHAR NOT NULL,
+                started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,coverage FLOAT NOT NULL,
+                algorithm_version VARCHAR NOT NULL,UNIQUE(kind,started_at,ended_at,algorithm_version));
+            CREATE TABLE metric_values(id VARCHAR PRIMARY KEY NOT NULL,period_id VARCHAR NOT NULL,
+                name VARCHAR NOT NULL,value FLOAT NOT NULL,unit VARCHAR NOT NULL,
+                algorithm_version VARCHAR NOT NULL,context_json TEXT NOT NULL,
+                FOREIGN KEY(period_id) REFERENCES analysis_periods(id));
+            CREATE TABLE detected_events(id VARCHAR PRIMARY KEY NOT NULL,period_id VARCHAR NOT NULL,
+                kind VARCHAR NOT NULL,started_at INTEGER NOT NULL,ended_at INTEGER,severity VARCHAR NOT NULL,
+                details_json TEXT NOT NULL,algorithm_version VARCHAR NOT NULL,
+                FOREIGN KEY(period_id) REFERENCES analysis_periods(id));
+            INSERT INTO analysis_periods VALUES('period','daily',1735689600,1735776000,99.5,'fixture-v1');
+            INSERT INTO metric_values VALUES('metric','period','temperature',21.25,'C','fixture-v1',
+                '{"count":12}');
+            INSERT INTO detected_events VALUES('event','period','heating',1735689600,NULL,'info',
+                '{"reason":"fixture"}','fixture-v1');
+        """)
+        connection.row_factory = sqlite3.Row
+        expected = {table: dict(connection.execute(f'SELECT * FROM "{table}"').fetchone())
+                    for table in ("analysis_periods", "metric_values", "detected_events")}
+    assert import_backup(backup, ydb_database) == dict.fromkeys(expected, 1)
+    for table, source in expected.items():
+        target = _rows(ydb_database, f"SELECT * FROM `{table}`;")[0]
+        assert target.id == source["id"]
+        assert json.loads(target.payload) == source
+        if table != "analysis_periods":
+            assert target.period_id == "period"
+    ydb_database.execute("UPDATE detected_events SET payload='{}' WHERE id='event';")
+    assert import_backup(backup, ydb_database)["detected_events"] == 1
+    assert all(count == 0 for count in import_backup(backup, ydb_database).values())
+    with sqlite3.connect(backup) as connection:
+        connection.execute("DELETE FROM detected_events")
+        connection.execute("DELETE FROM metric_values")
+        connection.execute("DELETE FROM analysis_periods")
+    assert import_backup(backup, ydb_database) == dict.fromkeys(expected, 1)
+    for table in expected:
+        assert _rows(ydb_database, f"SELECT * FROM `{table}`;") == []
+    assert verify_backup(backup, ydb_database)["ok"] is True
+
+
+@pytest.mark.ydb
+def test_publication_revision_coalesce_preserves_new_target_and_deletes_removed_key(
+    tmp_path: Path, ydb_database: YdbDatabase,
+) -> None:
+    backup = tmp_path / "coalesced-publication.sqlite"
+    with sqlite3.connect(backup) as connection:
+        connection.executescript("""
+            CREATE TABLE publication_changes(
+                revision INTEGER PRIMARY KEY, scope TEXT NOT NULL, identifier TEXT NOT NULL,
+                UNIQUE(scope,identifier));
+            INSERT INTO publication_changes VALUES(1,'report','same');
+            INSERT INTO publication_changes VALUES(2,'report','removed');
+        """)
+    import_backup(backup, ydb_database)
+    assert verify_backup(backup, ydb_database)["ok"] is True
+
+    with sqlite3.connect(backup) as connection:
+        connection.execute(
+            "UPDATE publication_changes SET revision=3 WHERE scope='report' AND identifier='same';"
+        )
+        connection.execute("DELETE FROM publication_changes WHERE identifier='removed';")
+    changed = import_backup(backup, ydb_database)
+    assert changed["publication_changes"] == 3  # new row and two stale source manifests
+    rows = _rows(ydb_database, "SELECT scope,identifier,revision FROM publication_changes;")
+    assert [(row.scope, row.identifier, row.revision) for row in rows] == [("report", "same", 3)]
+    manifests = _rows(ydb_database, "SELECT source_key FROM migration_records "
+                                      "WHERE source_table='publication_changes';")
+    assert [json.loads(row.source_key) for row in manifests] == [[3]]
+    proof = verify_backup(backup, ydb_database)
+    assert proof["ok"] is True
+    assert proof["mismatches"] == 0
+    assert all(value == 0 for value in import_backup(backup, ydb_database).values())

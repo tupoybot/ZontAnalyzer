@@ -16,15 +16,26 @@ import httpx
 from openai import OpenAI
 
 from zont_analyzer.adapters.openai.model_catalog import OpenAIModelCatalog
-from zont_analyzer.adapters.openai.provider import AIRequestPending, OpenAIAnalyst
+from zont_analyzer.adapters.openai.provider import (
+    AIRequestDeferred,
+    AIRequestPending,
+    OpenAIAnalyst,
+)
 from zont_analyzer.adapters.ydb.jobs import JobLease, JobLeaseRepository, _job
 from zont_analyzer.application.ai_maintenance import local_assessments
 from zont_analyzer.application.ai_settings import AISettingsStore
 from zont_analyzer.application.model_review import ModelReviewStore
 from zont_analyzer.application.regeneration import normalize_counterfactual_question
 from zont_analyzer.cloud.egress import ReportTransport
+from zont_analyzer.cloud.heavy_work import HeavyWorkLease
+from zont_analyzer.cloud.limits import (
+    DEFAULT_LONG_JOB_SECONDS,
+    MAINTENANCE_LEASE_GRACE_SECONDS,
+    MAINTENANCE_PUBLICATION_RESERVE_SECONDS,
+    MAX_LONG_JOB_SECONDS,
+)
 from zont_analyzer.reports import render_text
-from zont_analyzer.runtime import Runtime, build_runtime
+from zont_analyzer.runtime import Runtime, open_runtime
 
 _PREFIX = "m5:"
 _REVIEW_KEY = _PREFIX + "review"
@@ -128,7 +139,31 @@ def review_status(runtime: Runtime) -> dict[str, Any]:
     return _status(lease, _read_checkpoint(lease))
 
 
-def _run_regeneration(runtime: Runtime, lease: JobLease, payload: dict[str, Any]) -> dict[str, Any]:
+def _run_regeneration(
+    runtime: Runtime, lease: JobLease, payload: dict[str, Any], *, deadline: float | None = None,
+) -> dict[str, Any]:
+    key = "report-write:" + str(payload["report_id"])
+    parent_remaining = max(
+        1, math.ceil((lease.lease_until - time.time_ns() // 1_000) / 1_000_000),
+    )
+    write_ttl = min(
+        MAX_LONG_JOB_SECONDS + MAINTENANCE_PUBLICATION_RESERVE_SECONDS
+        + MAINTENANCE_LEASE_GRACE_SECONDS * 2,
+        parent_remaining + MAINTENANCE_LEASE_GRACE_SECONDS,
+    )
+    write = runtime.db.jobs.acquire(key, lease.owner, write_ttl)
+    if write is None:
+        raise ReviewLeaseBusy()
+    try:
+        return _regenerate_owned(runtime, lease, payload, write, deadline=deadline)
+    finally:
+        runtime.db.jobs.release(key, write.owner, write.attempt)
+
+
+def _regenerate_owned(
+    runtime: Runtime, lease: JobLease, payload: dict[str, Any], write: JobLease,
+    *, deadline: float | None = None,
+) -> dict[str, Any]:
     report_id = str(payload["report_id"])
     old = runtime.db.report(report_id)
     if old is None:
@@ -160,6 +195,10 @@ def _run_regeneration(runtime: Runtime, lease: JobLease, payload: dict[str, Any]
             ))
             api_key = runtime.loaded.secrets.openai_api_key
             assert api_key is not None
+            service.analyst.dispatch_deadline = deadline
+            unresolved = service.analyst.ledger.pending_for_job(report_id)
+            if unresolved is not None:
+                raise AIRequestPending(unresolved["key"], unresolved["status"])
             service.analyst.client = OpenAI(
                 api_key=api_key.get_secret_value(), max_retries=0,
                 timeout=120.0, http_client=http_client,
@@ -171,7 +210,8 @@ def _run_regeneration(runtime: Runtime, lease: JobLease, payload: dict[str, Any]
     # same YDB transaction as the report write.
     runtime.db.save_report(candidate, render_text(candidate),
                            source_revision=source_revision,
-                           job_fence=(lease.job_key, lease.owner, lease.attempt))
+                           job_fence=(lease.job_key, lease.owner, lease.attempt),
+                           write_fence=(write.job_key, write.owner, write.attempt))
     return {"report_id": report_id, "status": "success", "updated_at": _now(),
             "generated_at": candidate.generated_at.isoformat(),
             **({"question": payload["question"]} if "question" in payload else {})}
@@ -194,6 +234,29 @@ def _run_review(runtime: Runtime, _lease: JobLease, payload: dict[str, Any]) -> 
     return {"kind": "review", "status": "success", "updated_at": _now()}
 
 
+def scheduled_review(runtime: Runtime, *, deadline: float | None = None) -> dict[str, Any]:
+    """Synchronous scheduled review; the review store owns its durable claim.
+
+    The catalog adapter only performs bounded read requests. Unlike manual
+    review, this respects the configured interval and disabled-review setting.
+    """
+    # Catalog.fetch reads two indexes and at most ten model pages. Reserve
+    # time for the durable review result even when every page times out.
+    remaining = deadline - time.monotonic() if deadline is not None else MAX_LONG_JOB_SECONDS
+    if remaining < 20:
+        return {"status": "pending"}
+    timeout = min(15.0, (remaining - 15) / 12)
+    with httpx.Client(transport=ReportTransport(), follow_redirects=False,
+                      trust_env=False, timeout=timeout) as client:
+        settings = AISettingsStore(runtime.db, runtime.config).snapshot()
+        store = ModelReviewStore(runtime.db, OpenAIModelCatalog(client=client),
+                                 assessments=local_assessments(runtime))
+        if not store.due(settings):
+            return {"status": "not_due"}
+        result = store.run_if_due(settings, trigger="scheduled")
+        return {"status": "done" if result is not None else "busy"}
+
+
 def _pending_keys(runtime: Runtime) -> list[str]:
     rows = runtime.db.storage.execute(
         "DECLARE $now AS Int64; "
@@ -206,9 +269,11 @@ def _pending_keys(runtime: Runtime) -> list[str]:
             for row in rows]
 
 
-def drain(runtime: Runtime, *, timeout_seconds: float = 145, max_jobs: int = 2) -> dict[str, Any]:
+def drain(
+    runtime: Runtime, *, timeout_seconds: float = DEFAULT_LONG_JOB_SECONDS, max_jobs: int = 2,
+) -> dict[str, Any]:
     """Run a bounded number of queued jobs; expired leases can be retried."""
-    if not 1 <= max_jobs <= _MAX_SCAN or not 1 <= timeout_seconds <= 180:
+    if not 1 <= max_jobs <= _MAX_SCAN or not 1 <= timeout_seconds <= MAX_LONG_JOB_SECONDS:
         raise ValueError("invalid maintenance bounds")
     deadline = time.monotonic() + timeout_seconds
     results: list[dict[str, Any]] = []
@@ -216,16 +281,34 @@ def drain(runtime: Runtime, *, timeout_seconds: float = 145, max_jobs: int = 2) 
         if len(results) >= max_jobs or deadline - time.monotonic() < 135:
             break
         owner = str(uuid.uuid4())
-        lease = runtime.db.jobs.acquire(key, owner, math.ceil(deadline - time.monotonic()) + 15)
+        lease_seconds = math.ceil(deadline - time.monotonic()) + (
+            MAINTENANCE_PUBLICATION_RESERVE_SECONDS + MAINTENANCE_LEASE_GRACE_SECONDS
+        )
+        lease = runtime.db.jobs.acquire(key, owner, lease_seconds)
         if lease is None:
             continue
         payload = _read_checkpoint(lease)
         if not payload:
             runtime.db.jobs.release(key, owner, lease.attempt)
             continue
+        if payload.get("status") == "reconciliation_required":
+            runtime.db.jobs.release(key, owner, lease.attempt)
+            continue
         try:
             outcome = (_run_review(runtime, lease, payload) if key == _REVIEW_KEY
-                       else _run_regeneration(runtime, lease, payload))
+                       else _run_regeneration(runtime, lease, payload, deadline=deadline))
+        except AIRequestDeferred:
+            # No request crossed the dispatch gate; preserve the original job
+            # identity and let a later invocation retry with a full time budget.
+            deferred = {field: value for field, value in payload.items()
+                        if field in {"report_id", "question", "request_nonce", "kind"}}
+            deferred.update({"status": "queued", "updated_at": _now()})
+            if not runtime.db.jobs.checkpoint(key, owner, lease.attempt,
+                                              json.dumps(deferred, ensure_ascii=False, sort_keys=True)):
+                raise RuntimeError("job ownership expired") from None
+            runtime.db.jobs.release(key, owner, lease.attempt)
+            results.append({"job_key": key, "status": "pending"})
+            continue
         except AIRequestPending:
             # A provider response may have been lost after dispatch. Keep the
             # original request identity so later reconciliation cannot send
@@ -264,16 +347,48 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
     allowed = {"max_jobs", "_runtime_timeout_seconds"}
     if set(payload) - allowed:
         raise ValueError("unknown maintenance fields")
-    timeout = float(payload.get("_runtime_timeout_seconds", 150))
-    max_jobs = payload.get("max_jobs", 2)
-    if type(max_jobs) is not int:
-        raise ValueError("max_jobs must be integer")
-    runtime = build_runtime(None, None)
+    timeout = float(payload.get("_runtime_timeout_seconds", DEFAULT_LONG_JOB_SECONDS))
+    if not 1 <= timeout <= MAX_LONG_JOB_SECONDS:
+        raise ValueError("invalid maintenance timeout")
+    max_jobs = payload.get("max_jobs", 1)
+    if type(max_jobs) is not int or not 1 <= max_jobs <= _MAX_SCAN:
+        raise ValueError("invalid maintenance bounds")
+    deadline = time.monotonic() + timeout
+    runtime = open_runtime()
+    heavy = None
+    completed = False
     try:
-        result = drain(runtime, timeout_seconds=max(1, min(timeout - 30, 145)), max_jobs=max_jobs)
+        heavy = HeavyWorkLease.acquire(runtime, deadline=deadline)
+        if heavy is None:
+            return {"status": "busy", "processed": 0, "jobs": [],
+                    "publication": {"status": "busy"}}
+        remaining = deadline - time.monotonic()
+        if remaining <= MAINTENANCE_PUBLICATION_RESERVE_SECONDS:
+            completed = True
+            return {"processed": 0, "jobs": [], "publication": {"status": "deferred"}}
+        drain_budget = min(
+            MAX_LONG_JOB_SECONDS, remaining - MAINTENANCE_PUBLICATION_RESERVE_SECONDS,
+        )
+        if drain_budget < 1:
+            completed = True
+            return {"processed": 0, "jobs": [], "publication": {"status": "deferred"}}
+        result = drain(runtime, timeout_seconds=drain_budget, max_jobs=max_jobs)
+        if deadline - time.monotonic() < MAINTENANCE_PUBLICATION_RESERVE_SECONDS:
+            result["publication"] = {"status": "deferred"}
+            completed = True
+            return result
         from zont_analyzer.application.publication import publish_reports
 
         result["publication"] = publish_reports(runtime, batch_size=8)
+        completed = True
         return result
     finally:
-        runtime.db.close()
+        try:
+            if completed:
+                runtime.db.set_app_meta("cloud-worker-last-success", _now())
+        finally:
+            try:
+                if heavy is not None:
+                    heavy.release()
+            finally:
+                runtime.db.close()

@@ -11,7 +11,7 @@ resource "yandex_cm_certificate" "probe" {
 resource "yandex_api_gateway" "probe" {
   folder_id         = data.yandex_resourcemanager_folder.project.id
   name              = "${local.name}-web"
-  execution_timeout = "210"
+  execution_timeout = "600"
   spec = yamlencode({
     openapi = "3.0.0"
     info    = { title = "Isolated reports and application", version = "5.0" }
@@ -223,7 +223,7 @@ resource "yandex_api_gateway" "probe" {
         }
       },
       {
-        for path in ["/jobs/publication", "/jobs/maintenance"] : path => {
+        for path in ["/jobs/publication", "/jobs/maintenance", "/jobs/scheduler"] : path => {
           post = {
             responses = { "200" = { description = "Durable application job accepted" } }
             "x-yc-apigateway-integration" = {

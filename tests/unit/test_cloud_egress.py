@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from unittest.mock import MagicMock
 
@@ -15,6 +16,18 @@ from zont_analyzer.cloud.egress import (
     UpstreamError,
     validate_config,
 )
+
+
+class RawStream(httpx.SyncByteStream):
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+        self.closed = False
+
+    def __iter__(self):
+        yield self.body
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def client_mock(monkeypatch, status=200, content=b'{}'):
@@ -149,6 +162,57 @@ def test_report_transport_routes_zont_direct_and_responses_through_proxy(monkeyp
                      ('xray', '/v1/responses'), ('xray', '/v1/models/example'),
                      ('xray', '/api/docs/models.md'), ('xray', '/api/docs/deprecations.md'),
                      ('xray', '/api/docs/models/gpt-6.md')]
+
+
+@pytest.mark.parametrize(
+    ('url', 'method', 'route'),
+    [
+        ('https://my.zont.online/api/load_data', 'POST', 'direct'),
+        ('https://api.openai.com/v1/responses', 'POST', 'proxied'),
+    ],
+)
+def test_report_transport_decompresses_gzip_and_removes_stale_body_headers(url, method, route):
+    payload = b'{"result":"decoded response"}'
+    compressed = gzip.compress(payload)
+    upstream_stream = RawStream(compressed)
+    called_routes = []
+
+    def response_for_route(name):
+        def send(_request):
+            called_routes.append(name)
+            return httpx.Response(200, headers={
+                'Content-Type': 'application/json',
+                'Content-Encoding': 'gzip',
+                'Content-Length': str(len(compressed)),
+                'Transfer-Encoding': 'chunked',
+                'X-Upstream': 'preserved',
+            }, stream=upstream_stream)
+        return httpx.MockTransport(send)
+
+    transport = ReportTransport(direct=response_for_route('direct'),
+                                proxied=response_for_route('proxied'))
+    with httpx.Client(transport=transport, follow_redirects=False) as client:
+        result = client.request(method, url, json={})
+        assert result.content == payload
+        assert result.headers['content-type'] == 'application/json'
+        assert result.headers['x-upstream'] == 'preserved'
+        assert 'content-encoding' not in result.headers
+        assert 'content-length' not in result.headers or result.headers['content-length'] == str(len(payload))
+        assert 'transfer-encoding' not in result.headers
+    assert called_routes == [route]
+    assert upstream_stream.closed
+
+
+def test_report_transport_caps_decompressed_gzip_response():
+    compressed = gzip.compress(b'x' * (MAX_REPORT_RESPONSE_BYTES + 1))
+    upstream_stream = RawStream(compressed)
+    backend = httpx.MockTransport(lambda _request: httpx.Response(
+        200, headers={'Content-Encoding': 'gzip'}, stream=upstream_stream,
+    ))
+    with (httpx.Client(transport=ReportTransport(direct=backend, proxied=backend)) as client,
+          pytest.raises(ValueError, match='response byte limit')):
+        client.post('https://my.zont.online/api/devices', json={})
+    assert upstream_stream.closed
 
 
 def test_report_transport_rejects_unlisted_destination():

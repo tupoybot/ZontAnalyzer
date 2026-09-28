@@ -1,6 +1,8 @@
 """Bounded archive completion with durable per-source coverage in YDB."""
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -19,12 +21,15 @@ class CollectionService:
         self, start: datetime, end: datetime, *, now: datetime | None = None,
         max_requests: int = 24, replay_recent: bool = False,
         coverage_prefix: str = "", device_ids: set[str] | None = None,
+        deadline: float | None = None, monotonic: Callable[[], float] = time.monotonic,
+        replay_checked_after: datetime | None = None,
     ) -> dict[str, Any]:
         try:
             with span("zont_collection"):
                 result = self._ensure_period(
                     start, end, now=now, max_requests=max_requests, replay_recent=replay_recent,
                     coverage_prefix=coverage_prefix, device_ids=device_ids,
+                    deadline=deadline, monotonic=monotonic, replay_checked_after=replay_checked_after,
                 )
         except Exception:
             observe("zont_sync_observed_timestamp_seconds", datetime.now(UTC).timestamp())
@@ -42,6 +47,8 @@ class CollectionService:
         self, start: datetime, end: datetime, *, now: datetime | None = None,
         max_requests: int = 24, replay_recent: bool = False,
         coverage_prefix: str = "", device_ids: set[str] | None = None,
+        deadline: float | None = None, monotonic: Callable[[], float] = time.monotonic,
+        replay_checked_after: datetime | None = None,
     ) -> dict[str, Any]:
         reference = (now or datetime.now(UTC)).astimezone(UTC).replace(microsecond=0)
         start, end = start.astimezone(UTC).replace(microsecond=0), min(end, reference).replace(microsecond=0)
@@ -79,7 +86,30 @@ class CollectionService:
                 if replay_recent:
                     replay_start = max(start, reference - timedelta(minutes=self.config.scheduler.overlap_minutes))
                     if replay_start < end:
-                        windows.append((replay_start, end))
+                        if replay_checked_after is None:
+                            windows.append((replay_start, end))
+                        else:
+                            # A fixed poll slot must replay old successful coverage once,
+                            # and retain that progress across bounded invocations.
+                            rows = self.db.storage.execute(
+                                "DECLARE $device AS Utf8; DECLARE $type AS Utf8; "
+                                "DECLARE $since AS Int64; DECLARE $start AS Int64; DECLARE $end AS Int64; "
+                                "SELECT started_at,ended_at FROM coverage WHERE device_id=$device AND data_type=$type "
+                                "AND started_at < $end AND ended_at > $start AND checked_at >= $since "
+                                "AND (state='complete' OR state='empty') ORDER BY started_at;",
+                                {"$device": str(device["id"]), "$type": coverage_type,
+                                 "$since": int(replay_checked_after.timestamp() * 1_000_000),
+                                 "$start": int(replay_start.timestamp()), "$end": int(end.timestamp())},
+                            )[0].rows
+                            cursor = replay_start
+                            for row in rows:
+                                replay_left = datetime.fromtimestamp(row.started_at, UTC)
+                                replay_right = datetime.fromtimestamp(row.ended_at, UTC)
+                                if replay_left > cursor:
+                                    windows.append((cursor, min(replay_left, end)))
+                                cursor = max(cursor, replay_right)
+                            if cursor < end:
+                                windows.append((cursor, end))
                 merged: list[tuple[datetime, datetime]] = []
                 for lo, hi in sorted(windows):
                     if merged and lo <= merged[-1][1]:
@@ -93,9 +123,13 @@ class CollectionService:
         ordered = [(index, queues[index]) for index in
                    [(next_source + offset) % len(queues) for offset in range(len(queues))]]
         while any(queue for _, _, _, queue in queues) and requests < max_requests:
+            if deadline is not None and deadline - monotonic() < 20:
+                break
             for index, (device_id, data_type, window_seconds, queue) in ordered:
                 if not queue or requests >= max_requests:
                     continue
+                if deadline is not None and deadline - monotonic() < 20:
+                    break
                 lo, hi = queue.pop(0)
                 stop = min(lo + timedelta(seconds=window_seconds), hi)
                 if stop < hi:

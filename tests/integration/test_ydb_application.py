@@ -8,6 +8,38 @@ from zont_analyzer.domain import TelemetryPoint
 
 
 @pytest.mark.ydb
+def test_timestamp_history_stream_preserves_valid_presence_and_bounds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = make_database(tmp_path)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = start + timedelta(seconds=10002)
+    points = [TelemetryPoint(
+        device_id="fixture", source_type="temperature", entity_id="room", metric_key="temperature",
+        timestamp_utc=start + timedelta(seconds=index),
+        value_num=None if index == 0 else 20.0,
+        quality="invalid" if index == 9999 else "valid",
+    ) for index in range(-1, 10004)]
+    for offset in range(0, len(points), 2000):
+        db.telemetry.write_window(device_id="fixture", data_type="history",
+                                  start=start - timedelta(seconds=1), end=end + timedelta(seconds=2),
+                                  points=points[offset:offset + 2000])
+    series_id = db.list_series()[0]["id"]
+    read_table = db.storage.read_table
+    projected_columns: list[list[str]] = []
+
+    def track(table, *, columns, key_range, consume):
+        projected_columns.append(columns)
+        return read_table(table, columns=columns, key_range=key_range, consume=consume)
+
+    monkeypatch.setattr(db.storage, "read_table", track)
+    expected = [start + timedelta(seconds=index) for index in range(10002) if index != 9999]
+    assert db.fetch_sample_timestamps(series_id, start, end) == expected
+    assert projected_columns == [["timestamp_utc", "quality"]]
+    assert db.fetch_sample_timestamps(series_id, end, end) == []
+
+
+@pytest.mark.ydb
 def test_daily_comparison_preserves_historical_algorithm_versions(tmp_path: Path) -> None:
     from tests.integration.test_ydb_reports import _report
     from zont_analyzer.application.comparison_context import daily_history

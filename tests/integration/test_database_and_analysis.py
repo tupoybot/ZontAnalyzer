@@ -483,6 +483,31 @@ def test_openai_failure_keeps_deterministic_report(tmp_path: Path) -> None:
     assert db.latest_report() is not None
 
 
+@pytest.mark.ydb
+def test_deferred_scheduled_ai_does_not_save_deterministic_weekly_report(tmp_path: Path) -> None:
+    from zont_analyzer.adapters.openai.provider import AIRequestDeferred
+
+    class DeferredAnalyst:
+        def analyze(self, _packet):
+            raise AIRequestDeferred("insufficient invocation time")
+
+    db = make_database(tmp_path)
+    selected = date.fromisocalendar(2026, 38, 1)
+    start = datetime.combine(selected, datetime.min.time(), UTC)
+    seed_samples(db, list(_points(start, [22.0] * 2016, entity="room")),
+                 {"room": "indoor_temperature"})
+    config = AppConfig.model_validate({
+        "home": {"timezone": "UTC"},
+        "analysis": {"minimum_quality_score": 0.0},
+    })
+    service = AnalysisService(db, config, DeferredAnalyst(), job_fence=("weekly-job", "worker", 1))
+
+    with pytest.raises(AIRequestDeferred):
+        service.analyze_week(2026, 38, use_ai=True)
+
+    assert db.report(service.report_id_for("weekly", start)) is None
+
+
 @pytest.mark.parametrize("legacy_policy", [False, True])
 @pytest.mark.ydb
 def test_openai_refresh_failure_reuses_last_valid_interpretation(tmp_path: Path, legacy_policy: bool) -> None:

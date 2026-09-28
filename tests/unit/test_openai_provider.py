@@ -312,7 +312,7 @@ def test_reasoning_provider_preserves_budget_privacy_and_records_actual_prompt(t
 
 
 @pytest.mark.ydb
-def test_reasoning_provider_reuses_successful_result_without_second_api_call(tmp_path) -> None:
+def test_reasoning_provider_reuses_successful_result_without_second_api_call(tmp_path, monkeypatch) -> None:
     from types import SimpleNamespace
     from unittest.mock import Mock
 
@@ -329,11 +329,38 @@ def test_reasoning_provider_reuses_successful_result_without_second_api_call(tmp
     analyst.client = SimpleNamespace(responses=SimpleNamespace(parse=parse))
 
     first = analyst.analyze({"period": {"kind": "daily"}, "nonce": "same"})
+    analyst.dispatch_deadline = 149.9
+    monkeypatch.setattr("zont_analyzer.adapters.openai.provider.time.monotonic", lambda: 0.0)
     second = analyst.analyze({"period": {"kind": "daily"}, "nonce": "same"})
 
     assert first == second
     assert parse.call_count == 1
     assert analyst.ledger.token_usage_this_month() == 18
+
+
+@pytest.mark.ydb
+def test_reasoning_provider_defers_before_reserving_when_deadline_is_too_close(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from tests.ydb_support import make_database
+    from zont_analyzer.adapters.openai.provider import AIRequestDeferred, OpenAIAnalyst
+    from zont_analyzer.config import AppConfig
+
+    db = make_database(tmp_path)
+    analyst = OpenAIAnalyst(api_key="not-a-real-key", config=AppConfig(), db=db)
+    parse = Mock()
+    analyst.client = SimpleNamespace(responses=SimpleNamespace(parse=parse))
+    analyst.dispatch_deadline = 149.9
+    monkeypatch.setattr("zont_analyzer.adapters.openai.provider.time.monotonic", lambda: 0.0)
+
+    with pytest.raises(AIRequestDeferred):
+        analyst.analyze({"period": {"kind": "weekly"}})
+
+    parse.assert_not_called()
+    assert db.storage.execute("SELECT call_key FROM llm_calls;")[0].rows == []
 
 
 @pytest.mark.ydb
@@ -436,7 +463,8 @@ def test_ai_ledger_keeps_old_pending_fingerprint_but_scopes_budget_by_month(tmp_
     ledger.mark_sent("stuck")
     later = AiUsageRepository(db.storage)
     assert later.reserve("stuck", "job", {}, budget=1, estimate=1, billing_month="2026-09")["status"] == "sent"
-    assert later.reserve("new", "job", {}, budget=10, estimate=10, billing_month="2026-09") is None
+    assert later.reserve("new", "another-job", {}, budget=10, estimate=10,
+                         billing_month="2026-09") is None
     assert later.mark_sent("stuck") is False
 
 
@@ -457,7 +485,8 @@ def test_ai_ledger_fails_closed_on_corruption_and_unknown_usage_stays_charged(tm
     ledger.mark_sent("ambiguous")
     ledger.mark_unknown("ambiguous", "connection lost")
     with pytest.raises(RuntimeError, match="exhausted"):
-        ledger.reserve("another", "job", {}, budget=100, estimate=21, billing_month="2026-09")
+        ledger.reserve("another", "another-job", {}, budget=100, estimate=21,
+                       billing_month="2026-09")
     assert ledger.mark_sent("ambiguous") is False
 
 

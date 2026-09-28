@@ -113,7 +113,8 @@ def test_representative_writes_mark_report_feedback_gas_device_and_telemetry(tmp
     assert ("render", report.id) in scopes
     assert ("owner-gas:installation", "") in scopes
     assert ("device:device", "") in scopes
-    assert ("telemetry:device", "") in scopes
+    assert ("telemetry", report.period_start.astimezone(UTC).strftime("%Y-%m-%dT%H")) in scopes
+    assert ("telemetry:device", "") not in scopes
     assert ("global", "gas") not in scopes
 
 

@@ -22,6 +22,7 @@ from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from zont_analyzer.cloud import auth
+from zont_analyzer.cloud.limits import DEFAULT_LONG_JOB_SECONDS, MAX_LONG_JOB_SECONDS
 
 MAX_BODY_BYTES = 65_536
 MAX_RESULT_BYTES = 1_048_576
@@ -58,24 +59,31 @@ class RuntimeConfig:
     revision: str
     authorization: str
     xray_proxy_port: int = 1080
-    report_timeout_seconds: float = 180
+    report_timeout_seconds: float = DEFAULT_LONG_JOB_SECONDS
     oidc: auth.OidcConfig | None = None
+    writes_enabled: bool = True
 
     @classmethod
     def from_environment(cls) -> RuntimeConfig:
         environment = os.environ.get("CLOUD_ENVIRONMENT")
         if environment not in {"dev", "pilot"}:
             raise ValueError("CLOUD_ENVIRONMENT must be dev or pilot")
+        writes_enabled = os.environ.get("CLOUD_WRITES_ENABLED", "true")
+        if writes_enabled not in {"true", "false"}:
+            raise ValueError("CLOUD_WRITES_ENABLED must be true or false")
         credentials = os.environ.pop("CLOUD_WEB_CREDENTIALS", None)
         if not credentials or "\n" in credentials or "\r" in credentials:
             raise ValueError("CLOUD_WEB_CREDENTIALS is required")
         try:
             port = int(os.environ.get("PORT", "8080"))
             timeout = float(os.environ.get("CLOUD_JOB_TIMEOUT_SECONDS", "15"))
-            report_timeout = float(os.environ.get("CLOUD_REPORT_TIMEOUT_SECONDS", "180"))
+            report_timeout = float(os.environ.get(
+                "CLOUD_REPORT_TIMEOUT_SECONDS", str(DEFAULT_LONG_JOB_SECONDS),
+            ))
         except ValueError as exc:
             raise ValueError("invalid cloud runtime numeric configuration") from exc
-        if not 1 <= port <= 65535 or not 1 <= timeout <= 20 or not 1 <= report_timeout <= 180:
+        if (not 1 <= port <= 65535 or not 1 <= timeout <= 20
+                or not 1 <= report_timeout <= MAX_LONG_JOB_SECONDS):
             raise ValueError("cloud runtime limits are outside their allowed range")
         revision = os.environ.get("CLOUD_REVISION", "unknown")
         if not revision or len(revision) > 128:
@@ -88,6 +96,7 @@ class RuntimeConfig:
             authorization="Basic " + base64.b64encode(credentials.encode("utf-8")).decode("ascii"),
             report_timeout_seconds=report_timeout,
             oidc=auth.OidcConfig.from_environment(),
+            writes_enabled=writes_enabled == "true",
         )
 
 
@@ -126,6 +135,13 @@ def _child_entry(
         result_pipe.send(("failure", type(exc).__name__))
     finally:
         result_pipe.close()
+
+
+def _safe_original_error_type(exc: JobFailureError) -> str | None:
+    value = str(exc)
+    if len(value) <= 64 and value.isidentifier():
+        return value
+    return None
 
 
 def run_bounded(
@@ -223,14 +239,11 @@ def _dispatch_reports(payload: dict[str, Any]) -> dict[str, Any]:
 def _mark_worker_success() -> None:
     from datetime import UTC, datetime
 
-    from zont_analyzer.runtime import build_runtime
+    from zont_analyzer.runtime import open_runtime
 
-    runtime = build_runtime(None, None)
+    runtime = open_runtime()
     try:
         runtime.db.set_app_meta("cloud-worker-last-success", datetime.now(UTC).isoformat())
-        from zont_analyzer.cloud.monitoring import snapshot
-
-        snapshot(runtime)
     finally:
         runtime.db.close()
 
@@ -239,31 +252,48 @@ def _dispatch_maintenance(payload: dict[str, Any]) -> dict[str, Any]:
     from zont_analyzer.cloud import user_jobs
 
     request = dict(payload)
-    result = user_jobs.execute(request)
-    _mark_worker_success()
-    return result
+    return user_jobs.execute(request)
 
 
 def _dispatch_publication(payload: dict[str, Any]) -> dict[str, Any]:
     payload = dict(payload)
-    payload.pop("_runtime_timeout_seconds", None)
+    timeout = float(payload.pop("_runtime_timeout_seconds", 20))
     if payload:
         raise ValueError("publication payload must be empty")
-    from zont_analyzer.application.publication import publish_reports
-    from zont_analyzer.runtime import build_runtime
+    from zont_analyzer.cloud.heavy_work import HeavyWorkLease
+    from zont_analyzer.cloud.limits import MAX_LONG_JOB_SECONDS
 
-    runtime = build_runtime(None, None)
+    if not 1 <= timeout <= MAX_LONG_JOB_SECONDS:
+        raise ValueError("invalid publication timeout")
+    started = time.monotonic()
+    deadline = started + timeout
+    from zont_analyzer.application.publication import publish_reports
+    from zont_analyzer.runtime import open_runtime
+
+    runtime = open_runtime()
+    heavy = None
     try:
+        if deadline - time.monotonic() < 1:
+            return {"status": "busy"}
+        heavy = HeavyWorkLease.acquire(runtime, deadline=deadline)
+        if heavy is None or deadline - time.monotonic() < 1:
+            return {"status": "busy"}
         return publish_reports(runtime, batch_size=8)
     finally:
-        runtime.db.close()
+        try:
+            if heavy is not None:
+                heavy.release()
+        finally:
+            runtime.db.close()
 
 
 def _dispatch_monitoring(payload: dict[str, Any]) -> dict[str, Any]:
     if payload:
         raise ValueError("monitoring payload must be empty")
     from zont_analyzer.cloud.monitoring import snapshot
-    runtime = _cloud_application_runtime(initialize=False)
+    from zont_analyzer.runtime import open_runtime
+
+    runtime = open_runtime()
     try:
         snapshot(runtime)
         return {"status": "observed"}
@@ -293,6 +323,15 @@ def _cloud_application_runtime(*, initialize: bool = True) -> Any:
         raise
 
 
+def _dispatch_scheduler(payload: dict[str, Any]) -> dict[str, Any]:
+    from zont_analyzer.cloud.scheduler import execute
+
+    result = execute(payload)
+    if result.get("status") == "error":
+        raise RuntimeError("scheduled phase failed")
+    return result
+
+
 DISPATCHERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "analytics": _dispatch_analytics,
     "integrations": _dispatch_integrations,
@@ -300,6 +339,7 @@ DISPATCHERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "maintenance": _dispatch_maintenance,
     "publication": _dispatch_publication,
     "monitoring": _dispatch_monitoring,
+    "scheduler": _dispatch_scheduler,
 }
 
 
@@ -397,7 +437,7 @@ class CloudHandler(BaseHTTPRequestHandler):
             self._logout()
             return
         internal_maintenance = self.command == "POST" and self.path in {
-            "/internal/maintenance", "/internal/monitoring",
+            "/internal/maintenance", "/internal/monitoring", "/internal/scheduler",
         }
         if not internal_maintenance and not self._authorized():
             self._finish_input()
@@ -426,10 +466,15 @@ class CloudHandler(BaseHTTPRequestHandler):
                 "revision": self.server.config.revision,
                 "boot_id": self.server.boot_id,
                 "xray_ready": self.server.tunnel.ready(),
+                "writes_enabled": self.server.config.writes_enabled,
                 "counters": self.server.counters.snapshot(),
             })
             return
         if path.startswith(("/api/", "/za/api/")):
+            if self.command != "GET" and not self.server.config.writes_enabled:
+                self._finish_input()
+                self._reply(503, {"error": "maintenance"})
+                return
             from zont_analyzer.cloud import web_api
 
             if not web_api.prepare_input(self):
@@ -483,10 +528,16 @@ class CloudHandler(BaseHTTPRequestHandler):
             "/internal/maintenance": "maintenance",
             "/internal/monitoring": "monitoring",
             "/jobs/monitoring": "monitoring",
+            "/internal/scheduler": "scheduler",
+            "/jobs/scheduler": "scheduler",
         }.get(self.path)
         if self.command != "POST" or endpoint is None:
             self._finish_input()
             self._reply(404, {"error": "not_found"})
+            return
+        if endpoint != "monitoring" and not self.server.config.writes_enabled:
+            self._finish_input()
+            self._reply(503, {"error": "maintenance"})
             return
         from zont_analyzer.observability import observe
 
@@ -523,23 +574,27 @@ class CloudHandler(BaseHTTPRequestHandler):
                 request_payload = dict(payload)
                 if endpoint == "analytics":
                     request_payload["period_id"] = job_id
-                if endpoint in {"reports", "maintenance", "publication"}:
+                long_job = endpoint in {"reports", "maintenance", "publication", "scheduler"}
+                if long_job:
                     request_payload["_runtime_timeout_seconds"] = self.server.config.report_timeout_seconds
                 result = run_bounded(
                     DISPATCHERS[endpoint], request_payload,
-                    (self.server.config.report_timeout_seconds if endpoint in {"reports", "maintenance", "publication"}
+                    (self.server.config.report_timeout_seconds if long_job
                      else self.server.config.job_timeout_seconds), self.server.stopping,
                 )
             except JobTimeoutError:
                 outcome = "timeout"
                 self.server.counters.record("timeouts")
-                self._log_job(job_id, "timeout")
+                self._log_job(job_id, endpoint, "timeout")
                 response_status, response = 504, {"error": "job_timeout", "job_id": job_id}
                 telemetry_success = False
             except JobValidationError as exc:
                 outcome = "invalid"
                 self.server.counters.record("failures")
-                self._log_job(job_id, "invalid", type(exc).__name__)
+                self._log_job(
+                    job_id, endpoint, "invalid", type(exc).__name__,
+                    original_error_type=_safe_original_error_type(exc),
+                )
                 response_status, response = 400, {
                     "error": "invalid_job", "job_id": job_id, "error_type": type(exc).__name__,
                 }
@@ -547,7 +602,13 @@ class CloudHandler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001 - response/log deliberately excludes exception details
                 outcome = "failure"
                 self.server.counters.record("failures")
-                self._log_job(job_id, "failed", type(exc).__name__)
+                original_error_type = (
+                    _safe_original_error_type(exc) if isinstance(exc, JobFailureError) else None
+                )
+                self._log_job(
+                    job_id, endpoint, "failed", type(exc).__name__,
+                    original_error_type=original_error_type,
+                )
                 response_status, response = 502, {
                     "error": "job_failed", "job_id": job_id, "error_type": type(exc).__name__,
                 }
@@ -555,7 +616,7 @@ class CloudHandler(BaseHTTPRequestHandler):
             else:
                 outcome = "success"
                 self.server.counters.record("successes")
-                self._log_job(job_id, "ok")
+                self._log_job(job_id, endpoint, "ok")
                 response_status, response = 200, {"job_id": job_id, "result": result}
                 telemetry_success = True
             observe("zont_invocations_total", operation=endpoint, outcome=outcome)
@@ -693,16 +754,22 @@ class CloudHandler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
         self.close_connection = True
 
-    def _log_job(self, job_id: str, status: str, error_type: str | None = None) -> None:
+    def _log_job(
+        self, job_id: str, operation: str, status: str, error_type: str | None = None,
+        *, original_error_type: str | None = None,
+    ) -> None:
         payload: dict[str, str] = {
             "level": "INFO" if status == "ok" else "ERROR",
             "message": "cloud job",
             "event": "cloud_job",
             "job_id": job_id,
+            "operation": operation,
             "status": status,
         }
         if error_type is not None:
             payload["error_type"] = error_type
+        if original_error_type is not None:
+            payload["original_error_type"] = original_error_type
         logger.info(json.dumps(payload, separators=(",", ":")))
 
     def _send_telemetry(self, success: bool, duration: float) -> None:

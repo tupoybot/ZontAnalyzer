@@ -37,7 +37,7 @@ locals {
           "x-yc-apigateway-integration" = {
             type               = "object_storage"
             bucket             = yandex_storage_bucket.publication.bucket
-            object             = "reports/site-index.json"
+            object             = "${var.application_publication_prefix}/site-index.json"
             service_account_id = var.timer_service_account_id
           }
         }
@@ -52,7 +52,7 @@ locals {
           "x-yc-apigateway-integration" = {
             type               = "object_storage"
             bucket             = yandex_storage_bucket.publication.bucket
-            object             = "reports/publication/{path}"
+            object             = "${var.application_publication_prefix}/publication/{path}"
             service_account_id = var.timer_service_account_id
           }
         }
