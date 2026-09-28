@@ -23,6 +23,7 @@ from zont_analyzer.application.ai_settings import AISettingsStore
 from zont_analyzer.application.model_review import ModelReviewStore
 from zont_analyzer.application.regeneration import normalize_counterfactual_question
 from zont_analyzer.cloud.egress import ReportTransport
+from zont_analyzer.cloud.heavy_work import HeavyWorkLease
 from zont_analyzer.cloud.limits import (
     DEFAULT_LONG_JOB_SECONDS,
     MAINTENANCE_LEASE_GRACE_SECONDS,
@@ -328,7 +329,12 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("invalid maintenance bounds")
     deadline = time.monotonic() + timeout
     runtime = build_runtime(None, None)
+    heavy = None
     try:
+        heavy = HeavyWorkLease.acquire(runtime, deadline=deadline)
+        if heavy is None:
+            return {"status": "busy", "processed": 0, "jobs": [],
+                    "publication": {"status": "busy"}}
         remaining = deadline - time.monotonic()
         if remaining <= MAINTENANCE_PUBLICATION_RESERVE_SECONDS:
             return {"processed": 0, "jobs": [], "publication": {"status": "deferred"}}
@@ -346,4 +352,8 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
         result["publication"] = publish_reports(runtime, batch_size=8)
         return result
     finally:
-        runtime.db.close()
+        try:
+            if heavy is not None:
+                heavy.release()
+        finally:
+            runtime.db.close()

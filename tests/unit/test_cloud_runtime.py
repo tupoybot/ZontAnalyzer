@@ -690,3 +690,34 @@ def test_web_schema_cache_is_scoped_to_database_target(monkeypatch: pytest.Monke
         runtime_module._cloud_application_runtime().db.close()
     assert state.initialize_calls == 2
     assert state.close_calls == 4
+
+
+def test_standalone_publication_defers_when_heavy_work_is_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jobs = Mock()
+    jobs.acquire.return_value = None
+    runtime = SimpleNamespace(db=SimpleNamespace(jobs=jobs, close=Mock()))
+    monkeypatch.setattr("zont_analyzer.runtime.build_runtime", Mock(return_value=runtime))
+    publish = Mock()
+    monkeypatch.setattr("zont_analyzer.application.publication.publish_reports", publish)
+
+    assert runtime_module._dispatch_publication({"_runtime_timeout_seconds": 570}) == {
+        "status": "busy",
+    }
+
+    publish.assert_not_called()
+    runtime.db.close.assert_called_once()
+
+
+def test_busy_maintenance_does_not_mark_worker_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    execute = Mock(return_value={"status": "busy", "processed": 0, "jobs": [],
+                                 "publication": {"status": "busy"}})
+    mark_success = Mock()
+    monkeypatch.setattr("zont_analyzer.cloud.user_jobs.execute", execute)
+    monkeypatch.setattr(runtime_module, "_mark_worker_success", mark_success)
+
+    result = runtime_module._dispatch_maintenance({})
+
+    assert result["status"] == "busy"
+    mark_success.assert_not_called()

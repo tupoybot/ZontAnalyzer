@@ -27,6 +27,7 @@ from zont_analyzer.application.period_schedule import (
     seasonal_daily_signature,
 )
 from zont_analyzer.application.pilot import _report_source_event_revision
+from zont_analyzer.cloud.heavy_work import HeavyWorkLease
 from zont_analyzer.cloud.limits import DEFAULT_LONG_JOB_SECONDS, MAX_LONG_JOB_SECONDS
 from zont_analyzer.cloud.report_jobs import MIN_COLLECTION_SECONDS, ReportJobRunner
 from zont_analyzer.domain import Report
@@ -334,11 +335,23 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
     timeout = float(payload.get("_runtime_timeout_seconds", DEFAULT_LONG_JOB_SECONDS))
     if not 1 <= timeout <= MAX_LONG_JOB_SECONDS:
         raise ValueError("invalid scheduler timeout")
+    deadline = started + timeout
     runtime = build_runtime(None, None)
+    heavy = None
     try:
-        remaining = timeout - (time.monotonic() - started)
+        remaining = deadline - time.monotonic()
         if remaining < 1:
             raise TimeoutError("scheduler startup exhausted invocation budget")
+        heavy = HeavyWorkLease.acquire(runtime, deadline=deadline)
+        if heavy is None:
+            return {"status": "busy"}
+        remaining = deadline - time.monotonic()
+        if remaining < 1:
+            return {"status": "busy"}
         return ProductionScheduler(runtime).run(timeout_seconds=remaining)
     finally:
-        runtime.db.close()
+        try:
+            if heavy is not None:
+                heavy.release()
+        finally:
+            runtime.db.close()

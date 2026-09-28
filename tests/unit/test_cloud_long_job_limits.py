@@ -37,7 +37,8 @@ def test_report_execute_subtracts_runtime_startup_from_570_second_budget(
     runner_factory = Mock(return_value=runner)
     monkeypatch.setattr(report_jobs, "build_runtime", build)
     monkeypatch.setattr(report_jobs, "ReportJobRunner", runner_factory)
-    monkeypatch.setattr(report_jobs.time, "monotonic", Mock(side_effect=[90.0, 100.0, 130.0, 130.0]))
+    monkeypatch.setattr(report_jobs.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
+    monkeypatch.setattr(report_jobs.time, "monotonic", Mock(side_effect=[80.0, 90.0, 100.0, 120.0, 130.0]))
 
     result = report_jobs.execute({"kind": "weekly"}, timeout_seconds=570)
 
@@ -52,6 +53,7 @@ def test_report_execute_closes_runtime_when_startup_exhausts_budget(
     runtime = SimpleNamespace(db=SimpleNamespace(close=Mock()))
     monkeypatch.setattr(report_jobs, "build_runtime", Mock(return_value=runtime))
     monkeypatch.setattr(report_jobs, "ReportJobRunner", Mock())
+    monkeypatch.setattr(report_jobs.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
     monkeypatch.setattr(report_jobs.time, "monotonic", Mock(side_effect=[0.0, 0.0, 570.0, 570.0]))
 
     with pytest.raises(TimeoutError, match="report startup exhausted"):

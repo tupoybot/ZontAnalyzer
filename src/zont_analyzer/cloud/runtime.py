@@ -256,23 +256,41 @@ def _dispatch_maintenance(payload: dict[str, Any]) -> dict[str, Any]:
 
     request = dict(payload)
     result = user_jobs.execute(request)
-    _mark_worker_success()
+    if result.get("status") != "busy":
+        _mark_worker_success()
     return result
 
 
 def _dispatch_publication(payload: dict[str, Any]) -> dict[str, Any]:
     payload = dict(payload)
-    payload.pop("_runtime_timeout_seconds", None)
+    timeout = float(payload.pop("_runtime_timeout_seconds", 20))
     if payload:
         raise ValueError("publication payload must be empty")
+    from zont_analyzer.cloud.heavy_work import HeavyWorkLease
+    from zont_analyzer.cloud.limits import MAX_LONG_JOB_SECONDS
+
+    if not 1 <= timeout <= MAX_LONG_JOB_SECONDS:
+        raise ValueError("invalid publication timeout")
+    started = time.monotonic()
+    deadline = started + timeout
     from zont_analyzer.application.publication import publish_reports
     from zont_analyzer.runtime import build_runtime
 
     runtime = build_runtime(None, None)
+    heavy = None
     try:
+        if deadline - time.monotonic() < 1:
+            return {"status": "busy"}
+        heavy = HeavyWorkLease.acquire(runtime, deadline=deadline)
+        if heavy is None or deadline - time.monotonic() < 1:
+            return {"status": "busy"}
         return publish_reports(runtime, batch_size=8)
     finally:
-        runtime.db.close()
+        try:
+            if heavy is not None:
+                heavy.release()
+        finally:
+            runtime.db.close()
 
 
 def _dispatch_monitoring(payload: dict[str, Any]) -> dict[str, Any]:

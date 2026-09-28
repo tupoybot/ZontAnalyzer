@@ -69,7 +69,11 @@ def test_idle_or_busy_timer_does_not_erase_previous_lane_failure(monkeypatch) ->
 def test_runtime_initialization_consumes_the_same_outer_budget(monkeypatch, startup_seconds, remaining) -> None:
     runtime = Mock()
     monkeypatch.setattr(scheduler, "build_runtime", Mock(return_value=runtime))
-    monkeypatch.setattr(scheduler.time, "monotonic", Mock(side_effect=[10.0, 10.0 + startup_seconds]))
+    monkeypatch.setattr(scheduler.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
+    times = [10.0, 10.0 + startup_seconds]
+    if remaining is not None:
+        times.append(10.0 + startup_seconds)
+    monkeypatch.setattr(scheduler.time, "monotonic", Mock(side_effect=times))
     runner = Mock()
     runner.run.return_value = {"status": "idle"}
     constructor = Mock(return_value=runner)

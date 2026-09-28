@@ -31,6 +31,7 @@ from zont_analyzer.adapters.ydb.jobs import JobLease, JobLeaseRepository
 from zont_analyzer.adapters.zont_readonly import ZontReadOnlyClient
 from zont_analyzer.application.collection import CollectionService
 from zont_analyzer.cloud.egress import ReportTransport
+from zont_analyzer.cloud.heavy_work import HeavyWorkLease
 from zont_analyzer.cloud.limits import DEFAULT_LONG_JOB_SECONDS, MAX_LONG_JOB_SECONDS
 from zont_analyzer.domain import Report
 from zont_analyzer.domain.periods import Period as CalendarPeriod
@@ -456,11 +457,23 @@ def execute(
     if not 1 <= timeout_seconds <= MAX_LONG_JOB_SECONDS:
         raise ValueError("invalid report timeout")
     started = time.monotonic()
+    deadline = started + timeout_seconds
     runtime = build_runtime(None, None)
+    heavy = None
     try:
-        remaining = timeout_seconds - (time.monotonic() - started)
+        remaining = deadline - time.monotonic()
         if remaining < 1:
             raise TimeoutError("report startup exhausted invocation budget")
+        heavy = HeavyWorkLease.acquire(runtime, deadline=deadline)
+        if heavy is None:
+            return {"status": "busy"}
+        remaining = deadline - time.monotonic()
+        if remaining < 1:
+            return {"status": "busy"}
         return ReportJobRunner(runtime).run(payload, timeout_seconds=remaining)
     finally:
-        runtime.db.close()
+        try:
+            if heavy is not None:
+                heavy.release()
+        finally:
+            runtime.db.close()

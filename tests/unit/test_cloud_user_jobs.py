@@ -251,6 +251,7 @@ def test_execute_counts_startup_reserves_publication_and_defaults_to_one_job(
 ) -> None:
     runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(user_jobs, "build_runtime", lambda *_args: runtime)
+    monkeypatch.setattr(user_jobs.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
     monkeypatch.setattr(user_jobs.time, "monotonic", Mock(side_effect=[0.0, 10.0, 511.0]))
     drain = Mock(return_value={"processed": 1, "jobs": [{"status": "success"}]})
     monkeypatch.setattr(user_jobs, "drain", drain)
@@ -270,6 +271,7 @@ def test_execute_defers_when_startup_leaves_less_than_publication_reserve(
     closed: list[bool] = []
     runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: closed.append(True)))
     monkeypatch.setattr(user_jobs, "build_runtime", lambda *_args: runtime)
+    monkeypatch.setattr(user_jobs.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
     monkeypatch.setattr(user_jobs.time, "monotonic", Mock(side_effect=[0.0, 511.0]))
     drain = Mock()
     monkeypatch.setattr(user_jobs, "drain", drain)
@@ -289,6 +291,7 @@ def test_execute_publishes_batch_when_exactly_60_seconds_remain(
 ) -> None:
     runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(user_jobs, "build_runtime", lambda *_args: runtime)
+    monkeypatch.setattr(user_jobs.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
     monkeypatch.setattr(user_jobs.time, "monotonic", Mock(side_effect=[100.0, 110.0, 610.0]))
     drain = Mock(return_value={"processed": 1, "jobs": [{"status": "success"}]})
     monkeypatch.setattr(user_jobs, "drain", drain)
