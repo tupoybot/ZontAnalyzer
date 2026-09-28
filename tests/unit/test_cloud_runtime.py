@@ -253,8 +253,10 @@ def test_analytics_job_is_repeatable_and_rejects_malformed_input(
         "message": "cloud job",
         "event": "cloud_job",
         "job_id": body["job_id"],
+        "operation": "analytics",
         "status": "invalid",
         "error_type": "JobValidationError",
+        "original_error_type": "ValidationError",
     }
     assert "secret-value" not in caplog.text
     status, body = _request(instance, credentials, "POST", "/jobs/analytics", _payload(), content_type="text/plain")
@@ -280,6 +282,7 @@ def test_telemetry_failure_does_not_replace_completed_result(server: Any, caplog
         "message": "cloud job",
         "event": "cloud_job",
         "job_id": body["job_id"],
+        "operation": "analytics",
         "status": "ok",
     } in entries
     assert {
@@ -289,6 +292,40 @@ def test_telemetry_failure_does_not_replace_completed_result(server: Any, caplog
         "status": "failed",
         "error_type": "RuntimeError",
     } in entries
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_original_type"),
+    [
+        ("ConnectionResetError", "ConnectionResetError"),
+        ("private error detail with token=secret-value", None),
+        ("x" * 65, None),
+    ],
+)
+def test_bounded_failure_log_has_operation_and_only_safe_original_class(
+    server: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    message: str, expected_original_type: str | None,
+) -> None:
+    instance, credentials = server
+
+    def fail(*_args: Any) -> None:
+        raise JobFailureError(message)
+
+    monkeypatch.setattr(runtime_module, "run_bounded", fail)
+    with caplog.at_level("INFO"):
+        status, body = _request(instance, credentials, "POST", "/jobs/reports", {})
+
+    assert status == 502
+    assert body["error"] == "job_failed"
+    assert body["error_type"] == "JobFailureError"
+    entry = next(json.loads(record.message) for record in caplog.records
+                 if '"event":"cloud_job"' in record.message)
+    assert entry["operation"] == "reports"
+    assert entry["status"] == "failed"
+    assert entry["error_type"] == "JobFailureError"
+    assert entry.get("original_error_type") == expected_original_type
+    if expected_original_type is None:
+        assert message not in caplog.text
 
 
 def test_unready_xray_blocks_jobs_but_not_diagnostics(server: Any) -> None:

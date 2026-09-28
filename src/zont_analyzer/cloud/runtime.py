@@ -133,6 +133,13 @@ def _child_entry(
         result_pipe.close()
 
 
+def _safe_original_error_type(exc: JobFailureError) -> str | None:
+    value = str(exc)
+    if len(value) <= 64 and value.isidentifier():
+        return value
+    return None
+
+
 def run_bounded(
     callable_: Callable[[dict[str, Any]], dict[str, Any]], payload: dict[str, Any], timeout_seconds: float,
     cancelled: threading.Event | None = None,
@@ -560,13 +567,16 @@ class CloudHandler(BaseHTTPRequestHandler):
             except JobTimeoutError:
                 outcome = "timeout"
                 self.server.counters.record("timeouts")
-                self._log_job(job_id, "timeout")
+                self._log_job(job_id, endpoint, "timeout")
                 response_status, response = 504, {"error": "job_timeout", "job_id": job_id}
                 telemetry_success = False
             except JobValidationError as exc:
                 outcome = "invalid"
                 self.server.counters.record("failures")
-                self._log_job(job_id, "invalid", type(exc).__name__)
+                self._log_job(
+                    job_id, endpoint, "invalid", type(exc).__name__,
+                    original_error_type=_safe_original_error_type(exc),
+                )
                 response_status, response = 400, {
                     "error": "invalid_job", "job_id": job_id, "error_type": type(exc).__name__,
                 }
@@ -574,7 +584,13 @@ class CloudHandler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001 - response/log deliberately excludes exception details
                 outcome = "failure"
                 self.server.counters.record("failures")
-                self._log_job(job_id, "failed", type(exc).__name__)
+                original_error_type = (
+                    _safe_original_error_type(exc) if isinstance(exc, JobFailureError) else None
+                )
+                self._log_job(
+                    job_id, endpoint, "failed", type(exc).__name__,
+                    original_error_type=original_error_type,
+                )
                 response_status, response = 502, {
                     "error": "job_failed", "job_id": job_id, "error_type": type(exc).__name__,
                 }
@@ -582,7 +598,7 @@ class CloudHandler(BaseHTTPRequestHandler):
             else:
                 outcome = "success"
                 self.server.counters.record("successes")
-                self._log_job(job_id, "ok")
+                self._log_job(job_id, endpoint, "ok")
                 response_status, response = 200, {"job_id": job_id, "result": result}
                 telemetry_success = True
             observe("zont_invocations_total", operation=endpoint, outcome=outcome)
@@ -720,16 +736,22 @@ class CloudHandler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
         self.close_connection = True
 
-    def _log_job(self, job_id: str, status: str, error_type: str | None = None) -> None:
+    def _log_job(
+        self, job_id: str, operation: str, status: str, error_type: str | None = None,
+        *, original_error_type: str | None = None,
+    ) -> None:
         payload: dict[str, str] = {
             "level": "INFO" if status == "ok" else "ERROR",
             "message": "cloud job",
             "event": "cloud_job",
             "job_id": job_id,
+            "operation": operation,
             "status": status,
         }
         if error_type is not None:
             payload["error_type"] = error_type
+        if original_error_type is not None:
+            payload["original_error_type"] = original_error_type
         logger.info(json.dumps(payload, separators=(",", ":")))
 
     def _send_telemetry(self, success: bool, duration: float) -> None:
