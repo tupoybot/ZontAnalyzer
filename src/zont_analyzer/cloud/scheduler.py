@@ -33,7 +33,7 @@ from zont_analyzer.cloud.report_jobs import MIN_COLLECTION_SECONDS, ReportJobRun
 from zont_analyzer.domain import Report
 from zont_analyzer.domain.periods import Period, calendar_period, midnight
 from zont_analyzer.observability import observe
-from zont_analyzer.runtime import Runtime, build_runtime
+from zont_analyzer.runtime import Runtime, open_runtime
 
 _KEY = "production-scheduler:v1"
 _LANES = ("sync", "daily", "weekly", "monthly", "seasonal", "review")
@@ -147,6 +147,18 @@ class ProductionScheduler:
                 count = self.runtime.db.seed_source_event_report_baselines(batch_size=8)
                 return {"status": "initializing", "baselines": count}
             reference = self.now().astimezone(UTC)
+            due = state.get("next_recommendation_maintenance")
+            if due is None or reference >= datetime.fromisoformat(due):
+                try:
+                    self.runtime.maintain_recommendation_lifecycle(now=reference)
+                except Exception as exc:
+                    # A failed expiry pass must not prevent collection/reports.
+                    # Leave the due time unchanged so the next timer retries.
+                    state["recommendation_maintenance_error"] = type(exc).__name__
+                else:
+                    state.pop("recommendation_maintenance_error", None)
+                    state["next_recommendation_maintenance"] = (reference + timedelta(hours=1)).isoformat()
+                save()
             first = int(state.get("next_lane", 0)) % len(_LANES)
             for offset in range(len(_LANES)):
                 index = (first + offset) % len(_LANES)
@@ -336,7 +348,7 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
     if not 1 <= timeout <= MAX_LONG_JOB_SECONDS:
         raise ValueError("invalid scheduler timeout")
     deadline = started + timeout
-    runtime = build_runtime(None, None)
+    runtime = open_runtime()
     heavy = None
     try:
         remaining = deadline - time.monotonic()

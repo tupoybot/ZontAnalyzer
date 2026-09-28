@@ -249,6 +249,8 @@ def test_maintenance_allows_api_reads(server: Any, monkeypatch: pytest.MonkeyPat
     instance, credentials = server
     instance.config = replace(instance.config, writes_enabled=False)
     application = SimpleNamespace(db=Mock())
+    closed = threading.Event()
+    application.db.close.side_effect = closed.set
     instance.runtime_factory = Mock(return_value=application)
 
     def handle(handler: Any, runtime: Any) -> bool:
@@ -259,6 +261,7 @@ def test_maintenance_allows_api_reads(server: Any, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("zont_analyzer.cloud.web_api.handle", handle)
     assert _request(instance, credentials, "GET", path) == (200, {"healthy": True})
     instance.runtime_factory.assert_called_once()
+    assert closed.wait(1), "request must release the database after sending its response"
     application.db.close.assert_called_once()
 
 
@@ -698,7 +701,7 @@ def test_standalone_publication_defers_when_heavy_work_is_owned(
     jobs = Mock()
     jobs.acquire.return_value = None
     runtime = SimpleNamespace(db=SimpleNamespace(jobs=jobs, close=Mock()))
-    monkeypatch.setattr("zont_analyzer.runtime.build_runtime", Mock(return_value=runtime))
+    monkeypatch.setattr("zont_analyzer.runtime.open_runtime", Mock(return_value=runtime))
     publish = Mock()
     monkeypatch.setattr("zont_analyzer.application.publication.publish_reports", publish)
 
@@ -721,3 +724,15 @@ def test_busy_maintenance_does_not_mark_worker_success(monkeypatch: pytest.Monke
 
     assert result["status"] == "busy"
     mark_success.assert_not_called()
+
+
+def test_completed_maintenance_does_not_open_a_second_runtime_or_snapshot(monkeypatch):
+    execute = Mock(return_value={"processed": 0, "jobs": [], "publication": {"pending_reports": 0}})
+    monkeypatch.setattr("zont_analyzer.cloud.user_jobs.execute", execute)
+    mark_success = Mock()
+    monkeypatch.setattr(runtime_module, "_mark_worker_success", mark_success)
+    snapshot = Mock()
+    monkeypatch.setattr("zont_analyzer.cloud.monitoring.snapshot", snapshot)
+    assert runtime_module._dispatch_maintenance({}) == execute.return_value
+    mark_success.assert_not_called()
+    snapshot.assert_not_called()

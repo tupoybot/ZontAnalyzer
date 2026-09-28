@@ -1,6 +1,7 @@
 """Timer delivery must not hide failed work or reset the invocation budget."""
 
-from datetime import UTC, datetime
+import json
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -17,7 +18,7 @@ def _scheduler(monkeypatch):
     db.storage.execute.return_value = [SimpleNamespace(rows=[])]
     db.get_app_meta.return_value = "1"
     service = scheduler.ProductionScheduler(
-        SimpleNamespace(db=db), runner=Mock(),
+        SimpleNamespace(db=db, maintain_recommendation_lifecycle=Mock()), runner=Mock(),
         now=lambda: datetime(2026, 9, 27, tzinfo=UTC), monotonic=lambda: 0,
     )
     monkeypatch.setattr(service, "_sync", Mock(return_value=None))
@@ -68,7 +69,7 @@ def test_idle_or_busy_timer_does_not_erase_previous_lane_failure(monkeypatch) ->
 @pytest.mark.parametrize(("startup_seconds", "remaining"), [(45.0, 525.0), (569.5, None)])
 def test_runtime_initialization_consumes_the_same_outer_budget(monkeypatch, startup_seconds, remaining) -> None:
     runtime = Mock()
-    monkeypatch.setattr(scheduler, "build_runtime", Mock(return_value=runtime))
+    monkeypatch.setattr(scheduler, "open_runtime", Mock(return_value=runtime))
     monkeypatch.setattr(scheduler.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
     times = [10.0, 10.0 + startup_seconds]
     if remaining is not None:
@@ -95,7 +96,34 @@ def test_scheduler_accepts_570_and_rejects_571(monkeypatch) -> None:
         service.run(timeout_seconds=571)
 
     build_runtime = Mock()
-    monkeypatch.setattr(scheduler, "build_runtime", build_runtime)
+    monkeypatch.setattr(scheduler, "open_runtime", build_runtime)
     with pytest.raises(ValueError, match="invalid scheduler timeout"):
         scheduler.execute({"_runtime_timeout_seconds": 571})
     build_runtime.assert_not_called()
+
+
+def test_recommendation_expiry_is_hourly_and_durable_across_timer_children(monkeypatch):
+    reference = datetime(2026, 9, 27, tzinfo=UTC)
+    checkpoint = None
+    for offset, expected in [(0, 1), (59, 0), (60, 1)]:
+        service = _scheduler(monkeypatch)
+        service.now = lambda offset=offset: reference + timedelta(minutes=offset)
+        if offset:
+            service.runtime.db.jobs.acquire.return_value.checkpoint = checkpoint
+        assert service.run()["status"] == "idle"
+        assert service.runtime.maintain_recommendation_lifecycle.call_count == expected
+        checkpoint = service.runtime.db.jobs.checkpoint.call_args.args[3]
+    assert json.loads(checkpoint)["next_recommendation_maintenance"] == (
+        reference + timedelta(hours=2)
+    ).isoformat()
+
+
+def test_failed_expiry_is_retried_without_blocking_report_lanes(monkeypatch):
+    service = _scheduler(monkeypatch)
+    service.runtime.maintain_recommendation_lifecycle.side_effect = RuntimeError("private detail")
+    service._sync.return_value = {"status": "done"}
+    assert service.run()["lane"] == "sync"
+    checkpoint = json.loads(service.runtime.db.jobs.checkpoint.call_args.args[3])
+    assert "next_recommendation_maintenance" not in checkpoint
+    assert checkpoint["recommendation_maintenance_error"] == "RuntimeError"
+    assert "private" not in json.dumps(checkpoint)

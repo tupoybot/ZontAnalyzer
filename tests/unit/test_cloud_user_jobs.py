@@ -297,8 +297,8 @@ def test_report_write_lease_tracks_remaining_parent_lease(
 def test_execute_counts_startup_reserves_publication_and_defaults_to_one_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: None))
-    monkeypatch.setattr(user_jobs, "build_runtime", lambda *_args: runtime)
+    runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: None, set_app_meta=Mock()))
+    monkeypatch.setattr(user_jobs, "open_runtime", lambda *_args: runtime)
     monkeypatch.setattr(user_jobs.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
     monkeypatch.setattr(user_jobs.time, "monotonic", Mock(side_effect=[0.0, 10.0, 511.0]))
     drain = Mock(return_value={"processed": 1, "jobs": [{"status": "success"}]})
@@ -311,14 +311,16 @@ def test_execute_counts_startup_reserves_publication_and_defaults_to_one_job(
     drain.assert_called_once_with(runtime, timeout_seconds=500.0, max_jobs=1)
     publish.assert_not_called()
     assert result["publication"] == {"status": "deferred"}
+    runtime.db.set_app_meta.assert_called_once()
+    assert runtime.db.set_app_meta.call_args.args[0] == "cloud-worker-last-success"
 
 
 def test_execute_defers_when_startup_leaves_less_than_publication_reserve(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     closed: list[bool] = []
-    runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: closed.append(True)))
-    monkeypatch.setattr(user_jobs, "build_runtime", lambda *_args: runtime)
+    runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: closed.append(True), set_app_meta=Mock()))
+    monkeypatch.setattr(user_jobs, "open_runtime", lambda *_args: runtime)
     monkeypatch.setattr(user_jobs.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
     monkeypatch.setattr(user_jobs.time, "monotonic", Mock(side_effect=[0.0, 511.0]))
     drain = Mock()
@@ -337,8 +339,8 @@ def test_execute_defers_when_startup_leaves_less_than_publication_reserve(
 def test_execute_publishes_batch_when_exactly_60_seconds_remain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: None))
-    monkeypatch.setattr(user_jobs, "build_runtime", lambda *_args: runtime)
+    runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: None, set_app_meta=Mock()))
+    monkeypatch.setattr(user_jobs, "open_runtime", lambda *_args: runtime)
     monkeypatch.setattr(user_jobs.HeavyWorkLease, "acquire", Mock(return_value=Mock()))
     monkeypatch.setattr(user_jobs.time, "monotonic", Mock(side_effect=[100.0, 110.0, 610.0]))
     drain = Mock(return_value={"processed": 1, "jobs": [{"status": "success"}]})
@@ -351,13 +353,32 @@ def test_execute_publishes_batch_when_exactly_60_seconds_remain(
     drain.assert_called_once_with(runtime, timeout_seconds=500.0, max_jobs=2)
     publish.assert_called_once_with(runtime, batch_size=8)
     assert result["publication"] == {"pending_reports": 0}
+    runtime.db.set_app_meta.assert_called_once()
+
+
+@pytest.mark.parametrize("busy", [False, True])
+def test_execute_does_not_mark_success_on_busy_or_failed_work(monkeypatch, busy):
+    runtime = SimpleNamespace(db=Mock())
+    monkeypatch.setattr(user_jobs, "open_runtime", Mock(return_value=runtime))
+    heavy = Mock()
+    monkeypatch.setattr(user_jobs.HeavyWorkLease, "acquire", Mock(return_value=None if busy else heavy))
+    monkeypatch.setattr(user_jobs, "drain", Mock(side_effect=RuntimeError("fixture failure")))
+    if busy:
+        assert user_jobs.execute({})["status"] == "busy"
+        heavy.release.assert_not_called()
+    else:
+        with pytest.raises(RuntimeError, match="fixture failure"):
+            user_jobs.execute({})
+        heavy.release.assert_called_once()
+    runtime.db.set_app_meta.assert_not_called()
+    runtime.db.close.assert_called_once()
 
 
 def test_execute_rejects_571_before_opening_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     build = Mock()
-    monkeypatch.setattr(user_jobs, "build_runtime", build)
+    monkeypatch.setattr(user_jobs, "open_runtime", build)
     with pytest.raises(ValueError, match="invalid maintenance timeout"):
         user_jobs.execute({"_runtime_timeout_seconds": 571})
     build.assert_not_called()
@@ -368,7 +389,7 @@ def test_execute_rejects_invalid_job_count_before_opening_runtime(
     monkeypatch: pytest.MonkeyPatch, max_jobs: int,
 ) -> None:
     build = Mock()
-    monkeypatch.setattr(user_jobs, "build_runtime", build)
+    monkeypatch.setattr(user_jobs, "open_runtime", build)
     with pytest.raises(ValueError, match="invalid maintenance bounds"):
         user_jobs.execute({"max_jobs": max_jobs})
     build.assert_not_called()

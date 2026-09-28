@@ -35,7 +35,7 @@ from zont_analyzer.cloud.limits import (
     MAX_LONG_JOB_SECONDS,
 )
 from zont_analyzer.reports import render_text
-from zont_analyzer.runtime import Runtime, build_runtime
+from zont_analyzer.runtime import Runtime, open_runtime
 
 _PREFIX = "m5:"
 _REVIEW_KEY = _PREFIX + "review"
@@ -354,8 +354,9 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
     if type(max_jobs) is not int or not 1 <= max_jobs <= _MAX_SCAN:
         raise ValueError("invalid maintenance bounds")
     deadline = time.monotonic() + timeout
-    runtime = build_runtime(None, None)
+    runtime = open_runtime()
     heavy = None
+    completed = False
     try:
         heavy = HeavyWorkLease.acquire(runtime, deadline=deadline)
         if heavy is None:
@@ -363,23 +364,31 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
                     "publication": {"status": "busy"}}
         remaining = deadline - time.monotonic()
         if remaining <= MAINTENANCE_PUBLICATION_RESERVE_SECONDS:
+            completed = True
             return {"processed": 0, "jobs": [], "publication": {"status": "deferred"}}
         drain_budget = min(
             MAX_LONG_JOB_SECONDS, remaining - MAINTENANCE_PUBLICATION_RESERVE_SECONDS,
         )
         if drain_budget < 1:
+            completed = True
             return {"processed": 0, "jobs": [], "publication": {"status": "deferred"}}
         result = drain(runtime, timeout_seconds=drain_budget, max_jobs=max_jobs)
         if deadline - time.monotonic() < MAINTENANCE_PUBLICATION_RESERVE_SECONDS:
             result["publication"] = {"status": "deferred"}
+            completed = True
             return result
         from zont_analyzer.application.publication import publish_reports
 
         result["publication"] = publish_reports(runtime, batch_size=8)
+        completed = True
         return result
     finally:
         try:
-            if heavy is not None:
-                heavy.release()
+            if completed:
+                runtime.db.set_app_meta("cloud-worker-last-success", _now())
         finally:
-            runtime.db.close()
+            try:
+                if heavy is not None:
+                    heavy.release()
+            finally:
+                runtime.db.close()

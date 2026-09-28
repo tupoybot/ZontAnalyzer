@@ -61,7 +61,7 @@ def test_maintenance_busy_leaves_queue_untouched_and_closes_runtime(monkeypatch)
     assert first is not None
     runtime = _runtime(jobs)
     runtime.db.storage = Mock()
-    monkeypatch.setattr(user_jobs, "build_runtime", Mock(return_value=runtime))
+    monkeypatch.setattr(user_jobs, "open_runtime", Mock(return_value=runtime))
     drain = Mock()
     monkeypatch.setattr(user_jobs, "drain", drain)
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -83,6 +85,36 @@ def build_runtime(config_path: Path | None, data_dir: Path | None) -> Runtime:
         apply_device_timezone(db, loaded.config)
         runtime.maintain_recommendation_lifecycle()
         return runtime
+    except BaseException:
+        db.close()
+        raise
+
+
+def open_runtime(config_path: Path | None = None, data_dir: Path | None = None) -> Runtime:
+    """Open an already provisioned database without startup writes or maintenance.
+
+    Timer requests run in fresh child processes, so readiness is checked with
+    one metadata read each time rather than relying on a process-local cache.
+    Explicit initialization remains the responsibility of ``build_runtime``.
+    """
+    from zont_analyzer.adapters.ydb.schema import TABLES
+    from zont_analyzer.application.timezone import apply_device_timezone
+
+    loaded = load_config(config_path, data_dir)
+    storage = YdbConfig.from_environment(namespace=loaded.config.storage.namespace)
+    db = Database(storage)
+    try:
+        rows = db.storage.execute(
+            "SELECT name,value FROM metadata WHERE name IN ('schema_version','schema_hash');",
+        )[0].rows
+        metadata = {row.name: row.value for row in rows}
+        if metadata.get("schema_version") != "2":
+            raise ValueError("unsupported or uninitialized YDB schema version")
+        schema_hash = hashlib.sha256(json.dumps(TABLES, sort_keys=True).encode()).hexdigest()
+        if metadata.get("schema_hash") != schema_hash:
+            raise ValueError("YDB schema changed; an explicit migration is required")
+        apply_device_timezone(db, loaded.config)
+        return Runtime(loaded=loaded, db=db)
     except BaseException:
         db.close()
         raise

@@ -55,13 +55,29 @@ def bump_revision(
     return revision
 
 
-def _record_publication_change(tx: Transaction, scope: str, identifier: str) -> None:
+def _record_publication_change(
+    tx: Transaction, scope: str, identifier: str, *, payload: str = "{}",
+) -> None:
+    if payload != "{}":
+        previous, checkpoint = tx.execute(
+            "DECLARE $scope AS Utf8; DECLARE $identifier AS Utf8; "
+            "SELECT revision,payload FROM publication_changes WHERE scope=$scope AND identifier=$identifier; "
+            "SELECT value FROM metadata WHERE name='publication:checkpoint';",
+            {"$scope": scope, "$identifier": identifier},
+        )
+        acknowledged = int(checkpoint.rows[0].value) if checkpoint.rows else 0
+        if (previous.rows and int(previous.rows[0].revision) > acknowledged
+                and json.loads(previous.rows[0].payload).get("calibration") is not False):
+            # Do not narrow an unconsumed marker written by an older release.
+            payload = "{}"
     publication_revision = bump_revision(tx, "publication")
     tx.execute(
         "DECLARE $scope AS Utf8; DECLARE $identifier AS Utf8; DECLARE $revision AS Int64; "
+        "DECLARE $payload AS Utf8; "
         "UPSERT INTO publication_changes (scope,identifier,revision,payload) "
-        "VALUES ($scope,$identifier,$revision,'{}');",
-        {"$scope": scope, "$identifier": identifier, "$revision": publication_revision},
+        "VALUES ($scope,$identifier,$revision,$payload);",
+        {"$scope": scope, "$identifier": identifier, "$revision": publication_revision,
+         "$payload": payload},
     )
 
 
@@ -222,6 +238,7 @@ class TelemetryRepository:
             rows: list[dict[str, Any]] = []
             changed = False
             series_cache: dict[tuple[str, str, str], int] = {}
+            calibration_keys: set[tuple[int, int]] = set()
             for point in samples:
                 key = (point.source_type, point.entity_id, point.metric_key)
                 if key not in series_cache:
@@ -229,6 +246,11 @@ class TelemetryRepository:
                 rows.append({"series_id": series_cache[key], "timestamp_utc": utc_seconds(point.timestamp_utc),
                              "value_num": point.value_num, "value_text": point.value_text,
                              "quality": point.quality, "ingested_at": checked})
+                # GasService fits the meter model from boiler flags and
+                # modulation only. Temperatures and raw events do not change
+                # that fit, even when their timestamps fall inside calibration.
+                if point.source_type == "z3k_boiler_adapter" and point.metric_key in {"s", "rml", "modulation"}:
+                    calibration_keys.add((series_cache[key], utc_seconds(point.timestamp_utc)))
             if rows:
                 key_type = (ydb.TupleType().add_element(ydb.PrimitiveType.Int64)
                             .add_element(ydb.PrimitiveType.Int64))
@@ -256,6 +278,8 @@ class TelemetryRepository:
                 tx.execute("UPSERT INTO telemetry_samples SELECT * FROM AS_TABLE($rows);",
                            {"$rows": ydb.TypedValue(rows, ydb.ListType(row_type))})
             changed_times = {int(row["timestamp_utc"]) for row in rows}
+            calibration_times = {int(row["timestamp_utc"]) for row in rows
+                                 if (row["series_id"], row["timestamp_utc"]) in calibration_keys}
             if source_events:
                 # Source IDs identify canonical events even when the source
                 # corrects their timestamp. Resolve only this bounded batch of
@@ -325,12 +349,16 @@ class TelemetryRepository:
                 )
             if changed:
                 revision = bump_revision(tx, "telemetry:" + device_id, publish=False)
-                # Publish only changed UTC hours, including the old timestamp
-                # when a source event moves. The publisher expands calibration
-                # hours to the whole archive when its gas dependencies require it.
+                # Keep calibration markers independent: a later temperature
+                # write in the same hour must not overwrite an unconsumed boiler
+                # change. Existing hourly records without this payload remain
+                # conservative when read by the new publisher.
                 hours = {datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H") for at in changed_times}
                 for hour in sorted(hours):
-                    _record_publication_change(tx, "telemetry", hour)
+                    _record_publication_change(tx, "telemetry", hour, payload='{"calibration":false}')
+                for hour in sorted({datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H")
+                                    for at in calibration_times}):
+                    _record_publication_change(tx, "telemetry-gas", hour)
                 for day in {datetime.fromtimestamp(at, UTC).date().isoformat() for at in changed_times}:
                     tx.execute(
                         "DECLARE $key AS Utf8; DECLARE $value AS Utf8; "

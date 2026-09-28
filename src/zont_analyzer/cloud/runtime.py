@@ -239,14 +239,11 @@ def _dispatch_reports(payload: dict[str, Any]) -> dict[str, Any]:
 def _mark_worker_success() -> None:
     from datetime import UTC, datetime
 
-    from zont_analyzer.runtime import build_runtime
+    from zont_analyzer.runtime import open_runtime
 
-    runtime = build_runtime(None, None)
+    runtime = open_runtime()
     try:
         runtime.db.set_app_meta("cloud-worker-last-success", datetime.now(UTC).isoformat())
-        from zont_analyzer.cloud.monitoring import snapshot
-
-        snapshot(runtime)
     finally:
         runtime.db.close()
 
@@ -255,10 +252,7 @@ def _dispatch_maintenance(payload: dict[str, Any]) -> dict[str, Any]:
     from zont_analyzer.cloud import user_jobs
 
     request = dict(payload)
-    result = user_jobs.execute(request)
-    if result.get("status") != "busy":
-        _mark_worker_success()
-    return result
+    return user_jobs.execute(request)
 
 
 def _dispatch_publication(payload: dict[str, Any]) -> dict[str, Any]:
@@ -274,9 +268,9 @@ def _dispatch_publication(payload: dict[str, Any]) -> dict[str, Any]:
     started = time.monotonic()
     deadline = started + timeout
     from zont_analyzer.application.publication import publish_reports
-    from zont_analyzer.runtime import build_runtime
+    from zont_analyzer.runtime import open_runtime
 
-    runtime = build_runtime(None, None)
+    runtime = open_runtime()
     heavy = None
     try:
         if deadline - time.monotonic() < 1:
@@ -297,7 +291,9 @@ def _dispatch_monitoring(payload: dict[str, Any]) -> dict[str, Any]:
     if payload:
         raise ValueError("monitoring payload must be empty")
     from zont_analyzer.cloud.monitoring import snapshot
-    runtime = _cloud_application_runtime(initialize=False)
+    from zont_analyzer.runtime import open_runtime
+
+    runtime = open_runtime()
     try:
         snapshot(runtime)
         return {"status": "observed"}
