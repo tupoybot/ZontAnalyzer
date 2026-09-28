@@ -290,11 +290,12 @@ def _dispatch_publication(payload: dict[str, Any]) -> dict[str, Any]:
 def _dispatch_monitoring(payload: dict[str, Any]) -> dict[str, Any]:
     if payload:
         raise ValueError("monitoring payload must be empty")
-    from zont_analyzer.cloud.monitoring import snapshot
+    from zont_analyzer.cloud.monitoring import queues, snapshot
     from zont_analyzer.runtime import open_runtime
 
     runtime = open_runtime()
     try:
+        queues(runtime)
         snapshot(runtime)
         return {"status": "observed"}
     finally:

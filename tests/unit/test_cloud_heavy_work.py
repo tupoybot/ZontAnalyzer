@@ -71,7 +71,9 @@ def test_maintenance_busy_leaves_queue_untouched_and_closes_runtime(monkeypatch)
     }
 
     drain.assert_not_called()
-    runtime.db.storage.execute.assert_not_called()
+    assert runtime.db.storage.execute.call_count == 2
+    assert all(call.args[0].startswith("SELECT") and call.kwargs == {"timeout_seconds": 2}
+               for call in runtime.db.storage.execute.call_args_list)
     runtime.db.storage.transaction.assert_not_called()
     runtime.db.close.assert_called_once()
     first.release()

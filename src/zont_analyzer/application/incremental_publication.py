@@ -241,6 +241,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                                        lease_owner=owner, lease_attempt=attempt):
                     raise RuntimeError("publisher lost its YDB checkpoint or lease")
                 return {"reports": int(meta_hint["count"]), "rendered_reports": 0, "pending_reports": 0,
+                        "pending_oldest_timestamp_seconds": None,
                         "manifest": meta_hint["manifest_key"] if cloud else str(manifest_path),
                         "latest_report_id": latest_hint["report_id"] if latest_hint else None}
 
@@ -412,5 +413,8 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         raise RuntimeError("publisher lost its YDB checkpoint or lease")
     return {"reports": len(entries), "rendered_reports": rendered,
             "pending_reports": sum(bool(item["dirty"]) for item in items.values()),
+            "pending_oldest_timestamp_seconds": min(
+                (item["queued"] / 1_000_000 for item in items.values() if item["dirty"]), default=None,
+            ),
             "manifest": meta["manifest_key"] if cloud else str(manifest_path),
             "latest_report_id": latest["report_id"] if latest else None}
