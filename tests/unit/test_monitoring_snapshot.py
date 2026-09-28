@@ -117,12 +117,15 @@ def test_reliability_exports_only_existing_evidence_and_never_infers_zero():
 @pytest.mark.parametrize("latest", [None, datetime(2026, 9, 1, tzinfo=UTC)])
 def test_monitoring_dispatch_reads_without_providers_and_closes_runtime(monkeypatch, latest):
     app = _application(latest=latest)
+    queue_sample = Mock()
+    monkeypatch.setattr(monitoring, "queues", queue_sample)
     factory = Mock(return_value=app)
     monkeypatch.setattr("zont_analyzer.runtime.open_runtime", factory)
     events = []
     with capture(events.append):
         assert runtime._dispatch_monitoring({}) == {"status": "observed"}
     factory.assert_called_once_with()
+    queue_sample.assert_called_once_with(app)
     assert ("zont_telemetry_present", float(latest is not None), {}) in events
     timestamps = [value for name, value, _ in events if name == "zont_telemetry_timestamp_seconds"]
     assert timestamps == ([] if latest is None else [latest.timestamp()])

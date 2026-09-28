@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 from collections.abc import Callable, Iterator
@@ -86,17 +87,33 @@ class YdbDatabase:
         self.pool.stop()
         self.driver.stop()
 
-    def execute(self, query: str, parameters: dict[str, Any] | None = None) -> list[Any]:
+    def execute(
+        self, query: str, parameters: dict[str, Any] | None = None,
+        *, timeout_seconds: float | None = None,
+    ) -> list[Any]:
         try:
             with span("zont_ydb_query"):
-                return self._execute(query, parameters)
+                return self._execute(query, parameters, timeout_seconds=timeout_seconds)
         except Exception:
             observe("zont_ydb_errors_total")
             raise
 
-    def _execute(self, query: str, parameters: dict[str, Any] | None = None) -> list[Any]:
+    def _execute(
+        self, query: str, parameters: dict[str, Any] | None = None,
+        *, timeout_seconds: float | None = None,
+    ) -> list[Any]:
+        options: dict[str, Any] = {}
+        if timeout_seconds is not None:
+            if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+                raise ValueError("YDB request timeout must be positive and finite")
+            options = {
+                "retry_settings": ydb.RetrySettings(
+                    max_retries=0, max_session_acquire_timeout=1, get_session_client_timeout=1,
+                ),
+                "settings": ydb.BaseRequestSettings().with_timeout(timeout_seconds),
+            }
         merged: dict[int, Any] = {}
-        for part in self.pool.execute_with_retries(self.prefix + query, parameters=parameters):
+        for part in self.pool.execute_with_retries(self.prefix + query, parameters=parameters, **options):
             if part.truncated:
                 raise ValueError("YDB returned a truncated result")
             index = int(part.index or 0)

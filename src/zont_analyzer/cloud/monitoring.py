@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -12,6 +13,85 @@ from zont_analyzer.observability import observe, span
 if TYPE_CHECKING:
     from zont_analyzer.domain import Report
     from zont_analyzer.runtime import Runtime
+
+_QUEUE_LIMIT = 1000
+
+
+def queues(
+    runtime: Runtime, publication: dict[str, Any] | None = None, *, deadline: float | None = None,
+) -> None:
+    """Sample durable materialized queues without changing completed work.
+
+    Publication results reuse the publisher's committed in-memory index. Other
+    reads return at most 1001 rows; truncated counts are explicitly lower bounds.
+    Neither queue includes future scheduler work or unconsumed change records.
+    """
+    for kind in ("publication", "manual"):
+        try:
+            if deadline is not None and deadline - time.monotonic() < 8:
+                raise TimeoutError("insufficient queue sampling time")
+            if kind == "publication":
+                counts, oldest, truncated = _publication_queue(runtime, publication)
+            else:
+                counts, oldest, truncated = _manual_queue(runtime)
+        except Exception:  # noqa: BLE001 - queue health must not affect application work
+            observe("zont_queue_snapshot_success", 0, kind=kind)
+        else:
+            for status in ("pending", "running", "blocked"):
+                observe("zont_queue_items", counts.get(status, 0), kind=kind, status=status)
+            observe("zont_queue_truncated", float(truncated), kind=kind)
+            # Clear a previous nonempty sample when oldest is unavailable.
+            observe("zont_queue_oldest_timestamp_seconds", oldest or 0, kind=kind)
+            observe("zont_queue_snapshot_success", 1, kind=kind)
+        finally:
+            observe("zont_queue_observed_timestamp_seconds", time.time(), kind=kind)
+
+
+def _publication_queue(
+    runtime: Runtime, publication: dict[str, Any] | None,
+) -> tuple[dict[str, int], float | None, bool]:
+    if publication is not None and "pending_reports" in publication:
+        pending = int(publication["pending_reports"])
+        oldest = publication.get("pending_oldest_timestamp_seconds") if pending else None
+        return {"pending": pending}, oldest, False
+    rows = runtime.db.storage.execute(
+        "SELECT queued_at FROM publication_items VIEW by_queue WHERE dirty>0 "
+        "ORDER BY dirty,queued_at LIMIT 1001;",
+        timeout_seconds=2,
+    )[0].rows
+    truncated = len(rows) > _QUEUE_LIMIT
+    oldest = min((int(row.queued_at) / 1_000_000 for row in rows), default=None)
+    return {"pending": min(len(rows), _QUEUE_LIMIT)}, None if truncated else oldest, truncated
+
+
+def _manual_queue(runtime: Runtime) -> tuple[dict[str, int], float | None, bool]:
+    rows = runtime.db.storage.execute(
+        "SELECT state,lease_until,checkpoint FROM jobs "
+        "WHERE job_key >= 'm5:' AND job_key < 'm5;' AND (state='active' OR state='released') "
+        "ORDER BY job_key LIMIT 1001;",
+        timeout_seconds=2,
+    )[0].rows
+    counts = {"pending": 0, "running": 0, "blocked": 0}
+    oldest: float | None = None
+    now_us = time.time_ns() // 1_000
+    for row in rows[:_QUEUE_LIMIT]:
+        payload = json.loads(row.checkpoint)
+        if not isinstance(payload, dict):
+            raise ValueError("invalid manual job checkpoint")
+        if payload.get("status") == "reconciliation_required":
+            status = "blocked"
+        elif row.state == "active" and int(row.lease_until) > now_us:
+            status = "running"
+        else:
+            status = "pending"
+        counts[status] += 1
+        # updated_at is the durable last transition, not the original enqueue
+        # time (which the current jobs contract does not retain).
+        if payload.get("updated_at"):
+            timestamp = datetime.fromisoformat(payload["updated_at"]).timestamp()
+            oldest = timestamp if oldest is None else min(oldest, timestamp)
+    truncated = len(rows) > _QUEUE_LIMIT
+    return counts, None if truncated else oldest, truncated
 
 
 def snapshot(runtime: Runtime) -> None:

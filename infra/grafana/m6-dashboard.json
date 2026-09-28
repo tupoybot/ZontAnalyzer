@@ -232,6 +232,85 @@
       "options": {}
     },
     {
+      "id": 35,
+      "title": "Очереди заданий",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 8
+      },
+      "description": "Ожидающие публикации отчёты и ручные задания по состояниям. Последние замеры; отсутствие или ошибка свежих данных не означают пустую очередь. При ограниченном чтении — нижняя граница числа заданий.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(last_over_time(zont_queue_items{environment=\"$environment\",kind=\"publication\",status=\"pending\"}[2h]) and ignoring (status) (((last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment,kind) group_left max by (environment,kind) (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) > time() - 900)) and (last_over_time(zont_queue_snapshot_success{environment=\"$environment\"}[2h]) == 1)))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Публикация",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "max(last_over_time(zont_queue_items{environment=\"$environment\",kind=\"manual\",status=\"pending\"}[2h]) and ignoring (status) (((last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment,kind) group_left max by (environment,kind) (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) > time() - 900)) and (last_over_time(zont_queue_snapshot_success{environment=\"$environment\"}[2h]) == 1)))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Ручные: ожидают",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "max(last_over_time(zont_queue_items{environment=\"$environment\",kind=\"manual\",status=\"running\"}[2h]) and ignoring (status) (((last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment,kind) group_left max by (environment,kind) (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) > time() - 900)) and (last_over_time(zont_queue_snapshot_success{environment=\"$environment\"}[2h]) == 1)))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Ручные: выполняются",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "D",
+          "expr": "max(last_over_time(zont_queue_items{environment=\"$environment\",kind=\"manual\",status=\"blocked\"}[2h]) and ignoring (status) (((last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment,kind) group_left max by (environment,kind) (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_queue_observed_timestamp_seconds{environment=\"$environment\"}[2h]) > time() - 900)) and (last_over_time(zont_queue_snapshot_success{environment=\"$environment\"}[2h]) == 1)))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Ручные: требуют разбора",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Нет данных"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
       "id": 7,
       "title": "Вызовы и ошибки OpenAI за час",
       "type": "timeseries",
@@ -241,7 +320,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 24,
+        "y": 32,
         "w": 12,
         "h": 8
       },
@@ -274,7 +353,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 24,
+        "y": 32,
         "w": 12,
         "h": 8
       },
@@ -307,7 +386,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 32,
+        "y": 40,
         "w": 12,
         "h": 8
       },
@@ -340,7 +419,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 32,
+        "y": 40,
         "w": 12,
         "h": 8
       },
@@ -373,7 +452,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 40,
+        "y": 48,
         "w": 12,
         "h": 8
       },
@@ -406,7 +485,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 40,
+        "y": 48,
         "w": 12,
         "h": 8
       },
@@ -439,7 +518,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 48,
+        "y": 56,
         "w": 12,
         "h": 8
       },
@@ -472,7 +551,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 48,
+        "y": 56,
         "w": 12,
         "h": 8
       },
@@ -505,7 +584,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 56,
+        "y": 64,
         "w": 12,
         "h": 8
       },
@@ -538,7 +617,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 56,
+        "y": 64,
         "w": 12,
         "h": 8
       },
@@ -571,7 +650,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 64,
+        "y": 72,
         "w": 12,
         "h": 8
       },
@@ -604,7 +683,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 64,
+        "y": 72,
         "w": 12,
         "h": 8
       },
@@ -637,7 +716,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 72,
+        "y": 80,
         "w": 12,
         "h": 8
       },
@@ -670,7 +749,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 72,
+        "y": 80,
         "w": 12,
         "h": 8
       },
@@ -703,7 +782,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 80,
+        "y": 88,
         "w": 12,
         "h": 8
       },
@@ -736,7 +815,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 80,
+        "y": 88,
         "w": 12,
         "h": 8
       },
@@ -769,7 +848,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 88,
+        "y": 96,
         "w": 12,
         "h": 8
       },
@@ -802,7 +881,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 88,
+        "y": 96,
         "w": 12,
         "h": 8
       },
@@ -835,7 +914,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 96,
+        "y": 104,
         "w": 12,
         "h": 8
       },
@@ -868,7 +947,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 96,
+        "y": 104,
         "w": 12,
         "h": 8
       },
@@ -901,7 +980,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 104,
+        "y": 112,
         "w": 12,
         "h": 8
       },
@@ -934,7 +1013,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 104,
+        "y": 112,
         "w": 12,
         "h": 8
       },
@@ -967,7 +1046,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 112,
+        "y": 120,
         "w": 12,
         "h": 8
       },
@@ -1000,7 +1079,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 112,
+        "y": 120,
         "w": 12,
         "h": 8
       },

@@ -357,6 +357,7 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
     runtime = open_runtime()
     heavy = None
     completed = False
+    publication = None
     try:
         heavy = HeavyWorkLease.acquire(runtime, deadline=deadline)
         if heavy is None:
@@ -379,7 +380,8 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
             return result
         from zont_analyzer.application.publication import publish_reports
 
-        result["publication"] = publish_reports(runtime, batch_size=8)
+        publication = publish_reports(runtime, batch_size=8)
+        result["publication"] = publication
         completed = True
         return result
     finally:
@@ -391,4 +393,9 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
                 if heavy is not None:
                     heavy.release()
             finally:
-                runtime.db.close()
+                try:
+                    from zont_analyzer.cloud.monitoring import queues
+
+                    queues(runtime, publication, deadline=deadline)
+                finally:
+                    runtime.db.close()
