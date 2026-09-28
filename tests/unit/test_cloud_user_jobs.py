@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -190,3 +192,132 @@ def test_regeneration_ai_uses_proxy_and_stable_request_nonce(
     assert isinstance(observed["transport"], httpx.MockTransport)
     assert observed["retries"] == 0
     assert observed["fence"] == (key, "worker", lease.attempt)
+
+
+def test_drain_accepts_570_and_lease_covers_tail_and_grace(
+    storage: _Storage, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _Runtime(storage)
+    user_jobs.enqueue_regeneration(runtime, "daily-1")
+    acquired: list[tuple[str, int]] = []
+    original_acquire = runtime.db.jobs.acquire
+
+    def acquire(key: str, owner: str, lease_seconds: int) -> JobLease | None:
+        acquired.append((key, lease_seconds))
+        return original_acquire(key, owner, lease_seconds)
+
+    monkeypatch.setattr(runtime.db.jobs, "acquire", acquire)
+    monkeypatch.setattr(user_jobs.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(user_jobs, "_run_regeneration", lambda *_args: {"status": "success"})
+
+    result = user_jobs.drain(runtime, timeout_seconds=570, max_jobs=1)
+    assert result["processed"] == 1
+    assert acquired[0][0] == "m5:regenerate:daily-1"
+    assert acquired[0][1] == 645  # 570 seconds plus publication tail and expiry grace.
+    with pytest.raises(ValueError, match="invalid maintenance bounds"):
+        user_jobs.drain(runtime, timeout_seconds=571, max_jobs=1)
+
+
+def test_report_write_lease_tracks_remaining_parent_lease(
+    storage: _Storage, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _Runtime(storage)
+    report_id = "daily-1"
+    key = "m5:regenerate:" + report_id
+    checkpoint = json.dumps({"phase": "saved", "report_id": report_id})
+    parent = JobLease(key, "worker", 1, time.time_ns() // 1_000 + 300_500_000,
+                      "active", checkpoint)
+    runtime.db.report = lambda _report_id: SimpleNamespace(
+        id=report_id, generated_at=datetime(2026, 9, 25, tzinfo=UTC),
+    )
+    acquired_ttls: list[int] = []
+    original_acquire = runtime.db.jobs.acquire
+
+    def acquire(job_key: str, owner: str, lease_seconds: int) -> JobLease | None:
+        acquired_ttls.append(lease_seconds)
+        return original_acquire(job_key, owner, lease_seconds)
+
+    monkeypatch.setattr(runtime.db.jobs, "acquire", acquire)
+    fixed_now_ns = time.time_ns()
+    monkeypatch.setattr(user_jobs.time, "time_ns", lambda: fixed_now_ns)
+    result = user_jobs._run_regeneration(runtime, parent, json.loads(checkpoint))
+
+    assert result["status"] == "success"
+    assert acquired_ttls == [316]  # ceil(300.5s remaining) plus 15s.
+
+
+def test_execute_counts_startup_reserves_publication_and_defaults_to_one_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(user_jobs, "build_runtime", lambda *_args: runtime)
+    monkeypatch.setattr(user_jobs.time, "monotonic", Mock(side_effect=[0.0, 10.0, 511.0]))
+    drain = Mock(return_value={"processed": 1, "jobs": [{"status": "success"}]})
+    monkeypatch.setattr(user_jobs, "drain", drain)
+    publish = Mock(return_value={"pending_reports": 0})
+    monkeypatch.setattr("zont_analyzer.application.publication.publish_reports", publish)
+
+    result = user_jobs.execute({})
+
+    drain.assert_called_once_with(runtime, timeout_seconds=500.0, max_jobs=1)
+    publish.assert_not_called()
+    assert result["publication"] == {"status": "deferred"}
+
+
+def test_execute_defers_when_startup_leaves_less_than_publication_reserve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[bool] = []
+    runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: closed.append(True)))
+    monkeypatch.setattr(user_jobs, "build_runtime", lambda *_args: runtime)
+    monkeypatch.setattr(user_jobs.time, "monotonic", Mock(side_effect=[0.0, 511.0]))
+    drain = Mock()
+    monkeypatch.setattr(user_jobs, "drain", drain)
+    publish = Mock()
+    monkeypatch.setattr("zont_analyzer.application.publication.publish_reports", publish)
+
+    result = user_jobs.execute({"_runtime_timeout_seconds": 570, "max_jobs": 2})
+
+    assert result == {"processed": 0, "jobs": [], "publication": {"status": "deferred"}}
+    drain.assert_not_called()
+    publish.assert_not_called()
+    assert closed == [True]
+
+
+def test_execute_publishes_batch_when_exactly_60_seconds_remain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(user_jobs, "build_runtime", lambda *_args: runtime)
+    monkeypatch.setattr(user_jobs.time, "monotonic", Mock(side_effect=[100.0, 110.0, 610.0]))
+    drain = Mock(return_value={"processed": 1, "jobs": [{"status": "success"}]})
+    monkeypatch.setattr(user_jobs, "drain", drain)
+    publish = Mock(return_value={"pending_reports": 0})
+    monkeypatch.setattr("zont_analyzer.application.publication.publish_reports", publish)
+
+    result = user_jobs.execute({"_runtime_timeout_seconds": 570, "max_jobs": 2})
+
+    drain.assert_called_once_with(runtime, timeout_seconds=500.0, max_jobs=2)
+    publish.assert_called_once_with(runtime, batch_size=8)
+    assert result["publication"] == {"pending_reports": 0}
+
+
+def test_execute_rejects_571_before_opening_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build = Mock()
+    monkeypatch.setattr(user_jobs, "build_runtime", build)
+    with pytest.raises(ValueError, match="invalid maintenance timeout"):
+        user_jobs.execute({"_runtime_timeout_seconds": 571})
+    build.assert_not_called()
+
+
+@pytest.mark.parametrize("max_jobs", [0, 9])
+def test_execute_rejects_invalid_job_count_before_opening_runtime(
+    monkeypatch: pytest.MonkeyPatch, max_jobs: int,
+) -> None:
+    build = Mock()
+    monkeypatch.setattr(user_jobs, "build_runtime", build)
+    with pytest.raises(ValueError, match="invalid maintenance bounds"):
+        user_jobs.execute({"max_jobs": max_jobs})
+    build.assert_not_called()

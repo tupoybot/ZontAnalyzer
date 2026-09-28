@@ -127,7 +127,7 @@ def test_only_private_timer_route_bypasses_basic_auth(
                               body={"messages": [{"details": "ignored"}]})
     assert status == 200
     assert result["result"] == {"processed": 0}
-    assert seen == [{"_runtime_timeout_seconds": 180}]
+    assert seen == [{"_runtime_timeout_seconds": 570}]
     assert _request(server, "GET", "/internal/maintenance", authorization=False) == (
         401, {"error": "unauthorized"},
     )

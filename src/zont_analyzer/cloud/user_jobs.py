@@ -23,6 +23,12 @@ from zont_analyzer.application.ai_settings import AISettingsStore
 from zont_analyzer.application.model_review import ModelReviewStore
 from zont_analyzer.application.regeneration import normalize_counterfactual_question
 from zont_analyzer.cloud.egress import ReportTransport
+from zont_analyzer.cloud.limits import (
+    DEFAULT_LONG_JOB_SECONDS,
+    MAINTENANCE_LEASE_GRACE_SECONDS,
+    MAINTENANCE_PUBLICATION_RESERVE_SECONDS,
+    MAX_LONG_JOB_SECONDS,
+)
 from zont_analyzer.reports import render_text
 from zont_analyzer.runtime import Runtime, build_runtime
 
@@ -130,7 +136,15 @@ def review_status(runtime: Runtime) -> dict[str, Any]:
 
 def _run_regeneration(runtime: Runtime, lease: JobLease, payload: dict[str, Any]) -> dict[str, Any]:
     key = "report-write:" + str(payload["report_id"])
-    write = runtime.db.jobs.acquire(key, lease.owner, 210)
+    parent_remaining = max(
+        1, math.ceil((lease.lease_until - time.time_ns() // 1_000) / 1_000_000),
+    )
+    write_ttl = min(
+        MAX_LONG_JOB_SECONDS + MAINTENANCE_PUBLICATION_RESERVE_SECONDS
+        + MAINTENANCE_LEASE_GRACE_SECONDS * 2,
+        parent_remaining + MAINTENANCE_LEASE_GRACE_SECONDS,
+    )
+    write = runtime.db.jobs.acquire(key, lease.owner, write_ttl)
     if write is None:
         raise ReviewLeaseBusy()
     try:
@@ -216,7 +230,7 @@ def scheduled_review(runtime: Runtime, *, deadline: float | None = None) -> dict
     """
     # Catalog.fetch reads two indexes and at most ten model pages. Reserve
     # time for the durable review result even when every page times out.
-    remaining = deadline - time.monotonic() if deadline is not None else 180
+    remaining = deadline - time.monotonic() if deadline is not None else MAX_LONG_JOB_SECONDS
     if remaining < 20:
         return {"status": "pending"}
     timeout = min(15.0, (remaining - 15) / 12)
@@ -243,9 +257,11 @@ def _pending_keys(runtime: Runtime) -> list[str]:
             for row in rows]
 
 
-def drain(runtime: Runtime, *, timeout_seconds: float = 145, max_jobs: int = 2) -> dict[str, Any]:
+def drain(
+    runtime: Runtime, *, timeout_seconds: float = DEFAULT_LONG_JOB_SECONDS, max_jobs: int = 2,
+) -> dict[str, Any]:
     """Run a bounded number of queued jobs; expired leases can be retried."""
-    if not 1 <= max_jobs <= _MAX_SCAN or not 1 <= timeout_seconds <= 180:
+    if not 1 <= max_jobs <= _MAX_SCAN or not 1 <= timeout_seconds <= MAX_LONG_JOB_SECONDS:
         raise ValueError("invalid maintenance bounds")
     deadline = time.monotonic() + timeout_seconds
     results: list[dict[str, Any]] = []
@@ -253,7 +269,10 @@ def drain(runtime: Runtime, *, timeout_seconds: float = 145, max_jobs: int = 2) 
         if len(results) >= max_jobs or deadline - time.monotonic() < 135:
             break
         owner = str(uuid.uuid4())
-        lease = runtime.db.jobs.acquire(key, owner, math.ceil(deadline - time.monotonic()) + 15)
+        lease_seconds = math.ceil(deadline - time.monotonic()) + (
+            MAINTENANCE_PUBLICATION_RESERVE_SECONDS + MAINTENANCE_LEASE_GRACE_SECONDS
+        )
+        lease = runtime.db.jobs.acquire(key, owner, lease_seconds)
         if lease is None:
             continue
         payload = _read_checkpoint(lease)
@@ -301,13 +320,27 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
     allowed = {"max_jobs", "_runtime_timeout_seconds"}
     if set(payload) - allowed:
         raise ValueError("unknown maintenance fields")
-    timeout = float(payload.get("_runtime_timeout_seconds", 150))
-    max_jobs = payload.get("max_jobs", 2)
-    if type(max_jobs) is not int:
-        raise ValueError("max_jobs must be integer")
+    timeout = float(payload.get("_runtime_timeout_seconds", DEFAULT_LONG_JOB_SECONDS))
+    if not 1 <= timeout <= MAX_LONG_JOB_SECONDS:
+        raise ValueError("invalid maintenance timeout")
+    max_jobs = payload.get("max_jobs", 1)
+    if type(max_jobs) is not int or not 1 <= max_jobs <= _MAX_SCAN:
+        raise ValueError("invalid maintenance bounds")
+    deadline = time.monotonic() + timeout
     runtime = build_runtime(None, None)
     try:
-        result = drain(runtime, timeout_seconds=max(1, min(timeout - 30, 145)), max_jobs=max_jobs)
+        remaining = deadline - time.monotonic()
+        if remaining <= MAINTENANCE_PUBLICATION_RESERVE_SECONDS:
+            return {"processed": 0, "jobs": [], "publication": {"status": "deferred"}}
+        drain_budget = min(
+            MAX_LONG_JOB_SECONDS, remaining - MAINTENANCE_PUBLICATION_RESERVE_SECONDS,
+        )
+        if drain_budget < 1:
+            return {"processed": 0, "jobs": [], "publication": {"status": "deferred"}}
+        result = drain(runtime, timeout_seconds=drain_budget, max_jobs=max_jobs)
+        if deadline - time.monotonic() < MAINTENANCE_PUBLICATION_RESERVE_SECONDS:
+            result["publication"] = {"status": "deferred"}
+            return result
         from zont_analyzer.application.publication import publish_reports
 
         result["publication"] = publish_reports(runtime, batch_size=8)

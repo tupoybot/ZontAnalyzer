@@ -27,6 +27,7 @@ from zont_analyzer.application.period_schedule import (
     seasonal_daily_signature,
 )
 from zont_analyzer.application.pilot import _report_source_event_revision
+from zont_analyzer.cloud.limits import DEFAULT_LONG_JOB_SECONDS, MAX_LONG_JOB_SECONDS
 from zont_analyzer.cloud.report_jobs import MIN_COLLECTION_SECONDS, ReportJobRunner
 from zont_analyzer.domain import Report
 from zont_analyzer.domain.periods import Period, calendar_period, midnight
@@ -117,8 +118,10 @@ class ProductionScheduler:
         self.runtime, self.now, self.monotonic = runtime, now, monotonic
         self.runner = runner or ReportJobRunner(runtime, now=now, monotonic=monotonic, publish=False)
 
-    def run(self, *, timeout_seconds: float = 180) -> dict[str, Any]:
-        if not 1 <= timeout_seconds <= 180:
+    def run(
+        self, *, timeout_seconds: float = DEFAULT_LONG_JOB_SECONDS,
+    ) -> dict[str, Any]:
+        if not 1 <= timeout_seconds <= MAX_LONG_JOB_SECONDS:
             raise ValueError("invalid scheduler timeout")
         deadline = self.monotonic() + timeout_seconds - 5
         owner = str(uuid.uuid4())
@@ -311,7 +314,8 @@ class ProductionScheduler:
             save()
         assert period is not None
         result = self.runner.run_scheduled(
-            period, use_ai=use_ai, timeout_seconds=max(1, min(180, deadline - self.monotonic())),
+            period, use_ai=use_ai,
+            timeout_seconds=max(1, min(MAX_LONG_JOB_SECONDS, deadline - self.monotonic())),
         )
         if result["status"] in {"done", "stored_imported"}:
             state.pop(lane + "_pending", None)
@@ -327,8 +331,8 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
     started = time.monotonic()
     if set(payload) - {"_runtime_timeout_seconds"}:
         raise ValueError("scheduler payload must be empty")
-    timeout = float(payload.get("_runtime_timeout_seconds", 180))
-    if not 1 <= timeout <= 180:
+    timeout = float(payload.get("_runtime_timeout_seconds", DEFAULT_LONG_JOB_SECONDS))
+    if not 1 <= timeout <= MAX_LONG_JOB_SECONDS:
         raise ValueError("invalid scheduler timeout")
     runtime = build_runtime(None, None)
     try:

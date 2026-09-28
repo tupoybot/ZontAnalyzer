@@ -65,7 +65,7 @@ def test_idle_or_busy_timer_does_not_erase_previous_lane_failure(monkeypatch) ->
     assert measurements == []
 
 
-@pytest.mark.parametrize(("startup_seconds", "remaining"), [(45.0, 135.0), (179.5, None)])
+@pytest.mark.parametrize(("startup_seconds", "remaining"), [(45.0, 525.0), (569.5, None)])
 def test_runtime_initialization_consumes_the_same_outer_budget(monkeypatch, startup_seconds, remaining) -> None:
     runtime = Mock()
     monkeypatch.setattr(scheduler, "build_runtime", Mock(return_value=runtime))
@@ -76,9 +76,22 @@ def test_runtime_initialization_consumes_the_same_outer_budget(monkeypatch, star
     monkeypatch.setattr(scheduler, "ProductionScheduler", constructor)
     if remaining is None:
         with pytest.raises(TimeoutError, match="startup exhausted"):
-            scheduler.execute({"_runtime_timeout_seconds": 180})
+            scheduler.execute({"_runtime_timeout_seconds": 570})
         constructor.assert_not_called()
     else:
-        assert scheduler.execute({"_runtime_timeout_seconds": 180}) == {"status": "idle"}
+        assert scheduler.execute({"_runtime_timeout_seconds": 570}) == {"status": "idle"}
         runner.run.assert_called_once_with(timeout_seconds=remaining)
     runtime.db.close.assert_called_once()
+
+
+def test_scheduler_accepts_570_and_rejects_571(monkeypatch) -> None:
+    service = _scheduler(monkeypatch)
+    assert service.run(timeout_seconds=570)["status"] == "idle"
+    with pytest.raises(ValueError, match="invalid scheduler timeout"):
+        service.run(timeout_seconds=571)
+
+    build_runtime = Mock()
+    monkeypatch.setattr(scheduler, "build_runtime", build_runtime)
+    with pytest.raises(ValueError, match="invalid scheduler timeout"):
+        scheduler.execute({"_runtime_timeout_seconds": 571})
+    build_runtime.assert_not_called()

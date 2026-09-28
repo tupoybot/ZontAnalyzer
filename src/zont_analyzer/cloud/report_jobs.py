@@ -31,6 +31,7 @@ from zont_analyzer.adapters.ydb.jobs import JobLease, JobLeaseRepository
 from zont_analyzer.adapters.zont_readonly import ZontReadOnlyClient
 from zont_analyzer.application.collection import CollectionService
 from zont_analyzer.cloud.egress import ReportTransport
+from zont_analyzer.cloud.limits import DEFAULT_LONG_JOB_SECONDS, MAX_LONG_JOB_SECONDS
 from zont_analyzer.domain import Report
 from zont_analyzer.domain.periods import Period as CalendarPeriod
 from zont_analyzer.observability import span
@@ -142,12 +143,15 @@ class ReportJobRunner:
         key = f"report:{request.kind}:{int(start.timestamp())}:{int(end.timestamp())}:{mode}:report-v2"
         return Period(request.kind, start, end, key)
 
-    def run(self, payload: dict[str, Any], *, timeout_seconds: float = 180) -> dict[str, Any]:
+    def run(
+        self, payload: dict[str, Any], *, timeout_seconds: float = DEFAULT_LONG_JOB_SECONDS,
+    ) -> dict[str, Any]:
         request = ReportRequest.model_validate(payload)
         return self._run(request, self.period(request), timeout_seconds=timeout_seconds)
 
     def run_scheduled(
-        self, period: CalendarPeriod, *, use_ai: bool, timeout_seconds: float = 180,
+        self, period: CalendarPeriod, *, use_ai: bool,
+        timeout_seconds: float = DEFAULT_LONG_JOB_SECONDS,
     ) -> dict[str, Any]:
         key = f"scheduled:{period.kind}:{int(period.start.timestamp())}:{int(period.observed_end.timestamp())}:v1"
         return self._run(ScheduledRequest(period, use_ai),
@@ -157,7 +161,7 @@ class ReportJobRunner:
     def _run(
         self, request: ReportRequest | ScheduledRequest, period: Period, *, timeout_seconds: float,
     ) -> dict[str, Any]:
-        if not 1 <= timeout_seconds <= 180:
+        if not 1 <= timeout_seconds <= MAX_LONG_JOB_SECONDS:
             raise ValueError("invalid report timeout")
         reference = self.now().astimezone(UTC)
         due = period.end + (timedelta(minutes=self.runtime.config.pilot.daily_report_delay_minutes)
@@ -446,9 +450,17 @@ class ReportJobRunner:
 
 
 @span("zont_report")
-def execute(payload: dict[str, Any], *, timeout_seconds: float = 180) -> dict[str, Any]:
+def execute(
+    payload: dict[str, Any], *, timeout_seconds: float = DEFAULT_LONG_JOB_SECONDS,
+) -> dict[str, Any]:
+    if not 1 <= timeout_seconds <= MAX_LONG_JOB_SECONDS:
+        raise ValueError("invalid report timeout")
+    started = time.monotonic()
     runtime = build_runtime(None, None)
     try:
-        return ReportJobRunner(runtime).run(payload, timeout_seconds=timeout_seconds)
+        remaining = timeout_seconds - (time.monotonic() - started)
+        if remaining < 1:
+            raise TimeoutError("report startup exhausted invocation budget")
+        return ReportJobRunner(runtime).run(payload, timeout_seconds=remaining)
     finally:
         runtime.db.close()

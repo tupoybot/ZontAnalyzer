@@ -22,6 +22,7 @@ from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from zont_analyzer.cloud import auth
+from zont_analyzer.cloud.limits import DEFAULT_LONG_JOB_SECONDS, MAX_LONG_JOB_SECONDS
 
 MAX_BODY_BYTES = 65_536
 MAX_RESULT_BYTES = 1_048_576
@@ -58,7 +59,7 @@ class RuntimeConfig:
     revision: str
     authorization: str
     xray_proxy_port: int = 1080
-    report_timeout_seconds: float = 180
+    report_timeout_seconds: float = DEFAULT_LONG_JOB_SECONDS
     oidc: auth.OidcConfig | None = None
     writes_enabled: bool = True
 
@@ -76,10 +77,13 @@ class RuntimeConfig:
         try:
             port = int(os.environ.get("PORT", "8080"))
             timeout = float(os.environ.get("CLOUD_JOB_TIMEOUT_SECONDS", "15"))
-            report_timeout = float(os.environ.get("CLOUD_REPORT_TIMEOUT_SECONDS", "180"))
+            report_timeout = float(os.environ.get(
+                "CLOUD_REPORT_TIMEOUT_SECONDS", str(DEFAULT_LONG_JOB_SECONDS),
+            ))
         except ValueError as exc:
             raise ValueError("invalid cloud runtime numeric configuration") from exc
-        if not 1 <= port <= 65535 or not 1 <= timeout <= 20 or not 1 <= report_timeout <= 180:
+        if (not 1 <= port <= 65535 or not 1 <= timeout <= 20
+                or not 1 <= report_timeout <= MAX_LONG_JOB_SECONDS):
             raise ValueError("cloud runtime limits are outside their allowed range")
         revision = os.environ.get("CLOUD_REVISION", "unknown")
         if not revision or len(revision) > 128:

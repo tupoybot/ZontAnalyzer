@@ -134,7 +134,7 @@ run "isolated_defaults" {
     error_message = "The initial probe must have bounded invocation resources."
   }
   assert {
-    condition     = yandex_serverless_container.application.memory == 512 && yandex_serverless_container.application.cores == 1 && yandex_serverless_container.application.core_fraction == 100 && yandex_serverless_container.application.concurrency == 2 && yandex_serverless_container.application.execution_timeout == "210s"
+    condition     = yandex_serverless_container.application.memory == 512 && yandex_serverless_container.application.cores == 1 && yandex_serverless_container.application.core_fraction == 100 && yandex_serverless_container.application.concurrency == 2 && yandex_serverless_container.application.execution_timeout == "600s"
     error_message = "The application must have the bounded report runtime budget."
   }
   assert {
@@ -356,7 +356,7 @@ run "gateway_routes_use_the_correct_container" {
     error_message = "The runtime needs upload access while the existing viewer binding remains in place."
   }
   assert {
-    condition     = yandex_api_gateway.probe.execution_timeout == "210" && yandex_serverless_container.application.image[0].environment.CLOUD_REPORT_TIMEOUT_SECONDS == "180"
+    condition     = yandex_api_gateway.probe.execution_timeout == "600" && yandex_serverless_container.application.image[0].environment.CLOUD_REPORT_TIMEOUT_SECONDS == "570"
     error_message = "The gateway and container must allow the bounded report job to finish."
   }
 }

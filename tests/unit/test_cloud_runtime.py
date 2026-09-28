@@ -144,6 +144,35 @@ def test_write_gate_rejects_invalid_environment(monkeypatch: pytest.MonkeyPatch,
         RuntimeConfig.from_environment()
 
 
+@pytest.mark.parametrize(("report_timeout", "accepted"), [(570, True), (571, False)])
+def test_report_timeout_limit_does_not_change_short_job_limit(
+    monkeypatch: pytest.MonkeyPatch, report_timeout: int, accepted: bool,
+) -> None:
+    monkeypatch.setenv("CLOUD_ENVIRONMENT", "dev")
+    monkeypatch.setenv("CLOUD_WEB_CREDENTIALS", "test-user:test-password")
+    monkeypatch.delenv("CLOUD_JOB_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("CLOUD_REPORT_TIMEOUT_SECONDS", str(report_timeout))
+    if accepted:
+        config = RuntimeConfig.from_environment()
+        assert config.report_timeout_seconds == 570
+        assert config.job_timeout_seconds == 15
+    else:
+        with pytest.raises(ValueError, match="cloud runtime limits"):
+            RuntimeConfig.from_environment()
+
+
+def test_report_timeout_defaults_to_570_while_short_jobs_remain_15(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLOUD_ENVIRONMENT", "dev")
+    monkeypatch.setenv("CLOUD_WEB_CREDENTIALS", "test-user:test-password")
+    monkeypatch.delenv("CLOUD_JOB_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("CLOUD_REPORT_TIMEOUT_SECONDS", raising=False)
+    config = RuntimeConfig.from_environment()
+    assert config.report_timeout_seconds == 570
+    assert config.job_timeout_seconds == 15
+
+
 @pytest.mark.parametrize(
     ("method", "path"),
     [(method, prefix + "/settings") for method in ("POST", "PUT") for prefix in ("/api", "/za/api")]
@@ -358,6 +387,21 @@ def test_reports_route_uses_separate_bounded_budget_and_authorization(
     assert calls == [({**request, "_runtime_timeout_seconds": 180}, 180)]
     _request(instance, credentials, "POST", "/jobs/analytics", _payload())
     assert calls[1][1] == 3
+
+
+def test_reports_route_accepts_long_job_cap_without_raising_short_jobs(
+    server: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance, credentials = server
+    instance.config = replace(instance.config, report_timeout_seconds=570)
+    calls: list[tuple[float, dict[str, Any]]] = []
+    monkeypatch.setattr(runtime_module, "run_bounded", lambda _fn, payload, timeout, _cancelled:
+                        calls.append((timeout, payload)) or {"status": "pending"})
+    status, _body = _request(instance, credentials, "POST", "/jobs/reports",
+                             {"kind": "weekly", "year": 2026, "week": 38})
+    assert status == 200
+    assert calls == [(570, {"kind": "weekly", "year": 2026, "week": 38,
+                            "_runtime_timeout_seconds": 570})]
 
 
 @pytest.mark.parametrize("path", ["/jobs/scheduler", "/internal/scheduler"])

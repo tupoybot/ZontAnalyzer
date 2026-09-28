@@ -5,7 +5,7 @@ resource "yandex_serverless_container" "application" {
   cores              = 1
   core_fraction      = 100
   concurrency        = 2
-  execution_timeout  = "210s"
+  execution_timeout  = "600s"
   service_account_id = var.runtime_service_account_id
 
   metadata_options {
@@ -25,7 +25,7 @@ resource "yandex_serverless_container" "application" {
       CLOUD_REVISION                = var.application_revision
       CLOUD_WRITES_ENABLED          = tostring(var.application_writes_enabled)
       CLOUD_JOB_TIMEOUT_SECONDS     = "15"
-      CLOUD_REPORT_TIMEOUT_SECONDS  = "180"
+      CLOUD_REPORT_TIMEOUT_SECONDS  = "570"
       CLOUD_OPENAI_MODEL            = var.openai_smoke_model
       CLOUD_OPENAI_ACCESS_CONFIRMED = var.openai_access_confirmed ? "true" : "false"
       CLOUD_PUBLICATION_BUCKET      = yandex_storage_bucket.publication.bucket
