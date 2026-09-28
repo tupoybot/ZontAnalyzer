@@ -1,6 +1,11 @@
 locals {
   name                 = "zont-${var.environment}"
-  application_database = var.enable_production_database ? yandex_ydb_database_serverless.production[0] : yandex_ydb_database_serverless.probe
+  application_database = var.enable_production_database ? yandex_ydb_database_serverless.production[0] : yandex_ydb_database_serverless.probe[0]
+}
+
+moved {
+  from = yandex_ydb_database_serverless.probe
+  to   = yandex_ydb_database_serverless.probe[0]
 }
 
 resource "yandex_container_registry" "project" {
@@ -32,6 +37,7 @@ resource "yandex_lockbox_secret_iam_binding" "runtime" {
 }
 
 resource "yandex_ydb_database_serverless" "probe" {
+  count               = var.retain_development_database ? 1 : 0
   folder_id           = data.yandex_resourcemanager_folder.project.id
   name                = "${local.name}-isolated"
   deletion_protection = var.deletion_protection

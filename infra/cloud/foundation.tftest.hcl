@@ -25,9 +25,42 @@ run "production_database_is_separate_and_capped" {
     error_message = "Application credentials and connection must select the same production database."
   }
   assert {
-    condition     = yandex_ydb_database_serverless.probe.name == "zont-dev-isolated" && yandex_serverless_container.application.image[0].environment.CLOUD_WRITES_ENABLED == "false" && length(yandex_function_trigger.scheduler) == 0
+    condition     = yandex_ydb_database_serverless.probe[0].name == "zont-dev-isolated" && var.retain_development_database && yandex_serverless_container.application.image[0].environment.CLOUD_WRITES_ENABLED == "false" && length(yandex_function_trigger.scheduler) == 0
     error_message = "Creating production must retain development data and permit a closed write gate."
   }
+}
+
+run "production_can_omit_development_database" {
+  command = plan
+  variables {
+    enable_production_database  = true
+    retain_development_database = false
+  }
+  override_resource {
+    target          = yandex_ydb_database_serverless.production[0]
+    override_during = plan
+    values = {
+      id               = "test-production-database"
+      database_path    = "/test/production"
+      ydb_api_endpoint = "production.example:2135"
+    }
+  }
+  assert {
+    condition     = length(yandex_ydb_database_serverless.probe) == 0
+    error_message = "The original development database must be omitted when retention is disabled."
+  }
+  assert {
+    condition     = yandex_serverless_container.application.image[0].environment.YDB_DATABASE == "/test/production" && yandex_serverless_container.application.image[0].environment.YDB_ENDPOINT == "grpcs://production.example:2135" && yandex_ydb_database_iam_binding.application.database_id == "test-production-database"
+    error_message = "The application and IAM binding must continue to select production when development is omitted."
+  }
+}
+
+run "development_database_cannot_be_omitted_without_production" {
+  command = plan
+  variables {
+    retain_development_database = false
+  }
+  expect_failures = [var.retain_development_database]
 }
 
 run "production_quota_increase_is_not_implicit" {
@@ -84,7 +117,7 @@ run "isolated_defaults" {
   }
 
   assert {
-    condition     = yandex_ydb_database_serverless.probe.deletion_protection && yandex_cm_certificate.probe.deletion_protection
+    condition     = yandex_ydb_database_serverless.probe[0].deletion_protection && yandex_cm_certificate.probe.deletion_protection
     error_message = "Persistent resources must be protected by default."
   }
 
@@ -457,7 +490,7 @@ run "explicit_test_teardown" {
     deletion_protection = false
   }
   assert {
-    condition     = !yandex_ydb_database_serverless.probe.deletion_protection && !yandex_cm_certificate.probe.deletion_protection
+    condition     = !yandex_ydb_database_serverless.probe[0].deletion_protection && !yandex_cm_certificate.probe.deletion_protection
     error_message = "An explicitly selected test stack must support controlled teardown."
   }
 }
@@ -540,7 +573,7 @@ run "migration_capacity_remains_capped" {
     ydb_storage_size_limit_gib   = 5
   }
   assert {
-    condition     = one(yandex_ydb_database_serverless.probe.serverless_database).enable_throttling_rcu_limit && one(yandex_ydb_database_serverless.probe.serverless_database).throttling_rcu_limit == 100 && one(yandex_ydb_database_serverless.probe.serverless_database).storage_size_limit == 5 && one(yandex_ydb_database_serverless.probe.serverless_database).provisioned_rcu_limit == 0
+    condition     = one(yandex_ydb_database_serverless.probe[0].serverless_database).enable_throttling_rcu_limit && one(yandex_ydb_database_serverless.probe[0].serverless_database).throttling_rcu_limit == 100 && one(yandex_ydb_database_serverless.probe[0].serverless_database).storage_size_limit == 5 && one(yandex_ydb_database_serverless.probe[0].serverless_database).provisioned_rcu_limit == 0
     error_message = "Migration capacity must remain explicitly capped without provisioned idle capacity."
   }
 }

@@ -167,6 +167,16 @@ variable "enable_production_database" {
   default     = false
 }
 
+variable "retain_development_database" {
+  description = "Keep the original development database after switching the application to production."
+  type        = bool
+  default     = true
+  validation {
+    condition     = var.retain_development_database || var.enable_production_database
+    error_message = "The development database can be omitted only when the production database is enabled."
+  }
+}
+
 variable "production_database_name" {
   description = "Name of the separate production database."
   type        = string
