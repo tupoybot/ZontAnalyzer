@@ -16,7 +16,11 @@ import httpx
 from openai import OpenAI
 
 from zont_analyzer.adapters.openai.model_catalog import OpenAIModelCatalog
-from zont_analyzer.adapters.openai.provider import AIRequestPending, OpenAIAnalyst
+from zont_analyzer.adapters.openai.provider import (
+    AIRequestDeferred,
+    AIRequestPending,
+    OpenAIAnalyst,
+)
 from zont_analyzer.adapters.ydb.jobs import JobLease, JobLeaseRepository, _job
 from zont_analyzer.application.ai_maintenance import local_assessments
 from zont_analyzer.application.ai_settings import AISettingsStore
@@ -135,7 +139,9 @@ def review_status(runtime: Runtime) -> dict[str, Any]:
     return _status(lease, _read_checkpoint(lease))
 
 
-def _run_regeneration(runtime: Runtime, lease: JobLease, payload: dict[str, Any]) -> dict[str, Any]:
+def _run_regeneration(
+    runtime: Runtime, lease: JobLease, payload: dict[str, Any], *, deadline: float | None = None,
+) -> dict[str, Any]:
     key = "report-write:" + str(payload["report_id"])
     parent_remaining = max(
         1, math.ceil((lease.lease_until - time.time_ns() // 1_000) / 1_000_000),
@@ -149,13 +155,14 @@ def _run_regeneration(runtime: Runtime, lease: JobLease, payload: dict[str, Any]
     if write is None:
         raise ReviewLeaseBusy()
     try:
-        return _regenerate_owned(runtime, lease, payload, write)
+        return _regenerate_owned(runtime, lease, payload, write, deadline=deadline)
     finally:
         runtime.db.jobs.release(key, write.owner, write.attempt)
 
 
 def _regenerate_owned(
     runtime: Runtime, lease: JobLease, payload: dict[str, Any], write: JobLease,
+    *, deadline: float | None = None,
 ) -> dict[str, Any]:
     report_id = str(payload["report_id"])
     old = runtime.db.report(report_id)
@@ -188,6 +195,10 @@ def _regenerate_owned(
             ))
             api_key = runtime.loaded.secrets.openai_api_key
             assert api_key is not None
+            service.analyst.dispatch_deadline = deadline
+            unresolved = service.analyst.ledger.pending_for_job(report_id)
+            if unresolved is not None:
+                raise AIRequestPending(unresolved["key"], unresolved["status"])
             service.analyst.client = OpenAI(
                 api_key=api_key.get_secret_value(), max_retries=0,
                 timeout=120.0, http_client=http_client,
@@ -280,9 +291,24 @@ def drain(
         if not payload:
             runtime.db.jobs.release(key, owner, lease.attempt)
             continue
+        if payload.get("status") == "reconciliation_required":
+            runtime.db.jobs.release(key, owner, lease.attempt)
+            continue
         try:
             outcome = (_run_review(runtime, lease, payload) if key == _REVIEW_KEY
-                       else _run_regeneration(runtime, lease, payload))
+                       else _run_regeneration(runtime, lease, payload, deadline=deadline))
+        except AIRequestDeferred:
+            # No request crossed the dispatch gate; preserve the original job
+            # identity and let a later invocation retry with a full time budget.
+            deferred = {field: value for field, value in payload.items()
+                        if field in {"report_id", "question", "request_nonce", "kind"}}
+            deferred.update({"status": "queued", "updated_at": _now()})
+            if not runtime.db.jobs.checkpoint(key, owner, lease.attempt,
+                                              json.dumps(deferred, ensure_ascii=False, sort_keys=True)):
+                raise RuntimeError("job ownership expired") from None
+            runtime.db.jobs.release(key, owner, lease.attempt)
+            results.append({"job_key": key, "status": "pending"})
+            continue
         except AIRequestPending:
             # A provider response may have been lost after dispatch. Keep the
             # original request identity so later reconciliation cannot send

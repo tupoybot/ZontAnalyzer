@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from tests.ydb_support import make_database
-from zont_analyzer.adapters.openai.provider import AIRequestPending
+from zont_analyzer.adapters.openai.provider import AIRequestDeferred, AIRequestPending
 from zont_analyzer.cloud.report_jobs import ReportJobRunner, ReportRequest
 from zont_analyzer.config import AppConfig, LoadedConfig, Secrets
 from zont_analyzer.runtime import Runtime
@@ -259,6 +259,51 @@ def test_unknown_ai_request_leaves_job_pending_for_reconciliation(
     assert result["request_key"] == "request-key"
     job = runner.jobs.get(result["job_key"])
     assert job is not None and job.state != "done"
+
+
+@pytest.mark.ydb
+def test_ai_dispatch_guard_reserves_150_seconds_before_report_analysis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zont_analyzer.application.ai_settings import AISettingsStore
+
+    db, runner, _client = _runner(tmp_path)
+    payload = {"kind": "weekly", "year": 2026, "week": 38, "use_ai": True}
+    _seed_archive(db, runner, payload)
+    monkeypatch.setattr(AISettingsStore, "effective_config", lambda _self: AppConfig.model_validate(
+        {"openai": {"enabled": True}},
+    ))
+    runner.monotonic = lambda: 0.0
+    period = runner.period(ReportRequest.model_validate(payload))
+    lease = db.jobs.acquire(period.job_key, "seed-phase", 60)
+    assert lease is not None
+    assert db.jobs.checkpoint(period.job_key, lease.owner, lease.attempt,
+                              json.dumps({"phase": "analyze"}))
+    assert db.jobs.release(period.job_key, lease.owner, lease.attempt)
+
+    result = runner.run(payload, timeout_seconds=145)
+
+    assert result == {"status": "pending", "phase": "analyze",
+                      "job_key": runner.period(ReportRequest.model_validate(payload)).job_key}
+    assert db.storage.execute("SELECT id FROM reports;")[0].rows == []
+
+
+@pytest.mark.ydb
+def test_provider_deadline_deferral_stays_pending_without_losing_report_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db, runner, _client = _runner(tmp_path)
+    payload = {"kind": "daily", "date": "2026-09-23", "use_ai": False}
+    _seed_archive(db, runner, payload)
+    assert runner.run(payload)["phase"] == "analyze"
+    monkeypatch.setattr(runner, "_advance", lambda *_args: (_ for _ in ()).throw(
+        AIRequestDeferred("insufficient time"),
+    ))
+
+    result = runner.run(payload)
+
+    assert result["status"] == "pending" and result["phase"] == "analyze"
+    assert runner.jobs.get(runner.period(ReportRequest.model_validate(payload)).job_key).state != "done"
 
 
 @pytest.mark.ydb

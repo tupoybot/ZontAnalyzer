@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections import Counter
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
@@ -30,6 +31,8 @@ SCHEMA_VERSION = "analysis-result-v1"
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
 _PACKET_CONTENT_MAX_BYTES = 60 * 1024
 _PACKET_ACCOUNTING_RESERVE_BYTES = 2 * 1024
+OPENAI_REQUEST_TIMEOUT_SECONDS = 120.0
+AI_POST_REQUEST_RESERVE_SECONDS = 30.0
 
 SYSTEM_PROMPT = """You are a read-only heating telemetry analyst.
 Facts are only supplied observations, derived metrics/events and temporal evidence. Never invent numbers.
@@ -350,6 +353,10 @@ class AIRequestPending(RuntimeError):
         super().__init__("The OpenAI request has an unknown result or is in progress; reconciliation is required")
 
 
+class AIRequestDeferred(RuntimeError):
+    """The invocation has too little time left to safely dispatch an AI request."""
+
+
 class OpenAIAnalyst:
     def __init__(self, *, api_key: str, config: AppConfig, db: Database):
         # Keep construction lazy: importing the provider must remain usable in
@@ -359,6 +366,14 @@ class OpenAIAnalyst:
         self.config = config
         self.db = db
         self.ledger = AiUsageRepository(db.storage)
+        self.dispatch_deadline: float | None = None
+
+    def _require_dispatch_time(self) -> None:
+        if self.dispatch_deadline is None:
+            return
+        required = OPENAI_REQUEST_TIMEOUT_SECONDS + AI_POST_REQUEST_RESERVE_SECONDS
+        if self.dispatch_deadline - time.monotonic() < required:
+            raise AIRequestDeferred("insufficient invocation time for bounded AI request and save")
 
     def analyze(self, packet: dict[str, Any]) -> AnalysisResult:
         encoded = json.dumps(packet, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -409,8 +424,12 @@ class OpenAIAnalyst:
             if reservation is not None:
                 request_key = legacy_request_key
         if reservation is None:
+            # Avoid leaving a token reservation behind when the invocation is
+            # already too close to its hard deadline to finish the request/save.
+            self._require_dispatch_time()
+            ledger_job_key = _report_id_from_packet(packet) or f"analysis:{digest}"
             reservation = self.ledger.reserve(
-                request_key, _report_id_from_packet(packet) or f"analysis:{digest}",
+                request_key, ledger_job_key,
                 {"input_hash": digest, "prompt_version": PROMPT_VERSION,
                  "model": model, "reasoning_effort": reasoning_effort,
                  "settings_version": settings_version,
@@ -426,12 +445,22 @@ class OpenAIAnalyst:
                 detail = str(reservation.get("error") or "unknown failure")
                 raise RuntimeError(f"The same OpenAI request previously failed: {detail}")
             if reservation.get("status") != "prepared":
-                raise AIRequestPending(request_key, str(reservation.get("status")))
+                raise AIRequestPending(str(reservation.get("key") or request_key),
+                                       str(reservation.get("status")))
             # Prepared means no caller has crossed the durable dispatch gate.
             # A retry after a crash may compete for that same gate without
             # reserving budget again; exactly one caller can mark it sent.
+        # Recheck after the durable reservation in case database work consumed
+        # the remaining margin. A prepared call remains safe to resume later.
+        self._require_dispatch_time()
         if not self.ledger.mark_sent(request_key):
-            raise AIRequestPending(request_key, "sent")
+            unresolved = self.ledger.pending_for_job(
+                _report_id_from_packet(packet) or f"analysis:{digest}",
+            )
+            raise AIRequestPending(
+                unresolved["key"] if unresolved is not None else request_key,
+                unresolved["status"] if unresolved is not None else "sent",
+            )
 
         response: Any = None
         try:

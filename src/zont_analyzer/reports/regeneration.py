@@ -49,7 +49,7 @@ def render_regeneration(report: object, feedback_api_base_url: str = "/api") -> 
   let pollInFlight = null;
   let pollVersion = 0;
   let submitting = false;
-  const show = (s, error) => {{ status.textContent = s === 'queued' ? 'В очереди…' : s === 'running' ? 'Выполняется…' : s === 'success' ? 'Готово' : s === 'error' ? ('Ошибка пересчёта' + (error ? ': ' + error : '')) : ''; }};
+  const show = (s, error) => {{ status.textContent = s === 'queued' ? 'В очереди…' : s === 'running' ? 'Выполняется…' : s === 'success' ? 'Готово' : s === 'reconciliation_required' ? 'Ответ AI не удалось подтвердить. Повторная отправка приостановлена.' : s === 'error' ? ('Ошибка пересчёта' + (error ? ': ' + error : '')) : ''; }};
   const poll = () => {{
     if (!panel.open || submitting) return Promise.resolve();
     if (pollInFlight) return pollInFlight;

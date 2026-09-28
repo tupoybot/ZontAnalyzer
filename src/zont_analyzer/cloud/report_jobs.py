@@ -22,8 +22,11 @@ from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from zont_analyzer.adapters.openai.provider import (
+    AI_POST_REQUEST_RESERVE_SECONDS,
+    OPENAI_REQUEST_TIMEOUT_SECONDS,
     PROMPT_VERSION,
     SCHEMA_VERSION,
+    AIRequestDeferred,
     AIRequestPending,
     OpenAIAnalyst,
 )
@@ -38,7 +41,7 @@ from zont_analyzer.domain.periods import Period as CalendarPeriod
 from zont_analyzer.observability import span
 from zont_analyzer.runtime import Runtime, build_runtime
 
-MIN_AI_SECONDS = 135
+MIN_AI_SECONDS = OPENAI_REQUEST_TIMEOUT_SECONDS + AI_POST_REQUEST_RESERVE_SECONDS
 MIN_COLLECTION_SECONDS = 20
 
 
@@ -205,6 +208,9 @@ class ReportJobRunner:
                 self._write_fence = (write.job_key, write.owner, write.attempt)
                 try:
                     return self._advance(request, period, lease, deadline)
+                except AIRequestDeferred:
+                    return {"status": "pending", "phase": "analyze",
+                            "job_key": period.job_key, "reason": "insufficient_time"}
                 except AIRequestPending as exc:
                     return {"status": "reconciliation_required", "phase": "analyze",
                             "job_key": period.job_key, "request_key": exc.request_key,
@@ -374,14 +380,17 @@ class ReportJobRunner:
                     raise RuntimeError("OpenAI is enabled but no API key is configured")
                 if os.environ.get("CLOUD_OPENAI_ACCESS_CONFIRMED") != "true":
                     raise PermissionError("OpenAI access conditions are not confirmed")
+                service.analyst.dispatch_deadline = deadline
                 transport = ReportTransport()
                 http_client = stack.enter_context(httpx.Client(
-                    transport=transport, follow_redirects=False, trust_env=False, timeout=120.0,
+                    transport=transport, follow_redirects=False, trust_env=False,
+                    timeout=OPENAI_REQUEST_TIMEOUT_SECONDS,
                 ))
                 api_key = self.runtime.loaded.secrets.openai_api_key
                 assert api_key is not None
                 service.analyst.client = OpenAI(
-                    api_key=api_key.get_secret_value(), max_retries=0, timeout=120.0,
+                    api_key=api_key.get_secret_value(), max_retries=0,
+                    timeout=OPENAI_REQUEST_TIMEOUT_SECONDS,
                     http_client=http_client,
                 )
             if isinstance(request, ScheduledRequest):

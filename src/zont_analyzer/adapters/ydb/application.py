@@ -8,6 +8,8 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import ydb  # type: ignore[import-untyped]
+
 from zont_analyzer.domain import Report, SourceEvent
 
 from .ai_usage import AiUsageRepository
@@ -165,8 +167,20 @@ class Database:
                 if row["quality"] == "valid" and row["value_text"] is not None]
 
     def fetch_sample_timestamps(self, series_id: int, start: datetime, end: datetime) -> list[datetime]:
-        return [datetime.fromtimestamp(row["timestamp_utc"], UTC) for row in self._samples(series_id, start, end)
-                if row["quality"] == "valid"]
+        # ReadTable is intended for large ranges and avoids the per-row YQL
+        # read charge when reliability inspects the device's history.
+        if end <= start:
+            return []
+        key_type = ydb.TupleType().add_element(ydb.PrimitiveType.Int64).add_element(ydb.PrimitiveType.Int64)
+        key_range = ydb.KeyRange(
+            ydb.KeyBound.inclusive((series_id, utc_seconds(start)), key_type),
+            ydb.KeyBound.exclusive((series_id, utc_seconds(end)), key_type),
+        )
+        return self.storage.read_table(
+            "telemetry_samples", columns=["timestamp_utc", "quality"], key_range=key_range,
+            consume=lambda rows: [datetime.fromtimestamp(row.timestamp_utc, UTC)
+                                  for row in rows if row.quality == "valid"],
+        )
 
     def fetch_device_sample_timestamps(self, device_id: str, start: datetime, end: datetime) -> list[datetime]:
         return sorted({timestamp for series in self.list_series() if series["device_id"] == device_id

@@ -90,7 +90,7 @@ def test_expired_worker_is_reclaimed_and_result_remains_durable(
     storage.rows[lease.job_key] = JobLease(
         lease.job_key, lease.owner, lease.attempt, 0, "active", lease.checkpoint,
     )
-    monkeypatch.setattr(user_jobs, "_run_regeneration", lambda *_args: {
+    monkeypatch.setattr(user_jobs, "_run_regeneration", lambda *_args, **_kwargs: {
         "report_id": "daily-1", "status": "success", "updated_at": "2026-09-25T00:00:00+00:00",
     })
     result = user_jobs.drain(runtime, timeout_seconds=145, max_jobs=1)
@@ -98,6 +98,32 @@ def test_expired_worker_is_reclaimed_and_result_remains_durable(
     assert user_jobs.regeneration_status(_Runtime(storage), "daily-1")["status"] == "success"
     again = user_jobs.enqueue_regeneration(_Runtime(storage), "daily-1")
     assert again["status"] == "queued"
+
+
+def test_reconciliation_required_job_does_not_starve_next_pending_key(
+    storage: _Storage, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _Runtime(storage)
+    unresolved_key = "m5:regenerate:a"
+    ready_key = "m5:regenerate:b"
+    storage.rows[unresolved_key] = JobLease(
+        unresolved_key, "", 1, 0, "released",
+        json.dumps({"report_id": "a", "status": "reconciliation_required"}),
+    )
+    storage.rows[ready_key] = JobLease(
+        ready_key, "", 1, 0, "released", json.dumps({"report_id": "b", "status": "queued"}),
+    )
+    processed: list[str] = []
+
+    def run(_runtime: Any, lease: JobLease, payload: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        processed.append(lease.job_key)
+        return {"report_id": payload["report_id"], "status": "success"}
+
+    monkeypatch.setattr(user_jobs, "_run_regeneration", run)
+    result = user_jobs.drain(runtime, timeout_seconds=145, max_jobs=1)
+
+    assert result["processed"] == 1
+    assert processed == [ready_key]
 
 
 def test_failed_work_exposes_generic_status_and_can_be_requeued(
@@ -114,6 +140,27 @@ def test_failed_work_exposes_generic_status_and_can_be_requeued(
     assert status["status"] == "error"
     assert "private provider credential" not in str(status)
     assert user_jobs.enqueue_regeneration(_Runtime(storage), "daily-1")["status"] == "queued"
+
+
+def test_ai_time_deferral_keeps_original_request_queued(
+    storage: _Storage, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _Runtime(storage)
+    user_jobs.enqueue_regeneration(runtime, "daily-1")
+    key = "m5:regenerate:daily-1"
+    nonce = json.loads(storage.rows[key].checkpoint or "{}")["request_nonce"]
+
+    def defer(*_args: Any, **_kwargs: Any) -> Any:
+        raise user_jobs.AIRequestDeferred("too little time")
+
+    monkeypatch.setattr(user_jobs, "_run_regeneration", defer)
+    result = user_jobs.drain(runtime, timeout_seconds=145, max_jobs=1)
+    checkpoint = json.loads(storage.rows[key].checkpoint or "{}")
+
+    assert result["jobs"][0]["status"] == "pending"
+    assert storage.rows[key].state == "released"
+    assert checkpoint["status"] == "queued"
+    assert checkpoint["request_nonce"] == nonce
 
 
 def test_busy_model_review_stays_queued_for_later_timer_retry(
@@ -157,6 +204,7 @@ def test_regeneration_ai_uses_proxy_and_stable_request_nonce(
 
     class Analyst:
         client: Any = None
+        ledger: Any = SimpleNamespace(pending_for_job=lambda _report_id: None)
 
     class Service:
         config = SimpleNamespace(openai=SimpleNamespace(enabled=True))
@@ -208,7 +256,7 @@ def test_drain_accepts_570_and_lease_covers_tail_and_grace(
 
     monkeypatch.setattr(runtime.db.jobs, "acquire", acquire)
     monkeypatch.setattr(user_jobs.time, "monotonic", lambda: 10.0)
-    monkeypatch.setattr(user_jobs, "_run_regeneration", lambda *_args: {"status": "success"})
+    monkeypatch.setattr(user_jobs, "_run_regeneration", lambda *_args, **_kwargs: {"status": "success"})
 
     result = user_jobs.drain(runtime, timeout_seconds=570, max_jobs=1)
     assert result["processed"] == 1

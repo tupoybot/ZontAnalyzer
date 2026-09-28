@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+from zont_analyzer.adapters.ydb.ai_usage import AiUsageRepository
 from zont_analyzer.adapters.ydb.jobs import JobLeaseRepository, UsageLedger
 
 
@@ -134,6 +135,28 @@ def test_llm_dispatch_is_single_winner_and_unknown_is_not_redispatched(
     assert ledger.mark_succeeded(call_key, "reconciled").state == "succeeded"
     with pytest.raises(ValueError):
         ledger.mark_error(call_key, "different terminal result")
+
+
+@pytest.mark.ydb
+def test_ai_reservation_blocks_changed_packet_after_unresolved_dispatch(ydb_database: object) -> None:
+    ledger = AiUsageRepository(ydb_database)  # type: ignore[arg-type]
+    job_key = "weekly-report"
+    assert ledger.reserve("source-one", job_key, {}, budget=1000, estimate=100,
+                          billing_month="2026-09") is None
+    assert ledger.reserve("source-two-prepared", job_key, {}, budget=1000, estimate=100,
+                          billing_month="2026-09") is None
+    assert ledger.mark_sent("source-one")
+    ledger.mark_unknown("source-one", "response lost")
+    assert ledger.mark_sent("source-two-prepared") is False
+
+    pending = ledger.pending_for_job(job_key)
+    assert pending == {"key": "source-one", "status": "unknown"}
+    blocked = ledger.reserve("source-two", job_key, {}, budget=1000, estimate=100,
+                             billing_month="2026-09")
+    assert blocked is not None and blocked["status"] == "unknown"
+    calls = ydb_database.execute("SELECT call_key FROM llm_calls WHERE job_key=$job;",
+                                 {"$job": job_key})[0].rows  # type: ignore[attr-defined]
+    assert {row.call_key for row in calls} == {"source-one", "source-two-prepared"}
 
 
 @pytest.mark.ydb

@@ -6,11 +6,18 @@ import hashlib
 import json
 import logging
 from collections.abc import Collection
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from zont_analyzer.adapters.openai.provider import PROMPT_VERSION, AIRequestPending, Analyst, analysis_packet
+from zont_analyzer.adapters.openai.provider import (
+    PROMPT_VERSION,
+    AIRequestDeferred,
+    AIRequestPending,
+    Analyst,
+    analysis_packet,
+)
 from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.analytics import (
     ReliabilityEvidencePoint,
@@ -55,6 +62,58 @@ logger = logging.getLogger(__name__)
 
 
 CALCULATION_VERSION = "stage9-reliability-v2"
+
+
+def _samples_in_window(
+    samples: list[tuple[datetime, Any]], start: datetime, end: datetime,
+) -> list[tuple[datetime, Any]]:
+    """Slice already-valid samples with the same inclusive/exclusive bounds as YDB."""
+    return [(timestamp, value) for timestamp, value in samples if start <= timestamp < end]
+
+
+@dataclass(frozen=True)
+class _ComparisonReliabilityInputs:
+    """Outer-call history already loaded for bounded intervention comparisons."""
+
+    source_revision: int
+    history_start: datetime
+    end: datetime
+    device_id: str
+    boiler_series_id: int | None
+    status_series_id: int | None
+    boiler_metric_timestamps: list[datetime]
+    zont_status_samples: list[tuple[datetime, float]]
+    device_metric_timestamps: list[datetime]
+
+    def covers(
+        self,
+        *,
+        source_revision: int,
+        start: datetime,
+        end: datetime,
+        device_id: str,
+        boiler_series_id: int | None,
+        status_series_id: int | None,
+    ) -> bool:
+        # Telemetry/source-event writes bump source_revision, so the outer earliest
+        # sample boundary and contents remain stable when this fence matches.
+        return (
+            source_revision == self.source_revision
+            and self.history_start <= start
+            and end <= self.end
+            and device_id == self.device_id
+            and boiler_series_id == self.boiler_series_id
+            and status_series_id == self.status_series_id
+        )
+
+    def slice_before(
+        self, end: datetime,
+    ) -> tuple[list[datetime], list[tuple[datetime, float]], list[datetime]]:
+        return (
+            [timestamp for timestamp in self.boiler_metric_timestamps if timestamp < end],
+            [(timestamp, value) for timestamp, value in self.zont_status_samples if timestamp < end],
+            [timestamp for timestamp in self.device_metric_timestamps if timestamp < end],
+        )
 
 
 def _select_control_temperature_series(
@@ -255,6 +314,7 @@ class AnalysisService:
         self, start: datetime, end: datetime, *, kind: str, use_ai: bool,
         persist: bool = True, include_comparisons: bool = True, force_ai: bool = False,
         period: Period | None = None, request_nonce: str | None = None, question: str | None = None,
+        _reliability_inputs: _ComparisonReliabilityInputs | None = None,
     ) -> Report:
         source_revision = self.db.source_revision()
         if kind == "seasonal" and end - start > timedelta(days=31):
@@ -360,13 +420,16 @@ class AnalysisService:
         )
         burner_samples = self.db.fetch_samples(int(burner_series["id"]), start, end) if burner_series else []
         dhw_burner_samples: list[tuple[datetime, float]] = []
-        state_samples: list[tuple[datetime, str]] = []
+        interaction_state_samples: list[tuple[datetime, str | Collection[str]]] = list(
+            self.db.fetch_text_samples(int(boiler_state_series["id"]), context_start, end)
+            if boiler_state_series else []
+        )
+        state_samples = _samples_in_window(interaction_state_samples, start, end)
         flame_noise_windows: list[tuple[datetime, datetime]] = []
         flame_noise_events: list[DetectedEvent] = []
         flame_noise_metrics: list[MetricValue] = []
         burner_activity_scope = "generic_flame"
         if boiler_state_series:
-            state_samples = self.db.fetch_text_samples(int(boiler_state_series["id"]), start, end)
             if flow_temperature_samples:
                 flame_noise = detect_unconfirmed_burner_pulses(
                     period_id=period_id,
@@ -391,13 +454,18 @@ class AnalysisService:
                 burner_samples = space_heating_samples
                 burner_activity_scope = "space_heating_only"
         quality_samples = (
-            self.db.fetch_samples(int(quality_series["id"]), start, end) if quality_series else burner_samples
+            temperature_samples
+            if quality_series and temperature_series and quality_series["id"] == temperature_series["id"]
+            else self.db.fetch_samples(int(quality_series["id"]), start, end) if quality_series else burner_samples
         )
         quality = assess_quality(quality_samples, start, end)
         target_samples = (self.db.fetch_numeric_observations(
             int(target_series["id"]), start, end, include_previous=True,
         ) if target_series else [])
-        mode_samples = self.db.fetch_samples(int(mode_series["id"]), start, end) if mode_series else []
+        availability_modes = (
+            self.db.fetch_samples(int(mode_series["id"]), context_start, end) if mode_series else []
+        )
+        mode_samples = _samples_in_window(availability_modes, start, end)
         circuit_id = str(target_series["entity_id"]).rsplit(":", 1)[-1] if target_series else ""
         device_id = str(target_series["device_id"]) if target_series else ""
         mode_catalog = build_mode_catalog(
@@ -437,9 +505,6 @@ class AnalysisService:
                 and item["metric_key"] == "status"
             ),
             None,
-        )
-        availability_modes = (
-            self.db.fetch_samples(int(mode_series["id"]), context_start, end) if mode_series else mode_samples
         )
         status_samples = self.db.fetch_samples(int(status_series["id"]), context_start, end) if status_series else []
         availability_events, availability_context, inactive_windows = detect_heating_availability(
@@ -507,11 +572,6 @@ class AnalysisService:
                 int(target_series["id"]), context_start, end, include_previous=True,
             ) if target_series else []
         )
-        interaction_state_samples: list[tuple[datetime, str | Collection[str]]] = list(
-            self.db.fetch_text_samples(int(boiler_state_series["id"]), context_start, end)
-            if boiler_state_series
-            else []
-        )
         availability_by_time: dict[datetime, float | bool] = {start: True}
         for inactive_start, inactive_end in inactive_windows:
             availability_by_time[inactive_start] = False
@@ -552,21 +612,56 @@ class AnalysisService:
         )
         events.extend(flame_noise_events)
         events.extend(control_events)
-        history_start = self.db.earliest_sample_time() or context_start
+        cache = _reliability_inputs
+        boiler_reliability_series = boiler_state_series or burner_series or flow_temperature_series
+        boiler_series_id = int(boiler_reliability_series["id"]) if boiler_reliability_series else None
+        status_series_id = int(zont_status_series["id"]) if zont_status_series else None
         reliability_device_id = str(
             (boiler_state_series or burner_series or zont_status_series or next(iter(series), {})).get("device_id", "")
+        )
+        reuse_reliability_inputs = bool(
+            cache
+            and cache.covers(
+                source_revision=source_revision,
+                start=start,
+                end=end,
+                device_id=reliability_device_id,
+                boiler_series_id=boiler_series_id,
+                status_series_id=status_series_id,
+            )
+        )
+        # All sample and source-event writes bump publication source_revision;
+        # matching it proves the previously observed earliest sample is unchanged.
+        history_start = (
+            cache.history_start
+            if reuse_reliability_inputs and cache is not None
+            else self.db.earliest_sample_time() or context_start
         )
         source_events = [
             item
             for item in self.db.list_source_events(history_start, end)
             if not reliability_device_id or item.device_id == reliability_device_id
         ]
-        boiler_reliability_series = boiler_state_series or burner_series or flow_temperature_series
-        boiler_metric_timestamps = (
-            self.db.fetch_sample_timestamps(int(boiler_reliability_series["id"]), history_start, end)
-            if boiler_reliability_series
-            else []
-        )
+        if reuse_reliability_inputs:
+            assert cache is not None
+            (boiler_metric_timestamps, zont_status_samples,
+             zont_metric_timestamps) = cache.slice_before(end)
+        else:
+            boiler_metric_timestamps = (
+                self.db.fetch_sample_timestamps(boiler_series_id, history_start, end)
+                if boiler_series_id is not None
+                else []
+            )
+            zont_status_samples = (
+                self.db.fetch_samples(status_series_id, history_start, end)
+                if status_series_id is not None
+                else []
+            )
+            zont_metric_timestamps = (
+                self.db.fetch_device_sample_timestamps(reliability_device_id, history_start, end)
+                if reliability_device_id
+                else []
+            )
         reliability_evidence: list[ReliabilityEvidenceSeries] = []
         if boiler_reliability_series:
             metric_key = str(boiler_reliability_series["metric_key"])
@@ -591,14 +686,6 @@ class AnalysisService:
                     ),
                 )
             )
-        zont_status_samples = (
-            self.db.fetch_samples(int(zont_status_series["id"]), history_start, end) if zont_status_series else []
-        )
-        zont_metric_timestamps = (
-            self.db.fetch_device_sample_timestamps(reliability_device_id, history_start, end)
-            if reliability_device_id
-            else []
-        )
         reliability = analyze_reliability(
             period_id=period_id,
             period_start=start,
@@ -681,6 +768,7 @@ class AnalysisService:
             start=start, end=end, period_id=period_id, series=series,
             selected_control=temperature_series, selected_target=target_series,
             selected_boiler=boiler_state_series,
+            boiler_state_samples=interaction_state_samples,
             transition_windows=transition_windows, inactive_windows=inactive_windows,
             noise_windows=flame_noise_windows, events=events,
         )
@@ -701,11 +789,27 @@ class AnalysisService:
             )
         if temperature_series is None:
             summary = f"{summary} Комнатный температурный ряд не определён; метрики комфорта не рассчитаны."
+        comparison_reliability_inputs = None
+        if include_comparisons:
+            comparison_reliability_inputs = cache if reuse_reliability_inputs and cache is not None else (
+                _ComparisonReliabilityInputs(
+                source_revision=source_revision,
+                history_start=history_start,
+                end=end,
+                device_id=reliability_device_id,
+                boiler_series_id=boiler_series_id,
+                status_series_id=status_series_id,
+                boiler_metric_timestamps=boiler_metric_timestamps,
+                zont_status_samples=zont_status_samples,
+                device_metric_timestamps=zont_metric_timestamps,
+            )
+            )
         return self._finish_analysis(
             start, end, kind=kind, use_ai=use_ai, persist=persist, include_comparisons=include_comparisons,
             force_ai=force_ai, period=period, request_nonce=request_nonce, quality=quality, metrics=metrics,
             events=events, control_context=control_context, summary=summary,
             recommendations=recommendations, question=question, source_revision=source_revision,
+            reliability_inputs=comparison_reliability_inputs,
         )
 
     def _finish_analysis(
@@ -716,6 +820,7 @@ class AnalysisService:
         control_context: dict[str, Any], summary: str, recommendations: list[Recommendation],
         source_revision: int,
         question: str | None = None,
+        reliability_inputs: _ComparisonReliabilityInputs | None = None,
     ) -> Report:
         report_id = self.report_id_for(kind, start)
         previous_report = self.db.report(report_id)
@@ -774,6 +879,7 @@ class AnalysisService:
                 self.db, facts_report, period, boundaries=self.season_boundaries()[0],
                 analyze_window=lambda left, right: self._analyze(
                     left, right, kind="initial", use_ai=False, persist=False, include_comparisons=False,
+                    _reliability_inputs=reliability_inputs,
                 ),
             ))
         from zont_analyzer.application.heating_context import heating_context
@@ -833,7 +939,9 @@ class AnalysisService:
                     )
                 ai_used = True
             except Exception as exc:
-                if force_ai or (self.job_fence is not None and isinstance(exc, AIRequestPending)):
+                if force_ai or (
+                    self.job_fence is not None and isinstance(exc, (AIRequestPending, AIRequestDeferred))
+                ):
                     raise
                 logger.warning("OpenAI analysis failed; keeping deterministic report: %s", type(exc).__name__)
                 if (
@@ -888,6 +996,7 @@ class AnalysisService:
         self, *, start: datetime, end: datetime, period_id: str,
         series: list[dict[str, Any]], selected_control: dict[str, Any] | None,
         selected_target: dict[str, Any] | None, selected_boiler: dict[str, Any] | None,
+        boiler_state_samples: list[tuple[datetime, str | Collection[str]]],
         transition_windows: list[tuple[datetime, datetime]],
         inactive_windows: list[tuple[datetime, datetime]],
         noise_windows: list[tuple[datetime, datetime]], events: list[DetectedEvent],
@@ -969,9 +1078,10 @@ class AnalysisService:
                     exclusions.append(ExclusionWindow(
                         event.ended_at, event.ended_at + timedelta(minutes=hot_tail), "dhw",
                     ))
-        states = [StateSample(timestamp, parse_opentherm_flags(encoded), identity(selected_boiler))
-                  for timestamp, encoded in self.db.fetch_text_samples(int(selected_boiler["id"]), lookback, end)
-                  ] if selected_boiler else []
+        states = [
+            StateSample(timestamp, parse_opentherm_flags(encoded), identity(selected_boiler))
+            for timestamp, encoded in _samples_in_window(boiler_state_samples, lookback, end)
+        ] if selected_boiler else []
         heating_windows: list[EvidenceWindow] = []
         packet = build_evidence(
             start=start, end=end, timezone=self.config.home.effective_timezone, period_id=period_id,
