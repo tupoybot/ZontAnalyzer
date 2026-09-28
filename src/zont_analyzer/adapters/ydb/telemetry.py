@@ -39,6 +39,7 @@ def next_id(tx: Transaction, name: str) -> int:
 
 def bump_revision(
     tx: Transaction, scope: str, *, publication_scope: str | None = None, identifier: str = "",
+    publish: bool = True,
 ) -> int:
     rows = tx.execute(
         "DECLARE $scope AS Utf8; SELECT revision FROM revisions WHERE scope=$scope;", {"$scope": scope},
@@ -49,15 +50,19 @@ def bump_revision(
         "UPSERT INTO revisions (scope, revision) VALUES ($scope, $revision);",
         {"$scope": scope, "$revision": revision},
     )
-    if scope != "publication":
-        publication_revision = bump_revision(tx, "publication")
-        tx.execute(
-            "DECLARE $scope AS Utf8; DECLARE $identifier AS Utf8; DECLARE $revision AS Int64; "
-            "UPSERT INTO publication_changes (scope,identifier,revision,payload) "
-            "VALUES ($scope,$identifier,$revision,'{}');",
-            {"$scope": publication_scope or scope, "$identifier": identifier, "$revision": publication_revision},
-        )
+    if scope != "publication" and publish:
+        _record_publication_change(tx, publication_scope or scope, identifier)
     return revision
+
+
+def _record_publication_change(tx: Transaction, scope: str, identifier: str) -> None:
+    publication_revision = bump_revision(tx, "publication")
+    tx.execute(
+        "DECLARE $scope AS Utf8; DECLARE $identifier AS Utf8; DECLARE $revision AS Int64; "
+        "UPSERT INTO publication_changes (scope,identifier,revision,payload) "
+        "VALUES ($scope,$identifier,$revision,'{}');",
+        {"$scope": scope, "$identifier": identifier, "$revision": publication_revision},
+    )
 
 
 class TelemetryRepository:
@@ -319,7 +324,13 @@ class TelemetryRepository:
                     {"$device": device_id, "$type": data_type, "$end": ended},
                 )
             if changed:
-                revision = bump_revision(tx, "telemetry:" + device_id)
+                revision = bump_revision(tx, "telemetry:" + device_id, publish=False)
+                # Publish only changed UTC hours, including the old timestamp
+                # when a source event moves. The publisher expands calibration
+                # hours to the whole archive when its gas dependencies require it.
+                hours = {datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H") for at in changed_times}
+                for hour in sorted(hours):
+                    _record_publication_change(tx, "telemetry", hour)
                 for day in {datetime.fromtimestamp(at, UTC).date().isoformat() for at in changed_times}:
                     tx.execute(
                         "DECLARE $key AS Utf8; DECLARE $value AS Utf8; "

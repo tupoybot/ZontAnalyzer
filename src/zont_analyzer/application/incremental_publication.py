@@ -278,8 +278,11 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                          lambda item: item["lo"] + 900 < end and item["hi"] - 900 > start)  # noqa: B023
             elif scope.startswith("tariff:"):
                 _enqueue(items, COST, now)
-            elif scope.startswith(("owner-profile:", "owner-gas:", "device:", "series:", "telemetry:")):
+            elif scope.startswith(("owner-profile:", "owner-gas:", "series:", "telemetry:")):
                 _enqueue(items, GAS, now)
+            # Raw device snapshots also change on ordinary discovery (timestamps,
+            # online state). Equipment facts and device membership are covered by
+            # the profile digest below; effective timezone is in the config digest.
         _telemetry(items, repository, runtime,
                    [str(c["identifier"]) for c in changes if c["scope"] == "telemetry"], now)
 
