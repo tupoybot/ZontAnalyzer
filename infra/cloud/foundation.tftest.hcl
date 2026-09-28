@@ -101,7 +101,7 @@ run "isolated_defaults" {
     error_message = "The initial probe must have bounded invocation resources."
   }
   assert {
-    condition     = yandex_serverless_container.application.memory == 512 && yandex_serverless_container.application.cores == 1 && yandex_serverless_container.application.core_fraction == 100 && yandex_serverless_container.application.concurrency == 1 && yandex_serverless_container.application.execution_timeout == "210s"
+    condition     = yandex_serverless_container.application.memory == 512 && yandex_serverless_container.application.cores == 1 && yandex_serverless_container.application.core_fraction == 100 && yandex_serverless_container.application.concurrency == 2 && yandex_serverless_container.application.execution_timeout == "210s"
     error_message = "The application must have the bounded report runtime budget."
   }
   assert {

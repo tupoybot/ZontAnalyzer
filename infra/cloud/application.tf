@@ -4,7 +4,7 @@ resource "yandex_serverless_container" "application" {
   memory             = 512
   cores              = 1
   core_fraction      = 100
-  concurrency        = 1
+  concurrency        = 2
   execution_timeout  = "210s"
   service_account_id = var.runtime_service_account_id
 
