@@ -64,8 +64,11 @@ class CollectionService:
             devices = [device for device in devices if str(device["id"]) in device_ids]
         if not devices:
             raise ValueError("discover devices before collecting a period")
-        types = list(self.config.zont.history_data_types) + ["raw_events"]
-        # Round-robin source queues keep a busy history stream from starving events.
+        history_types = list(self.config.zont.history_data_types)
+        types = history_types + ["raw_events"]
+        # Keep durable coverage independent per source, but combine aligned
+        # history windows into one load_data request. This preserves recovery
+        # semantics while using the batching already supported by the ZONT API.
         queues: list[tuple[str, str, int, list[tuple[datetime, datetime]]]] = []
         for device in devices:
             for data_type in types:
@@ -118,69 +121,109 @@ class CollectionService:
                         merged.append((lo, hi))
                 queues.append((device["id"], data_type, window_seconds, merged))
         # A small per-invocation budget must still reach every source, even
-        # when the first source fails on every invocation.
+        # when the first source fails on every invocation. Aligned history
+        # sources consume one HTTP-request budget entry together.
         next_source = int(self.db.get_app_meta("collection-next-source") or "0") % len(queues)
         ordered = [(index, queues[index]) for index in
                    [(next_source + offset) % len(queues) for offset in range(len(queues))]]
         while any(queue for _, _, _, queue in queues) and requests < max_requests:
             if deadline is not None and deadline - monotonic() < 20:
                 break
+            processed: set[int] = set()
             for index, (device_id, data_type, window_seconds, queue) in ordered:
-                if not queue or requests >= max_requests:
+                if index in processed or not queue or requests >= max_requests:
                     continue
                 if deadline is not None and deadline - monotonic() < 20:
                     break
-                lo, hi = queue.pop(0)
-                stop = min(lo + timedelta(seconds=window_seconds), hi)
-                if stop < hi:
-                    queue.insert(0, (stop, hi))
-                    hi = stop
+                lo, original_hi = queue.pop(0)
+                hi = min(lo + timedelta(seconds=window_seconds), original_hi)
+                if hi < original_hi:
+                    queue.insert(0, (hi, original_hi))
+                bundled = [(index, data_type, queue)]
+                if data_type != "raw_events":
+                    for other_index, (other_device, other_type, other_seconds, other_queue) in ordered:
+                        if (other_index == index or other_index in processed or other_device != device_id
+                                or other_type == "raw_events" or not other_queue):
+                            continue
+                        other_lo, other_original_hi = other_queue[0]
+                        other_hi = min(other_lo + timedelta(seconds=other_seconds), other_original_hi)
+                        if other_lo != lo or other_hi != hi:
+                            continue
+                        other_queue.pop(0)
+                        if other_hi < other_original_hi:
+                            other_queue.insert(0, (other_hi, other_original_hi))
+                        bundled.append((other_index, other_type, other_queue))
+                processed.update(item[0] for item in bundled)
                 requests += 1
                 self.db.set_app_meta("collection-next-source", str((index + 1) % len(queues)))
-                points: list[TelemetryPoint] = []
                 values: list[SourceEvent] = []
                 try:
                     if data_type == "raw_events":
                         raw = self.client.load_events(device_id=device_id, start=lo, end=hi)
                         values = self.client.normalize_events(device_id, raw)
-                        points = []
-                    else:
-                        responses = self.client.load_history(device_ids=[device_id], start=lo, end=hi,
-                                                             data_types=[data_type])
-                        matching = [row for row in responses if str(row.get("device_id")) == device_id]
-                        if len(matching) != 1 or matching[0].get("ok") is False:
-                            raise ValueError("source did not return a successful response")
-                        if matching[0].get("time_truncated") is True:
-                            raise ValueError("source returned a truncated interval")
-                        points, inferred = self.client.normalize_history(matching[0])
-                        entities.update(inferred)
-                        values = []
-                    if len(points) + len(values) > 2000:
-                        if (hi - lo).total_seconds() <= 1:
-                            raise ValueError("source response exceeds atomic storage limit")
-                        middle = lo + timedelta(seconds=int((hi - lo).total_seconds()) // 2)
-                        # Persist the learned bound even if this invocation used its
-                        # final API request; the next invocation must make progress.
-                        self.db.set_app_meta(f"collection-window-seconds:{device_id}:{data_type}",
-                                             str(int((middle - lo).total_seconds())))
-                        queue[0:0] = [(lo, middle), (middle, hi)]
+                        if len(values) > 2000:
+                            if (hi - lo).total_seconds() <= 1:
+                                raise ValueError("source response exceeds atomic storage limit")
+                            middle = lo + timedelta(seconds=int((hi - lo).total_seconds()) // 2)
+                            self.db.set_app_meta(f"collection-window-seconds:{device_id}:raw_events",
+                                                 str(int((middle - lo).total_seconds())))
+                            queue[0:0] = [(lo, middle), (middle, hi)]
+                            continue
+                        self.db.telemetry.write_window(
+                            device_id=device_id, data_type=coverage_prefix + data_type,
+                            start=lo, end=hi, events=values,
+                            state="complete" if values else "empty",
+                        )
+                        events += len(values)
                         continue
-                    roles = {key: str(self.config.entity_overrides.get(key, {}).get("role", value["role"]))
-                             for key, value in entities.items()}
-                    self.db.telemetry.write_window(device_id=device_id, data_type=coverage_prefix + data_type,
-                                                   start=lo, end=hi,
-                                                   points=points, events=values,
-                                                   roles=roles, state="complete" if points or values else "empty")
-                    if points:
-                        latest = max(point.timestamp_utc.timestamp() for point in points)
+
+                    requested_types = [item[1] for item in bundled]
+                    responses = self.client.load_history(
+                        device_ids=[device_id], start=lo, end=hi, data_types=requested_types,
+                    )
+                    matching = [row for row in responses if str(row.get("device_id")) == device_id]
+                    if len(matching) != 1 or matching[0].get("ok") is False:
+                        raise ValueError("source did not return a successful response")
+                    if matching[0].get("time_truncated") is True:
+                        raise ValueError("source returned a truncated interval")
+                    points, inferred = self.client.normalize_history(matching[0])
+                    entities.update(inferred)
+                    by_type = {
+                        source: [point for point in points if point.source_type == source]
+                        for source in requested_types
+                    }
+                    roles = {
+                        key: str(self.config.entity_overrides.get(key, {}).get("role", value["role"]))
+                        for key, value in entities.items()
+                    }
+                    stored_points: list[TelemetryPoint] = []
+                    for _source_index, source, source_queue in bundled:
+                        source_points = by_type[source]
+                        if len(source_points) > 2000:
+                            if (hi - lo).total_seconds() <= 1:
+                                raise ValueError("source response exceeds atomic storage limit")
+                            middle = lo + timedelta(seconds=int((hi - lo).total_seconds()) // 2)
+                            self.db.set_app_meta(f"collection-window-seconds:{device_id}:{source}",
+                                                 str(int((middle - lo).total_seconds())))
+                            source_queue[0:0] = [(lo, middle), (middle, hi)]
+                            continue
+                        self.db.telemetry.write_window(
+                            device_id=device_id, data_type=coverage_prefix + source,
+                            start=lo, end=hi, points=source_points, roles=roles,
+                            state="complete" if source_points else "empty",
+                        )
+                        stored_points.extend(source_points)
+                    if stored_points:
+                        latest = max(point.timestamp_utc.timestamp() for point in stored_points)
                         latest_timestamp = max(latest_timestamp or latest, latest)
-                    samples += len(points)
-                    events += len(values)
+                    samples += len(stored_points)
                 except Exception as exc:
-                    self.db.telemetry.write_window(device_id=device_id, data_type=coverage_prefix + data_type,
-                                                   start=lo, end=hi,
-                                                   state="failed")
-                    errors.append(f"{data_type} {lo.isoformat()}: {type(exc).__name__}")
+                    for _source_index, source, _source_queue in bundled:
+                        self.db.telemetry.write_window(
+                            device_id=device_id, data_type=coverage_prefix + source,
+                            start=lo, end=hi, state="failed",
+                        )
+                        errors.append(f"{source} {lo.isoformat()}: {type(exc).__name__}")
         pending = any(queue for _, _, _, queue in queues)
         for entity_id, entity in entities.items():
             override = self.config.entity_overrides.get(entity_id, {})
