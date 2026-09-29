@@ -180,6 +180,7 @@ def test_scheduler_serializes_duplicate_timers_and_failed_lane_does_not_starve_r
     assert "private" not in json.dumps(result)
     review = Mock(return_value={"status": "done"})
     monkeypatch.setattr("zont_analyzer.cloud.user_jobs.scheduled_review", review)
+    monkeypatch.setattr(service, "_sync", Mock(return_value=None))
     assert service.run() == {"lane": "review", "status": "done"}
     review.assert_called_once()
 
@@ -198,8 +199,22 @@ def test_scheduler_resumes_same_sync_slot_then_respects_poll_interval(tmp_path: 
     assert sync.call_args_list[0].kwargs["now"] == sync.call_args_list[1].kwargs["now"]
     assert (sync.call_args_list[0].kwargs["replay_checked_after"]
             == sync.call_args_list[1].kwargs["replay_checked_after"])
-    assert sync.call_args_list[0].kwargs["max_requests"] == 8
+    assert sync.call_args_list[0].kwargs["max_requests"] == 100
     assert service._sync(state, start + timedelta(minutes=29), 9999999999, lambda: None) is None
+
+
+@pytest.mark.ydb
+def test_completed_sync_can_share_timer_delivery_with_report_lane(tmp_path: Path, monkeypatch) -> None:
+    _db, runner, _client = _runner(tmp_path)
+    service = scheduler.ProductionScheduler(runner.runtime, runner=runner)
+    monkeypatch.setattr(service, "_sync", Mock(return_value={"status": "done", "sync": {"failed_windows": 0}}))
+    reports = Mock(return_value={"status": "done"})
+    monkeypatch.setattr(service, "_reports", reports)
+
+    result = service.run()
+
+    assert result["lane"] == "daily"
+    reports.assert_called_once()
 
 
 @pytest.mark.ydb
