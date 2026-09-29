@@ -205,7 +205,8 @@ def test_scheduler_resumes_same_sync_slot_then_respects_poll_interval(tmp_path: 
 
 @pytest.mark.ydb
 def test_completed_sync_can_share_timer_delivery_with_report_lane(tmp_path: Path, monkeypatch) -> None:
-    _db, runner, _client = _runner(tmp_path)
+    db, runner, _client = _runner(tmp_path)
+    _scheduler_state(db, {})
     service = scheduler.ProductionScheduler(runner.runtime, runner=runner)
     monkeypatch.setattr(service, "_sync", Mock(return_value={"status": "done", "sync": {"failed_windows": 0}}))
     reports = Mock(return_value={"status": "done"})
