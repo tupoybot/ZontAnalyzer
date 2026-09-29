@@ -188,10 +188,14 @@ class CollectionService:
                         raise ValueError("source returned a truncated interval")
                     points, inferred = self.client.normalize_history(matching[0])
                     entities.update(inferred)
-                    by_type = {
-                        source: [point for point in points if point.source_type == source]
-                        for source in requested_types
-                    }
+                    by_type = (
+                        {requested_types[0]: points}
+                        if len(requested_types) == 1
+                        else {
+                            source: [point for point in points if point.source_type == source]
+                            for source in requested_types
+                        }
+                    )
                     roles = {
                         key: str(self.config.entity_overrides.get(key, {}).get("role", value["role"]))
                         for key, value in entities.items()
