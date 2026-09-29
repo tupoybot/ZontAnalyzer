@@ -122,6 +122,27 @@ def test_catalogue_snapshot_deduplication(ydb_database: YdbDatabase) -> None:
 
 
 @pytest.mark.ydb
+def test_catalogue_ignores_discovery_timestamp_only_changes(ydb_database: YdbDatabase) -> None:
+    repo = TelemetryRepository(ydb_database)
+    first = {"id": "fixture", "name": "Device", "raw": {"online": True}, "discovered_at": "2026-01-01T00:00:00+00:00"}
+    second = {**first, "discovered_at": "2026-01-01T01:00:00+00:00"}
+
+    repo.save_devices([first])
+    revision = ydb_database.execute(
+        "SELECT revision FROM revisions WHERE scope='device:fixture';"
+    )[0].rows[0].revision
+    snapshots = len(ydb_database.execute("SELECT id FROM config_snapshots;")[0].rows)
+
+    repo.save_devices([second])
+
+    assert ydb_database.execute(
+        "SELECT revision FROM revisions WHERE scope='device:fixture';"
+    )[0].rows[0].revision == revision
+    assert len(ydb_database.execute("SELECT id FROM config_snapshots;")[0].rows) == snapshots
+    assert repo.list_devices()[0]["discovered_at"] == first["discovered_at"]
+
+
+@pytest.mark.ydb
 def test_late_event_revision_and_archive_survive_source_horizon(ydb_database: YdbDatabase) -> None:
     repo = TelemetryRepository(ydb_database)
     event = SourceEvent(id="source-event", device_id="fixture", event_type="restart", timestamp_utc=START)
