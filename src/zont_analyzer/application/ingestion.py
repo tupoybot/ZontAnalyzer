@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 _CONNECTION_RECOVERY_META = "connection_recovery"
+_DISCOVERY_LAST_SUCCESS = "zont-discovery-last-success"
 
 
 def _connection_recovery_key(device_id: str) -> str:
@@ -325,13 +326,36 @@ class IngestionService:
 
         reference = (now or datetime.now(UTC)).astimezone(UTC).replace(microsecond=0)
         devices = self.db.list_devices()
-        try:
-            self.discover()
-            devices = self.db.list_devices()
-        except Exception:
-            if not devices:
-                raise
-            logger.warning("ZONT discovery refresh failed; using the latest cached configuration")
+        raw_discovery = self.db.get_app_meta(_DISCOVERY_LAST_SUCCESS)
+        discovery_due = not devices or not raw_discovery
+        if raw_discovery and devices:
+            try:
+                last_discovery = datetime.fromisoformat(raw_discovery)
+                discovery_due = (
+                    last_discovery.tzinfo is None
+                    or reference >= last_discovery.astimezone(UTC) + timedelta(
+                        minutes=self.config.scheduler.discovery_every_minutes
+                    )
+                )
+            except (TypeError, ValueError):
+                discovery_due = True
+        discovered = False
+        if discovery_due:
+            try:
+                self.discover()
+                self.db.set_app_meta(_DISCOVERY_LAST_SUCCESS, reference.isoformat())
+                devices = self.db.list_devices()
+                discovered = True
+            except Exception:
+                if not devices:
+                    raise
+                logger.warning("ZONT discovery refresh failed; using the latest cached configuration")
+        if not discovered:
+            # Runtime config is reconstructed for every cloud invocation, so
+            # reapply the timezone from cached inventory even when provider
+            # discovery is intentionally skipped.
+            from zont_analyzer.application.timezone import apply_device_timezone
+            apply_device_timezone(self.db, self.config)
         overlap = timedelta(minutes=self.config.scheduler.overlap_minutes)
         if backfill is not None:
             start = reference - backfill
