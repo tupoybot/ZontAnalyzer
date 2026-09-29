@@ -139,6 +139,32 @@ def test_normal_sync_replays_late_history_and_events_with_two_hour_overlap(tmp_p
 
 
 @pytest.mark.ydb
+def test_aligned_history_sources_share_one_load_data_request(tmp_path: Path) -> None:
+    db, service, client = _service(tmp_path)
+    service.config.zont.history_data_types = ["temperature", "z3k_temperature"]
+
+    def normalized(response: dict[str, Any]) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
+        at = response["start"] + timedelta(minutes=1)
+        return [
+            TelemetryPoint(device_id="1", source_type=source,
+                           entity_id=f"zont:1:{source}:1", metric_key="temperature",
+                           timestamp_utc=at, value_num=21, unit="°C")
+            for source in service.config.zont.history_data_types
+        ], {}
+
+    client.normalize_history = normalized  # type: ignore[method-assign]
+    result = service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=2)
+
+    assert result["complete"] and result["requests"] == 2
+    assert len(client.history_calls) == 1
+    assert client.history_calls[0]["data_types"] == ["temperature", "z3k_temperature"]
+    assert len(client.event_calls) == 1
+    assert db.get_cursor("1", "temperature") == NOW
+    assert db.get_cursor("1", "z3k_temperature") == NOW
+    assert {row["source_type"] for row in db.list_series()} == {"temperature", "z3k_temperature"}
+
+
+@pytest.mark.ydb
 def test_reconnect_state_requires_recovered_sample_and_survives_retry(tmp_path: Path) -> None:
     db, service, client = _service(tmp_path)
     disconnected = NOW - timedelta(hours=5)
