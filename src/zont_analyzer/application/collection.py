@@ -188,39 +188,38 @@ class CollectionService:
                         raise ValueError("source returned a truncated interval")
                     points, inferred = self.client.normalize_history(matching[0])
                     entities.update(inferred)
-                    by_type = (
-                        {requested_types[0]: points}
-                        if len(requested_types) == 1
-                        else {
-                            source: [point for point in points if point.source_type == source]
-                            for source in requested_types
-                        }
-                    )
+                    if len(points) > 2000:
+                        if (hi - lo).total_seconds() <= 1:
+                            raise ValueError("source response exceeds atomic storage limit")
+                        middle = lo + timedelta(seconds=int((hi - lo).total_seconds()) // 2)
+                        learned = str(int((middle - lo).total_seconds()))
+                        for _source_index, source, source_queue in bundled:
+                            self.db.set_app_meta(
+                                f"collection-window-seconds:{device_id}:{source}", learned,
+                            )
+                            source_queue[0:0] = [(lo, middle), (middle, hi)]
+                        continue
                     roles = {
                         key: str(self.config.entity_overrides.get(key, {}).get("role", value["role"]))
                         for key, value in entities.items()
                     }
-                    stored_points: list[TelemetryPoint] = []
-                    for _source_index, source, source_queue in bundled:
-                        source_points = by_type[source]
-                        if len(source_points) > 2000:
-                            if (hi - lo).total_seconds() <= 1:
-                                raise ValueError("source response exceeds atomic storage limit")
-                            middle = lo + timedelta(seconds=int((hi - lo).total_seconds()) // 2)
-                            self.db.set_app_meta(f"collection-window-seconds:{device_id}:{source}",
-                                                 str(int((middle - lo).total_seconds())))
-                            source_queue[0:0] = [(lo, middle), (middle, hi)]
-                            continue
+                    if len(requested_types) == 1:
+                        source = requested_types[0]
                         self.db.telemetry.write_window(
                             device_id=device_id, data_type=coverage_prefix + source,
-                            start=lo, end=hi, points=source_points, roles=roles,
-                            state="complete" if source_points else "empty",
+                            start=lo, end=hi, points=points, roles=roles,
+                            state="complete" if points else "empty",
                         )
-                        stored_points.extend(source_points)
-                    if stored_points:
-                        latest = max(point.timestamp_utc.timestamp() for point in stored_points)
+                    else:
+                        self.db.telemetry.write_history_window(
+                            device_id=device_id, data_types=requested_types,
+                            start=lo, end=hi, points=points, roles=roles,
+                            coverage_prefix=coverage_prefix,
+                        )
+                    if points:
+                        latest = max(point.timestamp_utc.timestamp() for point in points)
                         latest_timestamp = max(latest_timestamp or latest, latest)
-                    samples += len(stored_points)
+                    samples += len(points)
                 except Exception as exc:
                     for _source_index, source, _source_queue in bundled:
                         self.db.telemetry.write_window(
