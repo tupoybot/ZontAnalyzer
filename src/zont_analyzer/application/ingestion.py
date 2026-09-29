@@ -267,7 +267,7 @@ class IngestionService:
         devices: list[dict[str, Any]],
         inferred_entities: dict[str, dict[str, Any]],
         config_names: dict[tuple[str, str], str],
-    ) -> None:
+    ) -> int:
         series_rows = self.db.list_series()
         links = heating_circuit_sensor_links(devices, config_names, series_rows)
         links_by_sensor = {(item.device_id, item.sensor_external_id): item for item in links}
@@ -307,14 +307,25 @@ class IngestionService:
                     role = configured_role
                     confidence = 1.0
                     provenance = "config.entity_overrides"
+            display_name = str(override.get("display_name", name))
+            origin = _series_origin(str(series["source_type"]), str(series["metric_key"]), role)
+            if all((
+                series.get("role") == role,
+                series.get("display_name") == display_name,
+                series.get("confidence") == confidence,
+                series.get("provenance") == provenance,
+                series.get("origin") == origin,
+            )):
+                continue
             self.db.update_series_role(
                 int(series["id"]),
                 role,
-                str(override.get("display_name", name)),
+                display_name,
                 confidence=confidence,
                 provenance=provenance,
-                origin=_series_origin(str(series["source_type"]), str(series["metric_key"]), role),
+                origin=origin,
             )
+        return len(series_rows)
 
     def sync(
         self, *, backfill: timedelta | None = None, now: datetime | None = None,
@@ -417,7 +428,7 @@ class IngestionService:
             ))
         else:
             result["complete"], result["pending"] = False, True
-        self._refresh_series_roles(devices, {}, _object_names(devices))
+        series_count = self._refresh_series_roles(devices, {}, _object_names(devices))
         for device in devices:
             device_id = str(device["id"])
             state = _load_connection_recovery(self.db, device_id)
@@ -428,6 +439,6 @@ class IngestionService:
                 result["complete"], result["pending"] = False, True
             _save_connection_recovery(self.db, device_id, state)
         first, last = self.db.earliest_sample_time(), self.db.latest_sample_time()
-        return {**result, "series": len(self.db.list_series()), "windows": result["requests"],
+        return {**result, "series": series_count, "windows": result["requests"],
                 "history_range": {"first_observed": first.isoformat() if first else None,
                                   "last_observed": last.isoformat() if last else None}}
