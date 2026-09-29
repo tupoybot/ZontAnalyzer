@@ -179,7 +179,7 @@ resource "yandex_function_trigger" "maintenance" {
   folder_id = data.yandex_resourcemanager_folder.project.id
   name      = "${local.name}-web-jobs"
   timer {
-    cron_expression = "* * * * ? *"
+    cron_expression = "2/5 * * * ? *"
   }
   container {
     id                 = yandex_serverless_container.application.id
@@ -196,7 +196,7 @@ resource "yandex_function_trigger" "scheduler" {
   folder_id = data.yandex_resourcemanager_folder.project.id
   name      = "${local.name}-scheduler"
   timer {
-    cron_expression = "* * * * ? *"
+    cron_expression = "0/5 * * * ? *"
   }
   container {
     id                 = yandex_serverless_container.application.id
