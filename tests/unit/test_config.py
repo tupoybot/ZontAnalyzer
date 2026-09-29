@@ -36,11 +36,13 @@ def test_unknown_yaml_fields_are_rejected(tmp_path: Path, monkeypatch: pytest.Mo
 def test_cloud_configuration_preserves_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ZONT_ANALYZER_CONFIG_JSON", json.dumps({
-        "scheduler": {"sync_every_minutes": 30}, "dhw": {"recirculation_present": False},
+        "scheduler": {"sync_every_minutes": 30, "max_requests_per_sync": 12},
+        "dhw": {"recirculation_present": False},
         "openai": {"enabled": True, "monthly_token_budget": 12345},
     }))
     config = load_config(data_dir=tmp_path).config
     assert config.scheduler.sync_every_minutes == 30
+    assert config.scheduler.max_requests_per_sync == 12
     assert config.dhw.recirculation_present is False
     assert config.openai.enabled and config.openai.monthly_token_budget == 12345
     path = tmp_path / "config.yaml"
