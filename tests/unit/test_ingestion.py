@@ -29,10 +29,12 @@ class RecordingClient:
     def __init__(self) -> None:
         self.history_calls: list[dict[str, Any]] = []
         self.event_calls: list[dict[str, Any]] = []
+        self.discover_calls = 0
         self.fail_history_once = False
         self.late_point = False
 
     def discover_devices(self) -> list[dict[str, Any]]:
+        self.discover_calls += 1
         return [{"device_id": 1, "name": "fixture"}]
 
     def load_history(self, **kwargs: Any) -> list[dict[str, Any]]:
@@ -81,6 +83,25 @@ def test_same_second_connection_events_apply_disconnect_before_restore() -> None
     assert state["open_disconnect_at"] is None
     assert state["pending_replay_start"] == timestamp
     assert state["pending_restore_at"] == timestamp
+
+
+@pytest.mark.ydb
+def test_discovery_is_reused_until_refresh_interval(tmp_path: Path) -> None:
+    _db, service, client = _service(tmp_path)
+    service.config.scheduler.discovery_every_minutes = 60
+
+    first = service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=2)
+    assert first["complete"] and client.discover_calls == 1
+
+    second = service.sync(
+        backfill=timedelta(minutes=30), now=NOW + timedelta(minutes=30), max_requests=2,
+    )
+    assert second["complete"] and client.discover_calls == 1
+
+    third = service.sync(
+        backfill=timedelta(minutes=30), now=NOW + timedelta(minutes=61), max_requests=2,
+    )
+    assert third["complete"] and client.discover_calls == 2
 
 
 @pytest.mark.ydb
