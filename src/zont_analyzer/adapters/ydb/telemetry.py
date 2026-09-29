@@ -216,18 +216,52 @@ class TelemetryRepository:
         points: Iterable[TelemetryPoint] = (), events: Iterable[SourceEvent] = (),
         state: CoverageState = "complete", roles: dict[str, str] | None = None,
     ) -> int:
-        """Only a fully saved successful response advances the independent cursor.
+        return self._write_window_batch(
+            device_id=device_id, coverage_states={data_type: state}, start=start, end=end,
+            points=points, events=events, roles=roles,
+        )
 
-        A response is bounded to 2000 records. Split larger source requests, never
-        mark partially committed pages as covered. The source's end point is kept.
-        """
+    def write_history_window(
+        self, *, device_id: str, data_types: Iterable[str], start: datetime, end: datetime,
+        points: Iterable[TelemetryPoint] = (), roles: dict[str, str] | None = None,
+    ) -> int:
+        """Commit one successful multi-type history response and all its cursors together."""
+        selected = tuple(dict.fromkeys(str(value) for value in data_types))
+        if not selected:
+            raise ValueError("history data types are required")
+        samples = list(points)
+        if any(point.source_type not in selected for point in samples):
+            raise ValueError("history point source is outside requested types")
+        present = {point.source_type for point in samples}
+        return self._write_window_batch(
+            device_id=device_id,
+            coverage_states={source: "complete" if source in present else "empty" for source in selected},
+            start=start, end=end, points=samples, roles=roles,
+        )
+
+    def _write_window_batch(
+        self, *, device_id: str, coverage_states: dict[str, CoverageState],
+        start: datetime, end: datetime, points: Iterable[TelemetryPoint] = (),
+        events: Iterable[SourceEvent] = (), roles: dict[str, str] | None = None,
+    ) -> int:
+        """Only fully saved responses advance their independent source cursors."""
         started, ended = utc_seconds(start), utc_seconds(end)
         samples, source_events = list(points), list(events)
-        if started >= ended or len(samples) + len(source_events) > 2000:
+        if (started >= ended or len(samples) + len(source_events) > 2000
+                or not coverage_states):
             raise ValueError("invalid or oversized ingestion window")
-        if state not in {"complete", "empty", "failed", "unavailable"}:
+        if any(state not in {"complete", "empty", "failed", "unavailable"}
+               for state in coverage_states.values()):
             raise ValueError("invalid coverage state")
-        if state != "complete" and (samples or source_events):
+        if len(coverage_states) > 1 and any(
+            state not in {"complete", "empty"} for state in coverage_states.values()
+        ):
+            raise ValueError("batched coverage accepts only successful history responses")
+        if source_events and len(coverage_states) != 1:
+            raise ValueError("events require one coverage source")
+        if any(state != "complete" for state in coverage_states.values()) and (
+            samples or source_events
+        ) and len(coverage_states) == 1:
             raise ValueError("only complete windows can contain records")
         records: list[TelemetryPoint | SourceEvent] = [*samples, *source_events]
         if any(p.device_id != device_id or not started <= utc_seconds(p.timestamp_utc) <= ended for p in records):
@@ -326,26 +360,79 @@ class TelemetryRepository:
                                "UPSERT INTO source_events SELECT * FROM AS_TABLE($rows);",
                                {"$rows": ydb.TypedValue(new_rows, ydb.ListType(row_type))})
             # A failed recheck must not erase evidence of an earlier successful response.
-            params = {"$device": device_id, "$type": data_type, "$start": started, "$end": ended}
-            decl = "DECLARE $device AS Utf8; DECLARE $type AS Utf8; DECLARE $start AS Int64; DECLARE $end AS Int64; "
-            old = tx.execute(
-                decl + "SELECT state FROM coverage WHERE device_id=$device AND data_type=$type "
-                "AND started_at=$start AND ended_at=$end;", params,
-            )[0].rows
-            if state in {"complete", "empty"} or not old or old[0].state not in {"complete", "empty"}:
-                tx.execute(
-                    decl + "DECLARE $state AS Utf8; DECLARE $at AS Int64; "
-                    "UPSERT INTO coverage (device_id,data_type,started_at,ended_at,state,checked_at) "
-                    "VALUES ($device,$type,$start,$end,$state,$at);",
-                    {**params, "$state": state, "$at": checked},
+            if len(coverage_states) == 1:
+                data_type, state = next(iter(coverage_states.items()))
+                params = {"$device": device_id, "$type": data_type, "$start": started, "$end": ended}
+                decl = (
+                    "DECLARE $device AS Utf8; DECLARE $type AS Utf8; "
+                    "DECLARE $start AS Int64; DECLARE $end AS Int64; "
                 )
-            if state in {"complete", "empty"}:
+                old = tx.execute(
+                    decl + "SELECT state FROM coverage WHERE device_id=$device AND data_type=$type "
+                    "AND started_at=$start AND ended_at=$end;", params,
+                )[0].rows
+                if state in {"complete", "empty"} or not old or old[0].state not in {"complete", "empty"}:
+                    tx.execute(
+                        decl + "DECLARE $state AS Utf8; DECLARE $at AS Int64; "
+                        "UPSERT INTO coverage (device_id,data_type,started_at,ended_at,state,checked_at) "
+                        "VALUES ($device,$type,$start,$end,$state,$at);",
+                        {**params, "$state": state, "$at": checked},
+                    )
+                if state in {"complete", "empty"}:
+                    tx.execute(
+                        "DECLARE $device AS Utf8; DECLARE $type AS Utf8; DECLARE $end AS Int64; "
+                        "$old = SELECT timestamp_utc FROM ingestion_cursors "
+                        "WHERE device_id=$device AND data_type=$type; "
+                        "UPSERT INTO ingestion_cursors (device_id,data_type,timestamp_utc) "
+                        "SELECT $device, $type, MAX_OF(COALESCE(MAX(timestamp_utc), $end), $end) FROM $old;",
+                        {"$device": device_id, "$type": data_type, "$end": ended},
+                    )
+            else:
+                # One provider response becomes one YDB transaction: coverage and
+                # cursors remain source-specific but no longer pay one transaction
+                # per history data type.
+                coverage_type = (
+                    ydb.StructType().add_member("device_id", ydb.PrimitiveType.Utf8)
+                    .add_member("data_type", ydb.PrimitiveType.Utf8)
+                    .add_member("started_at", ydb.PrimitiveType.Int64)
+                    .add_member("ended_at", ydb.PrimitiveType.Int64)
+                    .add_member("state", ydb.PrimitiveType.Utf8)
+                    .add_member("checked_at", ydb.PrimitiveType.Int64)
+                )
+                coverage_rows = [
+                    {"device_id": device_id, "data_type": source, "started_at": started,
+                     "ended_at": ended, "state": state, "checked_at": checked}
+                    for source, state in coverage_states.items()
+                ]
                 tx.execute(
-                    "DECLARE $device AS Utf8; DECLARE $type AS Utf8; DECLARE $end AS Int64; "
-                    "$old = SELECT timestamp_utc FROM ingestion_cursors WHERE device_id=$device AND data_type=$type; "
-                    "UPSERT INTO ingestion_cursors (device_id,data_type,timestamp_utc) "
-                    "SELECT $device, $type, MAX_OF(COALESCE(MAX(timestamp_utc), $end), $end) FROM $old;",
-                    {"$device": device_id, "$type": data_type, "$end": ended},
+                    "DECLARE $rows AS List<Struct<device_id:Utf8,data_type:Utf8,started_at:Int64,"
+                    "ended_at:Int64,state:Utf8,checked_at:Int64>>; "
+                    "UPSERT INTO coverage SELECT * FROM AS_TABLE($rows);",
+                    {"$rows": ydb.TypedValue(coverage_rows, ydb.ListType(coverage_type))},
+                )
+                source_names = list(coverage_states)
+                existing = tx.execute(
+                    "DECLARE $device AS Utf8; DECLARE $types AS List<Utf8>; "
+                    "SELECT data_type,timestamp_utc FROM ingestion_cursors "
+                    "WHERE device_id=$device AND data_type IN $types;",
+                    {"$device": device_id,
+                     "$types": ydb.TypedValue(source_names, ydb.ListType(ydb.PrimitiveType.Utf8))},
+                )[0].rows
+                old_cursors = {str(row.data_type): int(row.timestamp_utc) for row in existing}
+                cursor_type = (
+                    ydb.StructType().add_member("device_id", ydb.PrimitiveType.Utf8)
+                    .add_member("data_type", ydb.PrimitiveType.Utf8)
+                    .add_member("timestamp_utc", ydb.PrimitiveType.Int64)
+                )
+                cursor_rows = [
+                    {"device_id": device_id, "data_type": source,
+                     "timestamp_utc": max(old_cursors.get(source, ended), ended)}
+                    for source in source_names
+                ]
+                tx.execute(
+                    "DECLARE $rows AS List<Struct<device_id:Utf8,data_type:Utf8,timestamp_utc:Int64>>; "
+                    "UPSERT INTO ingestion_cursors SELECT * FROM AS_TABLE($rows);",
+                    {"$rows": ydb.TypedValue(cursor_rows, ydb.ListType(cursor_type))},
                 )
             if changed:
                 revision = bump_revision(tx, "telemetry:" + device_id, publish=False)
