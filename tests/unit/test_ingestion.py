@@ -105,6 +105,22 @@ def test_discovery_is_reused_until_refresh_interval(tmp_path: Path) -> None:
 
 
 @pytest.mark.ydb
+def test_unchanged_series_roles_do_not_open_per_series_transactions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db, service, client = _service(tmp_path)
+    assert service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=2)["complete"]
+
+    update = Mock()
+    monkeypatch.setattr(db, "update_series_role", update)
+    assert service.sync(
+        backfill=timedelta(minutes=30), now=NOW + timedelta(minutes=30), max_requests=2,
+    )["complete"]
+
+    update.assert_not_called()
+
+
+@pytest.mark.ydb
 def test_explicit_backfill_uses_requested_interval_and_bounded_calls(tmp_path: Path) -> None:
     db, service, client = _service(tmp_path)
     db.save_devices(client.discover_devices())
