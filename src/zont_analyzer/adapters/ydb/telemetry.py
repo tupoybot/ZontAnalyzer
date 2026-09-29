@@ -102,6 +102,15 @@ class TelemetryRepository:
                 previous = tx.execute(
                     "DECLARE $id AS Utf8; SELECT payload FROM devices WHERE id=$id;", {"$id": device_id},
                 )[0].rows
+                current = json.loads(payload)
+                prior = json.loads(previous[0].payload) if previous else None
+                semantic = {key: value for key, value in current.items() if key != "discovered_at"}
+                prior_semantic = (
+                    {key: value for key, value in prior.items() if key != "discovered_at"}
+                    if isinstance(prior, dict) else None
+                )
+                if prior_semantic == semantic:
+                    return
                 tx.execute(
                     "DECLARE $id AS Utf8; DECLARE $payload AS Utf8; "
                     "UPSERT INTO devices (id,payload) VALUES ($id,$payload);",
@@ -122,8 +131,7 @@ class TelemetryRepository:
                         {"$id": device_id, "$hash": digest, "$n": snapshot_id,
                          "$payload": payload, "$at": captured_at},
                     )
-                if not previous or previous[0].payload != payload:
-                    bump_revision(tx, "device:" + device_id)
+                bump_revision(tx, "device:" + device_id)
 
             self.db.transaction(write)
             saved += 1
