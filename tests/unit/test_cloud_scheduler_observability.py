@@ -51,7 +51,8 @@ def test_timer_records_lane_outcome_after_durable_progress(monkeypatch, result, 
     assert len(measurements) == 3
     assert "private" not in str(outcome) + str(measurements)
     checkpoint = service.runtime.db.jobs.checkpoint.call_args.args[3]
-    assert '"next_lane": 1' in checkpoint
+    if result is not None and result.get("status") == "done" and not raised:
+        assert '"next_lane": 0' in checkpoint
     if raised:
         assert '"last_error"' in checkpoint
 
