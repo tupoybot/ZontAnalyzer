@@ -42,6 +42,35 @@ def test_window_repeat_boundaries_and_precision(ydb_database: YdbDatabase) -> No
 
 
 @pytest.mark.ydb
+def test_multi_type_history_commits_coverage_and_cursors_together(ydb_database: YdbDatabase) -> None:
+    repo = TelemetryRepository(ydb_database)
+    point_a = TelemetryPoint(
+        device_id="fixture", source_type="temperature", entity_id="room",
+        metric_key="temperature", timestamp_utc=START + timedelta(minutes=1), value_num=20,
+    )
+    point_b = TelemetryPoint(
+        device_id="fixture", source_type="z3k_temperature", entity_id="pipe",
+        metric_key="temperature", timestamp_utc=START + timedelta(minutes=1), value_num=40,
+    )
+
+    assert repo.write_history_window(
+        device_id="fixture",
+        data_types=["temperature", "z3k_temperature", "z3k_radio_sensor"],
+        start=START,
+        end=START + timedelta(minutes=30),
+        points=[point_a, point_b],
+    ) == 2
+
+    end = START + timedelta(minutes=30)
+    assert repo.get_cursor("fixture", "temperature") == end
+    assert repo.get_cursor("fixture", "z3k_temperature") == end
+    assert repo.get_cursor("fixture", "z3k_radio_sensor") == end
+    assert repo.coverage("fixture", "temperature", START, end)[0]["state"] == "complete"
+    assert repo.coverage("fixture", "z3k_temperature", START, end)[0]["state"] == "complete"
+    assert repo.coverage("fixture", "z3k_radio_sensor", START, end)[0]["state"] == "empty"
+
+
+@pytest.mark.ydb
 def test_coverage_empty_errors_and_source_horizon(ydb_database: YdbDatabase) -> None:
     repo = TelemetryRepository(ydb_database)
     for hour, state in [(0, "empty"), (1, "failed"), (2, "complete")]:
