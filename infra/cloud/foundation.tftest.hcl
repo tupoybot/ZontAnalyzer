@@ -434,7 +434,7 @@ run "monitored_maintenance_timer" {
     }
   }
   assert {
-    condition     = length(yandex_function_trigger.maintenance) == 1 && yandex_function_trigger.maintenance[0].container[0].id == yandex_serverless_container.application.id && yandex_function_trigger.maintenance[0].container[0].path == "/internal/maintenance"
+    condition     = length(yandex_function_trigger.maintenance) == 1 && yandex_function_trigger.maintenance[0].container[0].id == yandex_serverless_container.application.id && yandex_function_trigger.maintenance[0].container[0].path == "/internal/maintenance" && yandex_function_trigger.maintenance[0].timer[0].cron_expression == "2/5 * * * ? *"
     error_message = "The opt-in maintenance timer must invoke the private application maintenance endpoint."
   }
   assert {
@@ -542,7 +542,7 @@ run "configured_scheduler_is_private" {
     values          = { id = "probe-container" }
   }
   assert {
-    condition     = length(yandex_function_trigger.scheduler) == 1 && yandex_function_trigger.scheduler[0].container[0].id == "application-container" && yandex_function_trigger.scheduler[0].container[0].path == "/internal/scheduler"
+    condition     = length(yandex_function_trigger.scheduler) == 1 && yandex_function_trigger.scheduler[0].container[0].id == "application-container" && yandex_function_trigger.scheduler[0].container[0].path == "/internal/scheduler" && yandex_function_trigger.scheduler[0].timer[0].cron_expression == "0/5 * * * ? *"
     error_message = "The configured scheduler must invoke the private application scheduler route."
   }
   assert {
