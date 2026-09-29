@@ -35,6 +35,7 @@ openai:
 scheduler:
   sync_every_minutes: 5
   overlap_minutes: 120
+  max_requests_per_sync: 8
 
 pilot:
   daily_report_delay_minutes: 60
