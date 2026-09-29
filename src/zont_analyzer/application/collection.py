@@ -9,7 +9,7 @@ from typing import Any
 from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.adapters.zont_readonly import ZontReadOnlyClient
 from zont_analyzer.config import AppConfig
-from zont_analyzer.domain import SourceEvent, TelemetryPoint
+from zont_analyzer.domain import SourceEvent
 from zont_analyzer.observability import observe, span
 
 
