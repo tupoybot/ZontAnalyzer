@@ -198,6 +198,7 @@ def test_scheduler_resumes_same_sync_slot_then_respects_poll_interval(tmp_path: 
     assert sync.call_args_list[0].kwargs["now"] == sync.call_args_list[1].kwargs["now"]
     assert (sync.call_args_list[0].kwargs["replay_checked_after"]
             == sync.call_args_list[1].kwargs["replay_checked_after"])
+    assert sync.call_args_list[0].kwargs["max_requests"] == 8
     assert service._sync(state, start + timedelta(minutes=29), 9999999999, lambda: None) is None
 
 
