@@ -36,7 +36,7 @@ from zont_analyzer.observability import observe
 from zont_analyzer.runtime import Runtime, open_runtime
 
 _KEY = "production-scheduler:v1"
-_LANES = ("sync", "daily", "weekly", "monthly", "seasonal", "review")
+_LANES = ("daily", "weekly", "monthly", "seasonal", "review")
 _BASELINES = "source-event-report-baselines:v1:complete"
 _SCAN_LIMIT = 4
 
@@ -159,6 +159,28 @@ class ProductionScheduler:
                     state.pop("recommendation_maintenance_error", None)
                     state["next_recommendation_maintenance"] = (reference + timedelta(hours=1)).isoformat()
                 save()
+            # Collection is the freshness gate for every report lane. With a
+            # production timer matching the configured polling interval, always
+            # advance it first so report work cannot postpone telemetry by another
+            # timer period. A completed sync may share the same invocation with one
+            # report lane; an incomplete sync resumes on the next timer delivery.
+            sync_result: dict[str, Any] | None = None
+            try:
+                sync_result = self._sync(state, reference, deadline, save)
+            except Exception as exc:
+                state["last_error"] = {
+                    "lane": "sync", "type": type(exc).__name__, "at": reference.isoformat(),
+                }
+                save()
+                failure = {"status": "error", **state["last_error"]}
+                _observe_lane("sync", failure)
+                return failure
+            save()
+            if sync_result is not None:
+                _observe_lane("sync", sync_result)
+                if sync_result.get("status") != "done" or deadline - self.monotonic() < 25:
+                    return {"lane": "sync", **sync_result}
+
             first = int(state.get("next_lane", 0)) % len(_LANES)
             for offset in range(len(_LANES)):
                 index = (first + offset) % len(_LANES)
@@ -170,9 +192,7 @@ class ProductionScheduler:
                 state["next_lane"] = (index + 1) % len(_LANES)
                 save()
                 try:
-                    if lane == "sync":
-                        result = self._sync(state, reference, deadline, save)
-                    elif lane in {"daily", "weekly", "monthly", "seasonal"}:
+                    if lane in {"daily", "weekly", "monthly", "seasonal"}:
                         result = self._reports(lane, state, reference, deadline, save)
                     else:
                         from zont_analyzer.cloud.user_jobs import scheduled_review
@@ -191,6 +211,8 @@ class ProductionScheduler:
                 if result is not None:
                     _observe_lane(lane, result)
                     return {"lane": lane, **result}
+            if sync_result is not None:
+                return {"lane": "sync", **sync_result}
             return {"status": "idle"}
         finally:
             self.runtime.db.jobs.release(_KEY, owner, lease.attempt)
