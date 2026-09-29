@@ -224,6 +224,7 @@ class TelemetryRepository:
     def write_history_window(
         self, *, device_id: str, data_types: Iterable[str], start: datetime, end: datetime,
         points: Iterable[TelemetryPoint] = (), roles: dict[str, str] | None = None,
+        coverage_prefix: str = "",
     ) -> int:
         """Commit one successful multi-type history response and all its cursors together."""
         selected = tuple(dict.fromkeys(str(value) for value in data_types))
@@ -235,7 +236,10 @@ class TelemetryRepository:
         present = {point.source_type for point in samples}
         return self._write_window_batch(
             device_id=device_id,
-            coverage_states={source: "complete" if source in present else "empty" for source in selected},
+            coverage_states={
+                coverage_prefix + source: "complete" if source in present else "empty"
+                for source in selected
+            },
             start=start, end=end, points=samples, roles=roles,
         )
 
