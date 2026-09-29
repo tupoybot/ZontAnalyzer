@@ -542,7 +542,7 @@ run "configured_scheduler_is_private" {
     values          = { id = "probe-container" }
   }
   assert {
-    condition     = length(yandex_function_trigger.scheduler) == 1 && yandex_function_trigger.scheduler[0].container[0].id == "application-container" && yandex_function_trigger.scheduler[0].container[0].path == "/internal/scheduler" && yandex_function_trigger.scheduler[0].timer[0].cron_expression == "0/5 * * * ? *"
+    condition     = length(yandex_function_trigger.scheduler) == 1 && yandex_function_trigger.scheduler[0].container[0].id == "application-container" && yandex_function_trigger.scheduler[0].container[0].path == "/internal/scheduler" && yandex_function_trigger.scheduler[0].timer[0].cron_expression == "0,30 * * * ? *"
     error_message = "The configured scheduler must invoke the private application scheduler route."
   }
   assert {
