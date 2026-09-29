@@ -165,6 +165,24 @@ def test_aligned_history_sources_share_one_load_data_request(tmp_path: Path) -> 
 
 
 @pytest.mark.ydb
+def test_history_batching_keeps_independent_coverage_gaps(tmp_path: Path) -> None:
+    db, service, client = _service(tmp_path)
+    service.config.zont.history_data_types = ["temperature", "z3k_temperature"]
+    db.save_devices(client.discover_devices())
+    start = NOW - timedelta(minutes=30)
+    db.telemetry.write_window(device_id="1", data_type="temperature", start=start, end=NOW, state="empty")
+    db.telemetry.write_window(device_id="1", data_type="raw_events", start=start, end=NOW, state="empty")
+
+    result = service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=1)
+
+    assert result["complete"] and result["requests"] == 1
+    assert len(client.history_calls) == 1
+    assert client.history_calls[0]["data_types"] == ["z3k_temperature"]
+    assert db.get_cursor("1", "temperature") == NOW
+    assert db.get_cursor("1", "z3k_temperature") == NOW
+
+
+@pytest.mark.ydb
 def test_reconnect_state_requires_recovered_sample_and_survives_retry(tmp_path: Path) -> None:
     db, service, client = _service(tmp_path)
     disconnected = NOW - timedelta(hours=5)
