@@ -124,6 +124,7 @@ class CollectionService:
         # when the first source fails on every invocation. Aligned history
         # sources consume one HTTP-request budget entry together.
         next_source = int(self.db.get_app_meta("collection-next-source") or "0") % len(queues)
+        next_source_value = next_source
         ordered = [(index, queues[index]) for index in
                    [(next_source + offset) % len(queues) for offset in range(len(queues))]]
         while any(queue for _, _, _, queue in queues) and requests < max_requests:
@@ -155,7 +156,7 @@ class CollectionService:
                         bundled.append((other_index, other_type, other_queue))
                 processed.update(item[0] for item in bundled)
                 requests += 1
-                self.db.set_app_meta("collection-next-source", str((index + 1) % len(queues)))
+                next_source_value = (index + 1) % len(queues)
                 values: list[SourceEvent] = []
                 try:
                     if data_type == "raw_events":
@@ -227,6 +228,8 @@ class CollectionService:
                             start=lo, end=hi, state="failed",
                         )
                         errors.append(f"{source} {lo.isoformat()}: {type(exc).__name__}")
+        if requests:
+            self.db.set_app_meta("collection-next-source", str(next_source_value))
         pending = any(queue for _, _, _, queue in queues)
         for entity_id, entity in entities.items():
             override = self.config.entity_overrides.get(entity_id, {})
