@@ -350,7 +350,7 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
     timeout = float(payload.get("_runtime_timeout_seconds", DEFAULT_LONG_JOB_SECONDS))
     if not 1 <= timeout <= MAX_LONG_JOB_SECONDS:
         raise ValueError("invalid maintenance timeout")
-    max_jobs = payload.get("max_jobs", 1)
+    max_jobs = payload.get("max_jobs", 2)
     if type(max_jobs) is not int or not 1 <= max_jobs <= _MAX_SCAN:
         raise ValueError("invalid maintenance bounds")
     deadline = time.monotonic() + timeout
