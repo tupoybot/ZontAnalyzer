@@ -217,7 +217,7 @@ class ProductionScheduler:
         selected = datetime.fromisoformat(slot["reference"])
         with contextlib.closing(self.runner.client_factory()) as client:
             result = self.runtime.ingestion(client).sync(
-                now=selected, max_requests=4, deadline=deadline,
+                now=selected, max_requests=8, deadline=deadline,
                 replay_checked_after=datetime.fromisoformat(slot["checked_after"]),
                 start_at=datetime.fromisoformat(slot["start"]),
             )
