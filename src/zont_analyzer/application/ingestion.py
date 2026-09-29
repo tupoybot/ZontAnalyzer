@@ -366,7 +366,7 @@ class IngestionService:
             # reapply the timezone from cached inventory even when provider
             # discovery is intentionally skipped.
             from zont_analyzer.application.timezone import apply_device_timezone
-            apply_device_timezone(self.db, self.config)
+            apply_device_timezone(self.db, self.config, devices=devices)
         overlap = timedelta(minutes=self.config.scheduler.overlap_minutes)
         if backfill is not None:
             start = reference - backfill
