@@ -105,7 +105,9 @@ class YdbDatabase:
         self, query: str, parameters: dict[str, Any] | None = None,
         *, timeout_seconds: float | None = None,
     ) -> list[Any]:
-        options: dict[str, Any] = {}
+        # Bound retries of a failed database operation; durable jobs resume on
+        # the next invocation instead of spending the whole lease retrying it.
+        options: dict[str, Any] = {"retry_settings": ydb.RetrySettings(max_retries=3)}
         if timeout_seconds is not None:
             if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
                 raise ValueError("YDB request timeout must be positive and finite")
@@ -135,7 +137,7 @@ class YdbDatabase:
 
         try:
             with span("zont_ydb_transaction"):
-                result: T = self.pool.retry_operation_sync(run)
+                result: T = self.pool.retry_operation_sync(run, ydb.RetrySettings(max_retries=3))
                 return result
         except Exception as exc:
             # Count only terminal failures, never replayable callback attempts.
