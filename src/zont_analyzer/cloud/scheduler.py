@@ -181,7 +181,9 @@ class ProductionScheduler:
                 if sync_result.get("status") != "done" or deadline - self.monotonic() < 25:
                     return {"lane": "sync", **sync_result}
 
-            first = int(state.get("next_lane", 0)) % len(_LANES)
+            missing_daily = (self._has_recent_missing_daily(reference, state.get("daily_deferred", []))
+                             if state.get("last_sync") else False)
+            first = 0 if missing_daily else int(state.get("next_lane", 0)) % len(_LANES)
             for offset in range(len(_LANES)):
                 index = (first + offset) % len(_LANES)
                 lane = _LANES[index]
@@ -254,6 +256,45 @@ class ProductionScheduler:
             self.runtime.db.set_app_meta("cloud-worker-last-success", reference.isoformat())
         return {"status": "done" if result["complete"] else "pending", "sync": result}
 
+    def _has_recent_missing_daily(self, reference: datetime, deferred: list[dict[str, Any]]) -> bool:
+        timezone = self.runtime.config.home.effective_timezone
+        today = reference.astimezone(ZoneInfo(timezone)).date()
+        if reference < midnight(today, timezone) + timedelta(
+            minutes=self.runtime.config.pilot.daily_report_delay_minutes,
+        ):
+            return False
+        days = min(_SCAN_LIMIT, self.runtime.config.pilot.max_catchup_days)
+        periods = [calendar_period("daily", today - timedelta(days=offset + 1), timezone)
+                   for offset in range(days)]
+        available = {start for _identifier, start in self.runtime.db.daily_report_catalogue(
+            periods[-1].start, periods[0].end,
+        )}
+        return any(period.start not in available and not any(
+            item["period"] == period.model_dump(mode="json") for item in deferred
+        ) for period in periods)
+
+    def _missing_recent_daily(self, reference: datetime, deferred: list[dict[str, Any]]) -> Period | None:
+        timezone = self.runtime.config.home.effective_timezone
+        today = reference.astimezone(ZoneInfo(timezone)).date()
+        if reference < midnight(today, timezone) + timedelta(
+            minutes=self.runtime.config.pilot.daily_report_delay_minutes,
+        ):
+            return None
+        yesterday = today - timedelta(days=1)
+        analysis = self.runtime.analysis(no_ai=True)
+        earliest = self.runtime.db.earliest_sample_time()
+        first = earliest.astimezone(ZoneInfo(timezone)).date() if earliest else yesterday
+        first = max(min(first, yesterday), yesterday - timedelta(
+            days=self.runtime.config.pilot.max_catchup_days - 1,
+        ))
+        for offset in range(min(_SCAN_LIMIT, (yesterday - first).days + 1)):
+            period = calendar_period("daily", yesterday - timedelta(days=offset), timezone)
+            if any(item["period"] == period.model_dump(mode="json") for item in deferred):
+                continue
+            if self.runtime.db.report(analysis.report_id_for("daily", period.start)) is None:
+                return period
+        return None
+
     def _reports(
         self, lane: str, state: dict[str, Any], reference: datetime, deadline: float,
         save: Callable[[], None],
@@ -266,34 +307,17 @@ class ProductionScheduler:
         pending = state.get(lane + "_pending")
         deferred = state.setdefault(lane + "_deferred", [])
         if lane == "daily" and (pending or deferred):
-            timezone = self.runtime.config.home.effective_timezone
-            today = reference.astimezone(ZoneInfo(timezone)).date()
-            yesterday = today - timedelta(days=1)
-            ready = reference >= midnight(today, timezone) + timedelta(
-                minutes=self.runtime.config.pilot.daily_report_delay_minutes,
-            )
-            if ready:
-                analysis = self.runtime.analysis(no_ai=True)
-                earliest = self.runtime.db.earliest_sample_time()
-                first = earliest.astimezone(ZoneInfo(timezone)).date() if earliest else yesterday
-                first = max(min(first, yesterday), yesterday - timedelta(
-                    days=self.runtime.config.pilot.max_catchup_days - 1,
-                ))
-                for offset in range(min(_SCAN_LIMIT, (yesterday - first).days + 1)):
-                    selected = yesterday - timedelta(days=offset)
-                    urgent_period = calendar_period("daily", selected, timezone)
-                    if any(item["period"] == urgent_period.model_dump(mode="json") for item in deferred):
-                        continue
-                    if self.runtime.db.report(analysis.report_id_for("daily", urgent_period.start)) is not None:
-                        continue
-                    if pending is None or Period.model_validate(pending["period"]).start < urgent_period.start:
-                        if pending is not None:
-                            deferred.append({**pending, "retry_at": reference.isoformat()})
-                        pending = {"period": urgent_period.model_dump(mode="json"),
-                                   "use_ai": selected == yesterday}
-                        state[lane + "_pending"] = pending
-                        save()
-                    break
+            urgent_daily = self._missing_recent_daily(reference, deferred)
+            if urgent_daily is not None and (
+                pending is None or Period.model_validate(pending["period"]).start < urgent_daily.start
+            ):
+                if pending is not None:
+                    deferred.append({**pending, "retry_at": reference.isoformat()})
+                yesterday = reference.astimezone(ZoneInfo(urgent_daily.timezone)).date() - timedelta(days=1)
+                pending = {"period": urgent_daily.model_dump(mode="json"),
+                           "use_ai": urgent_daily.start.astimezone(ZoneInfo(urgent_daily.timezone)).date() == yesterday}
+                state[lane + "_pending"] = pending
+                save()
         if not pending:
             due_retry = next((item for item in deferred
                               if datetime.fromisoformat(item["retry_at"]) <= reference), None)

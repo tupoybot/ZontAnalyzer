@@ -384,6 +384,24 @@ def test_missing_daily_reports_preempt_an_older_pending_repair(tmp_path: Path, m
 
 
 @pytest.mark.ydb
+def test_missing_daily_report_runs_before_other_report_lanes(tmp_path: Path, monkeypatch) -> None:
+    db, runner, _client = _runner(tmp_path)
+    now = datetime(2026, 9, 30, 2, tzinfo=UTC)
+    monkeypatch.setattr(db, "earliest_sample_time", lambda: now - timedelta(days=3))
+    _scheduler_state(db, {"last_sync": now.isoformat(), "next_lane": 2})
+    fake_runner = Mock()
+    fake_runner.run_scheduled.return_value = {"status": "pending", "phase": "collect"}
+    service = scheduler.ProductionScheduler(runner.runtime, runner=fake_runner, now=lambda: now)
+    monkeypatch.setattr(service, "_sync", lambda *_args: None)
+
+    result = service.run()
+
+    assert result["lane"] == "daily" and result["status"] == "pending"
+    assert fake_runner.run_scheduled.call_args.args[0].start.date().isoformat() == "2026-09-29"
+    assert json.loads(db.jobs.get(scheduler._KEY).checkpoint)["next_lane"] == 1
+
+
+@pytest.mark.ydb
 def test_long_season_waits_for_daily_inputs_and_detects_repaired_facts_without_ai_text(tmp_path: Path) -> None:
     db, runner, _client = _runner(tmp_path)
     runtime = runner.runtime
