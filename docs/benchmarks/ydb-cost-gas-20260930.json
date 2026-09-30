@@ -168,5 +168,7 @@
         "sdk_cpu_us": 103398
       }
     }
-  ]
+  ],
+  "measured_code_commit": "dce7335",
+  "integration_note": "Later latest-report metadata maintenance changes report writes, not the measured gas calculation or bounded read methods."
 }
