@@ -14,6 +14,8 @@ import ydb  # type: ignore[import-untyped]
 
 from zont_analyzer.domain.models import Report
 
+from .latest_report import cache_parameters
+
 T = TypeVar("T")
 
 
@@ -109,8 +111,11 @@ DECLARE $version AS Utf8;
 DECLARE $id AS Utf8;
 DECLARE $payload AS Utf8;
 DECLARE $revision AS Int64;
+DECLARE $catalogue_key AS Utf8;
+DECLARE $catalogue_value AS Utf8;
 UPSERT INTO reports (kind, period_start, period_end, algorithm_version, id, payload, revision)
 VALUES ($kind, $start, $end, $version, $id, $payload, $revision);
+UPSERT INTO app_meta (key,value) VALUES ($catalogue_key,$catalogue_value);
 """
 
 _DELETE_REPORT = """
@@ -298,7 +303,8 @@ class ReportRepository:
                     "$end": previous_key[2], "$version": previous_key[3],
                 })
             tx.execute(_PUT_REPORT, {**key, "$id": normalized.id,
-                                     "$payload": payload, "$revision": revision})
+                                     "$payload": payload, "$revision": revision,
+                                     **cache_parameters(normalized, revision)})
             for recommendation in normalized.recommendations:
                 rec_id = recommendation.id
                 assert rec_id is not None
@@ -382,6 +388,7 @@ class ReportRepository:
                 "$kind": row["kind"], "$start": row["period_start"], "$end": row["period_end"],
                 "$version": row["algorithm_version"], "$id": original.id,
                 "$payload": _json(payload), "$revision": int(row["revision"]) + 1,
+                **cache_parameters(refreshed, int(row["revision"]) + 1),
             })
             return True
 

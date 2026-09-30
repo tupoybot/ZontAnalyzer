@@ -251,21 +251,22 @@ class Database:
                       key=lambda report: (report.generated_at, report.id))
 
     def _all_reports(self) -> Iterator[Report]:
-        after, after_id = -1, ""
+        after = ""
         while True:
             rows = self.storage.execute(
-                "DECLARE $after AS Int64; DECLARE $id AS Utf8; SELECT id,period_end,payload FROM reports "
-                "WHERE period_end > $after OR (period_end=$after AND id > $id) "
-                "ORDER BY period_end,id LIMIT 100;", {"$after": after, "$id": after_id},
+                "DECLARE $after AS Utf8; SELECT id,payload FROM reports VIEW by_id "
+                "WHERE id>$after ORDER BY id LIMIT 100;", {"$after": after},
             )[0].rows
             for row in rows:
                 yield Report.model_validate(json.loads(row.payload)["report"])
             if len(rows) < 100:
                 return
-            after, after_id = int(rows[-1].period_end), str(rows[-1].id)
+            after = str(rows[-1].id)
 
     def latest_report(self) -> Report | None:
-        return max(self._all_reports(), key=lambda report: report.generated_at, default=None)
+        from .latest_report import latest_report
+
+        return latest_report(self)
 
     def token_usage_this_month(self) -> int:
         return self.ai_usage.token_usage_this_month()
