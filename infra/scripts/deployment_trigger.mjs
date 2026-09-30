@@ -28,7 +28,7 @@ export function isReleasePath(path) {
 }
 
 export function trustedBranch(branch) {
-  return branch === 'main' || exactMatch(/^stageM[0-9]+\/[a-z0-9/-]+$/, branch);
+  return branch === 'main' || exactMatch(/^stageM[0-9]+(-[0-9]+)*\/[a-z0-9/-]+$/, branch);
 }
 
 export function trustedReleaseEnvelope(run, repository) {

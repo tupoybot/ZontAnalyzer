@@ -208,19 +208,38 @@ resource "yandex_function_trigger" "scheduler" {
   depends_on = [yandex_serverless_container_iam_binding.application_invoker]
 }
 
-resource "yandex_function_trigger" "monitoring" {
+removed {
+  from = yandex_function_trigger.monitoring
+  lifecycle {
+    destroy = false
+  }
+}
+
+import {
+  for_each = var.monitoring_trigger_import_id == null ? {} : { existing = var.monitoring_trigger_import_id }
+  to       = yandex_serverless_triggers.monitoring[0]
+  id       = each.value
+}
+
+resource "yandex_serverless_triggers" "monitoring" {
   count     = var.enable_monitoring_timer ? 1 : 0
   folder_id = data.yandex_resourcemanager_folder.project.id
   name      = "${local.name}-monitoring"
-  timer {
-    cron_expression = "0 * * * ? *"
+  source = {
+    timer = {
+      cron_expression = var.monitoring_timer_schedule
+    }
   }
-  container {
-    id                 = yandex_serverless_container.application.id
-    service_account_id = var.timer_service_account_id
-    path               = "/internal/monitoring"
-    retry_attempts     = 1
-    retry_interval     = 10
-  }
+  action = [{
+    invoke_container = {
+      container_id       = yandex_serverless_container.application.id
+      service_account_id = var.timer_service_account_id
+      path               = "/internal/monitoring"
+    }
+    retry_policy = {
+      retry_attempts = 1
+      interval       = "10s"
+    }
+  }]
   depends_on = [yandex_serverless_container_iam_binding.application_invoker]
 }

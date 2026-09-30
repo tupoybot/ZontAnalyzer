@@ -463,7 +463,7 @@ run "monitoring_is_private_and_opt_in" {
     }
   }
   assert {
-    condition     = length(yandex_function_trigger.monitoring) == 1 && yandex_function_trigger.monitoring[0].container[0].path == "/internal/monitoring" && yandex_function_trigger.monitoring[0].timer[0].cron_expression == "0 * * * ? *"
+    condition     = length(yandex_serverless_triggers.monitoring) == 1 && yandex_serverless_triggers.monitoring[0].action[0].invoke_container.path == "/internal/monitoring" && yandex_serverless_triggers.monitoring[0].source.timer.cron_expression == "0 * * * ? *"
     error_message = "Monitoring must be hourly and use only the private application endpoint."
   }
   assert {
