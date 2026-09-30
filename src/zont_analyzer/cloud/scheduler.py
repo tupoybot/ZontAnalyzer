@@ -265,6 +265,35 @@ class ProductionScheduler:
             return None
         pending = state.get(lane + "_pending")
         deferred = state.setdefault(lane + "_deferred", [])
+        if lane == "daily" and (pending or deferred):
+            timezone = self.runtime.config.home.effective_timezone
+            today = reference.astimezone(ZoneInfo(timezone)).date()
+            yesterday = today - timedelta(days=1)
+            ready = reference >= midnight(today, timezone) + timedelta(
+                minutes=self.runtime.config.pilot.daily_report_delay_minutes,
+            )
+            if ready:
+                analysis = self.runtime.analysis(no_ai=True)
+                earliest = self.runtime.db.earliest_sample_time()
+                first = earliest.astimezone(ZoneInfo(timezone)).date() if earliest else yesterday
+                first = max(min(first, yesterday), yesterday - timedelta(
+                    days=self.runtime.config.pilot.max_catchup_days - 1,
+                ))
+                for offset in range(min(_SCAN_LIMIT, (yesterday - first).days + 1)):
+                    selected = yesterday - timedelta(days=offset)
+                    urgent_period = calendar_period("daily", selected, timezone)
+                    if any(item["period"] == urgent_period.model_dump(mode="json") for item in deferred):
+                        continue
+                    if self.runtime.db.report(analysis.report_id_for("daily", urgent_period.start)) is not None:
+                        continue
+                    if pending is None or Period.model_validate(pending["period"]).start < urgent_period.start:
+                        if pending is not None:
+                            deferred.append({**pending, "retry_at": reference.isoformat()})
+                        pending = {"period": urgent_period.model_dump(mode="json"),
+                                   "use_ai": selected == yesterday}
+                        state[lane + "_pending"] = pending
+                        save()
+                    break
         if not pending:
             due_retry = next((item for item in deferred
                               if datetime.fromisoformat(item["retry_at"]) <= reference), None)

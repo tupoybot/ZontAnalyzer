@@ -8,6 +8,8 @@ from unittest.mock import Mock
 import pytest
 
 from zont_analyzer.cloud import scheduler
+from zont_analyzer.cloud.report_jobs import ReportJobRunner
+from zont_analyzer.domain.periods import calendar_period
 from zont_analyzer.observability import capture
 
 
@@ -128,3 +130,14 @@ def test_failed_expiry_is_retried_without_blocking_report_lanes(monkeypatch):
     assert "next_recommendation_maintenance" not in checkpoint
     assert checkpoint["recommendation_maintenance_error"] == "RuntimeError"
     assert "private" not in json.dumps(checkpoint)
+
+
+def test_scheduled_collection_uses_configured_sync_batch(monkeypatch) -> None:
+    runtime = Mock()
+    runtime.config.scheduler.max_requests_per_sync = 100
+    runner = ReportJobRunner(runtime)
+    advance = Mock(return_value={"status": "pending"})
+    monkeypatch.setattr(runner, "_run", advance)
+    period = calendar_period("daily", datetime(2026, 9, 29).date(), "UTC")
+    runner.run_scheduled(period, use_ai=False)
+    assert advance.call_args.args[0].max_requests == 100

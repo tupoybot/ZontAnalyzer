@@ -355,6 +355,35 @@ def test_latest_daily_is_not_delayed_by_archive_cursor_and_unknown_ai_does_not_b
 
 
 @pytest.mark.ydb
+def test_missing_daily_reports_preempt_an_older_pending_repair(tmp_path: Path, monkeypatch) -> None:
+    db, runner, _client = _runner(tmp_path)
+    now = datetime(2026, 9, 30, 2, tzinfo=UTC)
+    old = calendar_period("daily", datetime(2026, 9, 26).date(), "UTC")
+    monkeypatch.setattr(db, "earliest_sample_time", lambda: old.start)
+    analysis = runner.runtime.analysis(no_ai=True)
+    calls = []
+
+    def finish(period, *, use_ai, timeout_seconds):
+        calls.append((period.start.date(), use_ai))
+        db.save_report(analysis.analyze_period(period, use_ai=False), "fixture")
+        return {"status": "done"}
+
+    fake_runner = Mock(run_scheduled=Mock(side_effect=finish))
+    service = scheduler.ProductionScheduler(runner.runtime, runner=fake_runner, monotonic=lambda: 0)
+    state = {"last_sync": now.isoformat(),
+             "daily_pending": {"period": old.model_dump(mode="json"), "use_ai": False}}
+    for _ in range(4):
+        assert service._reports("daily", state, now, 180, lambda: None)["status"] == "done"
+    assert calls == [
+        (datetime(2026, 9, 29).date(), True),
+        (datetime(2026, 9, 28).date(), False),
+        (datetime(2026, 9, 27).date(), False),
+        (old.start.date(), False),
+    ]
+    assert state["daily_deferred"] == []
+
+
+@pytest.mark.ydb
 def test_long_season_waits_for_daily_inputs_and_detects_repaired_facts_without_ai_text(tmp_path: Path) -> None:
     db, runner, _client = _runner(tmp_path)
     runtime = runner.runtime
