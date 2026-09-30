@@ -138,9 +138,11 @@ def _calibration_bounds(repository: PublicationRepository, runtime: Runtime) -> 
     earliest, latest = repository.reading_span()
     if earliest and latest and earliest != latest:
         zone = ZoneInfo(runtime.config.home.effective_timezone)
+        # GasService's last boundary exposure ends at this local midnight.
+        # Its post-end cache-read padding cannot contribute integration time.
         return (
             datetime.fromisoformat(earliest).replace(tzinfo=zone).timestamp() - 900,
-            (datetime.fromisoformat(latest).replace(tzinfo=zone) + timedelta(days=1)).timestamp() + 900,
+            (datetime.fromisoformat(latest).replace(tzinfo=zone) + timedelta(days=1)).timestamp(),
         )
     return None
 
@@ -150,17 +152,43 @@ def _hour_overlaps(hour: str, bounds: tuple[float, float]) -> bool:
     return start < bounds[1] and start + 3600 > bounds[0]
 
 
+def _is_calibration_change(change: dict[str, Any]) -> bool:
+    if change["scope"] == "telemetry-gas":
+        return True
+    try:
+        return json.loads(change["payload"]).get("calibration") is not False
+    except (TypeError, ValueError, AttributeError):
+        return True  # Unknown legacy payloads must remain conservative.
+
+
+def _calibration_change_overlaps(change: dict[str, Any], bounds: tuple[float, float]) -> bool:
+    """Use exact changed seconds when available; old markers only identify an hour."""
+    hour = str(change["identifier"])
+    hour_start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
+    try:
+        payload = json.loads(change["payload"])
+        start, end = payload["change_start"], payload["change_end"]
+        if (payload.get("calibration") is True
+                and type(start) is int and type(end) is int
+                and hour_start <= start <= end < hour_start + 3600):
+            return start < bounds[1] and end >= bounds[0]
+    except (TypeError, ValueError, KeyError):
+        pass
+    return _hour_overlaps(hour, bounds)
+
+
 def _telemetry(items: dict[str, dict[str, Any]], repository: PublicationRepository,
-               runtime: Runtime, hours: list[str], calibration_hours: set[str], now: datetime) -> None:
-    if not hours:
+               runtime: Runtime, changes: list[dict[str, Any]], now: datetime) -> None:
+    if not changes:
         return
-    calibration = _calibration_bounds(repository, runtime) if calibration_hours else None
-    for hour in hours:
+    calibration_changes = [change for change in changes if _is_calibration_change(change)]
+    calibration = _calibration_bounds(repository, runtime) if calibration_changes else None
+    if calibration and any(_calibration_change_overlaps(change, calibration) for change in calibration_changes):
+        _enqueue(items, GAS, now)
+        return
+    for hour in sorted({str(change["identifier"]) for change in changes}):
         start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
         end = start + 3600
-        if hour in calibration_hours and calibration and _hour_overlaps(hour, calibration):
-            _enqueue(items, GAS, now)
-            return
         _enqueue(items, GAS, now, lambda item: item["lo"] < end and item["hi"] > start)  # noqa: B023
 
 
@@ -264,14 +292,13 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
     hourly_changes = bool(changes_hint) and len(changes_hint) <= 16 and all(
         change["scope"] in {"telemetry", "telemetry-gas"} for change in changes_hint
     )
-    hourly_hours = sorted({str(change["identifier"]) for change in changes_hint}) if hourly_changes else []
     if hourly_changes:
-        calibration_hours = {str(change["identifier"]) for change in changes_hint
-                             if change["scope"] == "telemetry-gas"
-                             or json.loads(change["payload"]).get("calibration") is not False}
-        calibration = _calibration_bounds(repository, runtime) if calibration_hours else None
-        if calibration and any(_hour_overlaps(hour, calibration) for hour in calibration_hours):
+        calibration_changes = [change for change in changes_hint if _is_calibration_change(change)]
+        calibration = _calibration_bounds(repository, runtime) if calibration_changes else None
+        if calibration and any(_calibration_change_overlaps(change, calibration)
+                               for change in calibration_changes):
             hourly_changes = False
+    hourly_hours = sorted({str(change["identifier"]) for change in changes_hint}) if hourly_changes else []
 
     # A stable backlog needs only one bounded queue batch. Broad invalidations
     # and recovery still load the index so their dirty flags remain durable.
@@ -343,13 +370,9 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         telemetry_changes = [c for c in changes if c["scope"] in {"telemetry", "telemetry-gas"}]
         # Old releases wrote no dependency information. Retain their broad
         # calibration invalidation until their journal entries are consumed.
-        calibration_hours = {str(c["identifier"]) for c in telemetry_changes
-                             if c["scope"] == "telemetry-gas"
-                             or json.loads(c["payload"]).get("calibration") is not False}
-        _telemetry(items, repository, runtime,
-                   sorted({str(c["identifier"]) for c in telemetry_changes}), calibration_hours, now)
+        _telemetry(items, repository, runtime, telemetry_changes, now)
     elif hourly_changes:
-        _telemetry(items, repository, runtime, hourly_hours, set(), now)
+        _telemetry(items, repository, runtime, changes_hint, now)
 
     # A lost local publication directory is reconciled from canonical YDB.
     # Ordinary polls examine only sixteen paths and do no full archive walk.

@@ -66,10 +66,36 @@ def _record_publication_change(
             {"$scope": scope, "$identifier": identifier},
         )
         acknowledged = int(checkpoint.rows[0].value) if checkpoint.rows else 0
-        if (previous.rows and int(previous.rows[0].revision) > acknowledged
-                and json.loads(previous.rows[0].payload).get("calibration") is not False):
-            # Do not narrow an unconsumed marker written by an older release.
-            payload = "{}"
+        if previous.rows and int(previous.rows[0].revision) > acknowledged:
+            try:
+                old = json.loads(previous.rows[0].payload)
+            except (TypeError, ValueError):
+                old = None
+            if scope == "telemetry-gas":
+                try:
+                    new = json.loads(payload)
+                except (TypeError, ValueError):
+                    new = None
+
+                def bounds(value: Any) -> tuple[int, int] | None:
+                    if not isinstance(value, dict) or value.get("calibration") is not True:
+                        return None
+                    first, last = value.get("change_start"), value.get("change_end")
+                    if type(first) is not int or type(last) is not int or first > last:
+                        return None
+                    return first, last
+
+                prior, current = bounds(old), bounds(new)
+                if prior is None or current is None:
+                    # Unknown unconsumed history must retain broad calibration.
+                    payload = "{}"
+                else:
+                    payload = encode({"calibration": True,
+                                      "change_start": min(prior[0], current[0]),
+                                      "change_end": max(prior[1], current[1])})
+            elif not isinstance(old, dict) or old.get("calibration") is not False:
+                # Do not narrow an unconsumed marker written by an older release.
+                payload = "{}"
     publication_revision = bump_revision(tx, "publication")
     tx.execute(
         "DECLARE $scope AS Utf8; DECLARE $identifier AS Utf8; DECLARE $revision AS Int64; "
@@ -455,9 +481,15 @@ class TelemetryRepository:
                 hours = {datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H") for at in changed_times}
                 for hour in sorted(hours):
                     _record_publication_change(tx, "telemetry", hour, payload='{"calibration":false}')
-                for hour in sorted({datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H")
-                                    for at in calibration_times}):
-                    _record_publication_change(tx, "telemetry-gas", hour)
+                by_hour: dict[str, list[int]] = {}
+                for at in calibration_times:
+                    hour = datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H")
+                    by_hour.setdefault(hour, []).append(at)
+                for hour, timestamps in sorted(by_hour.items()):
+                    _record_publication_change(tx, "telemetry-gas", hour, payload=encode({
+                        "calibration": True, "change_start": min(timestamps),
+                        "change_end": max(timestamps),
+                    }))
                 for day in {datetime.fromtimestamp(at, UTC).date().isoformat() for at in changed_times}:
                     tx.execute(
                         "DECLARE $key AS Utf8; DECLARE $value AS Utf8; "

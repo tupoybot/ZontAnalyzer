@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+import json
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -26,14 +27,16 @@ def _daily_reports(runtime, count: int, *, start: date = date(2026, 8, 1)):
     return [analysis.analyze_daily(start + timedelta(days=day), use_ai=False) for day in range(count)]
 
 
-def _record_change(db, scope: str, identifier: str) -> None:
+def _record_change(db, scope: str, identifier: str, payload: dict | None = None) -> None:
     def write(tx) -> None:
         revision = bump_revision(tx, "publication")
         tx.execute(
             "DECLARE $scope AS Utf8; DECLARE $identifier AS Utf8; DECLARE $revision AS Int64; "
+            "DECLARE $payload AS Utf8; "
             "UPSERT INTO publication_changes (scope,identifier,revision,payload) "
-            "VALUES ($scope,$identifier,$revision,'{}');",
-            {"$scope": scope, "$identifier": identifier, "$revision": revision},
+            "VALUES ($scope,$identifier,$revision,$payload);",
+            {"$scope": scope, "$identifier": identifier, "$revision": revision,
+             "$payload": json.dumps(payload or {})},
         )
 
     db.storage.transaction(write)
@@ -212,6 +215,68 @@ def test_calibration_telemetry_invalidates_reports_outside_sample_window(tmp_pat
     result = publication.publish_reports(runtime, batch_size=1)
     assert result["rendered_reports"] == 1
     assert result["pending_reports"] == 3
+
+
+@pytest.mark.ydb
+def test_post_midnight_calibration_change_targets_only_adjacent_reports(tmp_path: Path) -> None:
+    from zont_analyzer.application.owner_context import OwnerContextStore
+
+    runtime = _runtime(tmp_path)
+    reports = _daily_reports(runtime, 4)
+    store = OwnerContextStore(runtime.db)
+    store.update_gas(reports[0].id, {"value_m3": "100"})
+    store.update_gas(reports[1].id, {"value_m3": "102"})
+    publication.publish_reports(runtime)
+
+    # The last reading is Aug 2 in UTC+4. Its final boundary window ends at
+    # Aug 3 00:00 local (Aug 2 20:00 UTC); the old hour marker overlapped the
+    # 15-minute post-window cache fingerprint and invalidated the whole archive.
+    changed = int(datetime(2026, 8, 2, 20, 30, tzinfo=UTC).timestamp())
+    _record_change(runtime.db, "telemetry-gas", "2026-08-02T20",
+                   {"calibration": True, "change_start": changed, "change_end": changed})
+    result = publication.publish_reports(runtime, batch_size=1)
+    assert result["rendered_reports"] == 1
+    assert result["pending_reports"] == 1  # Report windows include a 15-minute edge.
+    assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 0
+
+    # A point inside the final boundary day can change the shared model,
+    # including gas context in reports outside that sample's own day.
+    inside = int(datetime(2026, 8, 2, 19, 30, tzinfo=UTC).timestamp())
+    _record_change(runtime.db, "telemetry-gas", "2026-08-02T19",
+                   {"calibration": True, "change_start": inside, "change_end": inside})
+    result = publication.publish_reports(runtime, batch_size=1)
+    assert result["rendered_reports"] == 1
+    assert result["pending_reports"] == 3
+
+
+def test_exact_calibration_range_and_legacy_hour_with_fractional_timezone() -> None:
+    from zont_analyzer.application.incremental_publication import (
+        _calibration_bounds,
+        _calibration_change_overlaps,
+    )
+
+    class Readings:
+        def reading_span(self) -> tuple[str, str]:
+            return "2026-08-01", "2026-08-02"
+
+    config = AppConfig()
+    config.home.timezone = "Asia/Kolkata"
+    runtime = type("RuntimeStub", (), {"config": config})()
+    bounds = _calibration_bounds(Readings(), runtime)
+    assert bounds is not None
+    assert bounds[1] == datetime(2026, 8, 2, 18, 30, tzinfo=UTC).timestamp()
+    hour = "2026-08-02T18"
+    outside = int(datetime(2026, 8, 2, 18, 45, tzinfo=UTC).timestamp())
+    inside = int(datetime(2026, 8, 2, 18, 15, tzinfo=UTC).timestamp())
+    change = {"scope": "telemetry-gas", "identifier": hour,
+              "payload": json.dumps({"calibration": True, "change_start": outside, "change_end": outside})}
+    assert not _calibration_change_overlaps(change, bounds)
+    change["payload"] = json.dumps({"calibration": True, "change_start": inside, "change_end": inside})
+    assert _calibration_change_overlaps(change, bounds)
+    change["payload"] = "{}"  # Pre-upgrade hourly markers stay conservative.
+    assert _calibration_change_overlaps(change, bounds)
+    change["payload"] = json.dumps({"change_start": outside, "change_end": outside})
+    assert _calibration_change_overlaps(change, bounds)  # Unknown schema is also conservative.
 
 
 @pytest.mark.ydb
