@@ -223,9 +223,17 @@ class ProductionScheduler:
         self, state: dict[str, Any], reference: datetime, deadline: float, save: Callable[[], None],
     ) -> dict[str, Any] | None:
         slot = state.get("sync")
+        interval = timedelta(minutes=self.runtime.config.scheduler.sync_every_minutes)
+
+        def boundary(moment: datetime) -> datetime:
+            # Anchor all polling slots to UTC, including legacy rolling due
+            # times saved a few seconds after a timer's actual boundary.
+            epoch = datetime(1970, 1, 1, tzinfo=UTC)
+            return epoch + ((moment.astimezone(UTC) - epoch) // interval) * interval
+
         if slot is None:
             due = datetime.fromisoformat(state["next_sync"]) if state.get("next_sync") else reference
-            if reference < due:
+            if reference < boundary(due):
                 return None
             # Preserve the reference and replay freshness threshold until this
             # slot completes. Never reset them after a short invocation.
@@ -250,8 +258,7 @@ class ProductionScheduler:
             state["last_sync"] = selected.isoformat()
             # Missed wakeups coalesce into one new slot; no unbounded catch-up
             # list, while independent source cursors retain all missing work.
-            interval = timedelta(minutes=self.runtime.config.scheduler.sync_every_minutes)
-            state["next_sync"] = (selected + interval).isoformat()
+            state["next_sync"] = (boundary(selected) + interval).isoformat()
             self.runtime.db.set_app_meta("cloud-sync-last-success", reference.isoformat())
             self.runtime.db.set_app_meta("cloud-worker-last-success", reference.isoformat())
         return {"status": "done" if result["complete"] else "pending", "sync": result}

@@ -193,14 +193,63 @@ def test_scheduler_resumes_same_sync_slot_then_respects_poll_interval(tmp_path: 
     sync = Mock(side_effect=[{"complete": False}, {"complete": True}])
     monkeypatch.setattr(runner.runtime, "ingestion", lambda _client: Mock(sync=sync))
     state = {}
-    start = datetime.now(UTC)
+    start = datetime(2026, 9, 30, 19, 30, 55, tzinfo=UTC)
     assert service._sync(state, start, 9999999999, lambda: None)["status"] == "pending"
+    pending_slot = dict(state["sync"])
     assert service._sync(state, start + timedelta(minutes=1), 9999999999, lambda: None)["status"] == "done"
+    assert "sync" not in state
+    assert state["next_sync"] == "2026-09-30T20:00:00+00:00"
     assert sync.call_args_list[0].kwargs["now"] == sync.call_args_list[1].kwargs["now"]
     assert (sync.call_args_list[0].kwargs["replay_checked_after"]
             == sync.call_args_list[1].kwargs["replay_checked_after"])
+    assert (sync.call_args_list[0].kwargs["start_at"]
+            == sync.call_args_list[1].kwargs["start_at"])
+    assert pending_slot["reference"] == start.isoformat()
+    assert pending_slot["checked_after"] == start.isoformat()
     assert sync.call_args_list[0].kwargs["max_requests"] == 100
     assert service._sync(state, start + timedelta(minutes=29), 9999999999, lambda: None) is None
+
+
+@pytest.mark.ydb
+def test_sync_timer_jitter_uses_next_utc_slot_once(tmp_path: Path, monkeypatch) -> None:
+    _db, runner, _client = _runner(tmp_path)
+    runner.runtime.config.scheduler.sync_every_minutes = 30
+    service = scheduler.ProductionScheduler(runner.runtime, runner=runner)
+    sync = Mock(return_value={"complete": True})
+    monkeypatch.setattr(runner.runtime, "ingestion", lambda _client: Mock(sync=sync))
+    state = {}
+    first = datetime(2026, 9, 30, 19, 30, 55, tzinfo=UTC)
+    next_timer = datetime(2026, 9, 30, 20, 0, 47, tzinfo=UTC)
+
+    assert service._sync(state, first, 9999999999, lambda: None)["status"] == "done"
+    assert state["next_sync"] == "2026-09-30T20:00:00+00:00"
+    assert service._sync(state, next_timer, 9999999999, lambda: None)["status"] == "done"
+    assert state["next_sync"] == "2026-09-30T20:30:00+00:00"
+    assert service._sync(state, next_timer + timedelta(seconds=8), 9999999999, lambda: None) is None
+    assert [call.kwargs["now"] for call in sync.call_args_list] == [first, next_timer]
+
+
+@pytest.mark.ydb
+def test_legacy_due_and_missed_wakeups_coalesce_into_current_slot(tmp_path: Path, monkeypatch) -> None:
+    _db, runner, _client = _runner(tmp_path)
+    runner.runtime.config.scheduler.sync_every_minutes = 30
+    service = scheduler.ProductionScheduler(runner.runtime, runner=runner)
+    sync = Mock(return_value={"complete": True})
+    monkeypatch.setattr(runner.runtime, "ingestion", lambda _client: Mock(sync=sync))
+    state = {"next_sync": "2026-09-30T20:00:55+00:00"}
+    timer = datetime(2026, 9, 30, 20, 0, 47, tzinfo=UTC)
+
+    assert service._sync(state, timer, 9999999999, lambda: None)["status"] == "done"
+    assert state["next_sync"] == "2026-09-30T20:30:00+00:00"
+    assert service._sync(state, timer + timedelta(seconds=8), 9999999999, lambda: None) is None
+
+    # A late wakeup performs one collection from the current cursor, then
+    # returns to the UTC grid without replaying a loop of missed timer slots.
+    late = datetime(2026, 9, 30, 22, 7, 12, tzinfo=UTC)
+    assert service._sync(state, late, 9999999999, lambda: None)["status"] == "done"
+    assert state["next_sync"] == "2026-09-30T22:30:00+00:00"
+    assert service._sync(state, late + timedelta(seconds=8), 9999999999, lambda: None) is None
+    assert [call.kwargs["now"] for call in sync.call_args_list] == [timer, late]
 
 
 @pytest.mark.ydb
