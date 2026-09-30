@@ -75,6 +75,11 @@ resource "yandex_storage_bucket" "publication" {
   versioning {
     enabled = true
   }
+  lifecycle {
+    # Storage policy changes require a separate review from application releases.
+    # Keep the creation defaults while preserving an existing bucket's policy.
+    ignore_changes = [max_size, versioning, lifecycle_rule]
+  }
 }
 
 resource "yandex_serverless_container" "probe" {
