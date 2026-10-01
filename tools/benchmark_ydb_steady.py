@@ -23,6 +23,8 @@ from tools.benchmark_ydb_cost import ObserveQueries
 from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.adapters.ydb.database import Transaction, YdbConfig
 from zont_analyzer.application.analysis import AnalysisService
+from zont_analyzer.application.period_schedule import _already_current, schedule_signature, seasonal_daily_signature
+from zont_analyzer.application.pilot import _report_source_event_revision
 from zont_analyzer.cloud import monitoring, scheduler
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import SourceEvent, TelemetryPoint
@@ -203,7 +205,13 @@ def main() -> None:
             seed_month_samples(db, at)
             analysis = AnalysisService(db, AppConfig())
             period = calendar_period('monthly', at.date(), 'UTC')
-            old_needs = baseline(args.baseline_scheduler, 'period_needs_report', vars(scheduler))
+            import itertools
+
+            old_needs = baseline(args.baseline_scheduler, 'period_needs_report', {
+                **vars(scheduler), 'schedule_signature': schedule_signature, '_already_current': _already_current,
+                'seasonal_daily_signature': seasonal_daily_signature,
+                '_report_source_event_revision': _report_source_event_revision, 'itertools': itertools,
+            })
             current_revision = db.source_event_revision
             db.source_event_revision = lambda end: old_revision(db, end)  # type: ignore[method-assign]
             try:

@@ -8,8 +8,6 @@ the timer payload. User jobs and publication retain their separate timer.
 from __future__ import annotations
 
 import contextlib
-import hashlib
-import itertools
 import json
 import math
 import time
@@ -19,14 +17,8 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from zont_analyzer.application.analysis import CALCULATION_VERSION, AnalysisService
-from zont_analyzer.application.period_schedule import (
-    _already_current,
-    schedule_signature,
-    scheduled_periods,
-    seasonal_daily_signature,
-)
-from zont_analyzer.application.pilot import _report_source_event_revision
+from zont_analyzer.application.analysis import AnalysisService
+from zont_analyzer.application.period_schedule import scheduled_periods
 from zont_analyzer.cloud.heavy_work import HeavyWorkLease
 from zont_analyzer.cloud.limits import DEFAULT_LONG_JOB_SECONDS, MAX_LONG_JOB_SECONDS
 from zont_analyzer.cloud.report_jobs import MIN_COLLECTION_SECONDS, ReportJobRunner
@@ -55,64 +47,15 @@ def _observe_lane(lane: str, result: dict[str, Any]) -> None:
 
 
 def daily_needs_report(analysis: AnalysisService, selected: date, yesterday: date) -> bool:
-    """The pilot's content-based repair rule, including imported legacy markers."""
-    db = analysis.db
-    start, end = analysis.local_day_window(selected)
-    report = db.report(analysis.report_id_for("daily", start))
-    if report is None:
-        return True
-    data_revision = db.period_data_revision(start, end)
-    empty_revision = hashlib.sha256(b"[]").hexdigest()
-    stored_revision = report.context.get("input_revision", {}).get("telemetry")
-    unchanged_import = (stored_revision is None and data_revision != empty_revision
-                        and db.legacy_period_data_revision(start, end) == empty_revision)
-    if (isinstance(stored_revision, str) and not stored_revision.startswith("telemetry-v2:")
-            and stored_revision != data_revision
-            and stored_revision == db.legacy_period_data_revision(start, end)):
-        if not db.upgrade_report_telemetry_revision(report.id, stored_revision, data_revision):
-            raise RuntimeError("report changed during revision upgrade")
-        report = report.model_copy(deep=True)
-        report.context["input_revision"]["telemetry"] = data_revision
-    return bool(
-        (selected == yesterday and report.context.get("calculation_version") != CALCULATION_VERSION)
-        or _report_source_event_revision(db, report) != db.source_event_revision(end)
-        or (not unchanged_import and (data_revision != empty_revision or (
-            isinstance(stored_revision, str) and stored_revision.startswith("telemetry-v2:")
-        )) and report.context.get("input_revision", {}).get("telemetry") != data_revision)
-    )
+    """Closed daily reports are regenerated only by an explicit request."""
+    start, _end = analysis.local_day_window(selected)
+    return analysis.db.reports.observed_end(analysis.report_id_for("daily", start)) is None
 
 
 def period_needs_report(analysis: AnalysisService, period: Period) -> bool:
-    identifier = analysis.report_id_for(period.kind, period.start)
-    previous = analysis.db.report(identifier)
-    # A missing report is due regardless of its expensive source signature.
-    # The report job computes that signature when it can persist progress.
-    if previous is None:
-        return True
-    signature = schedule_signature(analysis, period)
-    if previous is not None and previous.period_end == period.observed_end:
-        stored_daily = previous.context.get("scheduler_daily_signature")
-        if stored_daily is not None and stored_daily != seasonal_daily_signature(analysis, period):
-            return True
-    if _already_current(previous, period, signature):
-        return False
-    if previous is not None and (
-        _report_source_event_revision(analysis.db, previous) == analysis.db.source_event_revision(period.observed_end)
-    ):
-        # Exact upgrades of old signatures do not represent new facts and must
-        # not purchase another model interpretation.
-        for old_revision, old_ai, old_events in itertools.product((False, True), repeat=3):
-            if not (old_revision or old_ai or old_events):
-                continue
-            old_signature = schedule_signature(
-                analysis, period, legacy_revision=old_revision,
-                legacy_ai_config=old_ai, legacy_source_events=old_events,
-            )
-            if previous.context.get("schedule_signature") == old_signature:
-                if not analysis.db.upgrade_report_schedule_signature(identifier, old_signature, signature):
-                    raise RuntimeError("report changed during schedule signature upgrade")
-                return False
-    return True
+    """Schedule missing reports and the next seasonal observation boundary."""
+    observed_end = analysis.db.reports.observed_end(analysis.report_id_for(period.kind, period.start))
+    return observed_end is None or (period.kind == "seasonal" and observed_end < period.observed_end)
 
 
 class ProductionScheduler:
@@ -302,7 +245,7 @@ class ProductionScheduler:
             period = calendar_period("daily", yesterday - timedelta(days=offset), timezone)
             if any(item["period"] == period.model_dump(mode="json") for item in deferred):
                 continue
-            if self.runtime.db.report(analysis.report_id_for("daily", period.start)) is None:
+            if self.runtime.db.reports.observed_end(analysis.report_id_for("daily", period.start)) is None:
                 return period
         return None
 
@@ -380,6 +323,13 @@ class ProductionScheduler:
                     state[lane + "_cursor"] = index + 1
                 if any(item["period"] == selected_period.model_dump(mode="json") for item in deferred):
                     continue
+                if deadline - self.monotonic() < MIN_COLLECTION_SECONDS + 5:
+                    return {"status": "pending", "phase": "scan"}
+                selected_day = selected_period.start.astimezone(ZoneInfo(timezone)).date()
+                needed = (daily_needs_report(analysis, selected_day, yesterday)
+                          if lane == "daily" else period_needs_report(analysis, selected_period))
+                if not needed:
+                    continue
                 if (selected_period.kind == "seasonal"
                         and selected_period.observed_end - selected_period.start > timedelta(days=31)):
                     # Long seasons consume daily facts. Do not freeze a partial
@@ -393,14 +343,8 @@ class ProductionScheduler:
                     if any(start_day + timedelta(days=offset) not in available
                            for offset in range((end_day - start_day).days)):
                         continue
-                if deadline - self.monotonic() < MIN_COLLECTION_SECONDS + 5:
-                    return {"status": "pending", "phase": "scan"}
-                selected_day = selected_period.start.astimezone(ZoneInfo(timezone)).date()
-                needed = (daily_needs_report(analysis, selected_day, yesterday)
-                          if lane == "daily" else period_needs_report(analysis, selected_period))
-                if needed:
-                    period = selected_period
-                    break
+                period = selected_period
+                break
             if period is None:
                 return None
             previous: Report | None = self.runtime.db.report(analysis.report_id_for(period.kind, period.start))

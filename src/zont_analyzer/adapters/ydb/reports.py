@@ -354,6 +354,16 @@ class ReportRepository:
             {"$key": job_key, "$checkpoint": _json(saved)},
         )
 
+    def observed_end(self, report_id: str) -> datetime | None:
+        """Indexed scheduler lookup without loading report contents or inputs."""
+        rows = self._select(
+            "DECLARE $id AS Utf8; SELECT period_end FROM reports VIEW by_id WHERE id=$id LIMIT 2;",
+            {"$id": report_id},
+        )
+        if len(rows) > 1:
+            raise ValueError("duplicate report ID")
+        return datetime.fromtimestamp(int(rows[0].period_end), UTC) if rows else None
+
     def report(self, report_id: str) -> Report | None:
         def read(tx: Transaction) -> Report | None:
             rows = tx.execute(_REPORT_BY_ID, {"$id": report_id})[0].rows
