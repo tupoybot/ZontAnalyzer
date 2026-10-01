@@ -17,6 +17,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.adapters.ydb.publication import PublicationRepository
+from zont_analyzer.application.gas_feature import gas_analysis_enabled
 from zont_analyzer.domain import Report
 
 if TYPE_CHECKING:
@@ -94,6 +95,8 @@ def _entry(output: Path, report: Report) -> dict[str, Any]:
 
 def _enqueue(items: dict[str, dict[str, Any]], flags: int, now: datetime,
              predicate: Callable[[dict[str, Any]], bool] = lambda _: True) -> None:
+    if not gas_analysis_enabled():
+        flags = RENDER
     for item in items.values():
         if predicate(item):
             if not item["dirty"]:
@@ -119,7 +122,7 @@ def _remember(items: dict[str, dict[str, Any]], output: Path, report: Report,
         "start": int(report.period_start.timestamp()), "end": int(report.period_end.timestamp()),
         "generated": _micros(report.generated_at), "digest": digest, "lo": lo, "hi": hi,
         "comparisons": bool(report.context.get("period_comparisons")),
-        "dirty": (previous["dirty"] if previous else 0) | RENDER | GAS,
+        "dirty": (previous["dirty"] if previous else 0) | RENDER | (GAS if gas_analysis_enabled() else 0),
         "queued": previous["queued"] if previous and previous["dirty"] else _micros(now),
         "entry": previous["entry"] if previous else None,
         "json_stamp": previous["json_stamp"] if previous else ("" if cloud else _stamp(json_path)),
@@ -129,6 +132,8 @@ def _remember(items: dict[str, dict[str, Any]], output: Path, report: Report,
 
 
 def _dependents(items: dict[str, dict[str, Any]], report: Report, now: datetime) -> None:
+    if not gas_analysis_enabled():
+        return
     end, start = report.period_end.timestamp(), report.period_start.timestamp()
     _enqueue(items, COST, now, lambda item: item["comparisons"] and item["report_id"] != report.id
              and item["lo"] < end and item["hi"] > start)
@@ -179,7 +184,7 @@ def _calibration_change_overlaps(change: dict[str, Any], bounds: tuple[float, fl
 
 def _telemetry(items: dict[str, dict[str, Any]], repository: PublicationRepository,
                runtime: Runtime, changes: list[dict[str, Any]], now: datetime) -> None:
-    if not changes:
+    if not gas_analysis_enabled() or not changes:
         return
     calibration_changes = [change for change in changes if _is_calibration_change(change)]
     calibration = _calibration_bounds(repository, runtime) if calibration_changes else None
@@ -292,7 +297,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
     hourly_changes = bool(changes_hint) and len(changes_hint) <= 16 and all(
         change["scope"] in {"telemetry", "telemetry-gas"} for change in changes_hint
     )
-    if hourly_changes:
+    if hourly_changes and gas_analysis_enabled():
         calibration_changes = [change for change in changes_hint if _is_calibration_change(change)]
         calibration = _calibration_bounds(repository, runtime) if calibration_changes else None
         if calibration and any(_calibration_change_overlaps(change, calibration)
@@ -321,7 +326,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                         batch_size, str(latest_hint["href"]) if latest_hint else "",
                         include_unpublished=int(meta_hint["unpublished_count"]) > 0),
                     dict(meta_hint)) if partial else repository.load())
-    if partial and hourly_changes:
+    if partial and hourly_changes and gas_analysis_enabled():
         for href, affected in repository.affected_items(hourly_hours).items():
             items.setdefault(href, affected)
     previous, old_meta = deepcopy(items), dict(meta)
@@ -347,6 +352,13 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                     _dependents(items, report, now)
             elif scope == "render":
                 _enqueue(items, RENDER, now, lambda item: item["report_id"] == identifier)  # noqa: B023
+            elif not gas_analysis_enabled() and (
+                scope in {"tariff", "telemetry", "telemetry-gas"}
+                or scope.startswith(("tariff:", "owner-gas:", "telemetry:", "series:"))
+                or scope == "global" and identifier in {"gas", "cost"}
+            ):
+                # Consume the journal normally, without scheduling disabled work.
+                continue
             elif scope == "global":
                 _enqueue(items, {"gas": GAS, "cost": COST}.get(identifier, RENDER), now)
             elif scope == "tariff" and identifier:
@@ -431,8 +443,9 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                     "manifest": meta["manifest_key"] if cloud else str(manifest_path),
                     "latest_report_id": latest["report_id"] if latest else None}
     queue = _queue(items, latest_href, batch_size)
-    service = GasService(runtime.db, runtime.config) if any(item["dirty"] & (GAS | COST) for item in queue) else None
-    tariffs = GasTariffStore(runtime.db).history() if queue else []
+    service = (GasService(runtime.db, runtime.config)
+               if gas_analysis_enabled() and any(item["dirty"] & (GAS | COST) for item in queue) else None)
+    tariffs = GasTariffStore(runtime.db).history() if queue and gas_analysis_enabled() else []
 
     def render(report: Report, *, is_latest: bool = False) -> str:
         owner_data = {

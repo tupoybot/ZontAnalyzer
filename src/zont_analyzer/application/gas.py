@@ -87,6 +87,10 @@ def _utc(day: date, timezone: str, hour: int = 0) -> datetime:
 
 class GasService:
     def __init__(self, db: Database, config: AppConfig):
+        from zont_analyzer.application.gas_feature import gas_analysis_enabled
+
+        if not gas_analysis_enabled():
+            raise RuntimeError("Gas analysis is temporarily disabled")
         input_revision = db.gas_input_revision()
         self.db, self.config = db, config
         from zont_analyzer.application.timezone import apply_device_timezone

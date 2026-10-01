@@ -896,7 +896,9 @@ def _historical_evidence_html(context: Mapping[str, Any]) -> str:
 
 
 def render_text(report: Report, *, current_comfort_band_c: float | None = None) -> str:
-    report = normalize_report_for_display(report)
+    from .gas_visibility import gas_display_report
+
+    report = gas_display_report(normalize_report_for_display(report))
     lines = [
         f"ZontAnalyzer — {report.kind}",
         f"ID отчёта: {report.id}",
@@ -904,6 +906,8 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
         timezone_note(report),
         ai_provenance_label(report),
     ]
+    if notice := report.context.get("gas_disabled_notice"):
+        lines.append(str(notice))
     lines.extend(ai_provenance_details(report))
     if note := target_band_note(report, current_comfort_band_c):
         lines.append(note)
@@ -1156,10 +1160,13 @@ def render_html(
     from . import presentation as ui
     from .charts import render_charts
     from .charts.gas import render_daily_gas
+    from .gas_visibility import gas_display_report
     from .theme import SCRIPT, STYLE
 
     canonical_report = report
-    report = normalize_report_for_display(report)
+    report = gas_display_report(normalize_report_for_display(report))
+    gas_notice = report.context.get("gas_disabled_notice")
+    gas_notice_html = f'<p class="full-width chart-note">{html.escape(str(gas_notice))}</p>' if gas_notice else ""
     band_note = target_band_note(report, current_comfort_band_c)
     band_note_html = f'<p class="chart-note target-band-note">{html.escape(band_note)}</p>' if band_note else ""
     title = html.escape(f"ZontAnalyzer — {report.kind}")
@@ -1499,6 +1506,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="engineering-chart">{render_charts(report, chart_data, panel_ids=("thermal",))}</div>
 </section>
 <div class="lower-grid full-width">{ui.timeline(report)}{ui.quality(report)}</div>
+{gas_notice_html}
 {render_daily_gas(report)}
 {more_actions}
 <section class="details-area full-width"><h2>Почему сделаны эти выводы</h2>

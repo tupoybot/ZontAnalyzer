@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from zont_analyzer.application.gas_feature import gas_analysis_enabled
 from zont_analyzer.application.pilot import atomic_write_text as atomic_write_text
 from zont_analyzer.application.pilot import reports_directory
 from zont_analyzer.domain import Report
@@ -127,7 +128,7 @@ def _publish_report_locked(
 
     owner_data: dict[str, Any] = {
         "profiles": [owner_store.profile(str(device["id"])) for device in runtime.db.list_devices()],
-        "tariffs": GasTariffStore(runtime.db).history(),
+        "tariffs": (GasTariffStore(runtime.db).history() if gas_analysis_enabled() else []),
     }
     from zont_analyzer.application.ai_maintenance import review_state
 
@@ -236,10 +237,11 @@ def _publish_locked(
         # the durable report change schedules dependent worker work afterwards.
         from zont_analyzer.application.gas import GasService
 
-        service = GasService(runtime.db, runtime.config)
+        service = GasService(runtime.db, runtime.config) if gas_analysis_enabled() else None
         result: dict[str, Any] = {}
         for candidate in overrides:
-            result = _publish_report_locked(runtime, output_dir, service.refresh(candidate), now)
+            refreshed = service.refresh(candidate) if service else candidate
+            result = _publish_report_locked(runtime, output_dir, refreshed, now)
         return result
 
     from zont_analyzer.application.owner_context import OwnerContextStore
@@ -248,7 +250,7 @@ def _publish_locked(
     from zont_analyzer.application.gas_tariffs import GasTariffStore
 
     profiles = [owner_store.profile(str(device["id"])) for device in runtime.db.list_devices()]
-    tariffs = GasTariffStore(runtime.db).history()
+    tariffs = (GasTariffStore(runtime.db).history() if gas_analysis_enabled() else [])
     from zont_analyzer.application.ai_maintenance import review_state
 
     ai_review = review_state(runtime)
@@ -288,9 +290,11 @@ def _publish_locked(
 
     from zont_analyzer.application.gas import GasService
 
-    gas_service = GasService(runtime.db, runtime.config)
+    gas_service = GasService(runtime.db, runtime.config) if gas_analysis_enabled() else None
     candidate_ids = {report.id for report in overrides or []}
     for report_path, report in list(reports.items()):
+        if gas_service is None:
+            break
         refreshed = gas_service.refresh(report)
         # Regeneration owns the candidate commit after publication succeeds.
         if report.id in candidate_ids or gas_service.persist_refresh(report, refreshed):

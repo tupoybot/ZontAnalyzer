@@ -837,14 +837,18 @@ class AnalysisService:
                             timezone=self.config.home.effective_timezone, complete=True)
         control_context["period"] = period.model_dump(mode="json")
         from zont_analyzer.application.gas import GasService
+        from zont_analyzer.application.gas_feature import GAS_DISABLED_NOTICE, gas_analysis_enabled
 
-        if include_comparisons or self._gas_service is None:
-            self._gas_service = GasService(self.db, self.config)
-        control_context["gas"] = self._gas_service.context(
-            start, end, complete=period.complete, include_daily=kind in {"weekly", "monthly"},
-        )
-        if include_comparisons:
-            control_context["gas_savings"] = self._gas_service.savings(end)
+        if gas_analysis_enabled():
+            if include_comparisons or self._gas_service is None:
+                self._gas_service = GasService(self.db, self.config)
+            control_context["gas"] = self._gas_service.context(
+                start, end, complete=period.complete, include_daily=kind in {"weekly", "monthly"},
+            )
+            if include_comparisons:
+                control_context["gas_savings"] = self._gas_service.savings(end)
+        else:
+            control_context["gas_disabled_notice"] = GAS_DISABLED_NOTICE
         control_context["season_boundaries"] = self.season_boundaries()[0].model_dump()
         control_context["calculation_version"] = CALCULATION_VERSION
         control_context["timezone_provenance"] = self.config.home.timezone_provenance
@@ -953,8 +957,9 @@ class AnalysisService:
                     summary = previous_report.summary
                     recommendations = previous_report.recommendations
                     ai_used = True
-                    control_context["gas"]["ai_stale"] = True
-                    control_context["gas_interpretation_stale"] = True
+                    if gas_analysis_enabled():
+                        control_context["gas"]["ai_stale"] = True
+                        control_context["gas_interpretation_stale"] = True
                     control_context["ai_interpretation_reuse"] = {
                         "source_generated_at": original_ai_generated_at(previous_report),
                         "reason": "AI refresh failed validation; retained last valid interpretation",
@@ -979,8 +984,9 @@ class AnalysisService:
             ai_used=ai_used,
             **reasoning,
         )
-        priced_report: Report = self._gas_service.refresh_cost(report)
-        report = priced_report
+        if gas_analysis_enabled():
+            priced_report: Report = self._gas_service.refresh_cost(report)
+            report = priced_report
         if ai_used and not control_context.get("ai_interpretation_reuse"):
             report.context["ai_facts_fingerprint"] = report_facts_fingerprint(report)
         elif ai_used and previous_report and previous_report.context.get("ai_facts_fingerprint"):
