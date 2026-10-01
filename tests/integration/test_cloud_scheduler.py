@@ -26,6 +26,22 @@ def _coverage(db, period) -> None:
                                   end=period.observed_end, state="empty")
 
 
+@pytest.mark.ydb
+def test_missing_monthly_report_does_not_scan_telemetry_before_starting_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _db, runner, _client = _runner(tmp_path)
+    analysis = runner.runtime.analysis(no_ai=True)
+    period = calendar_period("monthly", datetime(2026, 9, 1, tzinfo=UTC).date(),
+                             analysis.config.home.effective_timezone)
+
+    def unexpected_revision(*_args: object) -> str:
+        raise AssertionError("a missing report does not need a source fingerprint before job start")
+
+    monkeypatch.setattr(analysis.db, "period_data_revision", unexpected_revision)
+    assert scheduler.period_needs_report(analysis, period)
+
+
 def _scheduler_state(db, state: dict) -> None:
     lease = db.jobs.acquire(scheduler._KEY, "test-setup", 30)
     assert lease is not None

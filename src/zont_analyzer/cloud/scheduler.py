@@ -85,6 +85,10 @@ def daily_needs_report(analysis: AnalysisService, selected: date, yesterday: dat
 def period_needs_report(analysis: AnalysisService, period: Period) -> bool:
     identifier = analysis.report_id_for(period.kind, period.start)
     previous = analysis.db.report(identifier)
+    # A missing report is due regardless of its expensive source signature.
+    # The report job computes that signature when it can persist progress.
+    if previous is None:
+        return True
     signature = schedule_signature(analysis, period)
     if previous is not None and previous.period_end == period.observed_end:
         stored_daily = previous.context.get("scheduler_daily_signature")
