@@ -35,6 +35,7 @@ fi
 
 docker run --rm --user "$(id -u):$(id -g)" \
     --env-file "$PRIVATE/state.env" -e "M1_ACTION=$ACTION" \
+    -e "M1_PRESERVE_RUNTIME_SETTINGS=${M1_PRESERVE_RUNTIME_SETTINGS:-0}" \
     --mount "type=bind,src=$ROOT/infra/scripts,dst=/scripts,readonly" \
     --mount "type=bind,src=$PRIVATE,dst=/private" \
     --workdir /private/cloud-work "$TOOLS" sh -c '
@@ -44,6 +45,10 @@ docker run --rm --user "$(id -u):$(id -g)" \
     if [ "$M1_ACTION" = plan ] || [ "$M1_ACTION" = plan-foundation ]; then
       terraform init -input=false -no-color -lockfile=readonly \
         -backend-config=/private/cloud.tfbackend.json > /private/deploy-init.log 2>&1
+      if [ "$M1_ACTION" = plan ]; then
+        terraform state pull > /private/pre-deploy-state.json 2> /private/state-pull.log
+        python /scripts/prepare_release_state.py /private > /private/state-compatibility.log 2>&1
+      fi
       set --
       if [ "$M1_ACTION" = plan-foundation ]; then
         set -- -target=yandex_container_registry.project -target=yandex_lockbox_secret.probe

@@ -47,8 +47,9 @@ def test_ydb_retried_callback_counts_only_terminal_failure(monkeypatch):
         attempts += 1
         raise RuntimeError("private query data")
 
-    def retries(run):
-        for _ in range(2):
+    def retries(run, retry_settings):
+        assert retry_settings.max_retries == 3
+        for _ in range(retry_settings.max_retries):
             with suppress(RuntimeError):
                 run(session)
         return run(session)
@@ -56,7 +57,7 @@ def test_ydb_retried_callback_counts_only_terminal_failure(monkeypatch):
     db.pool = SimpleNamespace(retry_operation_sync=retries)
     with pytest.raises(RuntimeError):
         db.transaction(callback)
-    assert attempts == 3
+    assert attempts == 4
     raw.commit.assert_not_called()
     observe.assert_called_once_with("zont_ydb_errors_total")
 

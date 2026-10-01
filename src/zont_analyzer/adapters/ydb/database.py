@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -17,6 +18,7 @@ import ydb  # type: ignore[import-untyped]
 from zont_analyzer.observability import observe, span
 
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -94,15 +96,18 @@ class YdbDatabase:
         try:
             with span("zont_ydb_query"):
                 return self._execute(query, parameters, timeout_seconds=timeout_seconds)
-        except Exception:
+        except Exception as exc:
             observe("zont_ydb_errors_total")
+            logger.error("YDB execute failed: %s", type(exc).__name__)
             raise
 
     def _execute(
         self, query: str, parameters: dict[str, Any] | None = None,
         *, timeout_seconds: float | None = None,
     ) -> list[Any]:
-        options: dict[str, Any] = {}
+        # Bound retries of a failed database operation; durable jobs resume on
+        # the next invocation instead of spending the whole lease retrying it.
+        options: dict[str, Any] = {"retry_settings": ydb.RetrySettings(max_retries=3)}
         if timeout_seconds is not None:
             if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
                 raise ValueError("YDB request timeout must be positive and finite")
@@ -132,11 +137,12 @@ class YdbDatabase:
 
         try:
             with span("zont_ydb_transaction"):
-                result: T = self.pool.retry_operation_sync(run)
+                result: T = self.pool.retry_operation_sync(run, ydb.RetrySettings(max_retries=3))
                 return result
-        except Exception:
+        except Exception as exc:
             # Count only terminal failures, never replayable callback attempts.
             observe("zont_ydb_errors_total")
+            logger.error("YDB transaction failed: %s", type(exc).__name__)
             raise
 
     def read_table(
@@ -174,8 +180,9 @@ class YdbDatabase:
                     read, ydb.RetrySettings(max_retries=3, idempotent=True),
                 )
                 return result
-        except Exception:
+        except Exception as exc:
             observe("zont_ydb_errors_total")
+            logger.error("YDB read_table %s failed: %s", table, type(exc).__name__)
             raise
 
     def initialize(self) -> None:

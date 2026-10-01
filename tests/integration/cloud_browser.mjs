@@ -67,7 +67,8 @@ try {
   assert.doesNotMatch(latest, /<script>unsafe<\/script>/);
   await page.goto(`${base}/latest.html`, { waitUntil: "networkidle" });
   await page.locator("[data-archive-navigation]").waitFor();
-  assert.match(await page.locator(".gas-kpi-money").first().textContent(), /98,40/, "saved gas cost is shown");
+  assert.equal(await page.locator(".gas-kpi-money").count(), 0, "suspended gas cost stays hidden");
+  assert.match(latest, /Расчёт расхода и стоимости газа временно отключён/);
   const provenance = page.locator(".ai-provenance").first();
   assert.match(await provenance.textContent(), /AI-анализ: fixture-model/, "saved model provenance is shown");
   assert.match(await provenance.textContent(), /Prompt: fixture-prompt/, "provenance details survive publication");
@@ -109,21 +110,16 @@ try {
     .reading.value_m3, "10");
   await drain();
   await page.reload({ waitUntil: "networkidle" });
-  assert.match(await page.locator("[data-owner-gas]").textContent(), /10/);
+  // The reading is durable through the API; suspension does not republish the archive.
+  await page.locator("[data-gas-edit]").click();
+  await page.locator('.owner-gas-history > summary').click();
+  await page.locator('[data-gas-reading][data-gas-day="2026-08-05"]').click();
+  await page.waitForFunction(() => document.querySelector('[name="gas-value"]')?.value === "10");
 
-  await page.locator("[data-tariff-edit]").click();
-  const tariffEditor = page.locator('[data-owner-gas] #tariff-editor');
-  const plannedMonth = await tariffEditor.locator("[data-tariff-month]").inputValue();
-  await tariffEditor.locator("[data-tariff-price]").fill("9");
-  await tariffEditor.locator("[data-tariff-save]").click();
-  await tariffEditor.locator("[data-tariff-message]").filter({ hasText: "Тариф сохранён" }).waitFor();
-  await drain();
-  const tariffs = (await (await context.request.get(`${base}/api/gas-tariffs`)).json()).history;
-  assert.equal(tariffs.find(item => item.effective_month === plannedMonth).price, "9");
-  await page.reload({ waitUntil: "networkidle" });
-  await page.locator("[data-tariff-edit]").click();
-  await page.locator("[data-tariff-message]").filter({ hasText: "История тарифов загружена" }).waitFor();
-  assert.match(await page.locator("[data-tariff-planned]").textContent(), /9 RUB/);
+  assert.equal(await page.locator("[data-tariff-edit]").count(), 0);
+  assert.equal((await context.request.put(`${base}/api/gas-tariffs`, {
+    data: {}, headers: { Origin: base },
+  })).status(), 503);
 
   const card = page.locator(".recommendation[data-recommendation-id]").first();
   await card.waitFor();

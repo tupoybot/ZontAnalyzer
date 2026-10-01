@@ -37,7 +37,7 @@ jobs:
       - name: Verify candidate branch and accepted base
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF_NAME" == main || "$GITHUB_REF_NAME" =~ ^stageM[0-9]+/[a-z0-9/-]+$ ]]
+          [[ "$GITHUB_REF_NAME" == main || "$GITHUB_REF_NAME" =~ ^stageM[0-9]+(-[0-9]+)*/[a-z0-9/-]+$ ]]
           git merge-base --is-ancestor origin/main HEAD
       - name: Find an existing immutable tag
         id: existing

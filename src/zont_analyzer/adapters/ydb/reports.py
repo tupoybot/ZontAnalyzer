@@ -14,6 +14,8 @@ import ydb  # type: ignore[import-untyped]
 
 from zont_analyzer.domain.models import Report
 
+from .latest_report import cache_parameters
+
 T = TypeVar("T")
 
 
@@ -109,8 +111,11 @@ DECLARE $version AS Utf8;
 DECLARE $id AS Utf8;
 DECLARE $payload AS Utf8;
 DECLARE $revision AS Int64;
+DECLARE $catalogue_key AS Utf8;
+DECLARE $catalogue_value AS Utf8;
 UPSERT INTO reports (kind, period_start, period_end, algorithm_version, id, payload, revision)
 VALUES ($kind, $start, $end, $version, $id, $payload, $revision);
+UPSERT INTO app_meta (key,value) VALUES ($catalogue_key,$catalogue_value);
 """
 
 _DELETE_REPORT = """
@@ -298,7 +303,8 @@ class ReportRepository:
                     "$end": previous_key[2], "$version": previous_key[3],
                 })
             tx.execute(_PUT_REPORT, {**key, "$id": normalized.id,
-                                     "$payload": payload, "$revision": revision})
+                                     "$payload": payload, "$revision": revision,
+                                     **cache_parameters(normalized, revision)})
             for recommendation in normalized.recommendations:
                 rec_id = recommendation.id
                 assert rec_id is not None
@@ -348,6 +354,16 @@ class ReportRepository:
             {"$key": job_key, "$checkpoint": _json(saved)},
         )
 
+    def observed_end(self, report_id: str) -> datetime | None:
+        """Indexed scheduler lookup without loading report contents or inputs."""
+        rows = self._select(
+            "DECLARE $id AS Utf8; SELECT period_end FROM reports VIEW by_id WHERE id=$id LIMIT 2;",
+            {"$id": report_id},
+        )
+        if len(rows) > 1:
+            raise ValueError("duplicate report ID")
+        return datetime.fromtimestamp(int(rows[0].period_end), UTC) if rows else None
+
     def report(self, report_id: str) -> Report | None:
         def read(tx: Transaction) -> Report | None:
             rows = tx.execute(_REPORT_BY_ID, {"$id": report_id})[0].rows
@@ -382,10 +398,23 @@ class ReportRepository:
                 "$kind": row["kind"], "$start": row["period_start"], "$end": row["period_end"],
                 "$version": row["algorithm_version"], "$id": original.id,
                 "$payload": _json(payload), "$revision": int(row["revision"]) + 1,
+                **cache_parameters(refreshed, int(row["revision"]) + 1),
             })
             return True
 
         return self.db.transaction(write)
+
+    def report_for_period(self, start: datetime, end: datetime) -> Report | None:
+        """Load only reports matching one period, using keys before payloads."""
+        rows = self._select(
+            "DECLARE $start AS Int64; DECLARE $end AS Int64; "
+            "SELECT id FROM reports WHERE kind IN ('initial','daily','weekly','monthly','seasonal') "
+            "AND period_start=$start AND period_end=$end ORDER BY kind, algorithm_version;",
+            {"$start": _seconds(start), "$end": _seconds(end)},
+        )
+        report_ids = [_text(row["id"]) or "" for row in rows]
+        reports = self._reports_by_ids(report_ids)
+        return max(reports, key=lambda report: report.generated_at) if reports else None
 
     def prior_reports(self, before: datetime, *, limit: int = 7) -> list[Report]:
         bound = max(0, min(limit, 7))
@@ -394,12 +423,13 @@ class ReportRepository:
         query = """
         DECLARE $before AS Int64;
         DECLARE $limit AS Uint64;
-        SELECT payload FROM reports
+        SELECT id FROM reports
         WHERE kind = 'daily' AND period_end <= $before
         ORDER BY period_end DESC, id LIMIT $limit;
         """
-        return self._list(query, {"$before": _seconds(before),
-                                  "$limit": ydb.TypedValue(bound, ydb.PrimitiveType.Uint64)})
+        rows = self._select(query, {"$before": _seconds(before),
+                                    "$limit": ydb.TypedValue(bound, ydb.PrimitiveType.Uint64)})
+        return self._reports_by_ids([_text(row["id"]) or "" for row in rows])
 
     def completed_reports(self, now: datetime, *, limit: int = 1000) -> list[Report]:
         bound = max(0, min(limit, 1000))
@@ -408,16 +438,65 @@ class ReportRepository:
         query = """
         DECLARE $now AS Int64;
         DECLARE $limit AS Uint64;
-        SELECT payload FROM reports
+        SELECT id FROM reports
         WHERE kind IN ('daily', 'weekly', 'monthly', 'seasonal') AND period_end <= $now
         ORDER BY period_end ASC, kind, id LIMIT $limit;
         """
-        reports = self._list(query, {"$now": _seconds(now),
-                                     "$limit": ydb.TypedValue(bound, ydb.PrimitiveType.Uint64)})
+        rows = self._select(query, {"$now": _seconds(now),
+                                    "$limit": ydb.TypedValue(bound, ydb.PrimitiveType.Uint64)})
+        reports = self._reports_by_ids([_text(row["id"]) or "" for row in rows])
         return sorted(
             (report for report in reports if report.generated_at >= report.period_end),
             key=lambda report: (report.generated_at, report.id),
         )
+
+    def latest_completed_daily_report_start(self, now: datetime) -> datetime | None:
+        """Find the latest completed daily period without loading report history."""
+        after_start, after_id = _seconds(now), ""
+        while True:
+            rows = self._select(
+                "DECLARE $now AS Int64; DECLARE $after_start AS Int64; DECLARE $after_id AS Utf8; "
+                "DECLARE $limit AS Uint64; SELECT id,period_start FROM reports WHERE kind='daily' "
+                "AND period_end <= $now AND (period_start < $after_start OR "
+                "(period_start=$after_start AND id > $after_id)) "
+                "ORDER BY period_start DESC, id LIMIT $limit;",
+                {"$now": _seconds(now), "$after_start": after_start, "$after_id": after_id,
+                 "$limit": ydb.TypedValue(100, ydb.PrimitiveType.Uint64)},
+            )
+            if not rows:
+                return None
+            for row in rows:
+                report_id = _text(row["id"]) or ""
+                reports = self._reports_by_ids([report_id])
+                if reports and reports[0].generated_at >= reports[0].period_end:
+                    return reports[0].period_start
+            after_start, after_id = int(rows[-1]["period_start"]), _text(rows[-1]["id"]) or ""
+
+    def _reports_by_ids(self, report_ids: list[str]) -> list[Report]:
+        """Fetch payloads only after a key/filter query has selected report IDs."""
+        if not report_ids:
+            return []
+        query = """
+        DECLARE $ids AS List<Utf8>;
+        SELECT id, payload FROM reports VIEW by_id WHERE id IN $ids;
+        """
+        rows = self._select(query, {
+            "$ids": ydb.TypedValue(report_ids, ydb.ListType(ydb.PrimitiveType.Utf8)),
+        })
+        by_id: dict[str, Report] = {}
+        for row in rows:
+            report_id = _text(row["id"]) or ""
+            if report_id in by_id:
+                raise ValueError("duplicate report ID")
+            by_id[report_id] = self._load(row)
+        if len(by_id) != len(set(report_ids)):
+            missing = set(report_ids) - by_id.keys()
+            if missing:
+                raise ValueError("selected report disappeared during read")
+        return [by_id[report_id] for report_id in report_ids]
+
+    def _select(self, query: str, parameters: dict[str, Any]) -> list[Any]:
+        return self.db.transaction(lambda tx: tx.execute(query, parameters)[0].rows)
 
     def feedback(self, recommendation_id: str) -> Feedback | None:
         def read(tx: Transaction) -> Feedback | None:

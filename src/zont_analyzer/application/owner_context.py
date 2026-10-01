@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
+
+from zont_analyzer.domain.models import Report
 
 
 def utcnow() -> datetime:
@@ -135,6 +139,30 @@ class OwnerContextStore:
 
     def __init__(self, db: Any) -> None:
         self.db = db
+        self._gas_snapshot_depth = 0
+        self._gas_snapshot_states: dict[
+            str, tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]
+        ] = {}
+        self._gas_snapshot_latest_start: datetime | None = None
+        self._gas_snapshot_latest_loaded = False
+        self._gas_snapshot_devices: list[str] | None = None
+
+    @contextmanager
+    def gas_snapshot(self) -> Iterator[OwnerContextStore]:
+        """Reuse gas form inputs during one explicit report-rendering job."""
+        self._gas_snapshot_depth += 1
+        try:
+            yield self
+        finally:
+            self._gas_snapshot_depth -= 1
+            if self._gas_snapshot_depth == 0:
+                self._clear_gas_snapshot()
+
+    def _clear_gas_snapshot(self) -> None:
+        self._gas_snapshot_states.clear()
+        self._gas_snapshot_latest_start = None
+        self._gas_snapshot_latest_loaded = False
+        self._gas_snapshot_devices = None
 
     @staticmethod
     def _validate_text(field: str, value: Any) -> str:
@@ -395,9 +423,19 @@ class OwnerContextStore:
         report = self.db.reports.report(report_id)
         if report is None:
             raise KeyError(report_id)
+        return self.gas_for_report(report, day)
+
+    def gas_for_report(self, report: Report, day: str | None = None) -> dict[str, Any]:
+        """Build gas context from a report already loaded by the caller."""
+        report_id = report.id
         report_day, device_id, zone = self._report_day(report)
         selected_day = self._selected_gas_day(day, report_day, zone)
-        readings, boundaries, audits = self.db.owner.application_gas_state(device_id)
+        if self._gas_snapshot_depth and device_id in self._gas_snapshot_states:
+            readings, boundaries, audits = self._gas_snapshot_states[device_id]
+        else:
+            readings, boundaries, audits = self.db.owner.application_gas_state(device_id)
+            if self._gas_snapshot_depth:
+                self._gas_snapshot_states[device_id] = (readings, boundaries, audits)
         row = next((r for r in readings if r["reading_day"] == selected_day), None)
         visible = [
             item
@@ -411,8 +449,7 @@ class OwnerContextStore:
             )
         ]
         visible.sort(key=lambda item: (_when(item["created_at"]), item["id"]))
-        completed = self.db.reports.completed_reports(utcnow())
-        latest_start = max((r.period_start for r in completed if r.kind == "daily"), default=None)
+        latest_start = self._latest_completed_daily_start()
         return {
             "report_id": report_id,
             "time_precision": "day",
@@ -442,7 +479,31 @@ class OwnerContextStore:
             reading_id=reading_id,
             reading_id_supplied=reading_id_supplied,
         )
+        if self._gas_snapshot_depth:
+            self._gas_snapshot_states.pop(device_id, None)
         return self.gas(report_id, day)
+
+    def _latest_completed_daily_start(self) -> datetime | None:
+        if self._gas_snapshot_depth and self._gas_snapshot_latest_loaded:
+            return self._gas_snapshot_latest_start
+        finder = getattr(self.db, "latest_completed_daily_report_start", None)
+        if callable(finder):
+            latest_start = cast(datetime | None, finder(utcnow()))
+        else:
+            completed = self.db.completed_reports(utcnow())
+            latest_start = max((r.period_start for r in completed if r.kind == "daily"), default=None)
+        if self._gas_snapshot_depth:
+            self._gas_snapshot_latest_start = latest_start
+            self._gas_snapshot_latest_loaded = True
+        return latest_start
+
+    def _application_devices(self) -> list[str]:
+        if self._gas_snapshot_depth and self._gas_snapshot_devices is not None:
+            return self._gas_snapshot_devices
+        devices = cast(list[str], self.db.owner.application_devices())
+        if self._gas_snapshot_depth:
+            self._gas_snapshot_devices = devices
+        return devices
 
     def gas_readings_for_analysis(self) -> list[dict[str, Any]]:
         readings, _boundaries, _audits = self.db.owner.application_gas_state("installation")
@@ -466,7 +527,11 @@ class OwnerContextStore:
         readings: list[dict[str, Any]],
         boundaries: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        devices = self.db.owner.application_devices()
+        from zont_analyzer.application.gas_feature import GAS_DISABLED_NOTICE, gas_analysis_enabled
+
+        if not gas_analysis_enabled():
+            return {"status": "disabled", "reason": GAS_DISABLED_NOTICE, "warnings": []}
+        devices = self._application_devices()
         if len(devices) != 1:
             return {
                 "status": "unknown",

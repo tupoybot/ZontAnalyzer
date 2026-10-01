@@ -294,7 +294,7 @@ def test_report_write_lease_tracks_remaining_parent_lease(
     assert acquired_ttls == [316]  # ceil(300.5s remaining) plus 15s.
 
 
-def test_execute_counts_startup_reserves_publication_and_defaults_to_one_job(
+def test_execute_counts_startup_reserves_publication_and_defaults_to_two_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = SimpleNamespace(db=SimpleNamespace(close=lambda: None, set_app_meta=Mock()))
@@ -308,7 +308,7 @@ def test_execute_counts_startup_reserves_publication_and_defaults_to_one_job(
 
     result = user_jobs.execute({})
 
-    drain.assert_called_once_with(runtime, timeout_seconds=500.0, max_jobs=1)
+    drain.assert_called_once_with(runtime, timeout_seconds=500.0, max_jobs=2)
     publish.assert_not_called()
     assert result["publication"] == {"status": "deferred"}
     runtime.db.set_app_meta.assert_called_once()

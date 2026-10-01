@@ -134,6 +134,8 @@ class OpenAIConfig(StrictModel):
 class SchedulerConfig(StrictModel):
     sync_every_minutes: int = Field(default=5, ge=1, le=1440)
     overlap_minutes: int = Field(default=120, ge=1, le=1440)
+    max_requests_per_sync: int = Field(default=100, ge=1, le=100)
+    discovery_every_minutes: int = Field(default=60, ge=5, le=1440)
 
 
 class PilotConfig(StrictModel):

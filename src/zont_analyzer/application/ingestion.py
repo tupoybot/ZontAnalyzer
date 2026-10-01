@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 _CONNECTION_RECOVERY_META = "connection_recovery"
+_DISCOVERY_LAST_SUCCESS = "zont-discovery-last-success"
 
 
 def _connection_recovery_key(device_id: str) -> str:
@@ -266,7 +267,7 @@ class IngestionService:
         devices: list[dict[str, Any]],
         inferred_entities: dict[str, dict[str, Any]],
         config_names: dict[tuple[str, str], str],
-    ) -> None:
+    ) -> int:
         series_rows = self.db.list_series()
         links = heating_circuit_sensor_links(devices, config_names, series_rows)
         links_by_sensor = {(item.device_id, item.sensor_external_id): item for item in links}
@@ -306,14 +307,25 @@ class IngestionService:
                     role = configured_role
                     confidence = 1.0
                     provenance = "config.entity_overrides"
+            display_name = str(override.get("display_name", name))
+            origin = _series_origin(str(series["source_type"]), str(series["metric_key"]), role)
+            if all((
+                series.get("role") == role,
+                series.get("display_name") == display_name,
+                series.get("confidence") == confidence,
+                series.get("provenance") == provenance,
+                series.get("origin") == origin,
+            )):
+                continue
             self.db.update_series_role(
                 int(series["id"]),
                 role,
-                str(override.get("display_name", name)),
+                display_name,
                 confidence=confidence,
                 provenance=provenance,
-                origin=_series_origin(str(series["source_type"]), str(series["metric_key"]), role),
+                origin=origin,
             )
+        return len(series_rows)
 
     def sync(
         self, *, backfill: timedelta | None = None, now: datetime | None = None,
@@ -325,13 +337,36 @@ class IngestionService:
 
         reference = (now or datetime.now(UTC)).astimezone(UTC).replace(microsecond=0)
         devices = self.db.list_devices()
-        try:
-            self.discover()
-            devices = self.db.list_devices()
-        except Exception:
-            if not devices:
-                raise
-            logger.warning("ZONT discovery refresh failed; using the latest cached configuration")
+        raw_discovery = self.db.get_app_meta(_DISCOVERY_LAST_SUCCESS)
+        discovery_due = not devices or not raw_discovery
+        if raw_discovery and devices:
+            try:
+                last_discovery = datetime.fromisoformat(raw_discovery)
+                discovery_due = (
+                    last_discovery.tzinfo is None
+                    or reference >= last_discovery.astimezone(UTC) + timedelta(
+                        minutes=self.config.scheduler.discovery_every_minutes
+                    )
+                )
+            except (TypeError, ValueError):
+                discovery_due = True
+        discovered = False
+        if discovery_due:
+            try:
+                self.discover()
+                self.db.set_app_meta(_DISCOVERY_LAST_SUCCESS, reference.isoformat())
+                devices = self.db.list_devices()
+                discovered = True
+            except Exception:
+                if not devices:
+                    raise
+                logger.warning("ZONT discovery refresh failed; using the latest cached configuration")
+        if not discovered:
+            # Runtime config is reconstructed for every cloud invocation, so
+            # reapply the timezone from cached inventory even when provider
+            # discovery is intentionally skipped.
+            from zont_analyzer.application.timezone import apply_device_timezone
+            apply_device_timezone(self.db, self.config, devices=devices)
         overlap = timedelta(minutes=self.config.scheduler.overlap_minutes)
         if backfill is not None:
             start = reference - backfill
@@ -393,7 +428,7 @@ class IngestionService:
             ))
         else:
             result["complete"], result["pending"] = False, True
-        self._refresh_series_roles(devices, {}, _object_names(devices))
+        series_count = self._refresh_series_roles(devices, {}, _object_names(devices))
         for device in devices:
             device_id = str(device["id"])
             state = _load_connection_recovery(self.db, device_id)
@@ -404,6 +439,6 @@ class IngestionService:
                 result["complete"], result["pending"] = False, True
             _save_connection_recovery(self.db, device_id, state)
         first, last = self.db.earliest_sample_time(), self.db.latest_sample_time()
-        return {**result, "series": len(self.db.list_series()), "windows": result["requests"],
+        return {**result, "series": series_count, "windows": result["requests"],
                 "history_range": {"first_observed": first.isoformat() if first else None,
                                   "last_observed": last.isoformat() if last else None}}

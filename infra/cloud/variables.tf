@@ -261,7 +261,19 @@ variable "identity" {
   }
 }
 variable "enable_monitoring_timer" {
-  description = "Enable hourly read-only application monitoring without provider calls."
+  description = "Enable read-only application monitoring without provider calls."
   type        = bool
   default     = false
+}
+
+variable "monitoring_trigger_import_id" {
+  description = "Existing monitoring trigger adopted through the v2 API, prepared privately from state."
+  type        = string
+  default     = null
+}
+
+variable "monitoring_timer_schedule" {
+  description = "Monitoring schedule; application releases retain the existing timer schedule."
+  type        = string
+  default     = "0 * * * ? *"
 }

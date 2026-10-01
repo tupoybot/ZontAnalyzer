@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "benchmark": "Bounded YDB report lookup cost",
+  "baseline_commit": "3149665386e5a31dc0fe64d7edd2803137022069",
+  "candidate_reports_source_sha256": "704510ca677e12d1117bdc3107c14033002746e51c59f42045b4adcb8c311cc2",
+  "source_proof": {
+    "mount": "Candidate source was mounted read-only into the measurement container and placed first on PYTHONPATH.",
+    "assertion": "The imported ReportRepository.report_for_period source contained the literal known-kind IN predicate.",
+    "sha256_verified": true
+  },
+  "method": {
+    "baseline": "Exact report lookup methods from the baseline commit ran against the same database as the candidate methods.",
+    "candidate": "Lookup queries select bounded report IDs or metadata before fetching selected payloads. Latest daily lookup pages metadata and fetches candidate payloads until it finds a complete report.",
+    "latest_daily_baseline": "OwnerContextStore historically called ReportRepository.completed_reports(now), whose default limit is 1000. It sorts completed reports by generated_at after loading that bounded result.",
+    "statistics": "YDB Query SDK FULL statistics. read_rows and read_bytes sum table-access reads; queries counts measured SDK query executions; elapsed_ms is client wall time. Request units were not available in these SDK statistics."
+  },
+  "managed_comparison": {
+    "environment": "Managed YDB, read-only paired measurement",
+    "source_revision_stable": true,
+    "all_untruncated_selections_match": true,
+    "cases": {
+      "prior_7": {
+        "baseline": {
+          "queries": 1,
+          "read_rows": 150,
+          "read_bytes": 14673894,
+          "elapsed_ms": 1780.18,
+          "result_rows": 7
+        },
+        "candidate": {
+          "queries": 2,
+          "read_rows": 164,
+          "read_bytes": 1390381,
+          "elapsed_ms": 884.14,
+          "result_rows": 14
+        }
+      },
+      "single_period": {
+        "baseline": {
+          "queries": 1,
+          "read_rows": 175,
+          "read_bytes": 19476154,
+          "elapsed_ms": 292.3,
+          "result_rows": 1
+        },
+        "candidate": {
+          "queries": 2,
+          "read_rows": 3,
+          "read_bytes": 227242,
+          "elapsed_ms": 492.89,
+          "result_rows": 2
+        }
+      },
+      "latest_completed_daily": {
+        "baseline": {
+          "queries": 1,
+          "read_rows": 171,
+          "read_bytes": 19314479,
+          "elapsed_ms": 16618.95,
+          "result_rows": 171,
+          "truncated_at_1000": false
+        },
+        "candidate": {
+          "queries": 2,
+          "read_rows": 152,
+          "read_bytes": 234545,
+          "elapsed_ms": 533.79,
+          "result_rows": 101
+        },
+        "selected_period_matches": true
+      }
+    },
+    "limits": [
+      "The source revision guard verifies that publication inputs did not change during the paired read measurement.",
+      "These timings are individual managed-read observations, not a latency guarantee or request-unit/cost estimate.",
+      "The candidate uses an extra query for bounded selection plus payload retrieval; the managed single-period case read far fewer bytes but had higher observed latency in this run."
+    ]
+  },
+  "local_history_scaling": {
+    "environment": "Disposable in-memory local YDB emulator; source mounted read-only; client limited to two CPU cores",
+    "fixture": "One synthetic daily report per day, with a 2 KiB summary payload.",
+    "histories": [
+      {
+        "years": 1,
+        "report_count": 365,
+        "cases": {
+          "prior_7": {
+            "baseline": {
+              "queries": 1,
+              "read_rows": 365,
+              "read_bytes": 969805,
+              "elapsed_ms": 21.56,
+              "result_rows": 7
+            },
+            "candidate": {
+              "queries": 2,
+              "read_rows": 379,
+              "read_bytes": 28973,
+              "elapsed_ms": 40.02,
+              "result_rows": 14
+            }
+          },
+          "single_period": {
+            "baseline": {
+              "queries": 1,
+              "read_rows": 365,
+              "read_bytes": 965425,
+              "elapsed_ms": 13.06,
+              "result_rows": 1
+            },
+            "candidate": {
+              "queries": 2,
+              "read_rows": 3,
+              "read_bytes": 2713,
+              "elapsed_ms": 29.94,
+              "result_rows": 2
+            }
+          },
+          "latest_completed_daily": {
+            "baseline": {
+              "queries": 1,
+              "read_rows": 365,
+              "read_bytes": 971630,
+              "elapsed_ms": 35.99,
+              "result_rows": 365,
+              "truncated_at_1000": false
+            },
+            "candidate": {
+              "queries": 2,
+              "read_rows": 367,
+              "read_bytes": 15819,
+              "elapsed_ms": 27.24,
+              "result_rows": 101
+            },
+            "selected_period_matches": true
+          }
+        }
+      },
+      {
+        "years": 5,
+        "report_count": 1825,
+        "cases": {
+          "prior_7": {
+            "baseline": {
+              "queries": 1,
+              "read_rows": 1825,
+              "read_bytes": 4849025,
+              "elapsed_ms": 21.05,
+              "result_rows": 7
+            },
+            "candidate": {
+              "queries": 2,
+              "read_rows": 1839,
+              "read_bytes": 69853,
+              "elapsed_ms": 39.91,
+              "result_rows": 14
+            }
+          },
+          "single_period": {
+            "baseline": {
+              "queries": 1,
+              "read_rows": 1825,
+              "read_bytes": 4827125,
+              "elapsed_ms": 16.2,
+              "result_rows": 1
+            },
+            "candidate": {
+              "queries": 2,
+              "read_rows": 3,
+              "read_bytes": 2713,
+              "elapsed_ms": 28.79,
+              "result_rows": 2
+            }
+          },
+          "latest_completed_daily": {
+            "baseline": {
+              "queries": 1,
+              "read_rows": 1825,
+              "read_bytes": 4858150,
+              "elapsed_ms": 80.24,
+              "result_rows": 1000,
+              "truncated_at_1000": true
+            },
+            "candidate": {
+              "queries": 2,
+              "read_rows": 1827,
+              "read_bytes": 68379,
+              "elapsed_ms": 30.37,
+              "result_rows": 101
+            },
+            "selected_period_matches": false,
+            "baseline_behavior": "The old 1000-report limit excluded the newest 825 reports from its candidate set; the candidate selected the actual latest complete daily report."
+          }
+        }
+      },
+      {
+        "years": 10,
+        "report_count": 3650,
+        "cases": {
+          "prior_7": {
+            "baseline": {
+              "queries": 1,
+              "read_rows": 3650,
+              "read_bytes": 9705350,
+              "elapsed_ms": 27.43,
+              "result_rows": 7
+            },
+            "candidate": {
+              "queries": 2,
+              "read_rows": 3664,
+              "read_bytes": 124617,
+              "elapsed_ms": 40.19,
+              "result_rows": 14
+            }
+          },
+          "single_period": {
+            "baseline": {
+              "queries": 1,
+              "read_rows": 3650,
+              "read_bytes": 9657900,
+              "elapsed_ms": 20.7,
+              "result_rows": 1
+            },
+            "candidate": {
+              "queries": 2,
+              "read_rows": 3,
+              "read_bytes": 2716,
+              "elapsed_ms": 29.65,
+              "result_rows": 2
+            }
+          },
+          "latest_completed_daily": {
+            "baseline": {
+              "queries": 1,
+              "read_rows": 3650,
+              "read_bytes": 9723600,
+              "elapsed_ms": 62.39,
+              "result_rows": 1000,
+              "truncated_at_1000": true
+            },
+            "candidate": {
+              "queries": 2,
+              "read_rows": 3652,
+              "read_bytes": 137731,
+              "elapsed_ms": 39.19,
+              "result_rows": 101
+            },
+            "selected_period_matches": false,
+            "baseline_behavior": "The old 1000-report limit excluded the newest 2650 reports from its candidate set; the candidate selected the actual latest complete daily report."
+          }
+        }
+      }
+    ],
+    "limits": [
+      "The candidate and baseline selected the same prior-seven reports and same single-period report at all three history sizes.",
+      "For five- and ten-year histories the baseline latest-daily result is intentionally not equivalent: its 1000-item limit caused it to miss the actual latest report.",
+      "The candidate typically uses two queries where the baseline uses one, trading an extra round trip for fewer archive bytes. Local timings vary and are illustrative; emulator statistics do not predict managed YDB request units or production latency."
+    ]
+  },
+  "measured_code_commit": "dce7335",
+  "integration_note": "Later latest-report metadata maintenance changes report writes, not the measured gas calculation or bounded read methods."
+}

@@ -26,12 +26,71 @@ def _coverage(db, period) -> None:
                                   end=period.observed_end, state="empty")
 
 
+@pytest.mark.ydb
+def test_missing_monthly_report_does_not_scan_telemetry_before_starting_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _db, runner, _client = _runner(tmp_path)
+    analysis = runner.runtime.analysis(no_ai=True)
+    period = calendar_period("monthly", datetime(2026, 9, 1, tzinfo=UTC).date(),
+                             analysis.config.home.effective_timezone)
+
+    def unexpected_revision(*_args: object) -> str:
+        raise AssertionError("a missing report does not need a source fingerprint before job start")
+
+    monkeypatch.setattr(analysis.db, "period_data_revision", unexpected_revision)
+    assert scheduler.period_needs_report(analysis, period)
+
+
 def _scheduler_state(db, state: dict) -> None:
     lease = db.jobs.acquire(scheduler._KEY, "test-setup", 30)
     assert lease is not None
     assert db.jobs.checkpoint(lease.job_key, lease.owner, lease.attempt, json.dumps(state))
     assert db.jobs.release(lease.job_key, lease.owner, lease.attempt)
     db.set_app_meta(scheduler._BASELINES, "1")
+
+
+@pytest.mark.ydb
+@pytest.mark.parametrize("kind", ["daily", "weekly", "monthly", "seasonal"])
+def test_existing_report_selection_reads_only_indexed_boundary(
+    tmp_path: Path, monkeypatch, kind: str,
+) -> None:
+    db, runner, _client = _runner(tmp_path)
+    analysis = runner.runtime.analysis(no_ai=True)
+    selected = datetime(2026, 9, 1, tzinfo=UTC)
+    period = (analysis.seasonal_period(2026, "autumn", as_of=selected + timedelta(days=14))
+              if kind == "seasonal" else calendar_period(kind, selected.date(), "UTC"))
+    report = analysis.analyze_period(period, use_ai=False)
+    # Even legacy reports without freshness fields are complete registry entries.
+    report.context.clear()
+    db.save_report(report, report.summary)
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("scheduler must not load inputs or report contents to select work")
+
+    for name in ("report", "period_data_revision", "legacy_period_data_revision", "source_event_revision",
+                 "daily_reports", "list_series", "load_source_events"):
+        monkeypatch.setattr(db, name, unexpected, raising=False)
+    queries = []
+    execute = db.reports._select
+
+    def record(query, *args, **kwargs):
+        queries.append(query)
+        return execute(query, *args, **kwargs)
+
+    monkeypatch.setattr(db.reports, "_select", record)
+    for _ in range(2):
+        assert not scheduler.period_needs_report(analysis, period)
+        if kind == "daily":
+            assert not scheduler.daily_needs_report(analysis, selected.date(), selected.date())
+    assert len(queries) == (4 if kind == "daily" else 2)
+    assert all("SELECT period_end FROM reports VIEW by_id" in query and "payload" not in query
+               for query in queries)
+    if kind == "seasonal":
+        newer = analysis.seasonal_period(2026, "autumn", as_of=selected + timedelta(days=21))
+        assert scheduler.period_needs_report(analysis, newer)
+        older = analysis.seasonal_period(2026, "autumn", as_of=selected + timedelta(days=7))
+        assert not scheduler.period_needs_report(analysis, older)
 
 
 @pytest.mark.ydb
@@ -77,7 +136,7 @@ def test_collection_deadline_does_not_begin_another_source_request(tmp_path: Pat
 
 
 @pytest.mark.ydb
-def test_scheduled_repair_preserves_ai_in_its_only_atomic_save(tmp_path: Path, monkeypatch) -> None:
+def test_explicit_repair_preserves_ai_without_automatic_rescheduling(tmp_path: Path, monkeypatch) -> None:
     db, runner, _client = _runner(tmp_path)
     period = calendar_period("daily", datetime(2026, 9, 23).date(), "UTC")
     _coverage(db, period)
@@ -90,7 +149,9 @@ def test_scheduled_repair_preserves_ai_in_its_only_atomic_save(tmp_path: Path, m
                         timestamp_utc=period.start + timedelta(hours=5))
     db.telemetry.write_window(device_id="fixture", data_type="raw_events", start=period.start,
                               end=period.end, events=[event], state="complete")
-    assert scheduler.daily_needs_report(runner.runtime.analysis(no_ai=True), period.start.date(), period.start.date())
+    assert not scheduler.daily_needs_report(
+        runner.runtime.analysis(no_ai=True), period.start.date(), period.start.date(),
+    )
     assert runner.run_scheduled(period, use_ai=False)["phase"] == "analyze"
     saves = []
     original_save = db.save_report
@@ -180,6 +241,7 @@ def test_scheduler_serializes_duplicate_timers_and_failed_lane_does_not_starve_r
     assert "private" not in json.dumps(result)
     review = Mock(return_value={"status": "done"})
     monkeypatch.setattr("zont_analyzer.cloud.user_jobs.scheduled_review", review)
+    monkeypatch.setattr(service, "_sync", Mock(return_value=None))
     assert service.run() == {"lane": "review", "status": "done"}
     review.assert_called_once()
 
@@ -192,13 +254,78 @@ def test_scheduler_resumes_same_sync_slot_then_respects_poll_interval(tmp_path: 
     sync = Mock(side_effect=[{"complete": False}, {"complete": True}])
     monkeypatch.setattr(runner.runtime, "ingestion", lambda _client: Mock(sync=sync))
     state = {}
-    start = datetime.now(UTC)
+    start = datetime(2026, 9, 30, 19, 30, 55, tzinfo=UTC)
     assert service._sync(state, start, 9999999999, lambda: None)["status"] == "pending"
+    pending_slot = dict(state["sync"])
     assert service._sync(state, start + timedelta(minutes=1), 9999999999, lambda: None)["status"] == "done"
+    assert "sync" not in state
+    assert state["next_sync"] == "2026-09-30T20:00:00+00:00"
     assert sync.call_args_list[0].kwargs["now"] == sync.call_args_list[1].kwargs["now"]
     assert (sync.call_args_list[0].kwargs["replay_checked_after"]
             == sync.call_args_list[1].kwargs["replay_checked_after"])
+    assert (sync.call_args_list[0].kwargs["start_at"]
+            == sync.call_args_list[1].kwargs["start_at"])
+    assert pending_slot["reference"] == start.isoformat()
+    assert pending_slot["checked_after"] == start.isoformat()
+    assert sync.call_args_list[0].kwargs["max_requests"] == 100
     assert service._sync(state, start + timedelta(minutes=29), 9999999999, lambda: None) is None
+
+
+@pytest.mark.ydb
+def test_sync_timer_jitter_uses_next_utc_slot_once(tmp_path: Path, monkeypatch) -> None:
+    _db, runner, _client = _runner(tmp_path)
+    runner.runtime.config.scheduler.sync_every_minutes = 30
+    service = scheduler.ProductionScheduler(runner.runtime, runner=runner)
+    sync = Mock(return_value={"complete": True})
+    monkeypatch.setattr(runner.runtime, "ingestion", lambda _client: Mock(sync=sync))
+    state = {}
+    first = datetime(2026, 9, 30, 19, 30, 55, tzinfo=UTC)
+    next_timer = datetime(2026, 9, 30, 20, 0, 47, tzinfo=UTC)
+
+    assert service._sync(state, first, 9999999999, lambda: None)["status"] == "done"
+    assert state["next_sync"] == "2026-09-30T20:00:00+00:00"
+    assert service._sync(state, next_timer, 9999999999, lambda: None)["status"] == "done"
+    assert state["next_sync"] == "2026-09-30T20:30:00+00:00"
+    assert service._sync(state, next_timer + timedelta(seconds=8), 9999999999, lambda: None) is None
+    assert [call.kwargs["now"] for call in sync.call_args_list] == [first, next_timer]
+
+
+@pytest.mark.ydb
+def test_legacy_due_and_missed_wakeups_coalesce_into_current_slot(tmp_path: Path, monkeypatch) -> None:
+    _db, runner, _client = _runner(tmp_path)
+    runner.runtime.config.scheduler.sync_every_minutes = 30
+    service = scheduler.ProductionScheduler(runner.runtime, runner=runner)
+    sync = Mock(return_value={"complete": True})
+    monkeypatch.setattr(runner.runtime, "ingestion", lambda _client: Mock(sync=sync))
+    state = {"next_sync": "2026-09-30T20:00:55+00:00"}
+    timer = datetime(2026, 9, 30, 20, 0, 47, tzinfo=UTC)
+
+    assert service._sync(state, timer, 9999999999, lambda: None)["status"] == "done"
+    assert state["next_sync"] == "2026-09-30T20:30:00+00:00"
+    assert service._sync(state, timer + timedelta(seconds=8), 9999999999, lambda: None) is None
+
+    # A late wakeup performs one collection from the current cursor, then
+    # returns to the UTC grid without replaying a loop of missed timer slots.
+    late = datetime(2026, 9, 30, 22, 7, 12, tzinfo=UTC)
+    assert service._sync(state, late, 9999999999, lambda: None)["status"] == "done"
+    assert state["next_sync"] == "2026-09-30T22:30:00+00:00"
+    assert service._sync(state, late + timedelta(seconds=8), 9999999999, lambda: None) is None
+    assert [call.kwargs["now"] for call in sync.call_args_list] == [timer, late]
+
+
+@pytest.mark.ydb
+def test_completed_sync_can_share_timer_delivery_with_report_lane(tmp_path: Path, monkeypatch) -> None:
+    db, runner, _client = _runner(tmp_path)
+    _scheduler_state(db, {})
+    service = scheduler.ProductionScheduler(runner.runtime, runner=runner)
+    monkeypatch.setattr(service, "_sync", Mock(return_value={"status": "done", "sync": {"failed_windows": 0}}))
+    reports = Mock(return_value={"status": "done"})
+    monkeypatch.setattr(service, "_reports", reports)
+
+    result = service.run()
+
+    assert result["lane"] == "daily"
+    reports.assert_called_once()
 
 
 @pytest.mark.ydb
@@ -338,7 +465,54 @@ def test_latest_daily_is_not_delayed_by_archive_cursor_and_unknown_ai_does_not_b
 
 
 @pytest.mark.ydb
-def test_long_season_waits_for_daily_inputs_and_detects_repaired_facts_without_ai_text(tmp_path: Path) -> None:
+def test_missing_daily_reports_preempt_an_older_pending_repair(tmp_path: Path, monkeypatch) -> None:
+    db, runner, _client = _runner(tmp_path)
+    now = datetime(2026, 9, 30, 2, tzinfo=UTC)
+    old = calendar_period("daily", datetime(2026, 9, 26).date(), "UTC")
+    monkeypatch.setattr(db, "earliest_sample_time", lambda: old.start)
+    analysis = runner.runtime.analysis(no_ai=True)
+    calls = []
+
+    def finish(period, *, use_ai, timeout_seconds):
+        calls.append((period.start.date(), use_ai))
+        db.save_report(analysis.analyze_period(period, use_ai=False), "fixture")
+        return {"status": "done"}
+
+    fake_runner = Mock(run_scheduled=Mock(side_effect=finish))
+    service = scheduler.ProductionScheduler(runner.runtime, runner=fake_runner, monotonic=lambda: 0)
+    state = {"last_sync": now.isoformat(),
+             "daily_pending": {"period": old.model_dump(mode="json"), "use_ai": False}}
+    for _ in range(4):
+        assert service._reports("daily", state, now, 180, lambda: None)["status"] == "done"
+    assert calls == [
+        (datetime(2026, 9, 29).date(), True),
+        (datetime(2026, 9, 28).date(), False),
+        (datetime(2026, 9, 27).date(), False),
+        (old.start.date(), False),
+    ]
+    assert state["daily_deferred"] == []
+
+
+@pytest.mark.ydb
+def test_missing_daily_report_runs_before_other_report_lanes(tmp_path: Path, monkeypatch) -> None:
+    db, runner, _client = _runner(tmp_path)
+    now = datetime(2026, 9, 30, 2, tzinfo=UTC)
+    monkeypatch.setattr(db, "earliest_sample_time", lambda: now - timedelta(days=3))
+    _scheduler_state(db, {"last_sync": now.isoformat(), "next_lane": 2})
+    fake_runner = Mock()
+    fake_runner.run_scheduled.return_value = {"status": "pending", "phase": "collect"}
+    service = scheduler.ProductionScheduler(runner.runtime, runner=fake_runner, now=lambda: now)
+    monkeypatch.setattr(service, "_sync", lambda *_args: None)
+
+    result = service.run()
+
+    assert result["lane"] == "daily" and result["status"] == "pending"
+    assert fake_runner.run_scheduled.call_args.args[0].start.date().isoformat() == "2026-09-29"
+    assert json.loads(db.jobs.get(scheduler._KEY).checkpoint)["next_lane"] == 1
+
+
+@pytest.mark.ydb
+def test_long_season_waits_for_daily_inputs_but_does_not_recheck_completed_boundary(tmp_path: Path) -> None:
     db, runner, _client = _runner(tmp_path)
     runtime = runner.runtime
     runtime.config.pilot.max_catchup_days = 2
@@ -372,12 +546,19 @@ def test_long_season_waits_for_daily_inputs_and_detects_repaired_facts_without_a
     assert not scheduler.period_needs_report(analysis, period)
     daily.quality.score = 0.5
     db.save_report(daily, daily.summary)
-    assert scheduler.period_needs_report(analysis, period)
+    assert not scheduler.period_needs_report(analysis, period)
+    # An already built weekly boundary must not even read daily dependencies.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(db, "daily_reports", Mock(side_effect=AssertionError("unexpected dependency scan")))
+        fake_runner.reset_mock()
+        state.pop("seasonal_pending", None)
+        assert service._reports("seasonal", state, now, 180, lambda: None) is None
+        fake_runner.run_scheduled.assert_not_called()
 
 
 @pytest.mark.ydb
 @pytest.mark.parametrize("interrupted_completion", [False, True])
-def test_season_job_reopens_when_daily_repair_follows_telemetry_refresh(
+def test_explicit_season_job_reopens_when_daily_repair_follows_telemetry_refresh(
     tmp_path: Path, monkeypatch, interrupted_completion: bool,
 ) -> None:
     db, runner, _client = _runner(tmp_path)
@@ -410,7 +591,7 @@ def test_season_job_reopens_when_daily_repair_follows_telemetry_refresh(
     sources_after, publication_after = runner._input_state()
     assert sources_after == sources_before
     assert publication_after > publication_before
-    assert scheduler.period_needs_report(analysis, period)
+    assert not scheduler.period_needs_report(analysis, period)
     # Both completed-job reuse and saved-checkpoint recovery must invalidate
     # the stale aggregate. Neither may return done/reused forever.
     repaired = runner.run_scheduled(period, use_ai=False)
