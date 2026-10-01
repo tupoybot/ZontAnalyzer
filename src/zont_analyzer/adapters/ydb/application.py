@@ -149,7 +149,7 @@ class Database:
     def fetch_numeric_observations(
         self, series_id: int, start: datetime, end: datetime, *, include_previous: bool = False,
     ) -> list[tuple[datetime, float | None]]:
-        rows = list(self._samples(series_id, start, end))
+        rows = list(self._samples(series_id, start, end)) if end > start else []
         if include_previous:
             previous = self.storage.execute(
                 "DECLARE $id AS Int64; DECLARE $start AS Int64; SELECT * FROM telemetry_samples "
@@ -310,6 +310,13 @@ class Database:
 
     def period_data_revision(self, start: datetime, end: datetime) -> str:
         return self.period_data_revisions([(start, end)])[(start, end)]
+
+    def telemetry_day_revisions(
+        self, windows: list[tuple[datetime, datetime]],
+    ) -> dict[tuple[datetime, datetime], str]:
+        from .period_revisions import telemetry_day_revisions
+
+        return telemetry_day_revisions(self, windows)
 
     def period_data_revisions(
         self, windows: list[tuple[datetime, datetime]],

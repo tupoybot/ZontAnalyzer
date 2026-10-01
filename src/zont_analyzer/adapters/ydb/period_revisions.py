@@ -28,13 +28,18 @@ def _telemetry_revision(database: Transaction | YdbDatabase) -> str:
     return hashlib.sha256(encode([[row.scope, row.revision] for row in rows]).encode()).hexdigest()
 
 
-def period_data_revisions(db: Database, windows: list[Window]) -> dict[Window, str]:
+def telemetry_day_revisions(db: Database, windows: list[Window]) -> dict[Window, str]:
+    """Cheap conservative cache dependencies, not content fingerprints.
+
+    Every changed ingestion transaction writes its affected UTC day markers.
+    A missing marker is also a dependency: the first subsequent write creates it.
+    Callers must fence their reads and cache writes with the input revision.
+    """
     windows = list(dict.fromkeys(windows))
     if not windows:
         return {}
     if any(end <= start for start, end in windows):
         raise ValueError("period end must be after its start")
-    source_revision = _telemetry_revision(db.storage)
     first = min(start for start, _ in windows)
     last = max(end for _, end in windows)
     lower_marker = f"telemetry-day:{first.astimezone(UTC).date().isoformat()}"
@@ -54,7 +59,6 @@ def period_data_revisions(db: Database, windows: list[Window]) -> dict[Window, s
         after = page[-1].key
     marker_keys = [row.key for row in rows]
     markers: dict[Window, str] = {}
-    keys: dict[Window, str] = {}
     for window in windows:
         start, end = window
         lower = f"telemetry-day:{start.astimezone(UTC).date().isoformat()}"
@@ -62,6 +66,18 @@ def period_data_revisions(db: Database, windows: list[Window]) -> dict[Window, s
         markers[window] = hashlib.sha256(json.dumps(
             [[row.key, row.value] for row in rows[bisect_left(marker_keys, lower):bisect_right(marker_keys, upper)]],
         ).encode()).hexdigest()
+    return markers
+
+
+def period_data_revisions(db: Database, windows: list[Window]) -> dict[Window, str]:
+    windows = list(dict.fromkeys(windows))
+    if not windows:
+        return {}
+    source_revision = _telemetry_revision(db.storage)
+    markers = telemetry_day_revisions(db, windows)
+    keys: dict[Window, str] = {}
+    for window in windows:
+        start, end = window
         keys[window] = (
             f"telemetry-period-revision:v2:{start.astimezone(UTC).isoformat(timespec='microseconds')}:"
             f"{end.astimezone(UTC).isoformat(timespec='microseconds')}"

@@ -281,7 +281,7 @@ class GasService:
         return ranges
 
     def _prefetch_revisions(self, windows: list[tuple[datetime, datetime]]) -> None:
-        """Prime exact day-slice revisions once for this service's current input revision."""
+        """Prime cheap invalidation markers under the service's input fence."""
         self._assert_input_revision()
         bounds = {
             (left - FRESHNESS, right + FRESHNESS)
@@ -290,11 +290,7 @@ class GasService:
         }
         if not bounds:
             return
-        batch = getattr(self.db, 'period_data_revisions', None)
-        if batch is not None:
-            self._slice_revisions.update(batch(sorted(bounds)))
-        else:
-            self._slice_revisions.update({key: self.db.period_data_revision(*key) for key in sorted(bounds)})
+        self._slice_revisions.update(self.db.telemetry_day_revisions(sorted(bounds)))
 
     def _assert_input_revision(self) -> None:
         # Series selection, profile, readings and tariffs were captured at
@@ -316,10 +312,21 @@ class GasService:
         bounds = (start - FRESHNESS, end + FRESHNESS)
         revision = self._slice_revisions.get(bounds)
         if revision is None:
-            revision = self.db.period_data_revision(*bounds)
-            self._slice_revisions[bounds] = revision
+            self._prefetch_revisions([window])
+            revision = self._slice_revisions[bounds]
+        # A held setpoint can precede the marked days. Include that one indexed
+        # predecessor in the dependency and reuse it when calculating a miss.
+        previous = {}
+        for role in ('outdoor_temperature', 'target_temperature', 'control_indoor_temperature'):
+            source = self._unique(role)
+            if source and is_setpoint_series(source['source_type'], source['metric_key']):
+                series_id = int(source['id'])
+                previous[series_id] = self.db.fetch_numeric_observations(
+                    series_id, start, start, include_previous=True,
+                )
         signature = _hash([VERSION, ALGORITHM_VERSION, self.state, self.series,
-                           self.config.analysis.modulation_capability_profile, start, end, revision])
+                           self.config.analysis.modulation_capability_profile, start, end,
+                           'day-markers-v1', revision, previous])
         cache_key = f'gas-exposure:{signature}'
         cached = self.db.get_app_meta(cache_key)
         if cached:
@@ -370,8 +377,9 @@ class GasService:
             if source:
                 samples = self.db.fetch_numeric_observations(
                     int(source['id']), start if held else start - FRESHNESS, end + FRESHNESS,
-                    include_previous=held,
                 )
+                if held:
+                    samples = previous[int(source['id'])] + samples
             for index, (moment, value) in enumerate(samples):
                 if value is None:
                     continue

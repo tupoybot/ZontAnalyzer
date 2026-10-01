@@ -15,6 +15,75 @@ from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.domain import TelemetryPoint
 
 
+@pytest.mark.ydb
+def test_gas_cache_uses_markers_and_invalidates_corrected_old_setpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = make_runtime(tmp_path)
+    runtime.config.home.timezone = 'UTC'
+    runtime.db.save_devices([{'id': '1'}])
+    start = datetime(2026, 2, 1, tzinfo=UTC)
+
+    def target(at: datetime, value: float | None) -> TelemetryPoint:
+        return TelemetryPoint(device_id='1', entity_id='circuit', source_type='z3k_heating_circuit',
+                              metric_key='target_temp', timestamp_utc=at, value_num=value)
+
+    old = start - timedelta(days=3)
+    seed_samples(runtime.db, [target(old, 22.0)], roles={'circuit': 'target_temperature'})
+    # Imported samples may predate day markers. A new cache namespace must
+    # calculate them once; a later normal ingestion creates the missing marker.
+    runtime.db.storage.execute("DELETE FROM app_meta WHERE key >= 'telemetry-day:' AND key < 'telemetry-day;';")
+
+    def fingerprint_forbidden(*args: object) -> str:
+        raise AssertionError('Gas cache validation must not fingerprint raw telemetry')
+
+    monkeypatch.setattr(runtime.db, 'period_data_revisions', fingerprint_forbidden)
+    end = start + timedelta(hours=3)
+    first = GasService(runtime.db, runtime.config).window(start, end)
+    assert first['target_degree_hours'] == 66
+    original_samples = runtime.db._samples
+
+    def samples_forbidden(*args: object):
+        raise AssertionError('Warm exposure may read the predecessor, but not scan samples')
+
+    with monkeypatch.context() as warm:
+        warm.setattr(runtime.db, '_samples', samples_forbidden)
+        assert GasService(runtime.db, runtime.config).window(start, end) == first
+
+    seed_samples(runtime.db, [target(old, 24.0)])
+    assert GasService(runtime.db, runtime.config).window(start, end)['target_degree_hours'] == 72
+    # An explicit unknown predecessor stops holding the previous numeric value.
+    seed_samples(runtime.db, [target(old + timedelta(hours=1), None)])
+    assert GasService(runtime.db, runtime.config).window(start, end)['target_hours'] == 0
+    seed_samples(runtime.db, [target(start + timedelta(hours=1), 21.0)])
+    assert GasService(runtime.db, runtime.config).window(start, end)['target_degree_hours'] == 42
+    assert runtime.db._samples == original_samples
+
+
+@pytest.mark.ydb
+def test_day_marker_dependencies_are_bounded_and_include_freshness_padding(tmp_path: Path) -> None:
+    runtime = make_runtime(tmp_path)
+    start = datetime(2026, 2, 1, tzinfo=UTC)
+    end = start + timedelta(days=1)
+    plain, padded = (start, end), (start - timedelta(minutes=15), end + timedelta(minutes=15))
+    original = runtime.db.telemetry_day_revisions([plain, padded])
+
+    def write(at: datetime) -> None:
+        seed_samples(runtime.db, [TelemetryPoint(device_id='1', entity_id='boiler',
+                     source_type='z3k_boiler_adapter', metric_key='rml', timestamp_utc=at, value_num=50.0)])
+
+    write(start - timedelta(days=10))
+    assert runtime.db.telemetry_day_revisions([plain, padded]) == original
+    write(end)  # End exclusive: only the padded interval depends on this UTC day.
+    changed = runtime.db.telemetry_day_revisions([plain, padded])
+    assert changed[plain] == original[plain]
+    assert changed[padded] != original[padded]
+    write(end)  # Idempotent replay does not change the dependency.
+    assert runtime.db.telemetry_day_revisions([plain, padded]) == changed
+    write(start - timedelta(minutes=5))
+    assert runtime.db.telemetry_day_revisions([padded])[padded] != changed[padded]
+
+
 def _scalar_fingerprint(db, start: datetime, end: datetime) -> str:
     """Independent copy of the previous per-period content fingerprint."""
     digest = hashlib.sha256()
@@ -140,7 +209,7 @@ def test_gas_reuses_calibration_and_batched_revisions_without_freezing_correctio
     owner.update_gas(reports[0].id, {'value_m3': 100})
     owner.update_gas(reports[2].id, {'value_m3': 292})
 
-    original_batch = runtime.db.period_data_revisions
+    original_batch = runtime.db.telemetry_day_revisions
     revision_batches: list[list[tuple]] = []
 
     def batch(windows: list[tuple]) -> dict:
@@ -150,7 +219,8 @@ def test_gas_reuses_calibration_and_batched_revisions_without_freezing_correctio
     def scalar_forbidden(*args: object) -> str:
         raise AssertionError('A prefetched gas slice must not request its revision separately')
 
-    monkeypatch.setattr(runtime.db, 'period_data_revisions', batch)
+    monkeypatch.setattr(runtime.db, 'telemetry_day_revisions', batch)
+    monkeypatch.setattr(runtime.db, 'period_data_revisions', scalar_forbidden)
     monkeypatch.setattr(runtime.db, 'period_data_revision', scalar_forbidden)
     original_fit = gas_analytics.fit_intervals
     fit_calls = 0
