@@ -1,0 +1,65 @@
+{
+  "baseline_commit": "3149665386e5a31dc0fe64d7edd2803137022069",
+  "baseline_publication_sha256": "8165623fe438c9e3b7d5864429f27714be0c1b1f15b70fb665990771e7892dbf",
+  "environment": "Disposable local YDB emulator in Docker",
+  "method": "Exact baseline PublicationRepository.load/save methods were extracted from the baseline commit. The candidate used pending_items with unpublished_count=0, pending_count, and batched save. Both selected the same eight report hrefs and reported the same pending count on each identical fixture. Backend reads were measured with YDB Query SDK FULL statistics; saves were verified by reading the changed digests.",
+  "fixture": {
+    "kind": "synthetic daily publication index",
+    "batch_size": 8,
+    "dirty_rule": "Every tenth report plus the latest report at each fixture size; previous latest markers remain dirty when the fixture grows",
+    "unpublished_count": 0,
+    "entry_state": "All entries already published"
+  },
+  "results": [
+    {
+      "years": 1,
+      "index_items": 365,
+      "pending_items": 38,
+      "selected_sha256": "d3cb0bee77fd431ffcacea831fe476f7b02b6f6ecde1b50efd8796c98fd2c6f2",
+      "read": {
+        "baseline": {"queries": 2, "result_rows": 365, "result_json_bytes": 142607, "sdk_read_rows": 365, "sdk_read_bytes": 58400, "elapsed_seconds": 0.033},
+        "candidate": {"queries": 9, "result_rows": 10, "result_json_bytes": 3536, "sdk_read_rows": 55, "sdk_read_bytes": 2040, "elapsed_seconds": 0.080}
+      },
+      "save_eight": {
+        "baseline": {"queries": 10, "sdk_read_rows": 9, "sdk_read_bytes": 431, "elapsed_seconds": 0.114},
+        "candidate": {"queries": 3, "sdk_read_rows": 9, "sdk_read_bytes": 431, "elapsed_seconds": 0.012},
+        "stored_digests_match": true
+      }
+    },
+    {
+      "years": 5,
+      "index_items": 1825,
+      "pending_items": 185,
+      "selected_sha256": "9e7c37312752b417af2f0129cfc092a9843689a0b98af6056dda9bd4f9da7e85",
+      "read": {
+        "baseline": {"queries": 3, "result_rows": 1825, "result_json_bytes": 714357, "sdk_read_rows": 1825, "sdk_read_bytes": 292064, "elapsed_seconds": 0.044},
+        "candidate": {"queries": 9, "result_rows": 10, "result_json_bytes": 3594, "sdk_read_rows": 202, "sdk_read_bytes": 3272, "elapsed_seconds": 0.034}
+      },
+      "save_eight": {
+        "baseline": {"queries": 10, "sdk_read_rows": 9, "sdk_read_bytes": 431, "elapsed_seconds": 0.066},
+        "candidate": {"queries": 3, "sdk_read_rows": 9, "sdk_read_bytes": 431, "elapsed_seconds": 0.013},
+        "stored_digests_match": true
+      }
+    },
+    {
+      "years": 10,
+      "index_items": 3650,
+      "pending_items": 368,
+      "selected_sha256": "9048ca6907d5398a47b4703ca8be6805c986b9d8111c08f3a05ce8efb47bf016",
+      "read": {
+        "baseline": {"queries": 5, "result_rows": 3650, "result_json_bytes": 1429821, "sdk_read_rows": 3650, "sdk_read_bytes": 584128, "elapsed_seconds": 0.083},
+        "candidate": {"queries": 9, "result_rows": 10, "result_json_bytes": 3650, "sdk_read_rows": 385, "sdk_read_bytes": 4792, "elapsed_seconds": 0.037}
+      },
+      "save_eight": {
+        "baseline": {"queries": 10, "sdk_read_rows": 9, "sdk_read_bytes": 431, "elapsed_seconds": 0.118},
+        "candidate": {"queries": 3, "sdk_read_rows": 9, "sdk_read_bytes": 431, "elapsed_seconds": 0.012},
+        "stored_digests_match": true
+      }
+    }
+  ],
+  "limits": [
+    "The unpublished_count metadata skips four by-kind archive searches only when every entry has been published. Actual unpublished backlog still uses those searches to preserve newest-unpublished priority.",
+    "The pending_count query reads the dirty index in proportion to pending work, so candidate SDK read rows still grow with the number of dirty reports.",
+    "This is one local emulator run on synthetic queue entries. Its Query SDK statistics and elapsed times are not managed YDB request units or production cost estimates."
+  ]
+}

@@ -434,7 +434,7 @@ run "monitored_maintenance_timer" {
     }
   }
   assert {
-    condition     = length(yandex_function_trigger.maintenance) == 1 && yandex_function_trigger.maintenance[0].container[0].id == yandex_serverless_container.application.id && yandex_function_trigger.maintenance[0].container[0].path == "/internal/maintenance"
+    condition     = length(yandex_function_trigger.maintenance) == 1 && yandex_function_trigger.maintenance[0].container[0].id == yandex_serverless_container.application.id && yandex_function_trigger.maintenance[0].container[0].path == "/internal/maintenance" && yandex_function_trigger.maintenance[0].timer[0].cron_expression == "2/5 * * * ? *"
     error_message = "The opt-in maintenance timer must invoke the private application maintenance endpoint."
   }
   assert {
@@ -463,7 +463,7 @@ run "monitoring_is_private_and_opt_in" {
     }
   }
   assert {
-    condition     = length(yandex_function_trigger.monitoring) == 1 && yandex_function_trigger.monitoring[0].container[0].path == "/internal/monitoring" && yandex_function_trigger.monitoring[0].timer[0].cron_expression == "0 * * * ? *"
+    condition     = length(yandex_serverless_triggers.monitoring) == 1 && yandex_serverless_triggers.monitoring[0].action[0].invoke_container.path == "/internal/monitoring" && yandex_serverless_triggers.monitoring[0].source.timer.cron_expression == "0 * * * ? *"
     error_message = "Monitoring must be hourly and use only the private application endpoint."
   }
   assert {
@@ -542,7 +542,7 @@ run "configured_scheduler_is_private" {
     values          = { id = "probe-container" }
   }
   assert {
-    condition     = length(yandex_function_trigger.scheduler) == 1 && yandex_function_trigger.scheduler[0].container[0].id == "application-container" && yandex_function_trigger.scheduler[0].container[0].path == "/internal/scheduler"
+    condition     = length(yandex_function_trigger.scheduler) == 1 && yandex_function_trigger.scheduler[0].container[0].id == "application-container" && yandex_function_trigger.scheduler[0].container[0].path == "/internal/scheduler" && yandex_function_trigger.scheduler[0].timer[0].cron_expression == "0,30 * * * ? *"
     error_message = "The configured scheduler must invoke the private application scheduler route."
   }
   assert {

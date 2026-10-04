@@ -14,6 +14,10 @@ on:
         description: Apply the reviewed infrastructure configuration
         type: boolean
         default: false
+      preserve_runtime_settings:
+        description: Retain deployed YDB throughput and monitoring schedule during an application release
+        type: boolean
+        default: true
   workflow_run:
     workflows: ['Verified cloud application candidate']
     types: [completed]
@@ -64,7 +68,7 @@ jobs:
           CANDIDATE_HEAD: ${{ needs.route.outputs.head }}
         run: |
           set -euo pipefail
-          [[ "$CANDIDATE_BRANCH" == main || "$CANDIDATE_BRANCH" =~ ^stageM[0-9]+/[a-z0-9/-]+$ ]]
+          [[ "$CANDIDATE_BRANCH" == main || "$CANDIDATE_BRANCH" =~ ^stageM[0-9]+(-[0-9]+)*/[a-z0-9/-]+$ ]]
           test "$(git rev-parse HEAD)" = "$CANDIDATE_HEAD"
           git merge-base --is-ancestor origin/main HEAD
           git fetch origin "$CANDIDATE_BRANCH"
@@ -203,6 +207,8 @@ jobs:
             "$private/cloud-work/inputs.tfvars.json" > "$private/candidate.json"
           mv "$private/candidate.json" "$private/cloud-work/inputs.tfvars.json"
       - name: Plan infrastructure without publishing its private output
+        env:
+          M1_PRESERVE_RUNTIME_SETTINGS: ${{ (github.event_name != 'workflow_dispatch' || inputs.preserve_runtime_settings != false) && '1' || '0' }}
         run: infra/deploy.sh plan "$RUNNER_TEMP/m1"
       - name: Apply the selected artifact and environment
         if: needs.route.outputs.apply == 'true'

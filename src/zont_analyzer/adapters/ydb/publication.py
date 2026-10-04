@@ -11,6 +11,8 @@ from zont_analyzer.domain import Report
 
 from .database import Transaction, YdbDatabase
 
+SAVE_BATCH_SIZE = 100
+
 
 def _limit(value: int = 1000) -> ydb.TypedValue:
     return ydb.TypedValue(value, ydb.PrimitiveType.Uint64)
@@ -49,6 +51,117 @@ class PublicationRepository:
         )[0].rows
         return dict(rows[0]) if rows else None
 
+    @staticmethod
+    def _item(row: Any) -> dict[str, Any]:
+        item = dict(row)
+        item["start"] = int(item.pop("period_start"))
+        item["end"] = int(item.pop("period_end"))
+        item["generated"] = int(item.pop("generated_at"))
+        item["queued"] = int(item.pop("queued_at"))
+        item["comparisons"] = bool(item["comparisons"])
+        item["dirty"] = int(item["dirty"])
+        return item
+
+    def pending_items(self, limit: int, latest_href: str, *,
+                      include_unpublished: bool = True) -> dict[str, dict[str, Any]]:
+        """Fetch bounded candidates for each priority and queue age."""
+        items: dict[str, dict[str, Any]] = {}
+
+        def add(rows: Any) -> None:
+            for row in rows:
+                item = self._item(row)
+                items[str(item["href"])] = item
+
+        if latest_href:
+            add(self.db.execute(
+                "DECLARE $href AS Utf8; SELECT * FROM publication_items "
+                "WHERE href=$href AND dirty>0;", {"$href": latest_href},
+            )[0].rows)
+        if include_unpublished:
+            for kind in ("daily", "weekly", "monthly", "seasonal"):
+                add(self.db.execute(
+                    "DECLARE $kind AS Utf8; DECLARE $limit AS Uint64; "
+                    "SELECT * FROM publication_items VIEW by_kind_start "
+                    "WHERE kind=$kind AND dirty>0 AND entry IS NULL "
+                    "ORDER BY period_start DESC LIMIT $limit;",
+                    {"$kind": kind, "$limit": _limit(limit)},
+                )[0].rows)
+        # The queue index sorts by dirty flags before age. Read one bounded
+        # prefix per possible bitmask, then choose the oldest across prefixes.
+        for dirty in range(1, 8):
+            add(self.db.execute(
+                "DECLARE $dirty AS Int64; DECLARE $limit AS Uint64; "
+                "SELECT * FROM publication_items VIEW by_queue "
+                "WHERE dirty=$dirty ORDER BY dirty,queued_at,href LIMIT $limit;",
+                {"$dirty": dirty, "$limit": _limit(limit)},
+            )[0].rows)
+        return items
+
+    def dependent_items(self, start: float, end: float, report_id: str) -> dict[str, dict[str, Any]]:
+        items: dict[str, dict[str, Any]] = {}
+        after = ""
+        while True:
+            rows = self.db.execute(
+                "DECLARE $start AS Double; DECLARE $end AS Double; DECLARE $report_id AS Utf8; "
+                "DECLARE $after AS Utf8; DECLARE $limit AS Uint64; "
+                "SELECT * FROM publication_items WHERE href>$after AND comparisons=true "
+                "AND report_id!=$report_id AND lo<$end AND hi>$start ORDER BY href LIMIT $limit;",
+                {"$start": start, "$end": end, "$report_id": report_id,
+                 "$after": after, "$limit": _limit()},
+            )[0].rows
+            for row in rows:
+                item = self._item(row)
+                items[str(item["href"])] = item
+            if len(rows) < 1000:
+                return items
+            after = str(rows[-1].href)
+
+    def affected_items(self, hours: list[str]) -> dict[str, dict[str, Any]]:
+        """Read only reports whose recorded source windows meet changed UTC hours."""
+        from datetime import UTC, datetime
+
+        items: dict[str, dict[str, Any]] = {}
+        for hour in hours:
+            start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
+            after = ""
+            while True:
+                rows = self.db.execute(
+                    "DECLARE $start AS Double; DECLARE $end AS Double; "
+                    "DECLARE $after AS Utf8; DECLARE $limit AS Uint64; "
+                    "SELECT * FROM publication_items WHERE href>$after AND lo<$end AND hi>$start "
+                    "ORDER BY href LIMIT $limit;",
+                    {"$start": start, "$end": start + 3600, "$after": after, "$limit": _limit()},
+                )[0].rows
+                for row in rows:
+                    item = self._item(row)
+                    items[str(item["href"])] = item
+                if len(rows) < 1000:
+                    break
+                after = str(rows[-1].href)
+        return items
+
+    def manifest_entries(self) -> dict[str, str]:
+        entries: dict[str, str] = {}
+        after = ""
+        while True:
+            rows = self.db.execute(
+                "DECLARE $after AS Utf8; DECLARE $limit AS Uint64; "
+                "SELECT href,entry FROM publication_items WHERE href>$after "
+                "ORDER BY href LIMIT $limit;",
+                {"$after": after, "$limit": _limit()},
+            )[0].rows
+            entries.update((str(row.href), str(row.entry)) for row in rows if row.entry is not None)
+            if len(rows) < 1000:
+                return entries
+            after = str(rows[-1].href)
+
+    def pending_count(self) -> tuple[int, int | None]:
+        rows = self.db.execute(
+            "SELECT COUNT(*) AS count,MIN(queued_at) AS oldest FROM publication_items VIEW by_queue "
+            "WHERE dirty>0;"
+        )[0].rows
+        return (int(rows[0].count), int(rows[0].oldest) if rows[0].oldest is not None else None)
+
     def load(self) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
         items: dict[str, dict[str, Any]] = {}
         after = ""
@@ -59,13 +172,7 @@ class PublicationRepository:
                 {"$after": after, "$limit": _limit()},
             )[0].rows
             for row in rows:
-                item = dict(row)
-                item["start"] = int(item.pop("period_start"))
-                item["end"] = int(item.pop("period_end"))
-                item["generated"] = int(item.pop("generated_at"))
-                item["queued"] = int(item.pop("queued_at"))
-                item["comparisons"] = bool(item["comparisons"])
-                item["dirty"] = int(item["dirty"])
+                item = self._item(row)
                 items[str(item["href"])] = item
             if len(rows) < 1000:
                 break
@@ -160,29 +267,51 @@ class PublicationRepository:
                 return False
             for href in removed:
                 tx.execute("DECLARE $href AS Utf8; DELETE FROM publication_items WHERE href=$href;", {"$href": href})
-            for item in changed:
+            item_type = (ydb.StructType()
+                         .add_member("href", ydb.PrimitiveType.Utf8)
+                         .add_member("report_id", ydb.PrimitiveType.Utf8)
+                         .add_member("kind", ydb.PrimitiveType.Utf8)
+                         .add_member("period_start", ydb.PrimitiveType.Int64)
+                         .add_member("period_end", ydb.PrimitiveType.Int64)
+                         .add_member("generated_at", ydb.PrimitiveType.Int64)
+                         .add_member("digest", ydb.PrimitiveType.Utf8)
+                         .add_member("lo", ydb.PrimitiveType.Double)
+                         .add_member("hi", ydb.PrimitiveType.Double)
+                         .add_member("comparisons", ydb.PrimitiveType.Bool)
+                         .add_member("dirty", ydb.PrimitiveType.Int64)
+                         .add_member("queued_at", ydb.PrimitiveType.Int64)
+                         .add_member("entry", ydb.OptionalType(ydb.PrimitiveType.Utf8))
+                         .add_member("json_stamp", ydb.PrimitiveType.Utf8)
+                         .add_member("html_stamp", ydb.PrimitiveType.Utf8))
+            for offset in range(0, len(changed), SAVE_BATCH_SIZE):
+                batch = changed[offset:offset + SAVE_BATCH_SIZE]
+                values = [{
+                    "href": item["href"], "report_id": item["report_id"], "kind": item["kind"],
+                    "period_start": item["start"], "period_end": item["end"],
+                    "generated_at": item["generated"], "digest": item["digest"],
+                    "lo": float(item["lo"]), "hi": float(item["hi"]),
+                    "comparisons": item["comparisons"], "dirty": item["dirty"],
+                    "queued_at": item["queued"], "entry": item["entry"],
+                    "json_stamp": item["json_stamp"], "html_stamp": item["html_stamp"],
+                } for item in batch]
                 tx.execute(
-                    "DECLARE $href AS Utf8; DECLARE $report_id AS Utf8; DECLARE $kind AS Utf8; "
-                    "DECLARE $start AS Int64; DECLARE $end AS Int64; DECLARE $generated AS Int64; "
-                    "DECLARE $digest AS Utf8; DECLARE $lo AS Double; DECLARE $hi AS Double; "
-                    "DECLARE $comparisons AS Bool; DECLARE $dirty AS Int64; DECLARE $queued AS Int64; "
-                    "DECLARE $entry AS Utf8?; DECLARE $json_stamp AS Utf8; DECLARE $html_stamp AS Utf8; "
-                    "UPSERT INTO publication_items (href,report_id,kind,period_start,period_end,generated_at,"
-                    "digest,lo,hi,comparisons,dirty,queued_at,entry,json_stamp,html_stamp) VALUES "
-                    "($href,$report_id,$kind,$start,$end,$generated,$digest,$lo,$hi,$comparisons,$dirty,"
-                    "$queued,$entry,$json_stamp,$html_stamp);",
-                    {"$href": item["href"], "$report_id": item["report_id"], "$kind": item["kind"],
-                     "$start": item["start"], "$end": item["end"], "$generated": item["generated"],
-                     "$digest": item["digest"], "$lo": float(item["lo"]), "$hi": float(item["hi"]),
-                     "$comparisons": item["comparisons"], "$dirty": item["dirty"], "$queued": item["queued"],
-                     "$entry": ydb.TypedValue(item["entry"], ydb.OptionalType(ydb.PrimitiveType.Utf8)),
-                     "$json_stamp": item["json_stamp"], "$html_stamp": item["html_stamp"]},
+                    "DECLARE $rows AS List<Struct<href:Utf8,report_id:Utf8,kind:Utf8,"
+                    "period_start:Int64,period_end:Int64,generated_at:Int64,digest:Utf8,"
+                    "lo:Double,hi:Double,comparisons:Bool,dirty:Int64,queued_at:Int64,"
+                    "entry:Utf8?,json_stamp:Utf8,html_stamp:Utf8>>; "
+                    "UPSERT INTO publication_items SELECT * FROM AS_TABLE($rows);",
+                    {"$rows": ydb.TypedValue(values, ydb.ListType(item_type))},
                 )
-            for key, value in changed_meta.items():
+            meta_type = (ydb.StructType().add_member("name", ydb.PrimitiveType.Utf8)
+                         .add_member("value", ydb.PrimitiveType.Utf8))
+            meta_rows = [{"name": "publication:" + key, "value": value}
+                         for key, value in changed_meta.items()]
+            for offset in range(0, len(meta_rows), SAVE_BATCH_SIZE):
                 tx.execute(
-                    "DECLARE $name AS Utf8; DECLARE $value AS Utf8; "
-                    "UPSERT INTO metadata (name,value) VALUES ($name,$value);",
-                    {"$name": "publication:" + key, "$value": value},
+                    "DECLARE $rows AS List<Struct<name:Utf8,value:Utf8>>; "
+                    "UPSERT INTO metadata SELECT * FROM AS_TABLE($rows);",
+                    {"$rows": ydb.TypedValue(meta_rows[offset:offset + SAVE_BATCH_SIZE],
+                                              ydb.ListType(meta_type))},
                 )
             return True
 

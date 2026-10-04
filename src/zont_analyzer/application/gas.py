@@ -9,10 +9,12 @@ from __future__ import annotations
 import ast
 import json
 from bisect import bisect_right
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, date, datetime, time, timedelta
+from functools import wraps
 from hashlib import sha256
-from typing import Any
+from typing import Any, Concatenate, ParamSpec, TypeVar, cast
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.adapters.ydb.application import Database
@@ -34,6 +36,29 @@ from zont_analyzer.domain import Report
 VERSION = "gas-context-v3"
 EDGES = (0.0, 25.0, 50.0, 75.0, 100.0)
 FRESHNESS = timedelta(minutes=15)
+P = ParamSpec('P')
+R = TypeVar('R')
+Service = TypeVar('Service', bound='GasService')
+
+
+def _validated(method: Callable[Concatenate[Service, P], R]) -> Callable[Concatenate[Service, P], R]:
+    """Publish new exposure cache entries only after a consistent calculation."""
+    @wraps(method)
+    def run(self: Service, *args: P.args, **kwargs: P.kwargs) -> R:
+        self._calculation_depth += 1
+        try:
+            result = method(self, *args, **kwargs)
+            if self._calculation_depth == 1:
+                self._flush_exposures()
+            return result
+        except BaseException:
+            if self._calculation_depth == 1:
+                self._pending_exposures.clear()
+            raise
+        finally:
+            self._calculation_depth -= 1
+
+    return cast(Callable[Concatenate[Service, P], R], run)
 
 
 def _json(value: Any) -> str:
@@ -62,6 +87,7 @@ def _utc(day: date, timezone: str, hour: int = 0) -> datetime:
 
 class GasService:
     def __init__(self, db: Database, config: AppConfig):
+        input_revision = db.gas_input_revision()
         self.db, self.config = db, config
         from zont_analyzer.application.timezone import apply_device_timezone
 
@@ -82,7 +108,13 @@ class GasService:
                                   'nominal_power_kw', 'installation_notes'}}
         self.readings = [_model_reading(row) for row in OwnerContextStore(db).gas_readings_for_analysis()]
         self._windows: dict[tuple[datetime, datetime], dict[str, Any]] = {}
+        self._slices: dict[tuple[datetime, datetime], dict[str, Any]] = {}
         self._models: dict[str, Any] = {}
+        self._model_results: dict[datetime | None, tuple[str, GasModel, list[GasInterval]]] = {}
+        self._intervals: dict[datetime | None, list[GasInterval]] = {}
+        self._slice_revisions: dict[tuple[datetime, datetime], str] = {}
+        self._pending_exposures: dict[str, str] = {}
+        self._calculation_depth = 0
         self._cost_slices: dict[
             tuple[datetime, datetime, str],
             tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]],
@@ -90,6 +122,9 @@ class GasService:
         from zont_analyzer.application.gas_tariffs import GasTariffStore
 
         self.tariffs = GasTariffStore(db, self.timezone).history(scope='installation')
+        self._input_revision = db.gas_input_revision()
+        if self._input_revision != input_revision:
+            raise ValueError('inputs changed while gas snapshot was loaded')
 
     def _unique(self, role: str) -> dict[str, Any] | None:
         rows = [s for s in self.series if s['role'] == role and
@@ -212,18 +247,15 @@ class GasService:
             start, end, volume_m3, self.tariffs, timezone=self.timezone, volume_slices=slices,
         )
 
+    @_validated
     def window(self, start: datetime, end: datetime) -> dict[str, Any]:
         """Return additive statistics, splitting on local day boundaries for reuse."""
         key = (start, end)
         if key in self._windows:
             return self._windows[key]
         pieces = []
-        cursor = start
-        while cursor < end:
-            day = cursor.astimezone(ZoneInfo(self.timezone)).date()
-            after = min(end, _utc(day + timedelta(days=1), self.timezone))
-            pieces.append(self._slice(cursor, after))
-            cursor = after
+        for left, right in self._slice_ranges(start, end):
+            pieces.append(self._slice(left, right))
         result: dict[str, Any] = {k: sum(p[k] for p in pieces) for k in (
             'minutes', 'flame_minutes', 'observed_minutes', 'unknown_modulation_minutes',
             'heating_minutes', 'dhw_minutes', 'ambiguous_purpose_minutes',
@@ -237,14 +269,70 @@ class GasService:
         self._windows[key] = result
         return result
 
+    def _slice_ranges(self, start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+        ranges = []
+        cursor = start
+        zone = ZoneInfo(self.timezone)
+        while cursor < end:
+            day = cursor.astimezone(zone).date()
+            after = min(end, _utc(day + timedelta(days=1), self.timezone))
+            ranges.append((cursor, after))
+            cursor = after
+        return ranges
+
+    def _prefetch_revisions(self, windows: list[tuple[datetime, datetime]]) -> None:
+        """Prime cheap invalidation markers under the service's input fence."""
+        self._assert_input_revision()
+        bounds = {
+            (left - FRESHNESS, right + FRESHNESS)
+            for start, end in windows for left, right in self._slice_ranges(start, end)
+            if (left - FRESHNESS, right + FRESHNESS) not in self._slice_revisions
+        }
+        if not bounds:
+            return
+        self._slice_revisions.update(self.db.telemetry_day_revisions(sorted(bounds)))
+
+    def _assert_input_revision(self) -> None:
+        # Series selection, profile, readings and tariffs were captured at
+        # construction. A changed input needs a new service snapshot.
+        if self.db.gas_input_revision() != self._input_revision:
+            raise ValueError('inputs changed while gas was calculated')
+
+    def _flush_exposures(self) -> None:
+        self._assert_input_revision()
+        pending, self._pending_exposures = self._pending_exposures, {}
+        for key, value in pending.items():
+            self.db.set_app_meta(key, value)
+        self._assert_input_revision()
+
     def _slice(self, start: datetime, end: datetime) -> dict[str, Any]:
-        revision = self.db.period_data_revision(start - FRESHNESS, end + FRESHNESS)
+        window = (start, end)
+        if window in self._slices:
+            return self._slices[window]
+        bounds = (start - FRESHNESS, end + FRESHNESS)
+        revision = self._slice_revisions.get(bounds)
+        if revision is None:
+            self._prefetch_revisions([window])
+            revision = self._slice_revisions[bounds]
+        # A held setpoint can precede the marked days. Include that one indexed
+        # predecessor in the dependency and reuse it when calculating a miss.
+        previous = {}
+        for role in ('outdoor_temperature', 'target_temperature', 'control_indoor_temperature'):
+            source = self._unique(role)
+            if source and is_setpoint_series(source['source_type'], source['metric_key']):
+                series_id = int(source['id'])
+                previous[series_id] = self.db.fetch_numeric_observations(
+                    series_id, start, start, include_previous=True,
+                )
         signature = _hash([VERSION, ALGORITHM_VERSION, self.state, self.series,
-                           self.config.analysis.modulation_capability_profile, start, end, revision])
+                           self.config.analysis.modulation_capability_profile, start, end,
+                           'day-markers-v1', revision, previous])
         cache_key = f'gas-exposure:{signature}'
         cached = self.db.get_app_meta(cache_key)
         if cached:
-            return dict(json.loads(cached))
+            result = dict(json.loads(cached))
+            self._slices[window] = result
+            return result
         states = (self.db.fetch_text_samples(int(self.state['id']), start - FRESHNESS, end + FRESHNESS)
                   if self.state else [])
         mods = [s for s in self.series if self.state and s['entity_id'] == self.state['entity_id']
@@ -289,8 +377,9 @@ class GasService:
             if source:
                 samples = self.db.fetch_numeric_observations(
                     int(source['id']), start if held else start - FRESHNESS, end + FRESHNESS,
-                    include_previous=held,
                 )
+                if held:
+                    samples = previous[int(source['id'])] + samples
             for index, (moment, value) in enumerate(samples):
                 if value is None:
                     continue
@@ -304,10 +393,28 @@ class GasService:
                 result[integral_key] += hours * value
                 if role == 'outdoor_temperature':
                     result['degree_hours'] += hours * max(0.0, 18.0-value)
-        self.db.set_app_meta(cache_key, _json(result))
+        self._pending_exposures[cache_key] = _json(result)
+        self._slices[window] = result
         return result
 
+    @_validated
     def intervals(self, *, before: datetime | None = None) -> list[GasInterval]:
+        self._prefetch_revisions([])
+        if before in self._intervals:
+            return self._intervals[before]
+        windows: list[tuple[datetime, datetime]] = []
+        for first, last in zip(self.readings, self.readings[1:], strict=False):
+            if first['segment'] != last['segment']:
+                continue
+            start = _utc(date.fromisoformat(first['day']), self.timezone, 12)
+            end = _utc(date.fromisoformat(last['day']), self.timezone, 12)
+            if (before and end + timedelta(hours=12) > before) or end <= start:
+                continue
+            if float(last['value_m3']) < float(first['value_m3']):
+                continue
+            windows.extend(((start, end), (start-timedelta(hours=12), start+timedelta(hours=12)),
+                            (end-timedelta(hours=12), end+timedelta(hours=12))))
+        self._prefetch_revisions(windows)
         intervals = []
         for first, last in zip(self.readings, self.readings[1:], strict=False):
             if first['segment'] != last['segment']:
@@ -329,11 +436,16 @@ class GasService:
             intervals.append(GasInterval(start, end, volume, tuple(w['bin_minutes']), w['flame_minutes'],
                                          w['observed_minutes'], w['observed_minutes']/w['minutes'],
                                          w['unknown_modulation_minutes'], uncertainty))
+        self._intervals[before] = intervals
         return intervals
 
+    @_validated
     def model(self, *, before: datetime | None = None) -> Any:
         from zont_analyzer.analytics.gas import fit_intervals
 
+        self._prefetch_revisions([])
+        if before in self._model_results:
+            return self._model_results[before]
         intervals = self.intervals(before=before)
         model_readings = [r for r in self.readings if before is None or
                           _utc(date.fromisoformat(r['day'])+timedelta(days=1), self.timezone) <= before]
@@ -352,14 +464,18 @@ class GasService:
                         'readings': model_readings, 'profile': fields,
                         'intervals': [asdict(i) for i in intervals], 'before': before}
             self.db.set_app_meta(f'gas-model:{key}', _json(snapshot))
-        return key, self._models[key], intervals
+        result = key, self._models[key], intervals
+        self._model_results[before] = result
+        return result
 
+    @_validated
     def context(
         self, start: datetime, end: datetime, *, complete: bool = True, include_daily: bool = False,
     ) -> dict[str, Any]:
         from zont_analyzer.analytics.gas import estimate_exposure
 
         version, model, intervals = self.model()
+        self._prefetch_revisions([(start, end)])
         w = self.window(start, end)
         exposure = self._exposure(w)
         estimate = estimate_exposure(exposure, model, start=start, end=end)
@@ -722,6 +838,7 @@ class GasService:
             )
             item['normalized_savings_cost'] = valued
 
+    @_validated
     def refresh_cost(self, report: Report) -> Report:
         """Reprice canonical money only, preserving gas volume, models and AI."""
         result = report.model_copy(deep=True)
@@ -732,6 +849,7 @@ class GasService:
         self._refresh_period_comparison_costs(result)
         return result
 
+    @_validated
     def refresh(self, report: Report) -> Report:
         gas = self.context(report.period_start, report.period_end,
                            complete=report.context.get('period', {}).get('complete', True),
@@ -763,6 +881,7 @@ class GasService:
         return self.refresh_cost(result)
 
     def persist_refresh(self, original: Report, refreshed: Report) -> bool:
+        self._assert_input_revision()
         revision = _hash(original.context.get('gas'))
         succeeded = self.db.reports.replace_context(
             original, refreshed, f'gas-report-revision:{original.id}:{revision}',
@@ -774,6 +893,7 @@ class GasService:
             rebind_chart_cache(self.db, original, refreshed)
         return succeeded
 
+    @_validated
     def savings(self, end: datetime) -> dict[str, Any]:
         """Evaluate whole independent meter intervals across recorded interventions."""
         from zont_analyzer.analytics.gas_savings import GasInterval as WeatherInterval

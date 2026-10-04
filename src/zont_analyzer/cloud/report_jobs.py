@@ -158,7 +158,9 @@ class ReportJobRunner:
         timeout_seconds: float = DEFAULT_LONG_JOB_SECONDS,
     ) -> dict[str, Any]:
         key = f"scheduled:{period.kind}:{int(period.start.timestamp())}:{int(period.observed_end.timestamp())}:v1"
-        return self._run(ScheduledRequest(period, use_ai),
+        return self._run(ScheduledRequest(
+            period, use_ai, max_requests=self.runtime.config.scheduler.max_requests_per_sync,
+        ),
                          Period(period.kind, period.start, period.observed_end, key),
                          timeout_seconds=timeout_seconds)
 

@@ -8,8 +8,6 @@ the timer payload. User jobs and publication retain their separate timer.
 from __future__ import annotations
 
 import contextlib
-import hashlib
-import itertools
 import json
 import math
 import time
@@ -19,14 +17,8 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from zont_analyzer.application.analysis import CALCULATION_VERSION, AnalysisService
-from zont_analyzer.application.period_schedule import (
-    _already_current,
-    schedule_signature,
-    scheduled_periods,
-    seasonal_daily_signature,
-)
-from zont_analyzer.application.pilot import _report_source_event_revision
+from zont_analyzer.application.analysis import AnalysisService
+from zont_analyzer.application.period_schedule import scheduled_periods
 from zont_analyzer.cloud.heavy_work import HeavyWorkLease
 from zont_analyzer.cloud.limits import DEFAULT_LONG_JOB_SECONDS, MAX_LONG_JOB_SECONDS
 from zont_analyzer.cloud.report_jobs import MIN_COLLECTION_SECONDS, ReportJobRunner
@@ -36,7 +28,7 @@ from zont_analyzer.observability import observe
 from zont_analyzer.runtime import Runtime, open_runtime
 
 _KEY = "production-scheduler:v1"
-_LANES = ("sync", "daily", "weekly", "monthly", "seasonal", "review")
+_LANES = ("daily", "weekly", "monthly", "seasonal", "review")
 _BASELINES = "source-event-report-baselines:v1:complete"
 _SCAN_LIMIT = 4
 
@@ -55,60 +47,15 @@ def _observe_lane(lane: str, result: dict[str, Any]) -> None:
 
 
 def daily_needs_report(analysis: AnalysisService, selected: date, yesterday: date) -> bool:
-    """The pilot's content-based repair rule, including imported legacy markers."""
-    db = analysis.db
-    start, end = analysis.local_day_window(selected)
-    report = db.report(analysis.report_id_for("daily", start))
-    if report is None:
-        return True
-    data_revision = db.period_data_revision(start, end)
-    empty_revision = hashlib.sha256(b"[]").hexdigest()
-    stored_revision = report.context.get("input_revision", {}).get("telemetry")
-    unchanged_import = (stored_revision is None and data_revision != empty_revision
-                        and db.legacy_period_data_revision(start, end) == empty_revision)
-    if (isinstance(stored_revision, str) and not stored_revision.startswith("telemetry-v2:")
-            and stored_revision != data_revision
-            and stored_revision == db.legacy_period_data_revision(start, end)):
-        if not db.upgrade_report_telemetry_revision(report.id, stored_revision, data_revision):
-            raise RuntimeError("report changed during revision upgrade")
-        report = report.model_copy(deep=True)
-        report.context["input_revision"]["telemetry"] = data_revision
-    return bool(
-        (selected == yesterday and report.context.get("calculation_version") != CALCULATION_VERSION)
-        or _report_source_event_revision(db, report) != db.source_event_revision(end)
-        or (not unchanged_import and (data_revision != empty_revision or (
-            isinstance(stored_revision, str) and stored_revision.startswith("telemetry-v2:")
-        )) and report.context.get("input_revision", {}).get("telemetry") != data_revision)
-    )
+    """Closed daily reports are regenerated only by an explicit request."""
+    start, _end = analysis.local_day_window(selected)
+    return analysis.db.reports.observed_end(analysis.report_id_for("daily", start)) is None
 
 
 def period_needs_report(analysis: AnalysisService, period: Period) -> bool:
-    identifier = analysis.report_id_for(period.kind, period.start)
-    previous = analysis.db.report(identifier)
-    signature = schedule_signature(analysis, period)
-    if previous is not None and previous.period_end == period.observed_end:
-        stored_daily = previous.context.get("scheduler_daily_signature")
-        if stored_daily is not None and stored_daily != seasonal_daily_signature(analysis, period):
-            return True
-    if _already_current(previous, period, signature):
-        return False
-    if previous is not None and (
-        _report_source_event_revision(analysis.db, previous) == analysis.db.source_event_revision(period.observed_end)
-    ):
-        # Exact upgrades of old signatures do not represent new facts and must
-        # not purchase another model interpretation.
-        for old_revision, old_ai, old_events in itertools.product((False, True), repeat=3):
-            if not (old_revision or old_ai or old_events):
-                continue
-            old_signature = schedule_signature(
-                analysis, period, legacy_revision=old_revision,
-                legacy_ai_config=old_ai, legacy_source_events=old_events,
-            )
-            if previous.context.get("schedule_signature") == old_signature:
-                if not analysis.db.upgrade_report_schedule_signature(identifier, old_signature, signature):
-                    raise RuntimeError("report changed during schedule signature upgrade")
-                return False
-    return True
+    """Schedule missing reports and the next seasonal observation boundary."""
+    observed_end = analysis.db.reports.observed_end(analysis.report_id_for(period.kind, period.start))
+    return observed_end is None or (period.kind == "seasonal" and observed_end < period.observed_end)
 
 
 class ProductionScheduler:
@@ -159,7 +106,31 @@ class ProductionScheduler:
                     state.pop("recommendation_maintenance_error", None)
                     state["next_recommendation_maintenance"] = (reference + timedelta(hours=1)).isoformat()
                 save()
-            first = int(state.get("next_lane", 0)) % len(_LANES)
+            # Collection is the freshness gate for every report lane. With a
+            # production timer matching the configured polling interval, always
+            # advance it first so report work cannot postpone telemetry by another
+            # timer period. A completed sync may share the same invocation with one
+            # report lane; an incomplete sync resumes on the next timer delivery.
+            sync_result: dict[str, Any] | None = None
+            try:
+                sync_result = self._sync(state, reference, deadline, save)
+            except Exception as exc:
+                state["last_error"] = {
+                    "lane": "sync", "type": type(exc).__name__, "at": reference.isoformat(),
+                }
+                save()
+                failure = {"status": "error", **state["last_error"]}
+                _observe_lane("sync", failure)
+                return failure
+            save()
+            if sync_result is not None:
+                _observe_lane("sync", sync_result)
+                if sync_result.get("status") != "done" or deadline - self.monotonic() < 25:
+                    return {"lane": "sync", **sync_result}
+
+            missing_daily = (self._has_recent_missing_daily(reference, state.get("daily_deferred", []))
+                             if state.get("last_sync") else False)
+            first = 0 if missing_daily else int(state.get("next_lane", 0)) % len(_LANES)
             for offset in range(len(_LANES)):
                 index = (first + offset) % len(_LANES)
                 lane = _LANES[index]
@@ -170,9 +141,7 @@ class ProductionScheduler:
                 state["next_lane"] = (index + 1) % len(_LANES)
                 save()
                 try:
-                    if lane == "sync":
-                        result = self._sync(state, reference, deadline, save)
-                    elif lane in {"daily", "weekly", "monthly", "seasonal"}:
+                    if lane in {"daily", "weekly", "monthly", "seasonal"}:
                         result = self._reports(lane, state, reference, deadline, save)
                     else:
                         from zont_analyzer.cloud.user_jobs import scheduled_review
@@ -191,6 +160,8 @@ class ProductionScheduler:
                 if result is not None:
                     _observe_lane(lane, result)
                     return {"lane": lane, **result}
+            if sync_result is not None:
+                return {"lane": "sync", **sync_result}
             return {"status": "idle"}
         finally:
             self.runtime.db.jobs.release(_KEY, owner, lease.attempt)
@@ -199,9 +170,17 @@ class ProductionScheduler:
         self, state: dict[str, Any], reference: datetime, deadline: float, save: Callable[[], None],
     ) -> dict[str, Any] | None:
         slot = state.get("sync")
+        interval = timedelta(minutes=self.runtime.config.scheduler.sync_every_minutes)
+
+        def boundary(moment: datetime) -> datetime:
+            # Anchor all polling slots to UTC, including legacy rolling due
+            # times saved a few seconds after a timer's actual boundary.
+            epoch = datetime(1970, 1, 1, tzinfo=UTC)
+            return epoch + ((moment.astimezone(UTC) - epoch) // interval) * interval
+
         if slot is None:
             due = datetime.fromisoformat(state["next_sync"]) if state.get("next_sync") else reference
-            if reference < due:
+            if reference < boundary(due):
                 return None
             # Preserve the reference and replay freshness threshold until this
             # slot completes. Never reset them after a short invocation.
@@ -217,7 +196,7 @@ class ProductionScheduler:
         selected = datetime.fromisoformat(slot["reference"])
         with contextlib.closing(self.runner.client_factory()) as client:
             result = self.runtime.ingestion(client).sync(
-                now=selected, max_requests=4, deadline=deadline,
+                now=selected, max_requests=self.runtime.config.scheduler.max_requests_per_sync, deadline=deadline,
                 replay_checked_after=datetime.fromisoformat(slot["checked_after"]),
                 start_at=datetime.fromisoformat(slot["start"]),
             )
@@ -226,11 +205,49 @@ class ProductionScheduler:
             state["last_sync"] = selected.isoformat()
             # Missed wakeups coalesce into one new slot; no unbounded catch-up
             # list, while independent source cursors retain all missing work.
-            interval = timedelta(minutes=self.runtime.config.scheduler.sync_every_minutes)
-            state["next_sync"] = (selected + interval).isoformat()
+            state["next_sync"] = (boundary(selected) + interval).isoformat()
             self.runtime.db.set_app_meta("cloud-sync-last-success", reference.isoformat())
             self.runtime.db.set_app_meta("cloud-worker-last-success", reference.isoformat())
         return {"status": "done" if result["complete"] else "pending", "sync": result}
+
+    def _has_recent_missing_daily(self, reference: datetime, deferred: list[dict[str, Any]]) -> bool:
+        timezone = self.runtime.config.home.effective_timezone
+        today = reference.astimezone(ZoneInfo(timezone)).date()
+        if reference < midnight(today, timezone) + timedelta(
+            minutes=self.runtime.config.pilot.daily_report_delay_minutes,
+        ):
+            return False
+        days = min(_SCAN_LIMIT, self.runtime.config.pilot.max_catchup_days)
+        periods = [calendar_period("daily", today - timedelta(days=offset + 1), timezone)
+                   for offset in range(days)]
+        available = {start for _identifier, start in self.runtime.db.daily_report_catalogue(
+            periods[-1].start, periods[0].end,
+        )}
+        return any(period.start not in available and not any(
+            item["period"] == period.model_dump(mode="json") for item in deferred
+        ) for period in periods)
+
+    def _missing_recent_daily(self, reference: datetime, deferred: list[dict[str, Any]]) -> Period | None:
+        timezone = self.runtime.config.home.effective_timezone
+        today = reference.astimezone(ZoneInfo(timezone)).date()
+        if reference < midnight(today, timezone) + timedelta(
+            minutes=self.runtime.config.pilot.daily_report_delay_minutes,
+        ):
+            return None
+        yesterday = today - timedelta(days=1)
+        analysis = self.runtime.analysis(no_ai=True)
+        earliest = self.runtime.db.earliest_sample_time()
+        first = earliest.astimezone(ZoneInfo(timezone)).date() if earliest else yesterday
+        first = max(min(first, yesterday), yesterday - timedelta(
+            days=self.runtime.config.pilot.max_catchup_days - 1,
+        ))
+        for offset in range(min(_SCAN_LIMIT, (yesterday - first).days + 1)):
+            period = calendar_period("daily", yesterday - timedelta(days=offset), timezone)
+            if any(item["period"] == period.model_dump(mode="json") for item in deferred):
+                continue
+            if self.runtime.db.reports.observed_end(analysis.report_id_for("daily", period.start)) is None:
+                return period
+        return None
 
     def _reports(
         self, lane: str, state: dict[str, Any], reference: datetime, deadline: float,
@@ -243,6 +260,18 @@ class ProductionScheduler:
             return None
         pending = state.get(lane + "_pending")
         deferred = state.setdefault(lane + "_deferred", [])
+        if lane == "daily" and (pending or deferred):
+            urgent_daily = self._missing_recent_daily(reference, deferred)
+            if urgent_daily is not None and (
+                pending is None or Period.model_validate(pending["period"]).start < urgent_daily.start
+            ):
+                if pending is not None:
+                    deferred.append({**pending, "retry_at": reference.isoformat()})
+                yesterday = reference.astimezone(ZoneInfo(urgent_daily.timezone)).date() - timedelta(days=1)
+                pending = {"period": urgent_daily.model_dump(mode="json"),
+                           "use_ai": urgent_daily.start.astimezone(ZoneInfo(urgent_daily.timezone)).date() == yesterday}
+                state[lane + "_pending"] = pending
+                save()
         if not pending:
             due_retry = next((item for item in deferred
                               if datetime.fromisoformat(item["retry_at"]) <= reference), None)
@@ -294,6 +323,13 @@ class ProductionScheduler:
                     state[lane + "_cursor"] = index + 1
                 if any(item["period"] == selected_period.model_dump(mode="json") for item in deferred):
                     continue
+                if deadline - self.monotonic() < MIN_COLLECTION_SECONDS + 5:
+                    return {"status": "pending", "phase": "scan"}
+                selected_day = selected_period.start.astimezone(ZoneInfo(timezone)).date()
+                needed = (daily_needs_report(analysis, selected_day, yesterday)
+                          if lane == "daily" else period_needs_report(analysis, selected_period))
+                if not needed:
+                    continue
                 if (selected_period.kind == "seasonal"
                         and selected_period.observed_end - selected_period.start > timedelta(days=31)):
                     # Long seasons consume daily facts. Do not freeze a partial
@@ -307,14 +343,8 @@ class ProductionScheduler:
                     if any(start_day + timedelta(days=offset) not in available
                            for offset in range((end_day - start_day).days)):
                         continue
-                if deadline - self.monotonic() < MIN_COLLECTION_SECONDS + 5:
-                    return {"status": "pending", "phase": "scan"}
-                selected_day = selected_period.start.astimezone(ZoneInfo(timezone)).date()
-                needed = (daily_needs_report(analysis, selected_day, yesterday)
-                          if lane == "daily" else period_needs_report(analysis, selected_period))
-                if needed:
-                    period = selected_period
-                    break
+                period = selected_period
+                break
             if period is None:
                 return None
             previous: Report | None = self.runtime.db.report(analysis.report_id_for(period.kind, period.start))

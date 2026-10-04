@@ -66,10 +66,36 @@ def _record_publication_change(
             {"$scope": scope, "$identifier": identifier},
         )
         acknowledged = int(checkpoint.rows[0].value) if checkpoint.rows else 0
-        if (previous.rows and int(previous.rows[0].revision) > acknowledged
-                and json.loads(previous.rows[0].payload).get("calibration") is not False):
-            # Do not narrow an unconsumed marker written by an older release.
-            payload = "{}"
+        if previous.rows and int(previous.rows[0].revision) > acknowledged:
+            try:
+                old = json.loads(previous.rows[0].payload)
+            except (TypeError, ValueError):
+                old = None
+            if scope == "telemetry-gas":
+                try:
+                    new = json.loads(payload)
+                except (TypeError, ValueError):
+                    new = None
+
+                def bounds(value: Any) -> tuple[int, int] | None:
+                    if not isinstance(value, dict) or value.get("calibration") is not True:
+                        return None
+                    first, last = value.get("change_start"), value.get("change_end")
+                    if type(first) is not int or type(last) is not int or first > last:
+                        return None
+                    return first, last
+
+                prior, current = bounds(old), bounds(new)
+                if prior is None or current is None:
+                    # Unknown unconsumed history must retain broad calibration.
+                    payload = "{}"
+                else:
+                    payload = encode({"calibration": True,
+                                      "change_start": min(prior[0], current[0]),
+                                      "change_end": max(prior[1], current[1])})
+            elif not isinstance(old, dict) or old.get("calibration") is not False:
+                # Do not narrow an unconsumed marker written by an older release.
+                payload = "{}"
     publication_revision = bump_revision(tx, "publication")
     tx.execute(
         "DECLARE $scope AS Utf8; DECLARE $identifier AS Utf8; DECLARE $revision AS Int64; "
@@ -102,6 +128,15 @@ class TelemetryRepository:
                 previous = tx.execute(
                     "DECLARE $id AS Utf8; SELECT payload FROM devices WHERE id=$id;", {"$id": device_id},
                 )[0].rows
+                current = json.loads(payload)
+                prior = json.loads(previous[0].payload) if previous else None
+                semantic = {key: value for key, value in current.items() if key != "discovered_at"}
+                prior_semantic = (
+                    {key: value for key, value in prior.items() if key != "discovered_at"}
+                    if isinstance(prior, dict) else None
+                )
+                if prior_semantic == semantic:
+                    return
                 tx.execute(
                     "DECLARE $id AS Utf8; DECLARE $payload AS Utf8; "
                     "UPSERT INTO devices (id,payload) VALUES ($id,$payload);",
@@ -122,8 +157,7 @@ class TelemetryRepository:
                         {"$id": device_id, "$hash": digest, "$n": snapshot_id,
                          "$payload": payload, "$at": captured_at},
                     )
-                if not previous or previous[0].payload != payload:
-                    bump_revision(tx, "device:" + device_id)
+                bump_revision(tx, "device:" + device_id)
 
             self.db.transaction(write)
             saved += 1
@@ -216,18 +250,56 @@ class TelemetryRepository:
         points: Iterable[TelemetryPoint] = (), events: Iterable[SourceEvent] = (),
         state: CoverageState = "complete", roles: dict[str, str] | None = None,
     ) -> int:
-        """Only a fully saved successful response advances the independent cursor.
+        return self._write_window_batch(
+            device_id=device_id, coverage_states={data_type: state}, start=start, end=end,
+            points=points, events=events, roles=roles,
+        )
 
-        A response is bounded to 2000 records. Split larger source requests, never
-        mark partially committed pages as covered. The source's end point is kept.
-        """
+    def write_history_window(
+        self, *, device_id: str, data_types: Iterable[str], start: datetime, end: datetime,
+        points: Iterable[TelemetryPoint] = (), roles: dict[str, str] | None = None,
+        coverage_prefix: str = "",
+    ) -> int:
+        """Commit one successful multi-type history response and all its cursors together."""
+        selected = tuple(dict.fromkeys(str(value) for value in data_types))
+        if not selected:
+            raise ValueError("history data types are required")
+        samples = list(points)
+        if any(point.source_type not in selected for point in samples):
+            raise ValueError("history point source is outside requested types")
+        present = {point.source_type for point in samples}
+        return self._write_window_batch(
+            device_id=device_id,
+            coverage_states={
+                coverage_prefix + source: "complete" if source in present else "empty"
+                for source in selected
+            },
+            start=start, end=end, points=samples, roles=roles,
+        )
+
+    def _write_window_batch(
+        self, *, device_id: str, coverage_states: dict[str, CoverageState],
+        start: datetime, end: datetime, points: Iterable[TelemetryPoint] = (),
+        events: Iterable[SourceEvent] = (), roles: dict[str, str] | None = None,
+    ) -> int:
+        """Only fully saved responses advance their independent source cursors."""
         started, ended = utc_seconds(start), utc_seconds(end)
         samples, source_events = list(points), list(events)
-        if started >= ended or len(samples) + len(source_events) > 2000:
+        if (started >= ended or len(samples) + len(source_events) > 2000
+                or not coverage_states):
             raise ValueError("invalid or oversized ingestion window")
-        if state not in {"complete", "empty", "failed", "unavailable"}:
+        if any(state not in {"complete", "empty", "failed", "unavailable"}
+               for state in coverage_states.values()):
             raise ValueError("invalid coverage state")
-        if state != "complete" and (samples or source_events):
+        if len(coverage_states) > 1 and any(
+            state not in {"complete", "empty"} for state in coverage_states.values()
+        ):
+            raise ValueError("batched coverage accepts only successful history responses")
+        if source_events and len(coverage_states) != 1:
+            raise ValueError("events require one coverage source")
+        if any(state != "complete" for state in coverage_states.values()) and (
+            samples or source_events
+        ) and len(coverage_states) == 1:
             raise ValueError("only complete windows can contain records")
         records: list[TelemetryPoint | SourceEvent] = [*samples, *source_events]
         if any(p.device_id != device_id or not started <= utc_seconds(p.timestamp_utc) <= ended for p in records):
@@ -326,26 +398,79 @@ class TelemetryRepository:
                                "UPSERT INTO source_events SELECT * FROM AS_TABLE($rows);",
                                {"$rows": ydb.TypedValue(new_rows, ydb.ListType(row_type))})
             # A failed recheck must not erase evidence of an earlier successful response.
-            params = {"$device": device_id, "$type": data_type, "$start": started, "$end": ended}
-            decl = "DECLARE $device AS Utf8; DECLARE $type AS Utf8; DECLARE $start AS Int64; DECLARE $end AS Int64; "
-            old = tx.execute(
-                decl + "SELECT state FROM coverage WHERE device_id=$device AND data_type=$type "
-                "AND started_at=$start AND ended_at=$end;", params,
-            )[0].rows
-            if state in {"complete", "empty"} or not old or old[0].state not in {"complete", "empty"}:
-                tx.execute(
-                    decl + "DECLARE $state AS Utf8; DECLARE $at AS Int64; "
-                    "UPSERT INTO coverage (device_id,data_type,started_at,ended_at,state,checked_at) "
-                    "VALUES ($device,$type,$start,$end,$state,$at);",
-                    {**params, "$state": state, "$at": checked},
+            if len(coverage_states) == 1:
+                data_type, state = next(iter(coverage_states.items()))
+                params = {"$device": device_id, "$type": data_type, "$start": started, "$end": ended}
+                decl = (
+                    "DECLARE $device AS Utf8; DECLARE $type AS Utf8; "
+                    "DECLARE $start AS Int64; DECLARE $end AS Int64; "
                 )
-            if state in {"complete", "empty"}:
+                old = tx.execute(
+                    decl + "SELECT state FROM coverage WHERE device_id=$device AND data_type=$type "
+                    "AND started_at=$start AND ended_at=$end;", params,
+                )[0].rows
+                if state in {"complete", "empty"} or not old or old[0].state not in {"complete", "empty"}:
+                    tx.execute(
+                        decl + "DECLARE $state AS Utf8; DECLARE $at AS Int64; "
+                        "UPSERT INTO coverage (device_id,data_type,started_at,ended_at,state,checked_at) "
+                        "VALUES ($device,$type,$start,$end,$state,$at);",
+                        {**params, "$state": state, "$at": checked},
+                    )
+                if state in {"complete", "empty"}:
+                    tx.execute(
+                        "DECLARE $device AS Utf8; DECLARE $type AS Utf8; DECLARE $end AS Int64; "
+                        "$old = SELECT timestamp_utc FROM ingestion_cursors "
+                        "WHERE device_id=$device AND data_type=$type; "
+                        "UPSERT INTO ingestion_cursors (device_id,data_type,timestamp_utc) "
+                        "SELECT $device, $type, MAX_OF(COALESCE(MAX(timestamp_utc), $end), $end) FROM $old;",
+                        {"$device": device_id, "$type": data_type, "$end": ended},
+                    )
+            else:
+                # One provider response becomes one YDB transaction: coverage and
+                # cursors remain source-specific but no longer pay one transaction
+                # per history data type.
+                coverage_type = (
+                    ydb.StructType().add_member("device_id", ydb.PrimitiveType.Utf8)
+                    .add_member("data_type", ydb.PrimitiveType.Utf8)
+                    .add_member("started_at", ydb.PrimitiveType.Int64)
+                    .add_member("ended_at", ydb.PrimitiveType.Int64)
+                    .add_member("state", ydb.PrimitiveType.Utf8)
+                    .add_member("checked_at", ydb.PrimitiveType.Int64)
+                )
+                coverage_rows = [
+                    {"device_id": device_id, "data_type": source, "started_at": started,
+                     "ended_at": ended, "state": state, "checked_at": checked}
+                    for source, state in coverage_states.items()
+                ]
                 tx.execute(
-                    "DECLARE $device AS Utf8; DECLARE $type AS Utf8; DECLARE $end AS Int64; "
-                    "$old = SELECT timestamp_utc FROM ingestion_cursors WHERE device_id=$device AND data_type=$type; "
-                    "UPSERT INTO ingestion_cursors (device_id,data_type,timestamp_utc) "
-                    "SELECT $device, $type, MAX_OF(COALESCE(MAX(timestamp_utc), $end), $end) FROM $old;",
-                    {"$device": device_id, "$type": data_type, "$end": ended},
+                    "DECLARE $rows AS List<Struct<device_id:Utf8,data_type:Utf8,started_at:Int64,"
+                    "ended_at:Int64,state:Utf8,checked_at:Int64>>; "
+                    "UPSERT INTO coverage SELECT * FROM AS_TABLE($rows);",
+                    {"$rows": ydb.TypedValue(coverage_rows, ydb.ListType(coverage_type))},
+                )
+                source_names = list(coverage_states)
+                existing = tx.execute(
+                    "DECLARE $device AS Utf8; DECLARE $types AS List<Utf8>; "
+                    "SELECT data_type,timestamp_utc FROM ingestion_cursors "
+                    "WHERE device_id=$device AND data_type IN $types;",
+                    {"$device": device_id,
+                     "$types": ydb.TypedValue(source_names, ydb.ListType(ydb.PrimitiveType.Utf8))},
+                )[0].rows
+                old_cursors = {str(row.data_type): int(row.timestamp_utc) for row in existing}
+                cursor_type = (
+                    ydb.StructType().add_member("device_id", ydb.PrimitiveType.Utf8)
+                    .add_member("data_type", ydb.PrimitiveType.Utf8)
+                    .add_member("timestamp_utc", ydb.PrimitiveType.Int64)
+                )
+                cursor_rows = [
+                    {"device_id": device_id, "data_type": source,
+                     "timestamp_utc": max(old_cursors.get(source, ended), ended)}
+                    for source in source_names
+                ]
+                tx.execute(
+                    "DECLARE $rows AS List<Struct<device_id:Utf8,data_type:Utf8,timestamp_utc:Int64>>; "
+                    "UPSERT INTO ingestion_cursors SELECT * FROM AS_TABLE($rows);",
+                    {"$rows": ydb.TypedValue(cursor_rows, ydb.ListType(cursor_type))},
                 )
             if changed:
                 revision = bump_revision(tx, "telemetry:" + device_id, publish=False)
@@ -356,9 +481,15 @@ class TelemetryRepository:
                 hours = {datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H") for at in changed_times}
                 for hour in sorted(hours):
                     _record_publication_change(tx, "telemetry", hour, payload='{"calibration":false}')
-                for hour in sorted({datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H")
-                                    for at in calibration_times}):
-                    _record_publication_change(tx, "telemetry-gas", hour)
+                by_hour: dict[str, list[int]] = {}
+                for at in calibration_times:
+                    hour = datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H")
+                    by_hour.setdefault(hour, []).append(at)
+                for hour, timestamps in sorted(by_hour.items()):
+                    _record_publication_change(tx, "telemetry-gas", hour, payload=encode({
+                        "calibration": True, "change_start": min(timestamps),
+                        "change_end": max(timestamps),
+                    }))
                 for day in {datetime.fromtimestamp(at, UTC).date().isoformat() for at in changed_times}:
                     tx.execute(
                         "DECLARE $key AS Utf8; DECLARE $value AS Utf8; "

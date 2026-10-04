@@ -33,8 +33,10 @@ openai:
   monthly_token_budget: 1000000
 
 scheduler:
-  sync_every_minutes: 5
+  sync_every_minutes: 30
   overlap_minutes: 120
+  max_requests_per_sync: 100
+  discovery_every_minutes: 60
 
 pilot:
   daily_report_delay_minutes: 60

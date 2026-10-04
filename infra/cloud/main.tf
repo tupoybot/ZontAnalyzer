@@ -75,6 +75,11 @@ resource "yandex_storage_bucket" "publication" {
   versioning {
     enabled = true
   }
+  lifecycle {
+    # Storage policy changes require a separate review from application releases.
+    # Keep the creation defaults while preserving an existing bucket's policy.
+    ignore_changes = [max_size, versioning, lifecycle_rule]
+  }
 }
 
 resource "yandex_serverless_container" "probe" {
@@ -179,7 +184,7 @@ resource "yandex_function_trigger" "maintenance" {
   folder_id = data.yandex_resourcemanager_folder.project.id
   name      = "${local.name}-web-jobs"
   timer {
-    cron_expression = "* * * * ? *"
+    cron_expression = "2/5 * * * ? *"
   }
   container {
     id                 = yandex_serverless_container.application.id
@@ -196,7 +201,7 @@ resource "yandex_function_trigger" "scheduler" {
   folder_id = data.yandex_resourcemanager_folder.project.id
   name      = "${local.name}-scheduler"
   timer {
-    cron_expression = "* * * * ? *"
+    cron_expression = "0,30 * * * ? *"
   }
   container {
     id                 = yandex_serverless_container.application.id
@@ -208,19 +213,38 @@ resource "yandex_function_trigger" "scheduler" {
   depends_on = [yandex_serverless_container_iam_binding.application_invoker]
 }
 
-resource "yandex_function_trigger" "monitoring" {
+removed {
+  from = yandex_function_trigger.monitoring
+  lifecycle {
+    destroy = false
+  }
+}
+
+import {
+  for_each = var.monitoring_trigger_import_id == null ? {} : { existing = var.monitoring_trigger_import_id }
+  to       = yandex_serverless_triggers.monitoring[0]
+  id       = each.value
+}
+
+resource "yandex_serverless_triggers" "monitoring" {
   count     = var.enable_monitoring_timer ? 1 : 0
   folder_id = data.yandex_resourcemanager_folder.project.id
   name      = "${local.name}-monitoring"
-  timer {
-    cron_expression = "0 * * * ? *"
+  source = {
+    timer = {
+      cron_expression = var.monitoring_timer_schedule
+    }
   }
-  container {
-    id                 = yandex_serverless_container.application.id
-    service_account_id = var.timer_service_account_id
-    path               = "/internal/monitoring"
-    retry_attempts     = 1
-    retry_interval     = 10
-  }
+  action = [{
+    invoke_container = {
+      container_id       = yandex_serverless_container.application.id
+      service_account_id = var.timer_service_account_id
+      path               = "/internal/monitoring"
+    }
+    retry_policy = {
+      retry_attempts = 1
+      interval       = "10s"
+    }
+  }]
   depends_on = [yandex_serverless_container_iam_binding.application_invoker]
 }
