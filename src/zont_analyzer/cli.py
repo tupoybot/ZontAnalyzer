@@ -270,10 +270,8 @@ def report_export(
     if report is None:
         raise typer.BadParameter(f"Unknown report: {report_id}" if report_id else "No reports exist")
     from zont_analyzer.application.gas import GasService
-    from zont_analyzer.application.gas_feature import gas_analysis_enabled
 
-    if gas_analysis_enabled():
-        report = GasService(db, _runtime(ctx).config).refresh_cost(report)
+    report = GasService(db, _runtime(ctx).config).refresh_cost(report)
     if format_ == "html":
         content = render_html(
             report,

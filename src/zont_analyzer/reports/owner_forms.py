@@ -231,10 +231,6 @@ def render_owner_forms(report: Report, owner_data: dict[str, Any] | None = None)
 <p class="owner-help">Укажите верную цену и валюту выше. Исправление сохраняет месяц действия и остаётся в истории.</p>
 <div class="owner-actions"><button type="button" data-tariff-correct>Исправить выбранный тариф</button></div></div></details>
 <p class="owner-message" data-tariff-message role="status" aria-live="polite"></p></details></div>"""
-    from zont_analyzer.application.gas_feature import GAS_DISABLED_NOTICE, gas_analysis_enabled
-
-    if not gas_analysis_enabled():
-        tariff_form = f'<p class="owner-help">{html.escape(GAS_DISABLED_NOTICE)}</p>'
     if gas_form:
         gas_form = gas_form.replace('  <details id="gas-editor"', tariff_form + '\n  <details id="gas-editor"', 1)
     ai_forms = render_ai_forms(owner_data)

@@ -171,19 +171,3 @@ def test_tariff_api_rejects_invalid_values_and_cross_origin(owner_server) -> Non
     assert client.put("/gas-tariffs", json=payload,
                       headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
     assert client.get("/gas-tariffs").json() == {"history": []}
-
-
-@pytest.mark.ydb
-def test_suspended_gas_keeps_meter_api_but_blocks_tariff_writes(owner_server, monkeypatch) -> None:
-    from zont_analyzer.application.gas import GasService
-
-    runtime, reports, client = owner_server
-    monkeypatch.delenv('ZONT_GAS_ANALYSIS_ENABLED')
-    monkeypatch.setattr(GasService, '__init__', lambda *a, **k: pytest.fail('gas constructed'))
-    url = f'/reports/{reports[0].id}/gas'
-    saved = client.put(url, json={'value_m3': '123.45'})
-    assert saved.status_code == 200
-    assert client.get(url).json()['reading']['value_m3'] == '123.45'
-    assert client.put('/gas-tariffs', json={}).status_code == 503
-    assert publish_reports(runtime)['rendered_reports'] == 0
-    assert runtime.db.token_usage_this_month() == 0

@@ -88,7 +88,6 @@ docker run -d --rm --name "$proxy" --network "$network" -p 127.0.0.1:18086:18086
 docker run --rm --network "$network" --entrypoint python \
     -e "YDB_ENDPOINT=grpc://$ydb:2136" -e YDB_DATABASE=/local \
     -e YDB_NAMESPACE=browser_fixture -e YDB_ANONYMOUS_CREDENTIALS=1 \
-    -e ZONT_GAS_ANALYSIS_ENABLED=1 \
     -v "$fixture_dir/data:/data" -v "$fixture_dir/publish:/publish" \
     -v "$fixture_dir/config.yaml:/config/config.yaml:ro" \
     -v "$project_root/tests/integration/archive_browser_fixture.py:/fixture.py:ro" \
@@ -97,7 +96,6 @@ docker run --rm --network "$network" --entrypoint python \
 docker run -d --name "$backend" --network "container:$proxy" \
     -e "YDB_ENDPOINT=grpc://$ydb:2136" -e YDB_DATABASE=/local \
     -e YDB_NAMESPACE=browser_fixture -e YDB_ANONYMOUS_CREDENTIALS=1 \
-    -e ZONT_GAS_ANALYSIS_ENABLED=1 \
     -v "$fixture_dir/data:/data" -v "$fixture_dir/publish:/publish" \
     -v "$fixture_dir/config.yaml:/config/config.yaml:ro" \
     -v "$project_root/tests/integration/archive_browser_feedback_server.py:/feedback-server.py:ro" \

@@ -3,13 +3,6 @@ from collections.abc import Iterator
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def legacy_gas_regressions(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Preserve coverage of the suspended implementation. Suspension tests remove
-    # this explicit opt-in and exercise the production default.
-    monkeypatch.setenv("ZONT_GAS_ANALYSIS_ENABLED", "1")
-
-
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_ydb_session() -> Iterator[None]:
     yield

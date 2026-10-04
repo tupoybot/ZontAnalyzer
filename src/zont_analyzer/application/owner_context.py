@@ -527,10 +527,6 @@ class OwnerContextStore:
         readings: list[dict[str, Any]],
         boundaries: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        from zont_analyzer.application.gas_feature import GAS_DISABLED_NOTICE, gas_analysis_enabled
-
-        if not gas_analysis_enabled():
-            return {"status": "disabled", "reason": GAS_DISABLED_NOTICE, "warnings": []}
         devices = self._application_devices()
         if len(devices) != 1:
             return {
