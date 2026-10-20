@@ -15,7 +15,7 @@ on:
         type: boolean
         default: false
       preserve_runtime_settings:
-        description: Retain deployed YDB throughput and monitoring schedule during an application release
+        description: Retain deployed YDB throughput and monitoring/scheduler schedules during an application release
         type: boolean
         default: true
   workflow_run:

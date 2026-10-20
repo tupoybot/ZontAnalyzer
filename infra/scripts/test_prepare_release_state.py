@@ -47,6 +47,25 @@ class ReleaseStateTest(unittest.TestCase):
         result = prepare(self.inputs, self.state, self.read)
         self.assertEqual(result["production_ydb_request_units_per_second"], 100)
 
+    def test_application_release_retains_catchup_cadence_but_explicit_change_wins(self):
+        self.state["resources"].append({"mode": "managed", "type": "yandex_function_trigger",
+                                        "name": "scheduler", "instances": [{"attributes": {"id": "scheduler"}}]})
+        scheduler = {"folderId": "folder", "rule": {"timer": {
+            "cronExpression": "* * * * ? *", "invokeContainerWithRetry": {
+                "containerId": "application", "serviceAccountId": "timer", "path": "/internal/scheduler"}}}}
+
+        def read(host, path):
+            return scheduler if path == "/triggers/v1/triggers/scheduler" else self.read(host, path)
+
+        inputs = {**self.inputs, "scheduler_timer_schedule": "0,30 * * * ? *"}
+        result = prepare(inputs, self.state, read, preserve_runtime=True)
+        self.assertEqual(result["scheduler_timer_schedule"], "* * * * ? *")
+        result = prepare(inputs, self.state, read)
+        self.assertEqual(result["scheduler_timer_schedule"], "0,30 * * * ? *")
+        scheduler["rule"]["timer"]["invokeContainerWithRetry"]["path"] = "/internal/other"
+        with self.assertRaisesRegex(ValueError, "scheduler trigger"):
+            prepare(inputs, self.state, read, preserve_runtime=True)
+
     def test_already_adopted_timer_is_not_imported_again(self):
         self.state["resources"][0]["type"] = "yandex_serverless_triggers"
         result = prepare(self.inputs, self.state, self.read, preserve_runtime=True)

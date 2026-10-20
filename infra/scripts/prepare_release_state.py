@@ -47,6 +47,19 @@ def prepare(inputs, state, read, *, preserve_runtime=False):
         if old or preserve_runtime:
             result["monitoring_timer_schedule"] = trigger["source"]["timer"]["cronExpression"]
     if preserve_runtime:
+        scheduler = resource(state, "yandex_function_trigger", "scheduler")
+        if scheduler:
+            trigger = read("serverless-triggers.api.cloud.yandex.net", "/triggers/v1/triggers/" + scheduler["id"])
+            application = resource(state, "yandex_serverless_container", "application")
+            timer = trigger.get("rule", {}).get("timer", {})
+            action = timer.get("invokeContainerWithRetry", {})
+            if (trigger.get("folderId") != inputs["folder_id"]
+                    or action.get("containerId") != (application["id"] if application else None)
+                    or action.get("serviceAccountId") != inputs["timer_service_account_id"]
+                    or action.get("path") != "/internal/scheduler"
+                    or timer.get("cronExpression") not in {"0,30 * * * ? *", "* * * * ? *"}):
+                raise ValueError("existing scheduler trigger has unexpected configuration")
+            result["scheduler_timer_schedule"] = timer["cronExpression"]
         for name, variable in (("probe", "ydb_request_units_per_second"),
                                ("production", "production_ydb_request_units_per_second")):
             stored = resource(state, "yandex_ydb_database_serverless", name)

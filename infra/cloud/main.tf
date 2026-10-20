@@ -201,7 +201,7 @@ resource "yandex_function_trigger" "scheduler" {
   folder_id = data.yandex_resourcemanager_folder.project.id
   name      = "${local.name}-scheduler"
   timer {
-    cron_expression = "0,30 * * * ? *"
+    cron_expression = var.scheduler_timer_schedule
   }
   container {
     id                 = yandex_serverless_container.application.id

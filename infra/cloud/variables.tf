@@ -237,6 +237,16 @@ variable "enable_scheduler_timer" {
   }
 }
 
+variable "scheduler_timer_schedule" {
+  description = "Use minute deliveries to drain a backlog, or the regular half-hour cadence."
+  type        = string
+  default     = "0,30 * * * ? *"
+  validation {
+    condition     = contains(["0,30 * * * ? *", "* * * * ? *"], var.scheduler_timer_schedule)
+    error_message = "Use the regular half-hour or temporary minute scheduler cadence."
+  }
+}
+
 variable "enable_maintenance_timer" {
   description = "Deliver durable web requests and publication work; enable after the M5 smoke."
   type        = bool
