@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from zont_analyzer.adapters.openai.provider import (
     AI_POST_REQUEST_RESERVE_SECONDS,
+    ANALYSIS_PACKET_MAX_BYTES,
     OPENAI_REQUEST_TIMEOUT_SECONDS,
     PROMPT_VERSION,
     SCHEMA_VERSION,
@@ -210,7 +211,16 @@ class ReportJobRunner:
                 self._write_fence = (write.job_key, write.owner, write.attempt)
                 try:
                     return self._advance(request, period, lease, deadline)
-                except AIRequestDeferred:
+                except AIRequestDeferred as exc:
+                    if exc.packet is not None:
+                        checkpoint = self._checkpoint(self.jobs.get(period.job_key) or lease)
+                        fingerprint, revision = self._input_state(request)
+                        if (checkpoint.get("input_fingerprint") == fingerprint
+                                and checkpoint.get("source_revision") == revision):
+                            self._save_checkpoint(lease, {
+                                "phase": "analyze", "prepared_ai_packet": exc.packet,
+                                "input_fingerprint": fingerprint, "source_revision": revision,
+                            })
                     return {"status": "pending", "phase": "analyze",
                             "job_key": period.job_key, "reason": "insufficient_time"}
                 except AIRequestPending as exc:
@@ -340,6 +350,9 @@ class ReportJobRunner:
     ) -> dict[str, Any]:
         checkpoint = self._checkpoint(lease)
         phase = checkpoint["phase"]
+        if phase == "analyze" and "prepared_ai_packet" in checkpoint:
+            # Older workers can ignore this optional handoff and redo analysis.
+            phase = "ai_prepare"
         if phase == "saved":
             report_id = checkpoint.get("report_id")
             fingerprint, _revision = self._input_state(request)
@@ -367,11 +380,33 @@ class ReportJobRunner:
         from zont_analyzer.application.ai_settings import AISettingsStore
 
         ai_enabled = AISettingsStore(self.runtime.db, self.runtime.config).effective_config().openai.enabled
+        if phase == "ai_prepare":
+            fingerprint, _revision = self._input_state(request)
+            if (not request.use_ai or not ai_enabled
+                    or checkpoint.get("input_fingerprint") != fingerprint):
+                self._save_checkpoint(lease, {"phase": "analyze"})
+                return {"status": "pending", "phase": "analyze", "job_key": period.job_key,
+                        "reason": "inputs_changed"}
+            packet = checkpoint.get("prepared_ai_packet")
+            packet_period = packet.get("period") if isinstance(packet, dict) else None
+            if (not isinstance(packet, dict)
+                    or len(json.dumps(packet, ensure_ascii=False, sort_keys=True,
+                                      separators=(",", ":"), allow_nan=False).encode()) > ANALYSIS_PACKET_MAX_BYTES
+                    or not isinstance(packet_period, dict)
+                    or packet_period.get("kind") != period.kind
+                    or packet_period.get("start") != period.start.isoformat()
+                    or packet_period.get("end") != period.end.isoformat()):
+                raise ValueError("invalid prepared AI packet")
         if deadline - self.monotonic() < (MIN_AI_SECONDS if request.use_ai and ai_enabled else MIN_COLLECTION_SECONDS):
             return {"status": "pending", "phase": "analyze", "job_key": period.job_key}
         fingerprint, source_revision = self._input_state(request)
-        self._save_checkpoint(lease, {"phase": "analyze", "input_fingerprint": fingerprint,
-                                      "source_revision": source_revision})
+        if phase == "ai_prepare" and checkpoint.get("input_fingerprint") != fingerprint:
+            self._save_checkpoint(lease, {"phase": "analyze"})
+            return {"status": "pending", "phase": "analyze", "job_key": period.job_key,
+                    "reason": "inputs_changed"}
+        if phase != "ai_prepare":
+            self._save_checkpoint(lease, {"phase": "analyze", "input_fingerprint": fingerprint,
+                                          "source_revision": source_revision})
         with contextlib.ExitStack() as stack:
             stack.enter_context(span("zont_analysis"))
             service = self.runtime.analysis(no_ai=not request.use_ai,
@@ -395,6 +430,18 @@ class ReportJobRunner:
                     timeout=OPENAI_REQUEST_TIMEOUT_SECONDS,
                     http_client=http_client,
                 )
+            if phase == "ai_prepare":
+                assert isinstance(service.analyst, OpenAIAnalyst)
+                assert isinstance(packet, dict)
+                # Other report saves advance publication between invocations.
+                # Validate source inputs here; the rebuilt exact packet and the
+                # normal save fence still guard the final report.
+                # Populate the existing exact-request cache in its own invocation.
+                # The next facts pass can reuse it even with little AI time left.
+                service.analyst.analyze(packet)
+                self._save_checkpoint(lease, {"phase": "analyze"})
+                return {"status": "pending", "phase": "analyze", "job_key": period.job_key,
+                        "reason": "ai_prepared"}
             if isinstance(request, ScheduledRequest):
                 from zont_analyzer.application.period_schedule import schedule_signature, seasonal_daily_signature
                 from zont_analyzer.application.reasoning_context import reuse_ai_interpretation

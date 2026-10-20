@@ -356,6 +356,15 @@ class AIRequestPending(RuntimeError):
 class AIRequestDeferred(RuntimeError):
     """The invocation has too little time left to safely dispatch an AI request."""
 
+    def __init__(self, message: str, *, packet: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.packet: dict[str, Any] | None = None
+        if packet is not None:
+            encoded = json.dumps(packet, ensure_ascii=False, sort_keys=True,
+                                 separators=(",", ":"), allow_nan=False)
+            if len(encoded.encode("utf-8")) <= ANALYSIS_PACKET_MAX_BYTES:
+                self.packet = json.loads(encoded)
+
 
 class OpenAIAnalyst:
     def __init__(self, *, api_key: str, config: AppConfig, db: Database):
@@ -368,12 +377,12 @@ class OpenAIAnalyst:
         self.ledger = AiUsageRepository(db.storage)
         self.dispatch_deadline: float | None = None
 
-    def _require_dispatch_time(self) -> None:
+    def _require_dispatch_time(self, packet: dict[str, Any] | None = None) -> None:
         if self.dispatch_deadline is None:
             return
         required = OPENAI_REQUEST_TIMEOUT_SECONDS + AI_POST_REQUEST_RESERVE_SECONDS
         if self.dispatch_deadline - time.monotonic() < required:
-            raise AIRequestDeferred("insufficient invocation time for bounded AI request and save")
+            raise AIRequestDeferred("insufficient invocation time for bounded AI request and save", packet=packet)
 
     def analyze(self, packet: dict[str, Any]) -> AnalysisResult:
         encoded = json.dumps(packet, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -426,7 +435,7 @@ class OpenAIAnalyst:
         if reservation is None:
             # Avoid leaving a token reservation behind when the invocation is
             # already too close to its hard deadline to finish the request/save.
-            self._require_dispatch_time()
+            self._require_dispatch_time(packet)
             ledger_job_key = _report_id_from_packet(packet) or f"analysis:{digest}"
             reservation = self.ledger.reserve(
                 request_key, ledger_job_key,
@@ -452,7 +461,7 @@ class OpenAIAnalyst:
             # reserving budget again; exactly one caller can mark it sent.
         # Recheck after the durable reservation in case database work consumed
         # the remaining margin. A prepared call remains safe to resume later.
-        self._require_dispatch_time()
+        self._require_dispatch_time(packet)
         if not self.ledger.mark_sent(request_key):
             unresolved = self.ledger.pending_for_job(
                 _report_id_from_packet(packet) or f"analysis:{digest}",
