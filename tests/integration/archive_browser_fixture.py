@@ -48,6 +48,7 @@ for selected in (date(2026, 8, 1), date(2026, 8, 3), date(2026, 8, 5)):
     gas = {"status": status, "volume_m3": None if status == "unknown" else 12.3,
            "lower_m3": 10, "upper_m3": 15, "reliability_index_pct": 72,
            "coverage_pct": 88, "model_version": "gas-browser-1", "observed_days": 1,
+           "model": {"validation_relative_error": .12, "heldout_interval_count": 3},
            "observed_hours": 20, "flame_hours": 4, "flame_pct": 20,
            "scope": "boiler", "reasons": ["неполный интервал"], "complete": False,
            "ai_stale": selected.day == 5}

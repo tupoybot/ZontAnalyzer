@@ -142,8 +142,9 @@ try {
   assert.match(await gasCard.textContent(), /Расход газа за период/);
   assert.match(await gasCard.textContent(), /12,30 м³/);
   assert.equal(await page.locator('.overview .gas-period-card').count(), 0);
-  assert.match(await page.locator('.gas-reliability').textContent(), /надёжность/i);
-  assert.match(await gasCard.textContent(), /Индекс надёжности/);
+  assert.match(await page.locator('.gas-reliability').textContent(), /ошибка проверки 12% · интервалов: 3/);
+  assert.doesNotMatch(await gasCard.textContent(), /Индекс надёжности/);
+  assert.match(await gasCard.textContent(), /заранее исключили из обучения/);
   assert.match(await gasCard.textContent(), /Модель: gas-browser-1/);
   const freshnessNotice = page.locator('p.gas-period-stale');
   assert.equal(await freshnessNotice.count(), 1);
@@ -559,7 +560,7 @@ try {
     assert(strip.x >= 0 && strip.x + strip.width <= width, 'gas block fits viewport');
     assert(await page.locator('.kpi-gas-strip').evaluate(el => el.scrollWidth <= el.clientWidth), 'gas content fits block');
     assert(rects.flat().every(r => r.x >= strip.x && r.right <= strip.x + strip.width), 'gas values fit block');
-    assert.match(await total.locator(':scope > span').textContent(), /Расход газа \(надёжность 35%\)/);
+    assert.match(await total.locator(':scope > span').textContent(), /Расход газа \(по счётчику\)/);
     assert.doesNotMatch(await page.locator('.gas-distribution-legend').textContent(), /руб/);
   }
 } finally {
