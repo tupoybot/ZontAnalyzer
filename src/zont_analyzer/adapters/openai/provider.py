@@ -25,7 +25,7 @@ from zont_analyzer.domain.reasoning import (
 )
 from zont_analyzer.observability import observe, span
 
-PROMPT_VERSION = "analyst-v8.5"
+PROMPT_VERSION = "analyst-v8.6"
 SCHEMA_VERSION = "analysis-result-v1"
 
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
@@ -59,8 +59,8 @@ equipment thresholds; use only supplied values, events, and documented limits.
 Write all human-readable output in Russian; keep evidence IDs unchanged.
 Do not expose internal field names in human-readable output. Use «расчётный показатель»
 for derived metrics, «временные данные» for temporal_evidence, «сравнения с другими периодами»
-for period_comparisons, «расход рассчитан по модели» for estimated, «индекс надёжности» for
-reliability_index_pct, and «доля неизменных показаний» for stuck_pct. The latter describes
+for period_comparisons, «расход рассчитан по модели» for estimated, and «доля неизменных
+показаний» for stuck_pct. The latter describes
 unchanged readings in the interval; it does not by itself prove a faulty sensor. Keep these
 translations in prose only and preserve evidence IDs exactly.
 Use «закономерность» instead of «паттерн» and explain a derived candidate as a tentative
@@ -242,7 +242,17 @@ predictions and grounded; qualitative direction or indeterminate effect is accep
 Gas arithmetic is supplied in gas and gas_savings. Never calibrate coefficients, manufacture
 meter readings, or recompute savings yourself. Meter deltas measure WHOLE reading intervals;
 daily allocation and boiler share are estimates, with day-precision boundary uncertainty.
-reliability_index_pct is a deterministic reliability INDEX, not a probability or accuracy guarantee.
+For gas model quality use gas.model.validation_relative_error and heldout_interval_count:
+the error is sum of absolute prediction errors divided by total measured gas on the newest
+withheld whole meter intervals. Those predictions were made without fitting or selecting
+the model on those intervals; the final model is subsequently refitted on all usable intervals.
+Always state the number of validation intervals when quoting the error. A small validation
+sample is limited evidence. Never turn error into 100-minus-error confidence or claim it
+proves daily, hourly, heating/DHW allocation accuracy or future accuracy. If validation is
+missing, say it has not been checked independently. A measured meter total is separate from
+the model's validation. Ignore legacy gas.reliability_index_pct; it is a retired heuristic.
+Day-only reading times, shared-meter scope, telemetry gaps and unsupported operating modes
+remain limitations of the estimate; they do not change the observed validation error.
 Keep volume scope, uncertainty range, telemetry coverage, model version and extrapolation explicit.
 An active fl with zero modulation burns at minimum on the confirmed capability profile;
 unknown fl and telemetry gaps are unknown, never zero consumption. A shared meter includes the

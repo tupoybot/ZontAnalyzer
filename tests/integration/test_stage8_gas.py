@@ -33,7 +33,9 @@ def history(tmp_path: Path):
 
 
 @pytest.mark.ydb
-def test_historical_gas_recalibrates_outside_interval_preserves_ai_feedback_and_versions(tmp_path: Path):
+def test_historical_gas_recalibrates_outside_interval_preserves_ai_feedback_and_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
     r, store, reports = history(tmp_path)
     store.update_gas(reports[0].id, {'value_m3': 100})
     store.update_gas(reports[2].id, {'value_m3': 292})  # eight days * 24 m3
@@ -41,6 +43,30 @@ def test_historical_gas_recalibrates_outside_interval_preserves_ai_feedback_and_
     assert first.context['gas']['volume_m3'] is not None
     assert first.context['gas']['flame_hours'] == 24
     assert first.context['gas']['flame_pct'] == 100
+    assert first.context['gas']['algorithm_version'] == 'gas-context-v4'
+    assert 'reliability_index_pct' not in first.context['gas']
+    legacy = first.model_copy(deep=True)
+    legacy.ai_used = True
+    legacy.context['gas']['algorithm_version'] = 'gas-context-v3'
+    legacy.context['gas']['reliability_index_pct'] = 45
+    migrated = GasService(r.db, r.config).refresh(legacy)
+    assert migrated.context['gas']['model_version'] == first.context['gas']['model_version']
+    assert migrated.context['gas']['volume_m3'] == first.context['gas']['volume_m3']
+    assert migrated.context['gas']['ai_stale'] is True
+    # A quality-version upgrade may create a new model snapshot, but must reuse
+    # the old exposure statistics instead of fetching raw boiler history again.
+    from zont_analyzer.application import gas as gas_module
+
+    with monkeypatch.context() as previous_version:
+        previous_version.setattr(gas_module, 'VERSION', 'gas-context-v3')
+        previous_version.setattr(gas_module, 'ALGORITHM_VERSION', 'gas-model-v3')
+        previous = GasService(r.db, r.config).refresh(reports[-1])
+    with monkeypatch.context() as cached_only:
+        cached_only.setattr(r.db, 'fetch_text_samples', lambda *args: pytest.fail('reread boiler states'))
+        cached_only.setattr(r.db, 'fetch_samples', lambda *args: pytest.fail('reread modulation'))
+        upgraded = GasService(r.db, r.config).refresh(previous)
+    assert upgraded.context['gas']['model_version'] != previous.context['gas']['model_version']
+    assert upgraded.context['gas']['volume_m3'] == previous.context['gas']['volume_m3']
     from zont_analyzer.domain import Recommendation
     first.recommendations = [Recommendation(
         id='keep-owner-decision', title='Наблюдать', category='observe_only', priority='low', confidence=.5,

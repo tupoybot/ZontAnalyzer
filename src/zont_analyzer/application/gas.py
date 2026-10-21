@@ -33,7 +33,11 @@ from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import Report
 
-VERSION = "gas-context-v3"
+VERSION = "gas-context-v4"
+# Exposure integration has not changed. New validation/model versions must not
+# reread the entire telemetry history just to reuse the same sufficient statistics.
+EXPOSURE_CACHE_VERSION = "gas-context-v3"
+EXPOSURE_ALGORITHM_VERSION = "gas-model-v3"
 EDGES = (0.0, 25.0, 50.0, 75.0, 100.0)
 FRESHNESS = timedelta(minutes=15)
 P = ParamSpec('P')
@@ -324,7 +328,7 @@ class GasService:
                 previous[series_id] = self.db.fetch_numeric_observations(
                     series_id, start, start, include_previous=True,
                 )
-        signature = _hash([VERSION, ALGORITHM_VERSION, self.state, self.series,
+        signature = _hash([EXPOSURE_CACHE_VERSION, EXPOSURE_ALGORITHM_VERSION, self.state, self.series,
                            self.config.analysis.modulation_capability_profile, start, end,
                            'day-markers-v1', revision, previous])
         cache_key = f'gas-exposure:{signature}'
@@ -487,7 +491,7 @@ class GasService:
             'epistemic_level': 'derived',
             'status': estimate.status, 'volume_m3': estimate.volume_m3,
             'lower_m3': bounds[0] if bounds else None, 'upper_m3': bounds[1] if bounds else None,
-            'reliability_index_pct': estimate.reliability_index, 'coverage_pct': estimate.coverage*100,
+            'coverage_pct': estimate.coverage*100,
             'model_version': version, 'algorithm_version': VERSION, 'reasons': list(estimate.reasons),
             'observed_days': days,
             'timezone_provenance': self.timezone_provenance,
@@ -860,6 +864,7 @@ class GasService:
             pilot_reuse and pilot_reuse.get('facts_changed') is not False
         ))
         stale = report.ai_used and (reused or not old or old.get('model_version') != gas['model_version'] or
+                                   old.get('algorithm_version') != gas['algorithm_version'] or
                                    old.get('volume_m3') != gas['volume_m3'] or
                                    old.get('burner_usage_version') != gas['burner_usage_version'] or
                                    old.get('ai_stale', False))

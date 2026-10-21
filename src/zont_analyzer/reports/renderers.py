@@ -12,6 +12,7 @@ from zont_analyzer.application.ai_provenance import label as ai_provenance_label
 from zont_analyzer.domain import Report
 from zont_analyzer.reports.control_settings import control_settings_html, control_settings_text
 from zont_analyzer.reports.experiment_forms import experiment_form
+from zont_analyzer.reports.gas_validation import validation_lines
 from zont_analyzer.reports.presentation import (
     LEGACY_DUTY_METRICS,
     _gas_value,
@@ -934,7 +935,7 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
             if isinstance(gas.get(key), (int, float)):
                 lines.append(f"{label}: {_volume_and_cost(gas[key], gas.get(cost_key), unit)}")
         lines.extend(f"{label}: {value}" for label, value in burner_usage_rows(report))
-        lines.append(f"Индекс надёжности: {_gas_value(gas.get('reliability_index_pct'), '%')}; не вероятность.")
+        lines.extend(validation_lines(gas))
         lines.append(f"Диапазон: {_gas_value(gas.get('lower_m3'), 'м³')} — "
                      f"{_gas_value(gas.get('upper_m3'), 'м³')}; покрытие {_gas_value(gas.get('coverage_pct'), '%')}")
         lines.append(f"Версия расчёта: {gas.get('model_version', 'неизвестна')}")

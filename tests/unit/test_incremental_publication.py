@@ -61,6 +61,28 @@ def test_noop_does_not_recalculate_or_walk_database(tmp_path: Path, monkeypatch:
 
 
 @pytest.mark.ydb
+def test_gas_validation_view_update_republishes_in_batches_without_calibration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zont_analyzer.reports import gas_validation
+
+    runtime = _runtime(tmp_path)
+    reports = _daily_reports(runtime, 3)
+    publication.publish_reports(runtime)
+    before = {report.id: runtime.db.report(report.id).model_dump_json() for report in reports}
+    monkeypatch.setattr(gas_validation, "VIEW_VERSION", "gas-validation-test-update")
+    monkeypatch.setattr(GasService, "refresh", lambda *args: pytest.fail("view update recalibrated gas"))
+    monkeypatch.setattr(GasService, "refresh_cost", lambda *args: pytest.fail("view update recalculated cost"))
+
+    results = [publication.publish_reports(runtime, batch_size=1) for _ in range(3)]
+
+    assert [result["rendered_reports"] for result in results] == [1, 1, 1]
+    assert [result["pending_reports"] for result in results] == [2, 1, 0]
+    assert {report.id: runtime.db.report(report.id).model_dump_json() for report in reports} == before
+    assert publication.publish_reports(runtime)["rendered_reports"] == 0
+
+
+@pytest.mark.ydb
 def test_changed_stored_summary_refreshes_one_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = _runtime(tmp_path)
     report = _daily_reports(runtime, 2)
