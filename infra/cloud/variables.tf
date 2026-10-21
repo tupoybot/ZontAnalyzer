@@ -192,8 +192,8 @@ variable "production_ydb_request_units_per_second" {
   type        = number
   default     = 50
   validation {
-    condition     = var.production_ydb_request_units_per_second >= 10 && var.production_ydb_request_units_per_second <= 1000 && floor(var.production_ydb_request_units_per_second) == var.production_ydb_request_units_per_second
-    error_message = "Use an integer throughput cap between 10 and 1000 request units per second."
+    condition     = var.production_ydb_request_units_per_second >= 10 && var.production_ydb_request_units_per_second <= 10000 && floor(var.production_ydb_request_units_per_second) == var.production_ydb_request_units_per_second
+    error_message = "Use an integer throughput cap between 10 and 10000 request units per second."
   }
 }
 
@@ -212,8 +212,8 @@ variable "ydb_request_units_per_second" {
   type        = number
   default     = 10
   validation {
-    condition     = var.ydb_request_units_per_second >= 10 && var.ydb_request_units_per_second <= 1000 && floor(var.ydb_request_units_per_second) == var.ydb_request_units_per_second
-    error_message = "Use an integer throughput cap between 10 and 1000 request units per second."
+    condition     = var.ydb_request_units_per_second >= 10 && var.ydb_request_units_per_second <= 10000 && floor(var.ydb_request_units_per_second) == var.ydb_request_units_per_second
+    error_message = "Use an integer throughput cap between 10 and 10000 request units per second."
   }
 }
 

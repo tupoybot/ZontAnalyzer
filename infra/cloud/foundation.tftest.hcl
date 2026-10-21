@@ -4,7 +4,7 @@ run "production_database_is_separate_and_capped" {
   command = plan
   variables {
     enable_production_database              = true
-    production_ydb_request_units_per_second = 1000
+    production_ydb_request_units_per_second = 10000
     application_writes_enabled              = false
   }
   override_resource {
@@ -17,7 +17,7 @@ run "production_database_is_separate_and_capped" {
     }
   }
   assert {
-    condition     = yandex_ydb_database_serverless.production[0].deletion_protection && one(yandex_ydb_database_serverless.production[0].serverless_database).throttling_rcu_limit == 1000 && one(yandex_ydb_database_serverless.production[0].serverless_database).provisioned_rcu_limit == 0
+    condition     = yandex_ydb_database_serverless.production[0].deletion_protection && one(yandex_ydb_database_serverless.production[0].serverless_database).throttling_rcu_limit == 10000 && one(yandex_ydb_database_serverless.production[0].serverless_database).provisioned_rcu_limit == 0
     error_message = "Production must be protected, capped and billed on demand."
   }
   assert {
@@ -569,11 +569,11 @@ run "maintenance_disables_writes" {
 run "migration_capacity_remains_capped" {
   command = plan
   variables {
-    ydb_request_units_per_second = 100
+    ydb_request_units_per_second = 10000
     ydb_storage_size_limit_gib   = 5
   }
   assert {
-    condition     = one(yandex_ydb_database_serverless.probe[0].serverless_database).enable_throttling_rcu_limit && one(yandex_ydb_database_serverless.probe[0].serverless_database).throttling_rcu_limit == 100 && one(yandex_ydb_database_serverless.probe[0].serverless_database).storage_size_limit == 5 && one(yandex_ydb_database_serverless.probe[0].serverless_database).provisioned_rcu_limit == 0
+    condition     = one(yandex_ydb_database_serverless.probe[0].serverless_database).enable_throttling_rcu_limit && one(yandex_ydb_database_serverless.probe[0].serverless_database).throttling_rcu_limit == 10000 && one(yandex_ydb_database_serverless.probe[0].serverless_database).storage_size_limit == 5 && one(yandex_ydb_database_serverless.probe[0].serverless_database).provisioned_rcu_limit == 0
     error_message = "Migration capacity must remain explicitly capped without provisioned idle capacity."
   }
 }
