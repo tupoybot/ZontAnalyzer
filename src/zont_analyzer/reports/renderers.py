@@ -31,6 +31,8 @@ from zont_analyzer.reports.presentation import (
 )
 from zont_analyzer.reports.wording import normalize_report_for_display
 
+VIEW_VERSION = "report-presentation-v1"
+
 METRIC_LABELS = {
     "mean_temperature_c": "Средняя температура помещения",
     "temperature_range_c": "Диапазон температуры помещения",
@@ -1177,11 +1179,14 @@ def render_html(
         if deprecations else '<p class="muted"><a href="#ai-settings">Есть предложение по моделям AI</a></p>'
         if any(item.get("status") == "open" for item in proposals) else ""
     )
-    from zont_analyzer.reports.period_context import render_period_context
+    from zont_analyzer.reports.period_context import render_period_context, render_season_comparisons
     from zont_analyzer.reports.regeneration import render_regeneration
 
     regeneration = render_regeneration(report, feedback_api_base_url)
-    period_context = render_period_context(report)
+    seasonal = report.kind == "seasonal"
+    period_context = render_period_context(report, include_comparisons=not seasonal)
+    season_comparisons = render_season_comparisons(report) if seasonal else ""
+    gas_cost_comparisons = ui.gas_cost_comparisons_section(report)
     period = html.escape(
         f"{_local(report.period_start, report.timezone)} — {_local(report.period_end, report.timezone)}"
     )
@@ -1328,7 +1333,12 @@ def render_html(
             f"<p class=\"debug-only\"><strong>Свидетельства:</strong> {evidence_html(item.evidence)}</p></article>"
             for item in report.unknowns
         )
-        reasoning_parts.append(f"<section><h2>Неизвестное / недостаток данных</h2>{cards}</section>")
+        insufficient = report.quality.score < 0.6 or not report.quality.sample_count or not report.metrics
+        no_interpretation = not (report.observed_patterns or report.hypotheses or report.predictions)
+        expanded = " open" if insufficient or no_interpretation else ""
+        reasoning_parts.append(
+            f'<details class="analysis-limitations"{expanded}><summary>Ограничения анализа</summary>{cards}</details>'
+        )
     if report.recommended_experiment is not None:
         experiment = report.recommended_experiment
         reasoning_parts.append(
@@ -1346,15 +1356,6 @@ def render_html(
             "</article></section>"
         )
     reasoning = "".join(reasoning_parts)
-    # Keep each explanation accessible with its technical evidence in context.
-    for heading in ("Наблюдаемые паттерны", "Гипотезы", "Прогнозы"):
-        prefix = f"<section><h2>{heading}</h2>"
-        start = reasoning.find(prefix)
-        if start >= 0:
-            end = reasoning.index("</section>", start)
-            body = reasoning[start + len(prefix):end]
-            reasoning = (reasoning[:start] + f"<details><summary>{heading}</summary>{body}</details>"
-                         + reasoning[end + len("</section>"):])
 
     feedback_by_id = recommendation_feedback or {}
     status_labels = {
@@ -1491,6 +1492,11 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <aside class="actions"><span class="eyebrow">СЛЕДУЮЩИЙ ШАГ</span><h2>Что делать</h2>
 {recommendations or '<p>Рекомендаций за этот период нет.</p>'}</aside>
 
+{season_comparisons}
+{gas_cost_comparisons if seasonal else ''}
+<section class="details-area full-width"><h2>Почему сделаны эти выводы</h2>
+{question_html}{reasoning or '<p>Дополнительные объяснения за период не сформированы.</p>'}
+</section>
 <section class="thermal-system full-width"><h2>Тепловая система</h2>
 <p class="boiler-context">Один котёл · отопление и горячая вода</p>
 <div class="thermal-columns"><section><h3>Отопление</h3>{mode_context}{summer_context}
@@ -1502,14 +1508,11 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="lower-grid full-width">{ui.timeline(report)}{ui.quality(report)}</div>
 {render_daily_gas(report)}
 {more_actions}
-<section class="details-area full-width"><h2>Почему сделаны эти выводы</h2>
-{question_html}{reasoning or '<p>Дополнительные объяснения за период не сформированы.</p>'}
-</section>
 <div class="details-area full-width">{ui.metric_groups(report, mttr_reason)}{ui.sensors(report)}{sensor_context}
 <div class="debug-only">{temporal_evidence}{historical_evidence}</div>
 <details class="debug-only"><summary>Канонический JSON</summary><pre>{canonical}</pre></details></div>
 {ui.gas_savings_section(report)}
-{ui.gas_cost_comparisons_section(report)}
+{gas_cost_comparisons if not seasonal else ''}
 {period_context}
 {regeneration}
 <section class="full-width owner-settings" aria-label="Профиль и показания">{owner_forms}</section>

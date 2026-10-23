@@ -563,6 +563,23 @@ try {
     assert.match(await total.locator(':scope > span').textContent(), /Расход газа \(по счётчику\)/);
     assert.doesNotMatch(await page.locator('.gas-distribution-legend').textContent(), /руб/);
   }
+  await page.goto(baseURL + '/season-comparison.html', {waitUntil:'networkidle'});
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({width, height:900});
+    const comparison = page.locator('.season-comparisons');
+    assert.equal(await comparison.getByText('Прошлая осень', {exact:true}).isVisible(), true);
+    assert.equal(await comparison.getByText('22.3', {exact:true}).isVisible(), true);
+    assert.match(await comparison.textContent(), /Различается погода/);
+    assert.equal(await page.getByText('Синтетическое наблюдение: в комнате стало теплее.', {exact:true}).isVisible(), true);
+    assert.equal(await page.getByText('Синтетическое ограничение.', {exact:true}).isVisible(), false);
+    const box = await comparison.boundingBox();
+    const thermal = await page.locator('.thermal-system').boundingBox();
+    assert(box.y + box.height <= thermal.y, 'season comparison precedes engineering details');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({path:`/tmp/zont-season-comparison-${width}.png`, fullPage:true});
+  }
+  await page.locator('.analysis-limitations summary').click();
+  assert.equal(await page.getByText('Синтетическое ограничение.', {exact:true}).isVisible(), true);
 } finally {
   await browser.close();
 }

@@ -6,8 +6,9 @@ from zont_analyzer.reports import render_html
 
 
 class Document(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(self, *, initial_view: bool = False) -> None:
         super().__init__()
+        self.initial_view = initial_view
         self.stack: list[tuple[str, dict[str, str | None]]] = []
         self.debug_text: list[str] = []
         self.visible_text: list[str] = []
@@ -25,12 +26,83 @@ class Document(HTMLParser):
     def handle_data(self, data):
         if any(tag in {"script", "style"} for tag, _ in self.stack):
             return
+        if self.initial_view and any(
+            tag == "details" and "open" not in attrs
+            and not any(child == "summary" for child, _ in self.stack[index + 1:])
+            for index, (tag, attrs) in enumerate(self.stack)
+        ):
+            return
         target = (
             self.debug_text
             if any("debug-only" in (attrs.get("class") or "").split() for _, attrs in self.stack)
             else self.visible_text
         )
         target.append(data)
+
+
+def test_interpretation_is_visible_and_limitations_follow_data_quality():
+    from tests.unit.test_reasoning_contract import _report
+
+    report = _report()
+    before = report.model_dump_json()
+    page = render_html(report)
+    document = Document(initial_view=True)
+    document.feed(page)
+    visible = "".join(document.visible_text)
+    for statement in (report.observed_patterns[0].statement, report.hypotheses[0].statement,
+                      report.predictions[0].expected_effect):
+        assert statement in visible
+    assert report.unknowns[0].statement not in visible
+    assert report.unknowns[0].statement in page
+    assert page.index("Почему сделаны эти выводы") < page.index("Тепловая система")
+    assert report.model_dump_json() == before
+
+    for changes in ({"quality": report.quality.model_copy(update={"score": 0.2})},
+                    {"observed_patterns": [], "hypotheses": [], "predictions": []}):
+        document = Document(initial_view=True)
+        document.feed(render_html(report.model_copy(update=changes)))
+        assert report.unknowns[0].statement in "".join(document.visible_text)
+
+
+def test_season_comparisons_lead_the_report_with_visible_evidence_and_limits():
+    report = fixture_report("seasonal")
+    report.context = {
+        "period": {"start": report.period_start.isoformat(), "end": report.period_end.isoformat()},
+        "period_comparisons": [
+            {"label": "Прошлая осень", "selection": "Подобраны дни с близкой погодой",
+             "matched_windows": [{
+                 "before_start": "2025-10-01T00:00:00+00:00", "before_end": "2025-10-02T00:00:00+00:00",
+                 "after_start": "2026-10-01T00:00:00+00:00", "after_end": "2026-10-02T00:00:00+00:00",
+                 "status": "limited", "confounders": ["operating_mode_not_comparable"],
+                 "metrics": [{"name": "room_mean_c", "unit": "celsius", "before": 21.2,
+                              "after": 22.3, "absolute_change": 1.1, "relative_change_pct": 5.19}],
+             }]},
+            {"label": "Эта весна", "unavailable_reason": "Нет дневной истории за выбранный сезон"},
+        ],
+    }
+    before = report.model_dump_json()
+    page = render_html(report)
+    document = Document(initial_view=True)
+    document.feed(page)
+    visible = "".join(document.visible_text)
+    for text in ("Прошлая осень", "21.2", "22.3", "Различается профиль режима или уставки",
+                 "Нет дневной истории за выбранный сезон", "Текущий сезон"):
+        assert text in visible
+    assert page.index("Сравнение с другими сезонами") < page.index("Почему сделаны эти выводы")
+    assert page.index("Сравнение с другими сезонами") < page.index("Тепловая система")
+    assert page.count("Подобраны дни с близкой погодой") == 1
+    assert report.model_dump_json() == before
+
+    report.kind = "monthly"
+    monthly = render_html(report)
+    assert "Сравнение с другими сезонами" not in monthly
+    assert monthly.index("Тепловая система") < monthly.index("Подобраны дни с близкой погодой")
+
+
+def test_season_without_comparisons_keeps_missing_history_visible():
+    document = Document(initial_view=True)
+    document.feed(render_html(fixture_report("seasonal")))
+    assert "В этом отчёте ещё нет сравнения с другими сезонами." in "".join(document.visible_text)
 
 
 def fixture_report(kind="daily") -> Report:

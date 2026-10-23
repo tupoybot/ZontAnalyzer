@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.application.publication import publish_reports
-from zont_analyzer.domain import Hypothesis, MetricValue, TimeInterval
+from zont_analyzer.domain import Hypothesis, MetricValue, ObservedPattern, QualityResult, TimeInterval, Unknown
 from zont_analyzer.reports import render_html, render_text
 from zont_analyzer.runtime import build_runtime
 
@@ -96,3 +96,26 @@ layout_report.context["gas"] = {
     },
 }
 Path("/publish/gas-layout.html").write_text(render_html(layout_report))
+
+# Cross-season comparisons must be readable before engineering details, including on mobile.
+season_report = report.model_copy(deep=True)
+season_report.quality = QualityResult(
+    score=.9, coverage_pct=99, max_gap_seconds=60, stuck_pct=0, implausible_jumps=0, sample_count=100,
+)
+season_report.metrics = [MetricValue(id="room", name="mean_temperature_c", value=22.3, unit="°C")]
+interval = TimeInterval(started_at=report.period_start, ended_at=report.period_end, timezone=report.timezone)
+season_report.observed_patterns = [ObservedPattern(
+    id="pattern:season", statement="Синтетическое наблюдение: в комнате стало теплее.", interval=interval,
+)]
+season_report.unknowns = [Unknown(id="unknown:season", statement="Синтетическое ограничение.", interval=interval)]
+season_report.context["period_comparisons"] = [{
+    "label": "Прошлая осень", "selection": "Сравнение выбранных суток, не итог всего сезона.",
+    "matched_windows": [{
+        "before_start": "2025-10-01T00:00:00+00:00", "before_end": "2025-10-02T00:00:00+00:00",
+        "after_start": "2026-10-01T00:00:00+00:00", "after_end": "2026-10-02T00:00:00+00:00",
+        "status": "limited", "confounders": ["weather_not_comparable"],
+        "metrics": [{"name": "room_mean_c", "unit": "celsius", "before": 21.2,
+                     "after": 22.3, "absolute_change": 1.1, "relative_change_pct": 5.19}],
+    }],
+}]
+Path("/publish/season-comparison.html").write_text(render_html(season_report))

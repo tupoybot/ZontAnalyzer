@@ -233,6 +233,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
     from zont_analyzer.application.owner_context import OwnerContextStore
     from zont_analyzer.application.timezone import apply_device_timezone
     from zont_analyzer.reports.gas_validation import VIEW_VERSION as gas_validation_view
+    from zont_analyzer.reports.renderers import VIEW_VERSION as report_view
 
     def fence() -> None:
         if runtime.db.jobs.renew("publication", owner, attempt, LEASE_SECONDS) is None:
@@ -261,6 +262,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         and meta_hint.get("profiles") == profile_digest and meta_hint.get("config") == config_digest
         and meta_hint.get("ai_review") == review_digest and "count" in meta_hint
         and meta_hint.get("gas_validation_view") == gas_validation_view
+        and meta_hint.get("report_view") == report_view
         and "unpublished_count" in meta_hint
         and meta_hint.get("unpublished_basis") == _unpublished_basis(meta_hint)
         and manifest_current
@@ -310,6 +312,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         and meta_hint.get("profiles") == profile_digest and meta_hint.get("config") == config_digest
         and meta_hint.get("ai_review") == review_digest and "count" in meta_hint
         and meta_hint.get("gas_validation_view") == gas_validation_view
+        and meta_hint.get("report_view") == report_view
         and "unpublished_count" in meta_hint
         and meta_hint.get("unpublished_basis") == _unpublished_basis(meta_hint)
         and manifest_current and (repository.has_dirty() or hourly_changes)
@@ -393,11 +396,13 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
     if not partial and meta.get("ai_review") != review_digest:
         _enqueue(items, RENDER, now)
     meta["ai_review"] = review_digest
-    if not partial and meta.get("gas_validation_view") != gas_validation_view:
+    if not partial and (meta.get("gas_validation_view") != gas_validation_view
+                        or meta.get("report_view") != report_view):
         # Existing models already contain the validation evidence. Republish
         # the view through bounded batches without recalibrating the archive.
         _enqueue(items, RENDER, now)
     meta["gas_validation_view"] = gas_validation_view
+    meta["report_view"] = report_view
 
     if not partial:
         hrefs = sorted(items)

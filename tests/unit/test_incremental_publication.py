@@ -61,16 +61,18 @@ def test_noop_does_not_recalculate_or_walk_database(tmp_path: Path, monkeypatch:
 
 
 @pytest.mark.ydb
-def test_gas_validation_view_update_republishes_in_batches_without_calibration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("view", ["gas_validation", "renderers"])
+def test_view_update_republishes_in_batches_without_calibration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, view: str,
 ) -> None:
-    from zont_analyzer.reports import gas_validation
+    from zont_analyzer.reports import gas_validation, renderers
 
     runtime = _runtime(tmp_path)
     reports = _daily_reports(runtime, 3)
     publication.publish_reports(runtime)
     before = {report.id: runtime.db.report(report.id).model_dump_json() for report in reports}
-    monkeypatch.setattr(gas_validation, "VIEW_VERSION", "gas-validation-test-update")
+    monkeypatch.setattr({"gas_validation": gas_validation, "renderers": renderers}[view],
+                        "VIEW_VERSION", "test-view-update")
     monkeypatch.setattr(GasService, "refresh", lambda *args: pytest.fail("view update recalibrated gas"))
     monkeypatch.setattr(GasService, "refresh_cost", lambda *args: pytest.fail("view update recalculated cost"))
 
