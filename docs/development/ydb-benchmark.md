@@ -2,10 +2,10 @@
 
 `#for-human`
 
-Статус на 2026-10-21: контракт запланированной доработки; стенд RU/сек ещё
+Статус на 2026-10-23: контракт задачи [#70](https://github.com/tupoybot/ZontAnalyzer/issues/70); стенд RU/сек ещё
 не реализован. Приоритет и зависимости — только в
 [единой очереди](../implementation_plan.md#единая-очередь-разработки).
-Связанные задачи: [#17](https://github.com/tupoybot/ZontAnalyzer/issues/17),
+Приёмка исходного результата #62 — #69. Связанные задачи: [#17](https://github.com/tupoybot/ZontAnalyzer/issues/17),
 [#64](https://github.com/tupoybot/ZontAnalyzer/issues/64),
 первый сценарий исправления — [#65](https://github.com/tupoybot/ZontAnalyzer/issues/65).
 

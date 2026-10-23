@@ -54,8 +54,9 @@
   and still-relevant integration plans in current docs, even when implemented in code.
   Mark implemented, planned and exploratory scope explicitly; archive only superseded
   decisions and completed execution history. Reduce context through selective reading.
-- Stage 9 is ongoing pilot production operation and improvements. Stages 10 (multi-room)
-  and 11 (control) are optional and deferred; do not start them automatically.
+- Stage numbers are historical contract references, not the current task sequence.
+  Track concrete work by GitHub issue number. Multi-room and control remain optional
+  ideas; do not create or start their implementation without a concrete request.
 
 # GitHub Issues: report outcomes
 
@@ -214,23 +215,37 @@ Do not use a stronger model merely because it is available.
 
 ## Plan execution and handoff
 
-- Follow the dependency order and work portions in `docs/implementation_plan.md`.
-- Develop each implementation stage N in its own `stageN` branch created from up-to-date
-  `main`. For the open-ended stage 9, use `stage9/<topic>` per bounded improvement;
-  acceptance and merge apply to that improvement, not the entire operation period.
-  Use `docs/<topic>` for documentation-only work.
+- Keep goals, milestone outcomes and technical contract links in `docs/implementation_plan.md`.
+  Use https://github.com/users/tupoybot/projects/1 for current task status and order,
+  milestones for bounded outcomes, and issues for scope, acceptance and dependencies.
+  Do not maintain a second live status queue in Markdown or reopen the superseded #1 tracker.
+  Priority is not a dependency. Do not impose a global stage sequence on independent work.
+  Keep one primary task in progress; move prepared results to acceptance without implying
+  owner approval. Creating or changing a Project item does not authorize implementation.
+- Every concrete task has a GitHub issue before implementation. Manual work uses
+  `feat/issue-N`; automatic work uses `codex/issue-N`, including documentation tasks.
+  Use one working branch and one PR per issue. A handoff keeps the existing branch/PR;
+  do not create both variants for the same task or add topic/follow-up suffixes.
+  Create new branches from current accepted `main`. Existing PRs #62 and #67 continue
+  on their current branches; do not rename them merely to adopt the convention.
+- Issue creation, grooming and completion of another task do not authorize implementation.
+  Do not add automation-triggering labels or dispatch automation without an explicit request.
+  The repository currently triggers on `bug`, `feature`, `enhancement`, and `maintenance`.
+- Branch naming does not grant release/apply permission. Issue #71 tracks compatibility
+  of the new names with existing release gates; do not manufacture stage aliases to
+  bypass that unfinished work for new issues.
 - Before asking for owner acceptance, complete implementation and technical checks,
-  commit and push the stage's changes, deploy the locally tested immutable image,
+  commit and push the task's changes, deploy the locally tested immutable image,
   and verify the running server with bounded smoke checks. Present the deployed result
   and evidence to the owner. These steps do not wait for owner acceptance; ONLY the
   merge waits. For documentation-only changes, commit/push and document checks suffice.
-  Merge `stageN`
-  into `main` ONLY AFTER THE OWNER EXPLICITLY ACCEPTS THAT STAGE. Passing tests, CI,
+  Merge the issue branch
+  into `main` ONLY AFTER THE OWNER EXPLICITLY ACCEPTS THAT RESULT. Passing tests, CI,
   isolated acceptance, deployment, smoke checks, or an agent's review does not constitute
-  owner acceptance. A request to implement/complete a stage is not advance acceptance;
-  silence is not acceptance. Until explicit owner acceptance, keep the stage open and
-  do not merge it or start the next stage. After acceptance, merge and create the next
-  stage branch from the updated `main`.
+  owner acceptance. A request to implement a task is not advance acceptance;
+  silence is not acceptance. Until explicit acceptance, keep that result open and do
+  not merge it. Start other tasks only when separately requested and their actual
+  dependencies permit it; do not infer permission from finishing the current task.
 - Follow the documentation entrypoint above; inspect only relevant source/tests.
 - Detailed release criteria are in `docs/development/release-process.md`; read them when preparing a release.
 - A work portion includes implementation and related tests. Do not write tests for reversible, low-impact changes that mirror the implementation. If you do choose to verify your work with tests, make sure that the tests are meaningful and necessary to verify implementation. Run tests appropriate to the change and complete required checks. Once those pass, broaden or repeat testing only when new changes, failures, or unresolved concerns justify it; otherwise, continue toward completing the task. Keep a short handoff in
