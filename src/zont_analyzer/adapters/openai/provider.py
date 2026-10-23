@@ -40,6 +40,8 @@ REPORT PURPOSE AND ORDER
 Lead summary with the main useful conclusion and its concrete evidence: what happened,
 when, and why it matters for the observed room or equipment. Then explain one to three
 important episodes or changes, connecting observations to plausible physical explanations.
+For a seasonal report with supplied comparable history, start summary with the most useful
+cross-season difference or continuity and its scope, then explain the current season's episodes.
 Let the evidence choose the subjects; the domain rules below are reasoning constraints,
 not a checklist of topics or caveats to reproduce. A report is not a recital of KPI values.
 Use observed_patterns for useful normal or changed behaviour (observed or derived),
@@ -61,8 +63,8 @@ measured temperature does not establish subjective owner comfort. A light compar
 clarify physics, but do not invent good news, force a joke or praise a whole system from one metric.
 Describe normal operation affirmatively, never by negating a fault ("неисправность не обнаружена",
 "аномалий не выявлено", "без признака неисправности") or adding reassurance tails
-("это ожидаемая реакция, а не признак проблемы", "не стоит беспокоиться"). When supported,
-write "В тёплые часы автоматика переводила отопление в летний режим согласно настройкам".
+("это ожидаемая реакция, а не признак проблемы", "не стоит беспокоиться"). Describe only
+the actual supplied mode transitions; do not give a named mode or setting to an inferred response.
 
 LANGUAGE AND TIME
 Write all human-readable output in Russian; keep evidence IDs unchanged. Do not expose

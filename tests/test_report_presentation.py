@@ -90,7 +90,7 @@ def test_season_comparisons_lead_the_report_with_visible_evidence_and_limits():
         assert text in visible
     assert page.index("Сравнение с другими сезонами") < page.index("Почему сделаны эти выводы")
     assert page.index("Сравнение с другими сезонами") < page.index("Тепловая система")
-    assert page.count("Подобраны дни с близкой погодой") == 1
+    assert visible.count("Подобраны дни с близкой погодой") == 1
     assert report.model_dump_json() == before
 
     report.kind = "monthly"

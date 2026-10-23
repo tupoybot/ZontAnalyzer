@@ -1,7 +1,7 @@
 """Create a deliberately sparse, complete archive for the browser E2E test."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -99,13 +99,18 @@ Path("/publish/gas-layout.html").write_text(render_html(layout_report))
 
 # Cross-season comparisons must be readable before engineering details, including on mobile.
 season_report = report.model_copy(deep=True)
+season_report.kind = "seasonal"
+season_report.period_start = datetime(2026, 9, 1, tzinfo=UTC)
+season_report.period_end = datetime(2026, 11, 1, tzinfo=UTC)
 season_report.quality = QualityResult(
     score=.9, coverage_pct=99, max_gap_seconds=60, stuck_pct=0, implausible_jumps=0, sample_count=100,
 )
 season_report.metrics = [MetricValue(id="room", name="mean_temperature_c", value=22.3, unit="°C")]
-interval = TimeInterval(started_at=report.period_start, ended_at=report.period_end, timezone=report.timezone)
+interval = TimeInterval(started_at=season_report.period_start, ended_at=season_report.period_end,
+                        timezone=season_report.timezone)
 season_report.observed_patterns = [ObservedPattern(
     id="pattern:season", statement="Синтетическое наблюдение: в комнате стало теплее.", interval=interval,
+    epistemic_level="derived",
 )]
 season_report.unknowns = [Unknown(id="unknown:season", statement="Синтетическое ограничение.", interval=interval)]
 season_report.context["period_comparisons"] = [{
