@@ -83,7 +83,7 @@ def period_text(report: Report) -> list[str]:
     return result
 
 
-def render_period_context(report: Report) -> str:
+def render_period_context(report: Report, *, include_comparisons: bool = True) -> str:
     period = report.context.get("period", {})
     if not period:
         return ""
@@ -103,17 +103,41 @@ def render_period_context(report: Report) -> str:
                          f"диапазон {_number(value['minimum'])}…{_number(value['maximum'])}</li>")
         body += "</ul><p>Тепловая инерция: точная постоянная времени пока не определена; "
         body += "темп остывания зависит также от погоды и теплопритоков.</p></details>"
-    for item in [*report.context.get("intervention_outcomes", []), *report.context.get("period_comparisons", [])]:
-        body += f"<details><summary>{escape(str(item.get('label', 'Сравнение')))}</summary>"
+    items = [*report.context.get("intervention_outcomes", [])]
+    if include_comparisons:
+        items.extend(report.context.get("period_comparisons", []))
+    body += _comparison_items(items, report.timezone)
+    return '<section class="full-width period-context"><h2>Период и сравнения</h2>' + body + "</section>"
+
+
+def render_season_comparisons(report: Report) -> str:
+    """Put existing cross-season evidence in the primary reading flow."""
+    items = report.context.get("period_comparisons", [])
+    body = _comparison_items(items, report.timezone, expanded=True) if items else (
+        "<p>В этом отчёте ещё нет сравнения с другими сезонами.</p>"
+    )
+    return ('<section class="full-width season-comparisons"><h2>Сравнение с другими сезонами</h2>'
+            + body + "</section>")
+
+
+def _comparison_items(items: list[dict[str, Any]], timezone: str, *, expanded: bool = False) -> str:
+    body = ""
+    for item in items:
+        opening = f"<section><h3>{escape(str(item.get('label', 'Сравнение')))}</h3>" if expanded else (
+            f"<details><summary>{escape(str(item.get('label', 'Сравнение')))}</summary>"
+        )
+        closing = "</section>" if expanded else "</details>"
+        body += opening
         if item.get("unavailable_reason"):
-            body += f"<p>{escape(str(item['unavailable_reason']))}</p></details>"
+            body += f"<p>{escape(str(item['unavailable_reason']))}</p>" + closing
             continue
         body += f"<p>{escape(str(item.get('selection', '')))}</p>"
         for pair in _pairs(item):
             status = "сопоставимые окна" if pair.get("status") == "comparable" else "сравнение с ограничениями"
-            body += f"<p>{escape(_bounds(pair, report.timezone))}</p><p>{status}. {escape(_limits(pair))}</p>"
-            body += ('<div class="table-scroll"><table><thead><tr><th>Показатель</th><th>До</th><th>После</th>'
-                     '<th>Δ</th><th>Δ, %</th></tr></thead><tbody>')
+            body += f"<p>{escape(_bounds(pair, timezone))}</p><p>{status}. {escape(_limits(pair))}</p>"
+            before, after = ("Другой сезон", "Текущий сезон") if expanded else ("До", "После")
+            body += ('<div class="table-scroll"><table><thead><tr><th>Показатель</th>'
+                     f'<th>{before}</th><th>{after}</th><th>Δ</th><th>Δ, %</th></tr></thead><tbody>')
             for metric in pair.get("metrics", []):
                 body += "<tr>" + "".join(f"<td>{escape(value)}</td>" for value in (
                     _label(metric["name"]) + ", " + _UNITS.get(metric["unit"], metric["unit"]),
@@ -121,5 +145,5 @@ def render_period_context(report: Report) -> str:
                     _number(metric.get("absolute_change")), _number(metric.get("relative_change_pct")),
                 )) + "</tr>"
             body += "</tbody></table></div>"
-        body += "</details>"
-    return '<section class="full-width period-context"><h2>Период и сравнения</h2>' + body + "</section>"
+        body += closing
+    return body

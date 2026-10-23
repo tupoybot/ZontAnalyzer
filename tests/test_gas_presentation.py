@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from zont_analyzer.domain import MetricValue, QualityResult, Report
 from zont_analyzer.reports import render_html
 
@@ -25,7 +27,9 @@ def test_gas_card_renders_measurement_provenance_and_flame_denominator() -> None
     assert "12,30 м³" in page
     assert 'class="metric-group gas-period-card"' in page
     assert page.index('id="metrics"') < page.index('id="gas-period-title"')
-    assert "Индекс надёжности: 72,0 %" in page
+    assert "Проверка модели: недостаточно данных" in page
+    assert "Индекс надёжности" not in page
+    assert "(надёжность 72%)" not in page
     assert "Знаменатель: 1 календарных суток" in page
     assert "Время работы горелки" in page
     assert "4,0 ч" in page and "за 24,0 ч периода" in page
@@ -129,7 +133,8 @@ def test_dashboard_uses_short_burner_labels_and_modelled_gas_denominator() -> No
     dashboard = kpis(report)
     assert "12 запусков · 75%" in dashboard
     assert "30 мин · 12,5%" in dashboard
-    assert "(надёжность 72%)" in dashboard
+    assert "(по счётчику)" in dashboard
+    assert "надёжность 72%" not in dashboard
     assert "времени горения" not in dashboard
     assert dashboard.index("Качество данных") < dashboard.index("Отопление · горелка")
     assert dashboard.index("Отопление · горелка") < dashboard.index("ГВС · догревы")
@@ -156,3 +161,100 @@ def test_dashboard_does_not_draw_a_gas_bar_without_complete_modelled_parts() -> 
     dashboard = kpis(report)
     assert 'class="gas-distribution-bar"' not in dashboard
     assert "Распределение по модели: Нет данных" in dashboard
+
+
+@pytest.mark.parametrize("error, expected", [(0, "0%"), (.09, "9%"), (1.37, "137%")])
+def test_validation_error_is_shared_by_kpi_details_and_plaintext(error: float, expected: str) -> None:
+    from zont_analyzer.reports.gas_validation import validation_lines
+    from zont_analyzer.reports.presentation import gas_distribution_card
+    from zont_analyzer.reports.renderers import render_text
+
+    gas = {
+        "status": "estimated", "volume_m3": 5, "reliability_index_pct": 45,
+        "model": {"validation_relative_error": error, "heldout_interval_count": 2,
+                  "validation_error_m3": 0, "usable_interval_count": 8},
+    }
+    report = _report(gas)
+    kpi, page, text = gas_distribution_card(gas), render_html(report), render_text(report)
+    for output in (kpi, page, text):
+        assert f"ошибка проверки {expected} · интервалов: 2" in output
+        assert "Индекс надёжности" not in output
+        assert "(надёжность 45%)" not in output
+    for line in validation_lines(gas):
+        assert line in page and line in text
+    assert "Средняя абсолютная ошибка за проверочный интервал: 0 м³" in text
+    assert "Пригодных интервалов для калибровки: 8" in text
+    assert "целых интервалах" in kpi
+    assert "заранее исключили из обучения" in text
+    assert "не гарантирует точность распределения расхода по отдельным дням" in text
+
+
+@pytest.mark.parametrize("model", [
+    None, {}, {"validation_relative_error": .09},
+    {"validation_relative_error": .09, "heldout_interval_count": 0},
+    *[{"validation_relative_error": value, "heldout_interval_count": 2}
+      for value in (-1, True, float("nan"), float("inf"))],
+    *[{"validation_relative_error": 0, "heldout_interval_count": count}
+      for count in (-1, True, .5, float("nan"), float("inf"))],
+])
+def test_invalid_or_missing_validation_never_uses_legacy_score(model: object) -> None:
+    from zont_analyzer.reports.gas_validation import validation_lines, validation_summary
+
+    gas = {"model": model, "reliability_index_pct": 45}
+    assert validation_summary(gas) == "Проверка модели: недостаточно данных"
+    assert validation_lines(gas)[0] == "Проверка модели: недостаточно данных"
+    assert not any("45" in line or "nan" in line or "inf" in line for line in validation_lines(gas))
+
+
+def test_measured_kpi_separates_whole_meter_total_from_model_check() -> None:
+    from zont_analyzer.reports.presentation import gas_distribution_card
+    from zont_analyzer.reports.renderers import render_text
+
+    gas = {
+        "status": "measured", "scope": "shared_meter", "volume_m3": 5,
+        "measurement_time_precision": "day",
+        "model": {"validation_relative_error": .09, "heldout_interval_count": 2,
+                  "boundary_relative_uncertainty": .8},
+    }
+    kpi = gas_distribution_card(gas)
+    assert "(по счётчику)" in kpi
+    assert "ошибка проверки" not in kpi
+    assert "Проверка модели приведена в подробностях" in kpi
+    for output in (render_html(_report(gas)), render_text(_report(gas))):
+        assert "ошибка проверки 9% · интервалов: 2" in output
+        assert "не отделяет расход котла от других газовых потребителей" in output
+        assert "Время снятия показаний внутри дня неизвестно" in output
+        assert "оно не является ошибкой проверки модели" in output
+        assert "45%" not in output
+
+
+def test_invalid_optional_validation_values_are_omitted() -> None:
+    from zont_analyzer.reports.gas_validation import validation_lines
+
+    lines = validation_lines({"model": {
+        "validation_relative_error": 0, "heldout_interval_count": 1,
+        "validation_error_m3": float("nan"), "usable_interval_count": True,
+        "boundary_relative_uncertainty": -1,
+    }})
+    assert not any("Средняя абсолютная" in line or "Пригодных" in line or "Время снятия" in line for line in lines)
+
+
+def test_legacy_ai_text_has_a_notice_without_changing_saved_interpretation() -> None:
+    from zont_analyzer.reports.presentation import ai_freshness_notice
+
+    report = _report({"reliability_index_pct": 45})
+    assert ai_freshness_notice(report) == ""
+    report.ai_used = True
+    original = report.model_dump_json()
+    assert "прежний условный индекс" in ai_freshness_notice(report)
+    assert report.model_dump_json() == original
+
+
+def test_validation_without_relative_error_can_show_absolute_error() -> None:
+    from zont_analyzer.reports.gas_validation import validation_lines
+
+    lines = validation_lines({"model": {
+        "validation_relative_error": None, "validation_error_m3": 1.2, "heldout_interval_count": 2,
+    }})
+    assert "ошибка проверки 1,2 м³ за интервал · интервалов: 2" in lines[0]
+    assert any("Относительная ошибка проверки не определена" in line for line in lines)

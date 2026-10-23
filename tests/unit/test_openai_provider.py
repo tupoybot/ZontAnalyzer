@@ -356,11 +356,56 @@ def test_reasoning_provider_defers_before_reserving_when_deadline_is_too_close(
     analyst.dispatch_deadline = 149.9
     monkeypatch.setattr("zont_analyzer.adapters.openai.provider.time.monotonic", lambda: 0.0)
 
-    with pytest.raises(AIRequestDeferred):
-        analyst.analyze({"period": {"kind": "weekly"}})
+    packet = {"period": {"kind": "weekly"}}
+    with pytest.raises(AIRequestDeferred) as deferred:
+        analyst.analyze(packet)
+
+    assert deferred.value.packet == packet
+    packet["period"]["kind"] = "changed"
+    assert deferred.value.packet == {"period": {"kind": "weekly"}}
+    assert "weekly" not in str(deferred.value)
 
     parse.assert_not_called()
     assert db.storage.execute("SELECT call_key FROM llm_calls;")[0].rows == []
+
+
+def test_deferred_request_never_carries_an_oversized_packet() -> None:
+    from zont_analyzer.adapters.openai.provider import AIRequestDeferred
+
+    assert AIRequestDeferred("later", packet={"data": "x" * ANALYSIS_PACKET_MAX_BYTES}).packet is None
+
+
+@pytest.mark.ydb
+def test_deadline_after_reservation_retains_packet_without_dispatch(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from tests.ydb_support import make_database
+    from zont_analyzer.adapters.openai.provider import AIRequestDeferred, OpenAIAnalyst
+    from zont_analyzer.config import AppConfig
+
+    db = make_database(tmp_path)
+    analyst = OpenAIAnalyst(api_key="fixture", config=AppConfig(), db=db)
+    parse = Mock()
+    analyst.client = SimpleNamespace(responses=SimpleNamespace(parse=parse))
+    clock = [0.0]
+    analyst.dispatch_deadline = 150.5
+    monkeypatch.setattr("zont_analyzer.adapters.openai.provider.time.monotonic", lambda: clock[0])
+    reserve = analyst.ledger.reserve
+
+    def slow_reserve(*args, **kwargs):
+        result = reserve(*args, **kwargs)
+        clock[0] = 1
+        return result
+
+    monkeypatch.setattr(analyst.ledger, "reserve", slow_reserve)
+    packet = {"period": {"kind": "weekly"}}
+    with pytest.raises(AIRequestDeferred) as deferred:
+        analyst.analyze(packet)
+    assert deferred.value.packet == packet
+    parse.assert_not_called()
+    rows = db.storage.execute("SELECT state,sent_at FROM llm_calls;")[0].rows
+    assert len(rows) == 1 and rows[0].state == "prepared" and rows[0].sent_at is None
 
 
 @pytest.mark.ydb

@@ -8,6 +8,7 @@ from pathlib import Path
 import boto3
 
 FILES = (
+    "pre-deploy-state.json", "state-pull.log", "state-compatibility.log",
     "deploy-init.log", "deploy-plan.log", "deploy-plan.json", "deploy-apply.log",
     "cloud-outputs.json", "scaling.log", "scaling-refresh.log", "bounded-revision.json",
     "scaling-operation.json", "scaling-error.json", "runtime-smoke.json", "runtime-smoke.log",

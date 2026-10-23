@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import Mock
 
 import pytest
 
@@ -29,10 +30,12 @@ class RecordingClient:
     def __init__(self) -> None:
         self.history_calls: list[dict[str, Any]] = []
         self.event_calls: list[dict[str, Any]] = []
+        self.discover_calls = 0
         self.fail_history_once = False
         self.late_point = False
 
     def discover_devices(self) -> list[dict[str, Any]]:
+        self.discover_calls += 1
         return [{"device_id": 1, "name": "fixture"}]
 
     def load_history(self, **kwargs: Any) -> list[dict[str, Any]]:
@@ -81,6 +84,41 @@ def test_same_second_connection_events_apply_disconnect_before_restore() -> None
     assert state["open_disconnect_at"] is None
     assert state["pending_replay_start"] == timestamp
     assert state["pending_restore_at"] == timestamp
+
+
+@pytest.mark.ydb
+def test_discovery_is_reused_until_refresh_interval(tmp_path: Path) -> None:
+    _db, service, client = _service(tmp_path)
+    service.config.scheduler.discovery_every_minutes = 60
+
+    first = service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=2)
+    assert first["complete"] and client.discover_calls == 1
+
+    second = service.sync(
+        backfill=timedelta(minutes=30), now=NOW + timedelta(minutes=30), max_requests=2,
+    )
+    assert second["complete"] and client.discover_calls == 1
+
+    third = service.sync(
+        backfill=timedelta(minutes=30), now=NOW + timedelta(minutes=61), max_requests=2,
+    )
+    assert third["complete"] and client.discover_calls == 2
+
+
+@pytest.mark.ydb
+def test_unchanged_series_roles_do_not_open_per_series_transactions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db, service, client = _service(tmp_path)
+    assert service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=2)["complete"]
+
+    update = Mock()
+    monkeypatch.setattr(db, "update_series_role", update)
+    assert service.sync(
+        backfill=timedelta(minutes=30), now=NOW + timedelta(minutes=30), max_requests=2,
+    )["complete"]
+
+    update.assert_not_called()
 
 
 @pytest.mark.ydb
@@ -136,6 +174,50 @@ def test_normal_sync_replays_late_history_and_events_with_two_hour_overlap(tmp_p
     assert NOW - timedelta(minutes=90) in {at for at, _ in samples}
     assert len(samples) >= 5
     assert len(db.list_source_events(start, NOW)) == 1
+
+
+@pytest.mark.ydb
+def test_aligned_history_sources_share_one_load_data_request(tmp_path: Path) -> None:
+    db, service, client = _service(tmp_path)
+    service.config.zont.history_data_types = ["temperature", "z3k_temperature"]
+
+    def normalized(response: dict[str, Any]) -> tuple[list[TelemetryPoint], dict[str, dict[str, Any]]]:
+        at = response["start"] + timedelta(minutes=1)
+        return [
+            TelemetryPoint(device_id="1", source_type=source,
+                           entity_id=f"zont:1:{source}:1", metric_key="temperature",
+                           timestamp_utc=at, value_num=21, unit="°C")
+            for source in service.config.zont.history_data_types
+        ], {}
+
+    client.normalize_history = normalized  # type: ignore[method-assign]
+    result = service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=2)
+
+    assert result["complete"] and result["requests"] == 2
+    assert len(client.history_calls) == 1
+    assert client.history_calls[0]["data_types"] == ["temperature", "z3k_temperature"]
+    assert len(client.event_calls) == 1
+    assert db.get_cursor("1", "temperature") == NOW
+    assert db.get_cursor("1", "z3k_temperature") == NOW
+    assert {row["source_type"] for row in db.list_series()} == {"temperature", "z3k_temperature"}
+
+
+@pytest.mark.ydb
+def test_history_batching_keeps_independent_coverage_gaps(tmp_path: Path) -> None:
+    db, service, client = _service(tmp_path)
+    service.config.zont.history_data_types = ["temperature", "z3k_temperature"]
+    db.save_devices(client.discover_devices())
+    start = NOW - timedelta(minutes=30)
+    db.telemetry.write_window(device_id="1", data_type="temperature", start=start, end=NOW, state="empty")
+    db.telemetry.write_window(device_id="1", data_type="raw_events", start=start, end=NOW, state="empty")
+
+    result = service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=1)
+
+    assert result["complete"] and result["requests"] == 1
+    assert len(client.history_calls) == 1
+    assert client.history_calls[0]["data_types"] == ["z3k_temperature"]
+    assert db.get_cursor("1", "temperature") == NOW
+    assert db.get_cursor("1", "z3k_temperature") == NOW
 
 
 @pytest.mark.ydb

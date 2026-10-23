@@ -34,14 +34,17 @@ def _device_offset(raw: dict[str, Any]) -> tuple[int | None, str | None]:
     return value, field
 
 
-def apply_device_timezone(db: Database, config: AppConfig) -> dict[str, Any]:
+def apply_device_timezone(
+    db: Database, config: AppConfig, *, devices: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Apply the common ZONT offset to ``config.home`` and return provenance.
 
     ZONT exposes an integer UTC offset. We only apply it when every discovered
     device has a valid, identical value; otherwise the configured IANA zone is
-    retained explicitly as a fallback.
+    retained explicitly as a fallback. Callers that already loaded the inventory
+    may pass it to avoid another database read.
     """
-    devices = db.list_devices()
+    devices = db.list_devices() if devices is None else devices
     observations: list[dict[str, Any]] = []
     invalid: list[str] = []
     for device in devices:

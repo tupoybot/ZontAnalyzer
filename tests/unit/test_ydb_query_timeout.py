@@ -1,4 +1,4 @@
-"""Operational reads cap requests and retries without changing normal queries."""
+"""Operational reads have strict deadlines; ordinary operations have bounded retries."""
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -26,10 +26,14 @@ def test_bounded_query_disables_retries_and_sets_request_and_session_timeouts():
     assert retry.max_session_acquire_timeout == retry.get_session_client_timeout == 1
 
 
-def test_default_queries_preserve_sdk_request_and_retry_defaults():
+def test_default_queries_bound_retries_without_changing_request_timeout():
     db = _database()
     db.execute("SELECT 1;")
-    db.pool.execute_with_retries.assert_called_once_with("fixture-prefix:SELECT 1;", parameters=None)
+    call = db.pool.execute_with_retries.call_args
+    assert call.args == ("fixture-prefix:SELECT 1;",)
+    assert call.kwargs["parameters"] is None
+    assert call.kwargs["retry_settings"].max_retries == 3
+    assert "settings" not in call.kwargs
 
 
 @pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])

@@ -149,7 +149,7 @@ class Database:
     def fetch_numeric_observations(
         self, series_id: int, start: datetime, end: datetime, *, include_previous: bool = False,
     ) -> list[tuple[datetime, float | None]]:
-        rows = list(self._samples(series_id, start, end))
+        rows = list(self._samples(series_id, start, end)) if end > start else []
         if include_previous:
             previous = self.storage.execute(
                 "DECLARE $id AS Int64; DECLARE $start AS Int64; SELECT * FROM telemetry_samples "
@@ -251,21 +251,22 @@ class Database:
                       key=lambda report: (report.generated_at, report.id))
 
     def _all_reports(self) -> Iterator[Report]:
-        after, after_id = -1, ""
+        after = ""
         while True:
             rows = self.storage.execute(
-                "DECLARE $after AS Int64; DECLARE $id AS Utf8; SELECT id,period_end,payload FROM reports "
-                "WHERE period_end > $after OR (period_end=$after AND id > $id) "
-                "ORDER BY period_end,id LIMIT 100;", {"$after": after, "$id": after_id},
+                "DECLARE $after AS Utf8; SELECT id,payload FROM reports VIEW by_id "
+                "WHERE id>$after ORDER BY id LIMIT 100;", {"$after": after},
             )[0].rows
             for row in rows:
                 yield Report.model_validate(json.loads(row.payload)["report"])
             if len(rows) < 100:
                 return
-            after, after_id = int(rows[-1].period_end), str(rows[-1].id)
+            after = str(rows[-1].id)
 
     def latest_report(self) -> Report | None:
-        return max(self._all_reports(), key=lambda report: report.generated_at, default=None)
+        from .latest_report import latest_report
+
+        return latest_report(self)
 
     def token_usage_this_month(self) -> int:
         return self.ai_usage.token_usage_this_month()
@@ -308,53 +309,39 @@ class Database:
         return sorted(events, key=lambda event: (event.timestamp_utc, event.id))
 
     def period_data_revision(self, start: datetime, end: datetime) -> str:
-        if end <= start:
-            raise ValueError("period end must be after its start")
-        source_revision = self.source_revision()
-        markers = self.legacy_period_data_revision(start, end)
-        key = (f"telemetry-period-revision:v2:{start.astimezone(UTC).isoformat(timespec='microseconds')}:"
-               f"{end.astimezone(UTC).isoformat(timespec='microseconds')}")
-        encoded = self.get_app_meta(key)
-        if encoded:
-            try:
-                cached = json.loads(encoded)
-                if isinstance(cached, dict) and cached.get("markers") == markers:
-                    revision = cached.get("revision")
-                    if isinstance(revision, str):
-                        return revision
-            except (ValueError, TypeError):
-                pass
-        digest = hashlib.sha256()
-        count = 0
-        for series in self.list_series():
-            for row in self._samples(series["id"], start, end):
-                digest.update(json.dumps([series["id"], row["timestamp_utc"], row["value_num"],
-                                          row["value_text"], row["quality"]], ensure_ascii=False,
-                                         allow_nan=False, separators=(",", ":")).encode())
-                digest.update(b"\n")
-                count += 1
-        revision = f"telemetry-v2:{digest.hexdigest()}" if count else hashlib.sha256(b"[]").hexdigest()
+        return self.period_data_revisions([(start, end)])[(start, end)]
 
-        def save(tx: Transaction) -> None:
-            current = tx.execute("SELECT revision FROM revisions WHERE scope='publication';")[0].rows
-            if (int(current[0].revision) if current else 0) != source_revision:
-                raise ValueError("inputs changed during telemetry fingerprint calculation")
-            tx.execute(
-                "DECLARE $key AS Utf8; DECLARE $value AS Utf8; "
-                "UPSERT INTO app_meta (key,value) VALUES ($key,$value);",
-                {"$key": key, "$value": encode({"markers": markers, "revision": revision})},
-            )
-        self.storage.transaction(save)
-        return revision
+    def telemetry_day_revisions(
+        self, windows: list[tuple[datetime, datetime]],
+    ) -> dict[tuple[datetime, datetime], str]:
+        from .period_revisions import telemetry_day_revisions
+
+        return telemetry_day_revisions(self, windows)
+
+    def period_data_revisions(
+        self, windows: list[tuple[datetime, datetime]],
+    ) -> dict[tuple[datetime, datetime], str]:
+        from .period_revisions import period_data_revisions
+
+        return period_data_revisions(self, windows)
 
     def report_for_period(self, start: datetime, end: datetime) -> Report | None:
+        return self.reports.report_for_period(start, end)
+
+    def latest_completed_daily_report_start(self, now: datetime) -> datetime | None:
+        return self.reports.latest_completed_daily_report_start(now)
+
+    def gas_input_revision(self) -> str:
         rows = self.storage.execute(
-            "DECLARE $start AS Int64; DECLARE $end AS Int64; SELECT payload FROM reports "
-            "WHERE period_start=$start AND period_end=$end;",
-            {"$start": utc_seconds(start), "$end": utc_seconds(end)},
+            "SELECT scope,revision FROM revisions WHERE "
+            "(scope >= 'telemetry:' AND scope < 'telemetry;') OR "
+            "(scope >= 'series:' AND scope < 'series;') OR "
+            "(scope >= 'device:' AND scope < 'device;') OR "
+            "(scope >= 'owner-gas:' AND scope < 'owner-gas;') OR "
+            "(scope >= 'owner-profile:' AND scope < 'owner-profile;') OR "
+            "(scope >= 'tariff:' AND scope < 'tariff;') ORDER BY scope;",
         )[0].rows
-        reports = [Report.model_validate(json.loads(row.payload)["report"]) for row in rows]
-        return max(reports, key=lambda report: report.generated_at) if reports else None
+        return hashlib.sha256(encode([[row.scope, row.revision] for row in rows]).encode()).hexdigest()
 
     def daily_report_catalogue(self, start: datetime, end: datetime) -> Iterator[tuple[str, datetime]]:
         """Read small selection metadata before loading bounded historical context."""

@@ -221,7 +221,7 @@ def test_identical_mixtures_do_not_claim_identifiable_bins() -> None:
     assert model.selected_bin_count == 1
     assert model.diversity_rank == 1
     assert not model.identifiable
-    assert estimate.reliability_index <= 50
+    assert "insufficient_interval_diversity" in estimate.reasons
 
 
 def test_unobserved_bins_use_mean_and_are_marked_as_extrapolation() -> None:
@@ -238,7 +238,7 @@ def test_unobserved_bins_use_mean_and_are_marked_as_extrapolation() -> None:
     assert "extrapolated_modulation_range" in estimate.reasons
 
 
-def test_few_intervals_have_no_heldout_error_and_capped_reliability() -> None:
+def test_few_intervals_have_no_independent_validation() -> None:
     rows = [interval(0, (50.0, 50.0, 0.0, 0.0)), interval(1, (20.0, 80.0, 0.0, 0.0))]
     model = fit_intervals(rows, has_gas_stove=False)
     exposure = Exposure(100, (50.0, 50.0, 0.0, 0.0), 0, 100, flame_minutes=100)
@@ -248,7 +248,7 @@ def test_few_intervals_have_no_heldout_error_and_capped_reliability() -> None:
     assert model.validation_error_m3 is None
     assert model.heldout_interval_count == 0
     assert model.selected_bin_count == 1
-    assert estimate.reliability_index <= 35
+    assert "no_heldout_validation" in estimate.reasons
 
 
 def test_complete_passport_prior_preserves_actual_range() -> None:
@@ -267,7 +267,8 @@ def test_complete_passport_prior_preserves_actual_range() -> None:
     assert model.rate_upper_m3_per_minute[0] == pytest.approx(3 / 60)
     assert estimate.volume_m3 == pytest.approx(2)
     assert estimate.uncertainty_m3 == pytest.approx((1, 3))
-    assert estimate.reliability_index <= 20
+    assert model.heldout_interval_count == 0
+    assert model.validation_relative_error is None
 
 
 @pytest.mark.parametrize(
@@ -302,7 +303,7 @@ def test_empirical_rate_respects_real_passport_bound() -> None:
     assert model.passport_limited
 
 
-def test_gas_stove_allows_preliminary_shared_meter_model_with_lower_reliability() -> None:
+def test_gas_stove_preserves_validation_but_widens_estimate_uncertainty() -> None:
     rows = rich_intervals()
     boiler_model = fit_intervals(rows, has_gas_stove=False)
     shared_model = fit_intervals(rows, has_gas_stove=True)
@@ -313,8 +314,7 @@ def test_gas_stove_allows_preliminary_shared_meter_model_with_lower_reliability(
 
     assert shared.volume_m3 == pytest.approx(boiler.volume_m3)
     assert shared.status == "extrapolated"
-    assert shared.reliability_index <= 35
-    assert shared.reliability_index < boiler.reliability_index
+    assert shared_model.validation_relative_error == boiler_model.validation_relative_error
     assert "shared_meter_gas_stove_unseparated" in shared.reasons
     assert shared.uncertainty_m3[0] < boiler.uncertainty_m3[0]  # type: ignore[index]
 
@@ -342,7 +342,6 @@ def test_too_little_telemetry_is_unknown() -> None:
     assert estimate.observed_volume_m3 == pytest.approx(0.2, rel=2e-4)
     assert estimate.estimated_gap_m3 is None
     assert estimate.status == "unknown"
-    assert estimate.reliability_index == 0
     assert "insufficient_telemetry_coverage" in estimate.reasons
 
 
@@ -369,7 +368,7 @@ def test_unknown_modulation_uses_mean_but_remains_explicit() -> None:
     assert "extrapolated_unknown_modulation" in estimate.reasons
 
 
-def test_stale_calibration_and_day_boundaries_widen_range_and_reduce_reliability() -> None:
+def test_stale_calibration_and_day_boundaries_widen_range_without_rewriting_validation() -> None:
     clean_rows = rich_intervals()
     boundary_rows = rich_intervals(boundary_uncertainty=0.2)
     clean_model = fit_intervals(clean_rows, has_gas_stove=False)
@@ -381,11 +380,56 @@ def test_stale_calibration_and_day_boundaries_widen_range_and_reduce_reliability
     stale = estimate_exposure(exposure, clean_model, end=clean_model.calibration_end + timedelta(days=400))
     uncertain_boundary = estimate_exposure(exposure, boundary_model, end=boundary_model.calibration_end)
 
-    assert stale.reliability_index < fresh.reliability_index
     assert stale.uncertainty_m3[0] < fresh.uncertainty_m3[0]  # type: ignore[index]
     assert stale.uncertainty_m3[1] > fresh.uncertainty_m3[1]  # type: ignore[index]
     assert "stale_calibration" in stale.uncertainty_factors
     assert uncertain_boundary.uncertainty_m3[1] > fresh.uncertainty_m3[1]  # type: ignore[index]
+    assert boundary_model.validation_relative_error == clean_model.validation_relative_error
+
+
+def test_validation_error_is_from_unseen_intervals_not_final_refitted_model() -> None:
+    # Development has one cubic metre per interval; the two withheld intervals
+    # have 0.5 and 2. The final refit sees both, but validation must not.
+    rows = [interval(index, (100.0, 0.0, 0.0, 0.0)) for index in range(8)]
+    rows += [interval(8, (100.0, 0.0, 0.0, 0.0), rates=(0.005,) * 4),
+             interval(9, (100.0, 0.0, 0.0, 0.0), rates=(0.02,) * 4)]
+
+    model = fit_intervals(rows, has_gas_stove=False)
+
+    assert model.heldout_interval_count == 2
+    assert model.validation_error_m3 == pytest.approx((0.5 + 1.0) / 2)
+    assert model.validation_relative_error == pytest.approx((0.5 + 1.0) / (0.5 + 2.0))
+    assert model.mean_rate_m3_per_minute != pytest.approx(0.01)
+
+
+def test_weekly_day_precision_keeps_validation_error_and_explicit_uncertainty() -> None:
+    # Identical weekly observations can validate a mean rate accurately even
+    # when unknown reading times leave a broad daily allocation range.
+    from dataclasses import replace
+
+    rows = [replace(interval(index, (700.0, 0.0, 0.0, 0.0), boundary_uncertainty=2.0),
+                    start=START + timedelta(days=index * 7),
+                    end=START + timedelta(days=(index + 1) * 7),
+                    observed_minutes=7 * 1440.0) for index in range(10)]
+    model = fit_intervals(rows, has_gas_stove=False)
+    exposure = Exposure(1440, (100.0, 0.0, 0.0, 0.0), 0, 1440, flame_minutes=100)
+    estimate = estimate_exposure(exposure, model, end=model.calibration_end)
+
+    assert model.boundary_relative_uncertainty == pytest.approx(2 / 7)
+    assert model.validation_relative_error == pytest.approx(0, abs=1e-6)
+    assert model.heldout_interval_count == 2
+    assert "meter_reading_day_boundary" in estimate.uncertainty_factors
+    assert estimate.uncertainty_m3[0] < estimate.volume_m3 < estimate.uncertainty_m3[1]  # type: ignore[index,operator]
+    assert "reliability_index" not in estimate.to_dict()
+
+
+def test_zero_measured_validation_volume_has_absolute_error_but_no_percentage() -> None:
+    rows = [interval(index, (100.0, 0.0, 0.0, 0.0)) for index in range(8)]
+    rows += [interval(index, (100.0, 0.0, 0.0, 0.0), rates=(0.0,) * 4) for index in (8, 9)]
+    model = fit_intervals(rows, has_gas_stove=False)
+    assert model.validation_error_m3 == pytest.approx(1.0)
+    assert model.validation_relative_error is None
+    assert model.heldout_interval_count == 2
 
 
 def test_reset_or_meter_change_breaks_cumulative_difference() -> None:

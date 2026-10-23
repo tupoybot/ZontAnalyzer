@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from zont_analyzer.application.gas_cost import format_cost
 from zont_analyzer.domain import Report
 
+from .gas_validation import VALIDATION_NOTE, validation_lines, validation_summary
 from .timezone_labels import timezone_label
 from .wording import normalize_report_for_display
 
@@ -60,6 +61,11 @@ def ai_freshness_notice(report: Report) -> str:
     failed_reuse = report.context.get("ai_interpretation_reuse")
     reuse = pilot_reuse or failed_reuse
     if not (reuse or isinstance(gas, dict) and gas.get("ai_stale")):
+        if report.ai_used and isinstance(gas, dict) and "reliability_index_pct" in gas:
+            return (
+                "Показатель качества газовой модели обновлён: теперь показана ошибка проверки по счётчику. "
+                "Сохранённый текст AI может ссылаться на прежний условный индекс надёжности."
+            )
         return ""
     source = reuse.get("source_generated_at") if isinstance(reuse, dict) else None
     stamp = ""
@@ -358,9 +364,7 @@ def gas_period_card(report: Report) -> str:
         details.append("Диапазон: " + " — ".join(bounds))
     if status == "unknown" and isinstance(gas.get("observed_volume_m3"), (int, float)):
         details.append("Оценка только наблюдаемой части: " + _gas_value(gas["observed_volume_m3"], "м³"))
-    reliability_index = gas.get("reliability_index_pct")
-    if isinstance(reliability_index, (int, float)) and not isinstance(reliability_index, bool):
-        details.append(f"Индекс надёжности: {_gas_value(reliability_index, '%')}")
+    details.extend(validation_lines(gas))
     coverage = gas.get("coverage_pct")
     if isinstance(coverage, (int, float)) and not isinstance(coverage, bool):
         details.append(f"Покрытие: {_gas_value(coverage, '%')}")
@@ -381,7 +385,6 @@ def gas_period_card(report: Report) -> str:
     for key in ("source", "uncertainty_method"):
         if gas.get(key):
             details.append(str(gas[key]))
-    details.append("Индекс надёжности не является вероятностью точности.")
     version = gas.get("model_version")
     if version:
         details.append(f"Модель: {version}")
@@ -630,10 +633,11 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
         if status != "unknown" else "Нет данных"
     )
     split = gas.get("purpose_split")
-    confidence = gas.get("reliability_index_pct")
-    confidence_label = (
-        compact_percent(confidence) if isinstance(confidence, (int, float))
-        and not isinstance(confidence, bool) and math.isfinite(confidence) else "Нет данных"
+    validation_label = "по счётчику" if status == "measured" else validation_summary(gas)
+    validation_tooltip = (
+        "Объём измерен счётчиком за весь интервал между показаниями. "
+        "Проверка модели приведена в подробностях о газе."
+        if status == "measured" else VALIDATION_NOTE
     )
     money = _cost_value(gas.get("cost")) if status != "unknown" else None
     money_html = (
@@ -642,8 +646,8 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
     )
     heading = (
         '<div class="gas-kpi-total"><span>Расход газа '
-        '<span class="gas-reliability" title="Индекс надёжности оценки, не вероятность точности">'
-        f'(надёжность {esc(confidence_label)})</span></span>'
+        f'<span class="gas-reliability" title="{esc(validation_tooltip)}">'
+        f'({esc(validation_label)})</span></span>'
         f'<strong><span class="gas-kpi-value">{esc(meter_volume)}</span>'
         + (f' {money_html}' if money_html else '')
         + '</strong></div>'

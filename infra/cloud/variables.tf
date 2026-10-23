@@ -192,8 +192,8 @@ variable "production_ydb_request_units_per_second" {
   type        = number
   default     = 50
   validation {
-    condition     = var.production_ydb_request_units_per_second >= 10 && var.production_ydb_request_units_per_second <= 1000 && floor(var.production_ydb_request_units_per_second) == var.production_ydb_request_units_per_second
-    error_message = "Use an integer throughput cap between 10 and 1000 request units per second."
+    condition     = var.production_ydb_request_units_per_second >= 10 && var.production_ydb_request_units_per_second <= 10000 && floor(var.production_ydb_request_units_per_second) == var.production_ydb_request_units_per_second
+    error_message = "Use an integer throughput cap between 10 and 10000 request units per second."
   }
 }
 
@@ -212,8 +212,8 @@ variable "ydb_request_units_per_second" {
   type        = number
   default     = 10
   validation {
-    condition     = var.ydb_request_units_per_second >= 10 && var.ydb_request_units_per_second <= 1000 && floor(var.ydb_request_units_per_second) == var.ydb_request_units_per_second
-    error_message = "Use an integer throughput cap between 10 and 1000 request units per second."
+    condition     = var.ydb_request_units_per_second >= 10 && var.ydb_request_units_per_second <= 10000 && floor(var.ydb_request_units_per_second) == var.ydb_request_units_per_second
+    error_message = "Use an integer throughput cap between 10 and 10000 request units per second."
   }
 }
 
@@ -234,6 +234,16 @@ variable "enable_scheduler_timer" {
   validation {
     condition     = !var.enable_scheduler_timer || (var.grafana_metrics_enabled && var.application_writes_enabled && var.application_config_secret_enabled)
     error_message = "Production scheduling requires monitoring, enabled writes and explicit application configuration."
+  }
+}
+
+variable "scheduler_timer_schedule" {
+  description = "Use minute deliveries to drain a backlog, or the regular half-hour cadence."
+  type        = string
+  default     = "0,30 * * * ? *"
+  validation {
+    condition     = contains(["0,30 * * * ? *", "* * * * ? *"], var.scheduler_timer_schedule)
+    error_message = "Use the regular half-hour or temporary minute scheduler cadence."
   }
 }
 
@@ -261,7 +271,19 @@ variable "identity" {
   }
 }
 variable "enable_monitoring_timer" {
-  description = "Enable hourly read-only application monitoring without provider calls."
+  description = "Enable read-only application monitoring without provider calls."
   type        = bool
   default     = false
+}
+
+variable "monitoring_trigger_import_id" {
+  description = "Existing monitoring trigger adopted through the v2 API, prepared privately from state."
+  type        = string
+  default     = null
+}
+
+variable "monitoring_timer_schedule" {
+  description = "Monitoring schedule; application releases retain the existing timer schedule."
+  type        = string
+  default     = "0 * * * ? *"
 }

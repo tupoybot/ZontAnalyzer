@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "benchmark": "Gas context and savings over synthetic historical telemetry",
+  "baseline_commit": "3149665386e5a31dc0fe64d7edd2803137022069",
+  "candidate_source_sha256": "a66047703048f95ff0094b34bb8bd93dd5e3bca61f14171dc8f838ac53bbc094",
+  "environment": "disposable local YDB emulator, two CPU cores for measured client",
+  "fixture": {
+    "start_utc": "2015-01-01T00:00:00Z",
+    "years": [
+      1,
+      5,
+      10
+    ],
+    "total_telemetry_points": 10965,
+    "telemetry": "One sample at noon UTC each day for boiler flame/heating state, modulation, and outdoor temperature; three series total.",
+    "meter_readings": "Two synthetic cumulative readings at the start and end of each measured window, rising by 0.5 cubic metres per day.",
+    "model_identifiable": false
+  },
+  "method": {
+    "baseline": "Load GasService and scalar period_data_revision from the exact baseline commit into the current runtime; cold and warm runs use the same fixture.",
+    "candidate": "Run current GasService and batched period revisions after clearing derived caches for each history length; warm run follows its cold run.",
+    "query_statistics": "YDB Query SDK FULL; sdk_read_rows, sdk_read_bytes, and sdk_cpu_us sum query phase table-access statistics. result_rows and result_json_bytes measure returned rows and JSON-encoded row objects in the client.",
+    "semantics": "SHA-256 of gas status, volume, bounds, coverage, model version, intervals, purpose split, and savings status; identical hashes verify these selected outputs only.",
+    "limits": "Sparse daily telemetry and two meter readings leave the model unidentifiable. Timings and local emulator statistics are illustrative; sdk_read_bytes are not managed YDB request units or a production cost estimate."
+  },
+  "results": [
+    {
+      "years": 1,
+      "semantic_sha256": "cb668a60c7e06548b989e67fa9f4b49c130c03a3c2cd9faa09c0969b6fc0b199",
+      "semantic_hashes_equal": true,
+      "gas_status": "measured",
+      "volume_m3": 182.5,
+      "model_identifiable": false,
+      "baseline_cold": {
+        "elapsed_seconds": 18.591,
+        "queries": 6623,
+        "queries_with_stats": 6623,
+        "result_rows": 7343,
+        "result_json_bytes": 1088166,
+        "sdk_read_rows": 7343,
+        "sdk_read_bytes": 721726,
+        "sdk_cpu_us": 231541
+      },
+      "baseline_warm": {
+        "elapsed_seconds": 6.819,
+        "queries": 2943,
+        "queries_with_stats": 2943,
+        "result_rows": 4400,
+        "result_json_bytes": 762612,
+        "sdk_read_rows": 4400,
+        "sdk_read_bytes": 646680,
+        "sdk_cpu_us": 89227
+      },
+      "candidate_cold": {
+        "elapsed_seconds": 5.746,
+        "queries": 1879,
+        "queries_with_stats": 1879,
+        "result_rows": 2606,
+        "result_json_bytes": 332294,
+        "sdk_read_rows": 2606,
+        "sdk_read_bytes": 98053,
+        "sdk_cpu_us": 64909
+      },
+      "candidate_warm": {
+        "elapsed_seconds": 0.859,
+        "queries": 397,
+        "queries_with_stats": 397,
+        "result_rows": 1135,
+        "result_json_bytes": 376056,
+        "sdk_read_rows": 1135,
+        "sdk_read_bytes": 334498,
+        "sdk_cpu_us": 10942
+      }
+    },
+    {
+      "years": 5,
+      "semantic_sha256": "de1077ae695a6ddf2581037ba6e2a059a34b27f9a2b20fe2acf0c485762b8eb0",
+      "semantic_hashes_equal": true,
+      "gas_status": "measured",
+      "volume_m3": 913,
+      "model_identifiable": false,
+      "baseline_cold": {
+        "elapsed_seconds": 93.613,
+        "queries": 32921,
+        "queries_with_stats": 32921,
+        "result_rows": 36563,
+        "result_json_bytes": 5417109,
+        "sdk_read_rows": 36563,
+        "sdk_read_bytes": 3594052,
+        "sdk_cpu_us": 1149812
+      },
+      "baseline_warm": {
+        "elapsed_seconds": 33.901,
+        "queries": 14631,
+        "queries_with_stats": 14631,
+        "result_rows": 21932,
+        "result_json_bytes": 3798570,
+        "sdk_read_rows": 21932,
+        "sdk_read_bytes": 3220962,
+        "sdk_cpu_us": 435362
+      },
+      "candidate_cold": {
+        "elapsed_seconds": 27.512,
+        "queries": 9221,
+        "queries_with_stats": 9221,
+        "result_rows": 12845,
+        "result_json_bytes": 1643279,
+        "sdk_read_rows": 12845,
+        "sdk_read_bytes": 479602,
+        "sdk_cpu_us": 303751
+      },
+      "candidate_warm": {
+        "elapsed_seconds": 3.97,
+        "queries": 1871,
+        "queries_with_stats": 1871,
+        "result_rows": 5518,
+        "result_json_bytes": 1860432,
+        "sdk_read_rows": 5518,
+        "sdk_read_bytes": 1656703,
+        "sdk_cpu_us": 51883
+      }
+    },
+    {
+      "years": 10,
+      "semantic_sha256": "c024bd55e45601e62452cdaa23d02a60c917ad552e49ef4628e4374e4c27a155",
+      "semantic_hashes_equal": true,
+      "gas_status": "measured",
+      "volume_m3": 1826.5,
+      "model_identifiable": false,
+      "baseline_cold": {
+        "elapsed_seconds": 188.915,
+        "queries": 65807,
+        "queries_with_stats": 65807,
+        "result_rows": 73103,
+        "result_json_bytes": 10830510,
+        "sdk_read_rows": 73103,
+        "sdk_read_bytes": 7185934,
+        "sdk_cpu_us": 2325355
+      },
+      "baseline_warm": {
+        "elapsed_seconds": 65.724,
+        "queries": 29247,
+        "queries_with_stats": 29247,
+        "result_rows": 43856,
+        "result_json_bytes": 7595076,
+        "sdk_read_rows": 43856,
+        "sdk_read_bytes": 6440136,
+        "sdk_cpu_us": 833215
+      },
+      "candidate_cold": {
+        "elapsed_seconds": 55.487,
+        "queries": 18403,
+        "queries_with_stats": 18403,
+        "result_rows": 25648,
+        "result_json_bytes": 3282644,
+        "sdk_read_rows": 25648,
+        "sdk_read_bytes": 956715,
+        "sdk_cpu_us": 619869
+      },
+      "candidate_warm": {
+        "elapsed_seconds": 7.818,
+        "queries": 3714,
+        "queries_with_stats": 3714,
+        "result_rows": 10999,
+        "result_json_bytes": 3716664,
+        "sdk_read_rows": 10999,
+        "sdk_read_bytes": 3310138,
+        "sdk_cpu_us": 103398
+      }
+    }
+  ],
+  "measured_code_commit": "dce7335",
+  "integration_note": "Later latest-report metadata maintenance changes report writes, not the measured gas calculation or bounded read methods."
+}

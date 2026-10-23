@@ -203,6 +203,28 @@ def test_snapshot_series_limit_fails_before_reading_any_samples():
     assert not any(name == "zont_telemetry_timestamp_seconds" for name, _, _ in events)
 
 
+@pytest.mark.ydb
+def test_snapshot_batches_indexed_latest_samples_and_preserves_empty_series(tmp_path, monkeypatch):
+    from tests.ydb_support import make_database
+
+    db = make_database(tmp_path)
+    db.storage.execute(
+        "UPSERT INTO telemetry_series (device_id,source_type,entity_id,metric_key,id) VALUES "
+        "('fixture','t','a','value',1),('fixture','t','b','value',2),('fixture','t','empty','value',3);"
+        "UPSERT INTO telemetry_samples (series_id,timestamp_utc,value_num) VALUES "
+        "(1,1700000000,21.0),(1,1700000300,22.0),(2,1700000600,23.0);",
+    )
+    execute = Mock(wraps=db.storage.execute)
+    monkeypatch.setattr(db.storage, "execute", execute)
+    events = []
+    with capture(events.append):
+        monitoring._snapshot(SimpleNamespace(db=db, config=AppConfig()))
+    assert ("zont_telemetry_timestamp_seconds", 1700000600.0, {}) in events
+    samples = [call for call in execute.call_args_list if "FROM telemetry_samples" in call.args[0]]
+    assert len(samples) == 1
+    assert samples[0].args[0].count("LIMIT 1;") == 3
+
+
 @pytest.mark.parametrize("enabled", [True, False])
 def test_effective_review_schedule_honors_overrides_without_mutating_state(enabled):
     last_success = datetime(2026, 9, 1, tzinfo=UTC)

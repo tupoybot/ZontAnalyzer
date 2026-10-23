@@ -197,7 +197,7 @@ def test_reasoning_rendering_labels_predictions_confidence_and_unknown_reference
     assert "[metric:known]" not in text
     assert 'class="evidence-id"' not in rendered
     assert "Рекомендуемый ручной эксперимент:" in text
-    assert "<summary>Прогнозы</summary>" in rendered
+    assert "<h2>Прогнозы</h2>" in rendered
     assert "Это не вероятность." in rendered
     assert "window:missing (неподтверждённая ссылка)" in rendered
     assert "metric:legacy-unknown (неподтверждённая ссылка)" in rendered
