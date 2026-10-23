@@ -16,6 +16,7 @@
 
 | Задача | Где начать | Когда расширить чтение |
 | --- | --- | --- |
+| Очередь разработки, ветки и открытые задачи | [Единая очередь](./implementation_plan.md#единая-очередь-разработки) | [Реестр веток и issues](./development/branch-inventory.md), [стенд RU/сек](./development/ydb-benchmark.md) |
 | Локальное исправление с известным местом | Нужный код и его тесты | Контракт темы ниже, если меняется поведение |
 | Новая продуктовая доработка | Нужная строка [плана](./implementation_plan.md) | Соответствующий раздел [требований](./product-scenarios.md) или [архитектуры](./architecture.md) |
 | Облачный этап | Общие правила и текущий M-раздел [облачного плана](./cloud/cloud_first_milestone.md) | Нужный контракт [M0](./cloud/cloud_first_m0.md) или раздел [облачной архитектуры](./cloud/cloud_first_architecture.md); предыдущие этапы целиком не нужны |
@@ -31,6 +32,7 @@
 | Выбор и оценка AI | [Политика моделей](./ai/model-maintenance-plan.md) или [оценочные пакеты](./ai/model-evaluation.md) | Нужный раздел архитектуры для потока данных |
 | Сборка, тесты, CI | [Контейнерная разработка](./development/container-development.md) | [Оптимизация CI](./development/ci-optimization.md), если исследуется скорость/изоляция; `benchmarks/` только для измерений |
 | Выпуск и приёмка | [Процедура выпуска](./development/release-process.md) | [Эксплуатация](../deploy/OPERATIONS.md), только если требуется развёртывание или восстановление |
+| GitHub Project, milestones и задачи | [Project](https://github.com/users/tupoybot/projects/1) и [правила плана](./implementation_plan.md#как-пользоваться-project) | Правила комментариев в [AGENTS.md](../AGENTS.md#github-issues-report-outcomes) |
 | GitHub Issues и автоматизация | Правила комментариев в [AGENTS.md](../AGENTS.md#github-issues-report-outcomes) | [Автозапуск Codex](./development/codex-bug-autofix.md), только при изменении автоматизации |
 | Приоритеты и будущие интеграции | [Дорожная карта](./roadmap.md) или [доставка](./delivery-plan.md) | Этапы 10/11 — только по явной задаче |
 | Действия владельца | [Инструкция](./for_human.md) | Нужная эксплуатационная процедура |
