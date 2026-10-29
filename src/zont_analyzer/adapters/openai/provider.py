@@ -27,6 +27,7 @@ from zont_analyzer.observability import observe, span
 
 PROMPT_VERSION = "analyst-v8.7"
 SCHEMA_VERSION = "analysis-result-v1"
+MAX_OUTPUT_TOKENS = 18_000
 
 ANALYSIS_PACKET_MAX_BYTES = 64 * 1024
 _PACKET_CONTENT_MAX_BYTES = 60 * 1024
@@ -394,7 +395,7 @@ class OpenAIAnalyst:
             "prompt_version": PROMPT_VERSION,
             "schema_version": SCHEMA_VERSION,
             "reasoning_effort": reasoning_effort,
-            "max_output_tokens": 6000,
+            "max_output_tokens": MAX_OUTPUT_TOKENS,
         }
         request_key = hashlib.sha256(
             json.dumps({"config": config_fingerprint, "input": encoded}, ensure_ascii=False, sort_keys=True).encode()
@@ -434,7 +435,7 @@ class OpenAIAnalyst:
                  "settings_version": settings_version,
                  "report_id": _report_id_from_packet(packet)},
                 budget=self.config.openai.monthly_token_budget,
-                estimate=estimated_input + 6000,
+                estimate=estimated_input + MAX_OUTPUT_TOKENS,
                 billing_month=datetime.now(UTC).strftime("%Y-%m"),
             )
         if reservation is not None:
@@ -476,7 +477,7 @@ class OpenAIAnalyst:
                     ],
                     text_format=_StructuredAnalysisResult,
                     store=False,
-                    max_output_tokens=6000,
+                    max_output_tokens=MAX_OUTPUT_TOKENS,
                 )
             parsed = response.output_parsed
             if parsed is None:
@@ -502,7 +503,7 @@ class OpenAIAnalyst:
         result = result.model_copy(update={"provenance": {
             "requested_model": model,
             "response_model": getattr(response, "model", None),
-            "parameters": {"reasoning_effort": reasoning_effort, "max_output_tokens": 6000},
+            "parameters": {"reasoning_effort": reasoning_effort, "max_output_tokens": MAX_OUTPUT_TOKENS},
             "generated_at": datetime.now(UTC).isoformat(),
             "prompt_version": PROMPT_VERSION,
             "schema_version": SCHEMA_VERSION,

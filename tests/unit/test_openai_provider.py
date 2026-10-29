@@ -299,7 +299,7 @@ def test_reasoning_provider_preserves_budget_privacy_and_records_actual_prompt(t
     assert result.unknowns[0].id == "u:source" and result.recommendations == []
     kwargs = parse.call_args.kwargs
     assert kwargs["store"] is False and "tools" not in kwargs
-    assert kwargs["max_output_tokens"] == 6000
+    assert kwargs["max_output_tokens"] == 18_000
     assert analyst.ledger.token_usage_this_month() == 30
     call = db.storage.execute("SELECT payload FROM llm_calls LIMIT 1;")[0].rows[0]
     assert __import__("json").loads(call.payload)["prompt_version"] == PROMPT_VERSION
@@ -485,7 +485,7 @@ def test_budget_reservation_includes_prompt_and_schema_bytes(tmp_path) -> None:
 
     db = make_database(tmp_path)
     schema = __import__("json").dumps(_StructuredAnalysisResult.model_json_schema(), ensure_ascii=False, sort_keys=True)
-    minimum = len(SYSTEM_PROMPT.encode()) + len(schema.encode()) + 1 + 6000
+    minimum = len(SYSTEM_PROMPT.encode()) + len(schema.encode()) + 1 + 18_000
     config = AppConfig.model_validate({"openai": {"monthly_token_budget": minimum - 1}})
     analyst = OpenAIAnalyst(api_key="not-a-real-key", config=config, db=db)
     parse = Mock(return_value=SimpleNamespace(output_parsed=_StructuredAnalysisResult(summary="too late"), usage=None))

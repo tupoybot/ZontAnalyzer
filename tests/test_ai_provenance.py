@@ -108,6 +108,7 @@ def test_provider_persists_response_metadata_and_returns_it_from_cache(tmp_path)
     assert first.provenance is not None
     assert first.provenance["requested_model"] == analyst.config.openai.daily_model
     assert first.provenance["response_model"] == "gpt-returned"
+    assert first.provenance["parameters"]["max_output_tokens"] == 18_000
     assert first.provenance["ai_log_id"].startswith("llm:")
 
 
