@@ -3827,5 +3827,37 @@
       "years": 10,
       "result_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
     }
-  ]
+  ],
+  "managed_verification": {
+    "date": "2026-11-01",
+    "same_parameters": true,
+    "full_results_equal": true,
+    "result_rows": 3,
+    "before": {
+      "server_ru": 4886,
+      "read_rows": 4886,
+      "read_bytes": 102786
+    },
+    "after_repetitions": [
+      {
+        "server_ru": 36,
+        "read_rows": 6,
+        "read_bytes": 159
+      },
+      {
+        "server_ru": 6,
+        "read_rows": 6,
+        "read_bytes": 159
+      },
+      {
+        "server_ru": 6,
+        "read_rows": 6,
+        "read_bytes": 159
+      }
+    ],
+    "all_rpc_complete": true,
+    "failed_rpc_count": 0,
+    "base_schema_unchanged": true,
+    "synchronous_index_ready": true
+  }
 }
