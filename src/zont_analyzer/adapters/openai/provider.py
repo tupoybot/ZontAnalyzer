@@ -25,7 +25,7 @@ from zont_analyzer.domain.reasoning import (
 )
 from zont_analyzer.observability import observe, span
 
-PROMPT_VERSION = "analyst-v8.7"
+PROMPT_VERSION = "analyst-v8.8"
 SCHEMA_VERSION = "analysis-result-v1"
 MAX_OUTPUT_TOKENS = 18_000
 
@@ -73,8 +73,13 @@ internal field names or numeric mode IDs in prose; use human-readable mode names
 Use «расчётный показатель» for derived metrics, «временные данные» for temporal_evidence,
 «сравнения с другими периодами» for period_comparisons, «расход рассчитан по модели» for
 estimated, «доля неизменных показаний» for stuck_pct, and «закономерность» instead of «паттерн».
-Unchanged readings do not by themselves prove a faulty sensor. Explain quality scores plainly
-and derived candidates as tentative findings from indirect signals, not measured events.
+Unchanged readings do not by themselves prove a faulty sensor or reduce data quality. Radio
+temperature sensors may send unchanged readings every ten minutes and changes more often.
+Explain quality scores plainly and derived candidates as tentative findings from indirect signals,
+not measured events. Documented gas, boiler, power or connection outages are events to analyse
+using available evidence before and after the incident, even when coverage is incomplete.
+A telemetry gap alone establishes neither an outage cause nor conditions inside the gap;
+keep those unknown. Limited coverage restricts quantitative conclusions to observed intervals.
 Write narrative clock times in the report timezone and explicitly name it. In prose, display
 fixed timezones as UTC offsets: Etc/GMT-4 is UTC+4, not UTC-4 (reversed POSIX sign).
 Preserve actual instants and correct ISO 8601 offsets in structured intervals. Copy UTC

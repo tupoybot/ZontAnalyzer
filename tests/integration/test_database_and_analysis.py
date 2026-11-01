@@ -483,6 +483,67 @@ def test_openai_failure_keeps_deterministic_report(tmp_path: Path) -> None:
     assert db.latest_report() is not None
 
 
+@pytest.mark.parametrize("sample_count", [0, 2])
+@pytest.mark.ydb
+def test_monthly_ai_receives_recorded_outage_despite_poor_telemetry(
+    tmp_path: Path, sample_count: int,
+) -> None:
+    class SuccessfulAnalyst:
+        def __init__(self):
+            self.packets = []
+
+        def analyze(self, packet):
+            from zont_analyzer.domain import AnalysisResult
+            self.packets.append(packet)
+            return AnalysisResult(summary="Зафиксирован перерыв питания; причина неизвестна.")
+
+    db = make_database(tmp_path)
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    if sample_count:
+        seed_samples(db, list(_points(start, [20.0] * sample_count, entity="room")),
+                     {"room": "indoor_temperature"})
+    lost = start + timedelta(days=14, hours=6)
+    restored = lost + timedelta(hours=3)
+    seed_events(db, [
+        SourceEvent(id="power-lost", device_id="1", event_type="MainPowerLost", timestamp_utc=lost),
+        SourceEvent(id="power-restored", device_id="1", event_type="MainPowerFound", timestamp_utc=restored),
+    ])
+    config = AppConfig.model_validate({"home": {"timezone": "UTC"}})
+    analyst = SuccessfulAnalyst()
+
+    report = AnalysisService(db, config, analyst).analyze_month(2026, 10, use_ai=True)
+
+    assert report.quality.score < config.analysis.minimum_quality_score
+    assert report.quality.sample_count == sample_count
+    assert report.ai_used is True
+    assert len(analyst.packets) == 1
+    packet = analyst.packets[0]
+    assert packet["data_quality"]["score"] == report.quality.score
+    outage = next(event for event in packet["events"] if event["kind"] == "main_power_outage")
+    assert datetime.fromisoformat(outage["started_at"].replace("Z", "+00:00")) == lost
+    assert datetime.fromisoformat(outage["ended_at"].replace("Z", "+00:00")) == restored
+    assert outage["details"]["duration_seconds"] == 3 * 3600
+    assert any(event.id == outage["id"] for event in report.events)
+
+
+@pytest.mark.ydb
+def test_empty_month_without_events_skips_ai(tmp_path: Path) -> None:
+    from unittest.mock import Mock
+
+    db = make_database(tmp_path)
+    config = AppConfig.model_validate({"home": {"timezone": "UTC"}})
+    analyst = Mock()
+
+    report = AnalysisService(db, config, analyst).analyze_month(2026, 10, use_ai=True)
+
+    assert report.quality.sample_count == 0
+    assert report.quality.score == 0
+    assert report.events == []
+    assert report.ai_used is False
+    analyst.analyze.assert_not_called()
+    assert db.report(report.id) is not None
+
+
 @pytest.mark.ydb
 def test_deferred_scheduled_ai_does_not_save_deterministic_weekly_report(tmp_path: Path) -> None:
     from zont_analyzer.adapters.openai.provider import AIRequestDeferred
