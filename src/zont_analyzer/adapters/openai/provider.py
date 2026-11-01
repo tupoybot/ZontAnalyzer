@@ -25,7 +25,7 @@ from zont_analyzer.domain.reasoning import (
 )
 from zont_analyzer.observability import observe, span
 
-PROMPT_VERSION = "analyst-v8.8"
+PROMPT_VERSION = "analyst-v8.9"
 SCHEMA_VERSION = "analysis-result-v1"
 MAX_OUTPUT_TOKENS = 18_000
 
@@ -34,6 +34,9 @@ _PACKET_CONTENT_MAX_BYTES = 60 * 1024
 _PACKET_ACCOUNTING_RESERVE_BYTES = 2 * 1024
 OPENAI_REQUEST_TIMEOUT_SECONDS = 120.0
 AI_POST_REQUEST_RESERVE_SECONDS = 30.0
+_RELIABILITY_EVENT_KINDS = frozenset({
+    "main_power_outage", "boiler_connection_loss", "zont_connection_loss",
+})
 
 SYSTEM_PROMPT = """You are a read-only heating telemetry analyst helping the owner understand the house.
 
@@ -741,7 +744,9 @@ def analysis_packet(
     seen_families: set[str] = set()
     for event in sorted(canonical_events, key=_event_sort_key):
         kind = str(event.get("kind", ""))
-        family = kind if any(name in kind for name in ("dhw", "summer", "burner_pulse", "reliability")) else ""
+        family = kind if kind in _RELIABILITY_EVENT_KINDS or any(
+            name in kind for name in ("dhw", "summer", "burner_pulse", "reliability")
+        ) else ""
         if event.get("severity") == "critical" or (family and family not in seen_families):
             representatives.append(event)
             seen_families.add(family)
@@ -824,14 +829,14 @@ def _fits(packet: dict[str, Any]) -> bool:
     return _encoded_size(packet) <= _PACKET_CONTENT_MAX_BYTES - _PACKET_ACCOUNTING_RESERVE_BYTES
 
 
-def _event_sort_key(item: Any) -> tuple[bool, bool, str, str]:
+def _event_sort_key(item: Any) -> tuple[bool, int, str, str]:
     if not isinstance(item, dict):
-        return (True, True, "", "")
+        return (True, 2, "", "")
     kind = str(item.get("kind", "")).lower()
     evidence_kind = any(term in kind for term in ("dhw", "summer", "noise", "burner_pulse", "reliability"))
     return (
         str(item.get("severity", "")) != "critical",
-        not evidence_kind,
+        0 if kind in _RELIABILITY_EVENT_KINDS else 1 if evidence_kind else 2,
         str(item.get("started_at", "")),
         str(item.get("id", "")),
     )
