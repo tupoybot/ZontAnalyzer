@@ -626,7 +626,7 @@ class TelemetryRepository:
         rows = self.db.execute(
             "DECLARE $device AS Utf8; DECLARE $type AS Utf8; DECLARE $start AS Int64; DECLARE $end AS Int64; "
             "DECLARE $after_start AS Int64; DECLARE $after_end AS Int64; DECLARE $limit AS Uint64; "
-            "SELECT started_at,ended_at,state FROM coverage WHERE device_id=$device AND data_type=$type "
+            "SELECT started_at,ended_at,state FROM coverage VIEW by_end WHERE device_id=$device AND data_type=$type "
             "AND started_at < $end AND ended_at > $start "
             "AND (started_at > $after_start OR (started_at=$after_start AND ended_at > $after_end)) "
             "ORDER BY started_at,ended_at LIMIT $limit;",
