@@ -104,10 +104,14 @@ def test_real_calibration_temperature_only_refreshes_dependent_report(tmp_path) 
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
-@pytest.mark.parametrize("metric", ["s", "rml"])
+@pytest.mark.parametrize("metric,new_value,model_changes", [("s", None, True), ("rml", 80.0, True),
+                                                        ("rml", 40.0, False)])
 @pytest.mark.ydb
-def test_calibration_boiler_change_survives_same_hour_temperature_and_replay(tmp_path, metric) -> None:
+def test_calibration_boiler_change_survives_same_hour_temperature_and_replay(
+    tmp_path, metric, new_value, model_changes,
+) -> None:
     runtime = _runtime(tmp_path)
+    runtime.config.analysis.modulation_capability_profile = "flame_zero_is_minimum"
     reports = _daily_reports(runtime, 4)
     owner = OwnerContextStore(runtime.db)
     owner.update_gas(reports[0].id, {"value_m3": "100"})
@@ -120,18 +124,35 @@ def test_calibration_boiler_change_survives_same_hour_temperature_and_replay(tmp
         value_num=30.0 if metric == "rml" else None,
     )
     # Establish stable series semantics before the publication checkpoint.
+    points = [point]
+    if metric == "rml":
+        # Modulation changes influence calibration only while a known burner
+        # state gives them actual integration time.
+        points.append(point.model_copy(update={
+            "metric_key": "s", "value_num": None, "value_text": "['fl', 'ch']",
+        }))
     runtime.db.telemetry.write_window(device_id="device", data_type="history", start=at,
-                                      end=at + timedelta(hours=1), points=[point])
+                                      end=at + timedelta(hours=1), points=points)
     _write_point(runtime, at, 18.0)
     publication.publish_reports(runtime)
+    previous_model = PublicationRepository(runtime.db.storage).load_meta()["gas_model_version"]
 
-    changed = point.model_copy(update={"value_text": "[]"} if metric == "s" else {"value_num": 40.0})
+    changed = point.model_copy(update={"value_text": "[]"} if metric == "s" else {"value_num": new_value})
     runtime.db.telemetry.write_window(device_id="device", data_type="history", start=at,
                                       end=at + timedelta(hours=1), points=[changed])
     _write_point(runtime, at, 19.0)
     result = publication.publish_reports(runtime, batch_size=1)
     assert result["rendered_reports"] == 1
-    assert result["pending_reports"] == len(reports) - 1
+    assert result["pending_reports"] == (len(reports) - 1 if model_changes else 0)
+    meta = PublicationRepository(runtime.db.storage).load_meta()
+    if model_changes:
+        assert meta["gas_model_version"] != previous_model
+        assert meta["gas_model_previous_version"] == previous_model
+        assert meta["gas_model_refresh_reason"] == "calibration_model_changed"
+    else:
+        # Both modulation values occupy the same fitted bin. The complete
+        # effective calibration intervals and model version remain identical.
+        assert meta["gas_model_version"] == previous_model
     assert publication.publish_reports(runtime, batch_size=8)["pending_reports"] == 0
     runtime.db.telemetry.write_window(device_id="device", data_type="history", start=at,
                                       end=at + timedelta(hours=1), points=[changed])

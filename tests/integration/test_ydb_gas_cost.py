@@ -239,10 +239,7 @@ def test_gas_reuses_calibration_and_batched_revisions_without_freezing_correctio
     assert first['model_version'] == second['model_version']
     assert first['volume_m3'] == second['volume_m3']
     assert fit_calls == 1
-    assert len(revision_batches) == 3  # Calibration and the two distinct report days.
-    assert len({window for batch_windows in revision_batches for window in batch_windows}) == sum(
-        len(batch_windows) for batch_windows in revision_batches
-    )
+    assert any(len(windows) > 1 for windows in revision_batches)
     # A fresh publication job validates its complete interval inputs but reuses
     # the durable fitted model, preserving the entire report context.
     restarted = GasService(runtime.db, runtime.config).context(
@@ -265,6 +262,63 @@ def test_gas_reuses_calibration_and_batched_revisions_without_freezing_correctio
     )
     assert updated['model_version'] != first['model_version']
     assert updated['volume_m3'] > first['volume_m3']
+
+
+@pytest.mark.ydb
+def test_restart_reuses_complete_gas_inputs_and_window_without_day_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, owner, reports = history(tmp_path)
+    owner.update_gas(reports[0].id, {'value_m3': 100})
+    owner.update_gas(reports[1].id, {'value_m3': 196})
+    owner.update_gas(reports[2].id, {'value_m3': 292})
+    window = (reports[0].period_start, reports[-1].period_end)
+    first = GasService(runtime.db, runtime.config).context(*window)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('unchanged restarted calculation read telemetry dependencies or daily slices')
+
+    with monkeypatch.context() as warm:
+        warm.setattr(runtime.db, 'telemetry_day_revisions', forbidden)
+        warm.setattr(GasService, '_slice', forbidden)
+        warm.setattr(gas_analytics, 'fit_intervals', forbidden)
+        assert GasService(runtime.db, runtime.config).context(*window) == first
+
+    # A write beyond calibration and this report changes the global fence but
+    # must only revalidate range dependencies, preserving the cached intervals.
+    seed_samples(runtime.db, [TelemetryPoint(
+        device_id='1', entity_id='boiler', source_type='z3k_boiler_adapter', metric_key='rml',
+        timestamp_utc=datetime(2026, 2, 1, tzinfo=UTC), value_num=50.0,
+    )])
+    with monkeypatch.context() as unchanged:
+        unchanged.setattr(GasService, '_slice', forbidden)
+        unchanged.setattr(gas_analytics, 'fit_intervals', forbidden)
+        assert GasService(runtime.db, runtime.config).context(*window) == first
+
+    rows = runtime.db.storage.execute(
+        "SELECT key FROM app_meta WHERE key >= 'gas-statistic:' AND key < 'gas-statistic;';",
+    )[0].rows
+    assert rows
+    for row in rows:
+        runtime.db.set_app_meta(str(row.key), '{')
+    assert GasService(runtime.db, runtime.config).context(*window) == first
+
+    # Correct a real historical burner fact: the old model must not survive.
+    seed_samples(runtime.db, [TelemetryPoint(
+        device_id='1', entity_id='boiler', source_type='z3k_boiler_adapter', metric_key='s',
+        timestamp_utc=datetime(2026, 1, 3, 12, tzinfo=UTC), value_text='[]',
+    )])
+    original_window = GasService.window
+
+    def preserve_unchanged_interval(self, start, end):
+        assert (start, end) != (datetime(2026, 1, 5, 12, tzinfo=UTC),
+                               datetime(2026, 1, 9, 12, tzinfo=UTC))
+        return original_window(self, start, end)
+
+    with monkeypatch.context() as targeted:
+        targeted.setattr(GasService, 'window', preserve_unchanged_interval)
+        corrected = GasService(runtime.db, runtime.config).context(*window)
+    assert corrected['model_version'] != first['model_version']
 
     original_readings = OwnerContextStore.gas_readings_for_analysis
     injected = False

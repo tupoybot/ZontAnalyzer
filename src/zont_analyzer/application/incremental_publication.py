@@ -161,8 +161,7 @@ def _is_calibration_change(change: dict[str, Any]) -> bool:
         return True  # Unknown legacy payloads must remain conservative.
 
 
-def _calibration_change_overlaps(change: dict[str, Any], bounds: tuple[float, float]) -> bool:
-    """Use exact changed seconds when available; old markers only identify an hour."""
+def _exact_change_range(change: dict[str, Any]) -> tuple[int, int] | None:
     hour = str(change["identifier"])
     hour_start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
     try:
@@ -171,19 +170,25 @@ def _calibration_change_overlaps(change: dict[str, Any], bounds: tuple[float, fl
         if (payload.get("calibration") is True
                 and type(start) is int and type(end) is int
                 and hour_start <= start <= end < hour_start + 3600):
-            return start < bounds[1] and end >= bounds[0]
+            return start, end
     except (TypeError, ValueError, KeyError):
         pass
-    return _hour_overlaps(hour, bounds)
+    return None
 
 
-def _telemetry(items: dict[str, dict[str, Any]], repository: PublicationRepository,
-               runtime: Runtime, changes: list[dict[str, Any]], now: datetime) -> None:
+def _calibration_change_overlaps(change: dict[str, Any], bounds: tuple[float, float]) -> bool:
+    """Use exact changed seconds when available; old markers only identify an hour."""
+    changed = _exact_change_range(change)
+    if changed is not None:
+        return changed[0] < bounds[1] and changed[1] >= bounds[0]
+    return _hour_overlaps(str(change["identifier"]), bounds)
+
+
+def _telemetry(items: dict[str, dict[str, Any]], changes: list[dict[str, Any]], now: datetime,
+               *, broad_calibration: bool) -> None:
     if not changes:
         return
-    calibration_changes = [change for change in changes if _is_calibration_change(change)]
-    calibration = _calibration_bounds(repository, runtime) if calibration_changes else None
-    if calibration and any(_calibration_change_overlaps(change, calibration) for change in calibration_changes):
+    if broad_calibration:
         _enqueue(items, GAS, now)
         return
     for hour in sorted({str(change["identifier"]) for change in changes}):
@@ -293,15 +298,45 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                         "latest_report_id": latest_hint["report_id"] if latest_hint else None}
 
     changes_hint = repository.changes_since(checkpoint, upper) if upper > checkpoint else []
+    service: GasService | None = None
+    model_version: str | None = None
+    model_at_upper = False
+
+    def capture_model() -> str:
+        nonlocal service, model_version, model_at_upper
+        if model_version is None:
+            if service is None:
+                service = GasService(runtime.db, runtime.config)
+            model_version = str(service.model()[0])
+            # A model loaded from inputs newer than the journal high-water mark
+            # must not become the baseline that narrows those unconsumed changes.
+            model_at_upper = runtime.db.source_revision() == upper
+        return model_version
+
+    def remember_model(meta: dict[str, str]) -> None:
+        if model_version is not None and model_at_upper:
+            meta["gas_model_version"] = model_version
+
+    telemetry_changes = [change for change in changes_hint if change["scope"] in {"telemetry", "telemetry-gas"}]
+    calibration_changes = [change for change in telemetry_changes if _is_calibration_change(change)]
+    calibration = _calibration_bounds(repository, runtime) if calibration_changes else None
+    overlaps = [change for change in calibration_changes
+                if calibration and _calibration_change_overlaps(change, calibration)]
+    broad_calibration = False
+    refresh_reason = ""
+    if overlaps:
+        if any(_exact_change_range(change) is None for change in overlaps):
+            broad_calibration, refresh_reason = True, "legacy_calibration_marker"
+        else:
+            current_model = capture_model()
+            previous_model = meta_hint.get("gas_model_version")
+            if not previous_model:
+                broad_calibration, refresh_reason = True, "calibration_model_checkpoint_missing"
+            elif previous_model != current_model:
+                broad_calibration, refresh_reason = True, "calibration_model_changed"
     hourly_changes = bool(changes_hint) and len(changes_hint) <= 16 and all(
         change["scope"] in {"telemetry", "telemetry-gas"} for change in changes_hint
-    )
-    if hourly_changes:
-        calibration_changes = [change for change in changes_hint if _is_calibration_change(change)]
-        calibration = _calibration_bounds(repository, runtime) if calibration_changes else None
-        if calibration and any(_calibration_change_overlaps(change, calibration)
-                               for change in calibration_changes):
-            hourly_changes = False
+    ) and not broad_calibration
     hourly_hours = sorted({str(change["identifier"]) for change in changes_hint}) if hourly_changes else []
 
     # A stable backlog needs only one bounded queue batch. Broad invalidations
@@ -331,6 +366,10 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         for href, affected in repository.affected_items(hourly_hours).items():
             items.setdefault(href, affected)
     previous, old_meta = deepcopy(items), dict(meta)
+    remember_model(meta)
+    if broad_calibration:
+        meta["gas_model_previous_version"] = meta_hint.get("gas_model_version", "")
+        meta["gas_model_refresh_reason"] = refresh_reason
     checkpoint = int(meta.get("checkpoint", "0"))
     # Keep the captured high-water mark. A source write during rendering must
     # remain newer than this checkpoint and be observed by the next run.
@@ -373,12 +412,11 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
             # Raw device snapshots also change on ordinary discovery (timestamps,
             # online state). Equipment facts and device membership are covered by
             # the profile digest below; effective timezone is in the config digest.
-        telemetry_changes = [c for c in changes if c["scope"] in {"telemetry", "telemetry-gas"}]
         # Old releases wrote no dependency information. Retain their broad
         # calibration invalidation until their journal entries are consumed.
-        _telemetry(items, repository, runtime, telemetry_changes, now)
+        _telemetry(items, telemetry_changes, now, broad_calibration=broad_calibration)
     elif hourly_changes:
-        _telemetry(items, repository, runtime, changes_hint, now)
+        _telemetry(items, changes_hint, now, broad_calibration=broad_calibration)
 
     # A lost local publication directory is reconciled from canonical YDB.
     # Ordinary polls examine only sixteen paths and do no full archive walk.
@@ -444,7 +482,8 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                     "manifest": meta["manifest_key"] if cloud else str(manifest_path),
                     "latest_report_id": latest["report_id"] if latest else None}
     queue = _queue(items, latest_href, batch_size)
-    service = GasService(runtime.db, runtime.config) if any(item["dirty"] & (GAS | COST) for item in queue) else None
+    if service is None and any(item["dirty"] & (GAS | COST) for item in queue):
+        service = GasService(runtime.db, runtime.config)
     tariffs = GasTariffStore(runtime.db).history() if queue else []
 
     def render(report: Report, *, is_latest: bool = False) -> str:
@@ -482,6 +521,9 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                     report = refreshed
                 else:
                     report = runtime.db.report(report.id) or report
+                if item["dirty"] & GAS:
+                    capture_model()
+                    remember_model(meta)
             html_path, json_path = pub.archive_paths(output, report)
             html = render(report)
             fence()

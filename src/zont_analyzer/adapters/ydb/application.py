@@ -209,6 +209,17 @@ class Database:
                                     {"$key": key})[0].rows
         return str(rows[0].value) if rows else None
 
+    def get_app_meta_many(self, keys: list[str]) -> dict[str, str]:
+        result: dict[str, str] = {}
+        keys = list(dict.fromkeys(keys))
+        for offset in range(0, len(keys), 128):
+            rows = self.storage.execute(
+                'DECLARE $keys AS List<Utf8>; SELECT key,value FROM app_meta WHERE key IN $keys;',
+                {'$keys': ydb.TypedValue(keys[offset:offset+128], ydb.ListType(ydb.PrimitiveType.Utf8))},
+            )[0].rows
+            result.update({str(row.key): str(row.value) for row in rows})
+        return result
+
     def report(self, report_id: str) -> Report | None:
         return self.reports.report(report_id)
 
