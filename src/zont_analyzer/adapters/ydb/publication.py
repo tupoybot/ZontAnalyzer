@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
+from uuid import uuid4
 
 import ydb  # type: ignore[import-untyped]
 
@@ -12,6 +14,31 @@ from zont_analyzer.domain import Report
 from .database import Transaction, YdbDatabase
 
 SAVE_BATCH_SIZE = 100
+QUEUE_EVENTS = ("added", "completed", "requeued")
+
+
+def queue_metrics(meta: dict[str, str]) -> dict[str, Any] | None:
+    """Return committed queue-cycle counts since activation, not archive history.
+
+    Added means a new queue item, requeued means clean work made dirty again,
+    and completed means a rendered cycle. Pending flag merges and failed
+    attempts add no cycle. Existing backlog completions can exceed additions;
+    removed canonical reports are not successful completions.
+    """
+    encoded = meta.get("queue_metrics")
+    if encoded is None:
+        return None
+    try:
+        value = json.loads(encoded)
+    except (TypeError, ValueError):
+        return None
+    if (not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != 1
+            or not isinstance(value.get("revision"), str) or not value["revision"]
+            or type(value.get("started_at")) is not int or value["started_at"] <= 0
+            or any(type(value.get(event)) is not int or value[event] < 0 for event in QUEUE_EVENTS)):
+        return None
+    return {"started_timestamp_seconds": value["started_at"] / 1_000_000,
+            **{event: value[event] for event in QUEUE_EVENTS}}
 
 
 def _limit(value: int = 1000) -> ydb.TypedValue:
@@ -247,7 +274,27 @@ class PublicationRepository:
         expected_checkpoint: int,
         lease_owner: str,
         lease_attempt: int,
+        queue_events: dict[str, int] | None = None,
     ) -> bool:
+        # Prepare once outside the replayable callback. Existing backlog may
+        # complete after activation without an observed added event.
+        events = queue_events or {}
+        if any(event not in QUEUE_EVENTS or type(count) is not int or count < 0
+               for event, count in events.items()):
+            raise ValueError("invalid publication queue transitions")
+        old_metrics = old_meta.get("queue_metrics")
+        old_state = queue_metrics(old_meta)
+        update_metrics = old_state is None or any(events.values())
+        if update_metrics:
+            # Monitoring state cannot block publication. Damage starts a new
+            # visible tracking epoch under the same exact-old-raw CAS.
+            metrics = json.loads(old_metrics) if old_metrics is not None and old_state is not None else {
+                "version": 1, "started_at": time.time_ns() // 1000,
+                **{event: 0 for event in QUEUE_EVENTS},
+            }
+            metrics.update(revision=str(uuid4()), **{event: metrics[event] + events.get(event, 0)
+                                                   for event in QUEUE_EVENTS})
+            meta["queue_metrics"] = json.dumps(metrics, sort_keys=True, separators=(",", ":"))
         changed = [item for href, item in items.items() if previous.get(href) != item]
         removed = [href for href in previous if href not in items]
         changed_meta = {key: value for key, value in meta.items() if old_meta.get(key) != value}
@@ -256,13 +303,26 @@ class PublicationRepository:
             rows = tx.execute(
                 "SELECT owner,attempt,lease_until,state FROM jobs WHERE job_key='publication';"
             )[0].rows
-            import time
-
             if not rows or str(rows[0].owner) != lease_owner or int(rows[0].attempt) != lease_attempt \
                     or rows[0].state != "active" or int(rows[0].lease_until) <= time.time_ns() // 1000:
                 return False
-            rows = tx.execute("SELECT value FROM metadata WHERE name='publication:checkpoint';")[0].rows
-            current = int(rows[0].value) if rows else 0
+            if update_metrics:
+                rows = tx.execute(
+                    "SELECT name,value FROM metadata "
+                    "WHERE name IN ('publication:checkpoint','publication:queue_metrics');"
+                )[0].rows
+                current_meta = {str(row.name): str(row.value) for row in rows}
+                current_metrics = current_meta.get("publication:queue_metrics")
+                if current_metrics == meta["queue_metrics"]:
+                    # A commit whose response was lost already applied every
+                    # item, checkpoint and counter atomically. Do not count twice.
+                    return True
+                if current_metrics != old_metrics:
+                    return False
+                current = int(current_meta.get("publication:checkpoint", "0"))
+            else:
+                rows = tx.execute("SELECT value FROM metadata WHERE name='publication:checkpoint';")[0].rows
+                current = int(rows[0].value) if rows else 0
             if current != expected_checkpoint:
                 return False
             for href in removed:

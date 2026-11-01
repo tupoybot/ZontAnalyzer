@@ -227,7 +227,7 @@
     },
     {
       "uid": "zont-m6-${environment}-loops",
-      "title": "M6: Частые вызовы контейнера",
+      "title": "M6: Частые запуски заданий приложения",
       "folderUID": "zont-m6",
       "ruleGroup": "m6-${environment}",
       "orgId": 1,
@@ -241,7 +241,7 @@
         "environment": "${environment}"
       },
       "annotations": {
-        "summary": "Частота вызовов выше настроенного порога (по умолчанию 180 в час). Проверить повторы и расписание."
+        "summary": "Число выполнений заданий приложения выше настроенного порога (по умолчанию 36 в час). Проверить повторы, расписание и ручную нагрузку."
       },
       "data": [
         {
@@ -253,7 +253,7 @@
           },
           "datasourceUid": "${datasource_uid}",
           "model": {
-            "expr": "sum(increase(zont_invocations_total{environment=\"${environment}\"}[1h]))",
+            "expr": "sum(increase(zont_invocations_total{operation!~\"scheduler_.*\",environment=\"${environment}\"}[1h]))",
             "instant": true,
             "range": false,
             "refId": "A",
@@ -279,7 +279,7 @@
                 "evaluator": {
                   "type": "gt",
                   "params": [
-                    180
+                    36
                   ]
                 },
                 "operator": {

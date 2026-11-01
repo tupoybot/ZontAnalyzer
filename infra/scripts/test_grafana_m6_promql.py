@@ -54,6 +54,82 @@ def generate(output: Path) -> None:
             })
     tests.append({"name": "counter panels distinguish simultaneous metric names with otherwise identical labels",
                   "interval": "1m", "input_series": counter_series, "promql_expr_test": counter_checks})
+    invocations = next(panel for panel in dashboard["panels"] if panel["id"] == 6)
+    failures = next(panel for panel in dashboard["panels"] if panel["id"] == 5)
+    tests.append({
+        "name": "job requests and scheduler lane runs remain separate counters",
+        "interval": "1m",
+        "input_series": [
+            {"series": 'zont_invocations_total'
+                       '{environment="pilot",instance="app",operation="scheduler",outcome="success"}',
+             "values": "0+1x60"},
+            {"series": 'zont_invocations_total'
+                       '{environment="pilot",instance="old",operation="scheduler_sync",outcome="failure"}',
+             "values": "0+99x60"},
+            {"series": 'zont_invocations_total'
+                       '{environment="dev",instance="other",operation="scheduler",outcome="success"}',
+             "values": "0+99x60"},
+            {"series": 'zont_scheduler_lane_runs_total'
+                       '{environment="pilot",instance="app",lane="sync",outcome="success"}',
+             "values": "0+1x60"},
+            {"series": 'zont_scheduler_lane_runs_total'
+                       '{environment="dev",instance="other",lane="sync",outcome="success"}',
+             "values": "0+99x60"},
+        ],
+        "promql_expr_test": [
+            {"expr": panel_expression(invocations["targets"][0]["expr"]), "eval_time": "1h",
+             "exp_samples": [{"labels": '{operation="scheduler",outcome="success"}', "value": 60}]},
+            {"expr": expressions["loops"], "eval_time": "1h",
+             "exp_samples": [{"labels": '{}', "value": 60}]},
+            {"expr": panel_expression(failures["targets"][0]["expr"]),
+             "eval_time": "1h", "exp_samples": []},
+            {"expr": panel_expression(invocations["targets"][1]["expr"]), "eval_time": "1h",
+             "exp_samples": [{"labels": '{lane="sync",outcome="success"}', "value": 60}]},
+        ],
+    })
+    queue_events = next(panel for panel in dashboard["panels"] if panel["id"] == 36)
+    tracking_start = next(panel for panel in dashboard["panels"] if panel["id"] == 37)
+    event_query = panel_expression(queue_events["targets"][0]["expr"])
+    start_query = panel_expression(tracking_start["targets"][0]["expr"])
+    tests.append({
+        "name": "durable queue counts select latest epoch, deduplicate instances and expire missing samples",
+        "interval": "1m",
+        "input_series": [
+            {"series": 'zont_publication_queue_events{environment="pilot",event="added",instance="old"}',
+             "values": "999+0x60"},
+            {"series": 'zont_publication_queue_tracking_started_timestamp_seconds{environment="pilot",instance="old"}',
+             "values": "100+0x60"},
+            *[{"series": 'zont_publication_queue_events{environment="pilot",event="' + event
+                         + '",instance="' + instance + '"}', "values": "_x49 " + str(count) + "+0x10"}
+              for instance in ("new", "duplicate")
+              for event, count in (("added", 10), ("completed", 12), ("requeued", 0), ("unknown", 99))],
+            *[{"series": 'zont_publication_queue_tracking_started_timestamp_seconds{environment="pilot",instance="'
+                         + instance + '"}', "values": "_x49 200+0x10"}
+              for instance in ("new", "duplicate")],
+            {"series": 'zont_publication_queue_events{environment="pilot",event="added",instance="reset"}',
+             "values": "_x65 2"},
+            {"series": 'zont_publication_queue_tracking_started_timestamp_seconds'
+                       '{environment="pilot",instance="reset"}',
+             "values": "_x65 300"},
+            {"series": 'zont_publication_queue_events{environment="pilot",event="completed",instance="orphan"}',
+             "values": "999+0x90"},
+            {"series": 'zont_publication_queue_events{environment="dev",event="added",instance="other"}',
+             "values": "9999+0x90"},
+            {"series": 'zont_publication_queue_tracking_started_timestamp_seconds{environment="dev",instance="other"}',
+             "values": "9999+0x90"},
+        ],
+        "promql_expr_test": [
+            *[{"expr": event_query, "eval_time": when,
+               "exp_samples": [{"labels": '{event="' + event + '"}', "value": count}
+                               for event, count in (("added", 10), ("completed", 12), ("requeued", 0))]}
+              for when in ("55m", "64m")],
+            {"expr": event_query, "eval_time": "70m",
+             "exp_samples": [{"labels": '{event="added"}', "value": 2}]},
+            {"expr": event_query, "eval_time": "86m", "exp_samples": []},
+            {"expr": start_query, "eval_time": "70m", "exp_samples": [{"labels": "{}", "value": 300000}]},
+            {"expr": start_query, "eval_time": "86m", "exp_samples": []},
+        ],
+    })
     duration = next(panel for panel in dashboard["panels"] if panel["id"] == 4)
     duration_queries = {target["refId"]: target["expr"].replace("$environment", "pilot").replace("$__interval", "1m")
                         for target in duration["targets"]}

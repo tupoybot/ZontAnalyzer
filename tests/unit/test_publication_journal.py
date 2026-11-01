@@ -1,6 +1,7 @@
 """Coalesced YDB publication revisions and semantic source changes."""
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -50,6 +51,42 @@ def _report() -> Report:
                                         suggested_manual_action="Observe", expected_effect="More comfort",
                                         observation_period_days=7)],
     )
+
+
+@pytest.mark.ydb
+def test_queue_metrics_cas_handles_ambiguous_commit_and_rejects_stale_saves(tmp_path, monkeypatch) -> None:
+    db = _database(tmp_path)
+    repo = PublicationRepository(db.storage)
+    lease = db.jobs.acquire("publication", "metrics-owner", 240)
+    assert lease is not None
+    first = {"checkpoint": "0"}
+    assert repo.save({}, {}, first, {}, expected_checkpoint=0, lease_owner=lease.owner,
+                     lease_attempt=lease.attempt, queue_events={"added": 2})
+    old = repo.load_meta()
+    original = db.storage.transaction
+    calls = []
+
+    def replay_after_committed_response_was_lost(callback):
+        calls.append(original(callback))
+        # The SDK repeats the exact callback after a committed response was
+        # lost. Backlog saves may retain the very same source checkpoint.
+        calls.append(original(callback))
+        return calls[-1]
+
+    with monkeypatch.context() as patch:
+        patch.setattr(db.storage, "transaction", replay_after_committed_response_was_lost)
+        assert repo.save({}, {}, dict(old), old, expected_checkpoint=0, lease_owner=lease.owner,
+                         lease_attempt=lease.attempt, queue_events={"completed": 1})
+    assert calls == [True, True]
+    committed = repo.load_meta()
+    assert json.loads(committed["queue_metrics"])["completed"] == 1
+    # Same checkpoint, stale metrics snapshot: reject instead of overwriting
+    # newer counters. A stale owner or checkpoint cannot update them either.
+    for snapshot, owner, checkpoint in ((old, lease.owner, 0), (committed, "stale-owner", 0),
+                                         (committed, lease.owner, 999)):
+        assert not repo.save({}, {}, dict(snapshot), snapshot, expected_checkpoint=checkpoint,
+                             lease_owner=owner, lease_attempt=lease.attempt, queue_events={"completed": 1})
+        assert repo.load_meta()["queue_metrics"] == committed["queue_metrics"]
 
 
 @pytest.mark.ydb

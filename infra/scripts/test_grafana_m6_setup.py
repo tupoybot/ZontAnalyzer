@@ -97,12 +97,46 @@ class M6Tests(unittest.TestCase):
         self.assertNotEqual(rules["sync"]["data"], rules["job"]["data"])
 
     def test_private_threshold_override_and_reserved_budget(self):
-        writes = g.prepare(FakeAPI(), ROOT, "prom", "pilot", None, {"stale": 120000})
+        writes = g.prepare(FakeAPI(), ROOT, "prom", "pilot", None, {"stale": 120000, "loops": 48})
         rules = {payload["uid"].rsplit("-", 1)[-1]: payload
                  for _, path, payload in writes if "alert-rules" in path}
         self.assertEqual(rules["stale"]["data"][1]["model"]["conditions"][0]["evaluator"]["params"],
                          [120000])
+        self.assertEqual(rules["loops"]["data"][1]["model"]["conditions"][0]["evaluator"]["params"],
+                         [48])
         self.assertIn("zont_monthly_ai_reserved_tokens", rules["budget"]["data"][0]["model"]["expr"])
+
+    def test_loop_alert_counts_root_job_executions_with_schedule_retry_headroom(self):
+        rules = {rule["uid"].rsplit("-", 1)[-1]: rule for rule in self.rules()}
+        loops = rules["loops"]
+        self.assertEqual(loops["title"], "M6: Частые запуски заданий приложения")
+        self.assertEqual(loops["data"][0]["model"]["expr"],
+                         'sum(increase(zont_invocations_total{operation!~"scheduler_.*",environment="pilot"}[1h]))')
+        self.assertEqual(loops["data"][1]["model"]["conditions"][0]["evaluator"]["params"], [36])
+        self.assertIn("36 в час", loops["annotations"]["summary"])
+
+        dashboard = json.loads((ROOT / "m6-dashboard.json").read_text())
+        panel = next(panel for panel in dashboard["panels"] if panel["id"] == 6)
+        self.assertEqual(len(panel["targets"]), 2)
+        self.assertIn("zont_invocations_total", panel["targets"][0]["expr"])
+        self.assertIn("by (operation, outcome)", panel["targets"][0]["expr"])
+        self.assertIn("zont_scheduler_lane_runs_total", panel["targets"][1]["expr"])
+        self.assertIn("by (lane, outcome)", panel["targets"][1]["expr"])
+        self.assertIn("а не число запусков контейнера", panel["description"])
+
+    def test_legacy_loop_title_is_migrated_without_losing_activation_or_routing(self):
+        template = next(rule for rule in self.rules() if rule["uid"].endswith("-loops"))
+        template["isPaused"] = False
+        template["notification_settings"] = {"receiver": "existing-channel", "group_wait": "45s"}
+        template["title"] = "M6: Частые вызовы контейнера"
+        api = FakeAPI({f'/api/v1/provisioning/alert-rules/{template["uid"]}': template})
+
+        writes = g.prepare(api, ROOT, "prom", "pilot", "new-channel")
+        migrated = next(payload for _, path, payload in writes if path.endswith("-loops"))
+        self.assertEqual(migrated["title"], "M6: Частые запуски заданий приложения")
+        self.assertFalse(migrated["isPaused"])
+        self.assertEqual(migrated["notification_settings"],
+                         {"receiver": "existing-channel", "group_wait": "45s"})
 
     def test_nonfinite_and_unknown_thresholds_rejected_before_network(self):
         for thresholds in ({"stale": float("nan")}, {"stale": float("inf")},

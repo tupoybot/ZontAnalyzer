@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from zont_analyzer.adapters.ydb.publication import PublicationRepository
+from zont_analyzer.adapters.ydb.publication import PublicationRepository, queue_metrics
 from zont_analyzer.domain import Report
 
 if TYPE_CHECKING:
@@ -93,12 +93,15 @@ def _entry(output: Path, report: Report) -> dict[str, Any]:
 
 
 def _enqueue(items: dict[str, dict[str, Any]], flags: int, now: datetime,
-             predicate: Callable[[dict[str, Any]], bool] = lambda _: True) -> None:
+             predicate: Callable[[dict[str, Any]], bool] = lambda _: True) -> set[str]:
+    newly_dirty = set()
     for item in items.values():
         if predicate(item):
             if not item["dirty"]:
                 item["queued"] = _micros(now)
+                newly_dirty.add(item["href"])
             item["dirty"] |= flags | RENDER
+    return newly_dirty
 
 
 def _remember(items: dict[str, dict[str, Any]], output: Path, report: Report,
@@ -128,10 +131,10 @@ def _remember(items: dict[str, dict[str, Any]], output: Path, report: Report,
     return True
 
 
-def _dependents(items: dict[str, dict[str, Any]], report: Report, now: datetime) -> None:
+def _dependents(items: dict[str, dict[str, Any]], report: Report, now: datetime) -> set[str]:
     end, start = report.period_end.timestamp(), report.period_start.timestamp()
-    _enqueue(items, COST, now, lambda item: item["comparisons"] and item["report_id"] != report.id
-             and item["lo"] < end and item["hi"] > start)
+    return _enqueue(items, COST, now, lambda item: item["comparisons"] and item["report_id"] != report.id
+                    and item["lo"] < end and item["hi"] > start)
 
 
 def _calibration_bounds(repository: PublicationRepository, runtime: Runtime) -> tuple[float, float] | None:
@@ -293,6 +296,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                                        lease_owner=owner, lease_attempt=attempt):
                     raise RuntimeError("publisher lost its YDB checkpoint or lease")
                 return {"reports": int(meta_hint["count"]), "rendered_reports": 0, "pending_reports": 0,
+                        "queue_metrics": queue_metrics(updated_meta),
                         "pending_oldest_timestamp_seconds": None,
                         "manifest": meta_hint["manifest_key"] if cloud else str(manifest_path),
                         "latest_report_id": latest_hint["report_id"] if latest_hint else None}
@@ -478,9 +482,16 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                                    lease_owner=owner, lease_attempt=attempt):
                 raise RuntimeError("publisher lost its YDB checkpoint or lease")
             return {"reports": int(meta["count"]), "rendered_reports": 0, "pending_reports": 0,
+                    "queue_metrics": queue_metrics(meta),
                     "pending_oldest_timestamp_seconds": None,
                     "manifest": meta["manifest_key"] if cloud else str(manifest_path),
                     "latest_report_id": latest["report_id"] if latest else None}
+    # Capture before rendering: a complete enqueue/render cycle can leave the
+    # final dirty flag unchanged. Already pending work merely merges flags.
+    added = {href for href, item in items.items() if item["dirty"] and href not in previous}
+    requeued = {href: 1 for href, item in items.items()
+                if item["dirty"] and href in previous and not previous[href]["dirty"]}
+    completed: set[str] = set()
     queue = _queue(items, latest_href, batch_size)
     if service is None and any(item["dirty"] & (GAS | COST) for item in queue):
         service = GasService(runtime.db, runtime.config)
@@ -506,6 +517,8 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
             report = runtime.db.report(item["report_id"])
             if report is None:
                 items.pop(item["href"], None)
+                added.discard(item["href"])
+                requeued.pop(item["href"], None)
                 continue
             if service is not None and item["dirty"] & (GAS | COST):
                 refreshed = service.refresh(report) if item["dirty"] & GAS else service.refresh_cost(report)
@@ -517,7 +530,10 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                             ).items():
                                 items.setdefault(href, dependent)
                                 previous.setdefault(href, deepcopy(dependent))
-                        _dependents(items, refreshed, now)
+                        for href in _dependents(items, refreshed, now):
+                            # A dependency can reactivate an item completed
+                            # earlier in this same bounded batch.
+                            requeued[href] = requeued.get(href, 0) + 1
                     report = refreshed
                 else:
                     report = runtime.db.report(report.id) or report
@@ -546,6 +562,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
             if item["href"] == latest_href:
                 newest = report
             rendered += 1
+            completed.add(item["href"])
 
     fence()
     if partial:
@@ -601,13 +618,16 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
     meta["latest_report_id"] = latest["report_id"] if latest else ""
     fence()
     if not repository.save(items, previous, meta, old_meta, expected_checkpoint=checkpoint,
-                           lease_owner=owner, lease_attempt=attempt):
+                           lease_owner=owner, lease_attempt=attempt,
+                           queue_events={"added": len(added), "completed": len(completed),
+                                         "requeued": sum(requeued.values())}):
         raise RuntimeError("publisher lost its YDB checkpoint or lease")
     pending, oldest = repository.pending_count() if partial else (
         sum(bool(item["dirty"]) for item in items.values()),
         min((item["queued"] for item in items.values() if item["dirty"]), default=None),
     )
     return {"reports": len(entries), "rendered_reports": rendered,
+            "queue_metrics": queue_metrics(meta),
             "pending_reports": pending,
             "pending_oldest_timestamp_seconds": oldest / 1_000_000 if oldest is not None else None,
             "manifest": meta["manifest_key"] if cloud else str(manifest_path),

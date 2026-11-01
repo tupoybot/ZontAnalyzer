@@ -46,8 +46,9 @@ def test_timer_records_lane_outcome_after_durable_progress(monkeypatch, result, 
         outcome = service.run()
     assert outcome["lane"] == "sync"
     assert ("zont_cloud_job_success", expected, {"operation": "scheduler_sync"}) in measurements
-    assert ("zont_invocations_total", 1.0,
-            {"operation": "scheduler_sync", "outcome": "success" if expected else "failure"}) in measurements
+    assert ("zont_scheduler_lane_runs_total", 1.0,
+            {"lane": "sync", "outcome": "success" if expected else "failure"}) in measurements
+    assert not any(name == "zont_invocations_total" for name, _, _ in measurements)
     assert any(name == "zont_cloud_job_observed_timestamp_seconds" and value > 0
                and labels == {"operation": "scheduler_sync"} for name, value, labels in measurements)
     assert len(measurements) == 3

@@ -72,9 +72,12 @@ def prepare(api: GrafanaAPI, root: Path, datasource: str, environment: str,
         path = f"/api/v1/provisioning/alert-rules/{uid}"
         status, existing = api.request("GET", path)
         if status == 200:
+            accepted_titles = {rule["title"]}
+            if suffix == "loops":
+                accepted_titles.add("M6: Частые вызовы контейнера")
             if (not isinstance(existing, dict) or existing.get("uid") != uid
                     or existing.get("folderUID") != FOLDER_UID
-                    or existing.get("title") != rule["title"]
+                    or existing.get("title") not in accepted_titles
                     or existing.get("labels", {}).get("project") != FOLDER_UID
                     or existing.get("labels", {}).get("environment") != environment
                     or not isinstance(existing.get("isPaused"), bool)):

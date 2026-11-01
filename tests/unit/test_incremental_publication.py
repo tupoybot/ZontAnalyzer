@@ -43,6 +43,93 @@ def _record_change(db, scope: str, identifier: str, payload: dict | None = None)
 
 
 @pytest.mark.ydb
+def test_queue_events_survive_drain_and_count_transient_enqueue_render_cycles(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    reports = _daily_reports(runtime, 4)
+    first = publication.publish_reports(runtime, batch_size=1)
+    assert first["queue_metrics"]["added"] == 4
+    assert first["queue_metrics"]["completed"] == 1
+    assert first["queue_metrics"]["requeued"] == 0
+    started = first["queue_metrics"]["started_timestamp_seconds"]
+    drained = publication.publish_reports(runtime, batch_size=8)
+    assert drained["queue_metrics"] == {"started_timestamp_seconds": started, "added": 4,
+                                         "completed": 4, "requeued": 0}
+    _record_change(runtime.db, "render", reports[0].id)
+    same_batch = publication.publish_reports(runtime)
+    assert same_batch["pending_reports"] == 0
+    assert same_batch["queue_metrics"] == {"started_timestamp_seconds": started, "added": 4,
+                                            "completed": 5, "requeued": 1}
+    state = PublicationRepository(runtime.db.storage).load_meta()["queue_metrics"]
+    assert publication.publish_reports(runtime)["queue_metrics"] == same_batch["queue_metrics"]
+    assert PublicationRepository(runtime.db.storage).load_meta()["queue_metrics"] == state
+
+
+@pytest.mark.ydb
+def test_tracking_activation_does_not_invent_historical_additions(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    _daily_reports(runtime, 3)
+    publication.publish_reports(runtime, batch_size=1)
+    runtime.db.storage.execute("DELETE FROM metadata WHERE name='publication:queue_metrics';")
+    resumed = publication.publish_reports(runtime, batch_size=1)
+    assert resumed["queue_metrics"]["added"] == 0
+    assert resumed["queue_metrics"]["completed"] == 1
+    assert resumed["queue_metrics"]["requeued"] == 0
+    assert resumed["queue_metrics"]["started_timestamp_seconds"] > 0
+
+
+@pytest.mark.ydb
+def test_failed_render_does_not_commit_queue_events(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = _runtime(tmp_path)
+    _daily_reports(runtime, 1)
+    original = publication.render_html
+
+    def failed_render(*args, **kwargs):
+        raise RuntimeError("render")
+
+    monkeypatch.setattr(publication, "render_html", failed_render)
+    with pytest.raises(RuntimeError, match="render"):
+        publication.publish_reports(runtime)
+    assert "queue_metrics" not in PublicationRepository(runtime.db.storage).load_meta()
+    monkeypatch.setattr(publication, "render_html", original)
+    retried = publication.publish_reports(runtime)
+    assert retried["queue_metrics"]["added"] == retried["queue_metrics"]["completed"] == 1
+
+
+@pytest.mark.ydb
+def test_committed_metrics_recover_when_publisher_loses_its_result(tmp_path: Path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path)
+    _daily_reports(runtime, 1)
+    original = PublicationRepository.save
+
+    def lost_result(*args, **kwargs):
+        assert original(*args, **kwargs)
+        raise RuntimeError("publisher result lost")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(PublicationRepository, "save", lost_result)
+        with pytest.raises(RuntimeError, match="publisher result lost"):
+            publication.publish_reports(runtime)
+    recovered = publication.publish_reports(runtime)
+    assert recovered["rendered_reports"] == 0
+    assert recovered["queue_metrics"]["added"] == recovered["queue_metrics"]["completed"] == 1
+
+
+@pytest.mark.ydb
+def test_damaged_metrics_start_new_epoch_without_blocking_publication(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    report = _daily_reports(runtime, 1)[0]
+    first = publication.publish_reports(runtime)["queue_metrics"]
+    runtime.db.storage.execute(
+        "UPSERT INTO metadata(name,value) VALUES ('publication:queue_metrics','invalid-json');",
+    )
+    _record_change(runtime.db, "render", report.id)
+    repaired = publication.publish_reports(runtime)["queue_metrics"]
+    assert repaired["started_timestamp_seconds"] > first["started_timestamp_seconds"]
+    assert repaired["added"] == 0
+    assert repaired["completed"] == repaired["requeued"] == 1
+
+
+@pytest.mark.ydb
 def test_noop_does_not_recalculate_or_walk_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = _runtime(tmp_path)
     _daily_reports(runtime, 1)
@@ -452,7 +539,10 @@ def test_local_artifact_loss_recovers_from_canonical_ydb(tmp_path: Path) -> None
 
 
 @pytest.mark.ydb
-def test_comparison_is_requeued_when_its_source_finishes_in_later_batch(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("batch_size", [1, 2])
+def test_comparison_is_requeued_when_its_source_finishes_in_later_batch(
+    tmp_path: Path, monkeypatch, batch_size,
+) -> None:
 
     runtime = _runtime(tmp_path)
     older, latest = _daily_reports(runtime, 2)
@@ -464,7 +554,7 @@ def test_comparison_is_requeued_when_its_source_finishes_in_later_batch(tmp_path
     for _ in range(5):
         if not publication.publish_reports(runtime)["pending_reports"]:
             break
-    publication.publish_reports(runtime)
+    baseline = publication.publish_reports(runtime)["queue_metrics"]
     original_refresh = GasService.refresh
 
     def revised_volume(self, report):
@@ -476,7 +566,13 @@ def test_comparison_is_requeued_when_its_source_finishes_in_later_batch(tmp_path
     monkeypatch.setattr(GasService, "refresh", revised_volume)
     _record_change(runtime.db, "global", "gas")
     # Latest is rendered first. Its older source changes only in the next batch.
-    assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 1
-    assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 1
-    assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 0
+    first = publication.publish_reports(runtime, batch_size=batch_size)
+    assert first["pending_reports"] == 1
+    assert first["queue_metrics"]["completed"] == baseline["completed"] + batch_size
+    if batch_size == 1:
+        assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 1
+    drained = publication.publish_reports(runtime, batch_size=1)
+    assert drained["pending_reports"] == 0
+    assert drained["queue_metrics"]["completed"] == baseline["completed"] + 3
+    assert drained["queue_metrics"]["requeued"] == baseline["requeued"] + 3
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
