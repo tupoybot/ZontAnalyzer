@@ -438,7 +438,7 @@ class IngestionService:
             if state["pending_restore_at"] is not None:
                 result["complete"], result["pending"] = False, True
             _save_connection_recovery(self.db, device_id, state)
-        first, last = self.db.earliest_sample_time(), self.db.latest_sample_time()
+        first, last = self.db.sample_bounds()
         return {**result, "series": series_count, "windows": result["requests"],
                 "history_range": {"first_observed": first.isoformat() if first else None,
                                   "last_observed": last.isoformat() if last else None}}
