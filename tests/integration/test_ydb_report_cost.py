@@ -75,7 +75,8 @@ def test_period_history_and_completed_reads_fetch_only_selected_payloads(ydb_dat
     prior = repository.prior_reports(datetime(2026, 1, 14, tzinfo=UTC), limit=3)
     assert [report.id for report in prior] == [reports[11].id, reports[10].id, reports[9].id]
     assert _payload_reads(recording.queries) == 3
-    assert sum(count for query, count in recording.queries if "SELECT ID FROM REPORTS" in query.upper()) == 3
+    assert sum(count for query, count in recording.queries
+               if "SELECT ID,PERIOD_END FROM REPORTS VIEW BY_KIND_END" in query.upper()) == 3
 
     recording.reset()
     completed = repository.completed_reports(datetime(2026, 1, 14, tzinfo=UTC), limit=4)
@@ -94,6 +95,30 @@ def test_period_history_and_completed_reads_fetch_only_selected_payloads(ydb_dat
 
 
 @pytest.mark.ydb
+def test_prior_reports_preserves_id_order_across_equal_end_pages(ydb_database: Any) -> None:
+    recording = _RecordingDatabase(ydb_database)
+    repository = ReportRepository(recording)  # type: ignore[arg-type]
+    newest = _report(4)
+    repository.save_report(newest, "latest end")
+    for version in range(102):
+        report = _report(2, report_id=f"tie-{101 - version:03d}")
+        report.algorithm_version = f"version-{version:03d}"
+        repository.save_report(report, "equal end with opposing version and ID order")
+    earlier_start = _report(1, report_id="a-first")
+    earlier_start.period_end = datetime(2026, 1, 3, tzinfo=UTC)
+    earlier_start.generated_at = earlier_start.period_end + timedelta(minutes=1)
+    repository.save_report(earlier_start, "equal end with different start")
+
+    recording.reset()
+    selected = repository.prior_reports(datetime(2026, 1, 5, tzinfo=UTC), limit=3)
+    assert [report.id for report in selected] == [newest.id, "a-first", "tie-000"]
+    assert _payload_reads(recording.queries) == 3
+    tied_pages = [count for query, count in recording.queries
+                  if "SELECT id,period_start,algorithm_version FROM reports VIEW by_kind_end" in query]
+    assert tied_pages == [100, 3]
+
+
+@pytest.mark.ydb
 def test_latest_completed_daily_start_skips_incomplete_reports_without_history_payload_scan(
     ydb_database: Any,
 ) -> None:
@@ -109,6 +134,31 @@ def test_latest_completed_daily_start_skips_incomplete_reports_without_history_p
     assert latest == complete.period_start
     assert _payload_reads(recording.queries) == 2
     assert sum(count for query, count in recording.queries if "SELECT ID,PERIOD_START" in query.upper()) == 2
+
+
+@pytest.mark.ydb
+def test_latest_completed_daily_start_pages_by_full_primary_key(ydb_database: Any) -> None:
+    recording = _RecordingDatabase(ydb_database)
+    repository = ReportRepository(recording)  # type: ignore[arg-type]
+    repository.save_report(_report(1), "older complete day")
+    for version in range(102):
+        report = _report(2, complete=version == 0, report_id=f"candidate-{102 - version:03d}")
+        report.algorithm_version = f"version-{version:03d}"
+        repository.save_report(report, "same start and end, distinct versions")
+    future_end = _report(2, report_id="future-end")
+    future_end.period_end = datetime(2026, 1, 6, tzinfo=UTC)
+    repository.save_report(future_end, "period is not complete yet")
+
+    recording.reset()
+    assert repository.latest_completed_daily_report_start(datetime(2026, 1, 5, tzinfo=UTC)) == (
+        datetime(2026, 1, 2, tzinfo=UTC)
+    )
+    pages = [(query, count) for query, count in recording.queries if "SELECT ID,PERIOD_START" in query.upper()]
+    assert len(pages) > 1 and sum(count for _, count in pages) == 104
+    assert max(count for _, count in pages) <= 100
+    assert _payload_reads(recording.queries) == 102
+    assert all("ORDER BY period_start DESC,period_end DESC,algorithm_version DESC" in query for query, _ in pages)
+    assert "(period_start,period_end,algorithm_version) < ($start,$end,$version)" in pages[1][0]
 
 
 @pytest.mark.ydb

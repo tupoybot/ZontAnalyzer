@@ -20,13 +20,14 @@ import hashlib
 import json
 import time
 import types
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
 import ydb  # type: ignore[import-untyped]
 
+from tools.measure_ydb_bounds import ObserveRpc
 from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.adapters.ydb.database import Transaction, YdbConfig, YdbDatabase
 from zont_analyzer.application.gas import GasService
@@ -36,6 +37,7 @@ from zont_analyzer.domain import TelemetryPoint
 
 @dataclass
 class Costs:
+    native: dict[str, Any] = field(default_factory=dict)
     queries: int = 0
     result_rows: int = 0
     result_json_bytes: int = 0
@@ -69,8 +71,10 @@ class ObserveQueries:
         self.costs = Costs()
         self._pool_execute = storage.pool.execute_with_retries
         self._tx_execute = Transaction.execute
+        self._rpc = ObserveRpc()
 
     def __enter__(self) -> Costs:
+        self._rpc.__enter__()
         costs, pool = self.costs, self.storage.pool
 
         def pool_execute(query: str, parameters: dict[str, Any] | None = None,
@@ -112,6 +116,8 @@ class ObserveQueries:
     def __exit__(self, *_args: object) -> None:
         self.storage.pool.execute_with_retries = self._pool_execute
         Transaction.execute = self._tx_execute  # type: ignore[method-assign]
+        self._rpc.__exit__(*_args)
+        self.costs.native = self._rpc.summary()
 
 
 def _baseline(gas_path: Path, db_path: Path) -> tuple[type, Any]:
@@ -199,6 +205,7 @@ def _run(service_type: type, db: Database, config: AppConfig,
         'result_json_bytes': cost.result_json_bytes,
         'sdk_read_rows': cost.sdk_read_rows, 'sdk_read_bytes': cost.sdk_read_bytes,
         'sdk_cpu_us': cost.sdk_cpu_us, 'queries_with_stats': cost.queries_with_stats,
+        'native': cost.native,
         'semantic_sha256': hashlib.sha256(json.dumps(semantic, sort_keys=True,
                                                    default=str).encode()).hexdigest(),
         'model_identifiable': result['model']['identifiable'], 'gas_status': result['status'],
@@ -218,6 +225,7 @@ def main() -> None:
     parser.add_argument('--years', type=int, nargs='+', default=[1, 5, 10])
     parser.add_argument('--candidate-only', action='store_true',
                         help='rerun only the current candidate after baseline evidence was captured')
+    parser.add_argument('--baseline-commit', default='3149665')
     args = parser.parse_args()
     if any(year not in {1, 5, 10} for year in args.years):
         parser.error('years must be selected from 1, 5, 10')
@@ -239,7 +247,7 @@ def main() -> None:
                      Path('src/zont_analyzer/adapters/ydb/period_revisions.py')):
             source_hash.update(path.read_bytes())
         print(json.dumps({'fixture_points': _seed(db, start, furthest),
-                          'baseline_commit': '3149665', 'storage': 'local YDB emulator',
+                          'baseline_commit': args.baseline_commit, 'storage': 'local YDB emulator',
                           'candidate_source_sha256': source_hash.hexdigest()}), flush=True)
         current_revision = db.period_data_revision
         for years in args.years:

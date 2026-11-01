@@ -12,6 +12,28 @@ from zont_analyzer.domain.periods import SeasonBoundaries, midnight
 
 
 @pytest.mark.ydb
+@pytest.mark.parametrize("use_ai", [False, True])
+def test_deterministic_month_does_not_read_previous_ai_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_ai: bool,
+) -> None:
+    runtime = make_runtime(tmp_path)
+    analysis = AnalysisService(runtime.db, runtime.config)
+    start, _ = analysis.local_day_window(date(2026, 8, 1))
+    identifier = analysis.report_id_for("monthly", start)
+    original = runtime.db.report
+
+    def read_report(report_id: str):
+        assert report_id != identifier, "Deterministic facts do not need the previous AI payload"
+        return original(report_id)
+
+    monkeypatch.setattr(runtime.db, "report", read_report)
+    report = analysis.analyze_month(2026, 8, use_ai=use_ai)
+    assert report.id == identifier
+    assert not report.ai_used
+    assert original(identifier) is not None
+
+
+@pytest.mark.ydb
 def test_empty_database_schedule_is_deterministic_and_idempotent(tmp_path: Path) -> None:
     runtime = make_runtime(tmp_path)
     analysis = AnalysisService(runtime.db, runtime.config)

@@ -61,6 +61,7 @@ def _record(years: int, run: str, operation: str, seconds: float, costs: Any,
         "result_rows": costs.result_rows, "result_json_bytes": costs.result_json_bytes,
         "sdk_read_rows": costs.sdk_read_rows, "sdk_read_bytes": costs.sdk_read_bytes,
         "sdk_cpu_us": costs.sdk_cpu_us, "queries_with_stats": costs.queries_with_stats,
+        "native": costs.native,
         "pending_count": pending_count,
         "selected_sha256": hashlib.sha256(json.dumps(selected).encode()).hexdigest(),
     }, sort_keys=True), flush=True)

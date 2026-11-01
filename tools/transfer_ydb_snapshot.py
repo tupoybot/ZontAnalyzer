@@ -18,6 +18,7 @@ from typing import Any, cast
 
 from tools.verify_sqlite_import import verify_backup
 from zont_analyzer.adapters.ydb.database import YdbConfig, YdbDatabase
+from zont_analyzer.adapters.ydb.read_indexes import SUPPLEMENTAL_INDEXES
 from zont_analyzer.adapters.ydb.schema import TABLES
 
 EXCLUDED = frozenset({"migration_records"})
@@ -60,9 +61,11 @@ def _primary_key(table: str) -> tuple[str, ...]:
 
 
 def _expected_indexes(table: str) -> dict[str, tuple[str, ...]]:
-    return {name: tuple(part.strip() for part in columns.split(","))
-            for name, columns in re.findall(r"INDEX\s+(\w+)\s+GLOBAL SYNC ON\s*\(([^)]*)\)",
-                                            TABLES[table])}
+    indexes = {name: tuple(part.strip() for part in columns.split(","))
+               for name, columns in re.findall(r"INDEX\s+(\w+)\s+GLOBAL SYNC ON\s*\(([^)]*)\)",
+                                               TABLES[table])}
+    indexes.update(SUPPLEMENTAL_INDEXES.get(table, {}))
+    return indexes
 
 
 def _check_schema(db: YdbDatabase) -> None:
@@ -76,11 +79,18 @@ def _check_schema(db: YdbDatabase) -> None:
                           for col in description.columns}
         if actual_columns != expected_columns or tuple(description.primary_key) != _primary_key(table):
             raise ValueError(f"YDB schema mismatch: {table}")
-        # SDK TableSchemeEntry discards the index kind while decoding DescribeTable:
-        # it retains only name, columns, and status. We can compare the actual
-        # columns here; schema metadata cannot independently prove the index kind.
+        # SDK TableSchemeEntry currently discards kind and covering columns
+        # while decoding DescribeTable. Verify names and key columns here;
+        # preserve the covering-column rejection if the SDK starts exposing them.
         actual_indexes = {index.name: tuple(index.index_columns) for index in description.indexes}
-        if actual_indexes != _expected_indexes(table) or description.ttl_settings is not None:
+        expected_indexes = _expected_indexes(table)
+        # Read indexes do not change row encoding or the schema-v2 snapshot
+        # hash. A source from an older release may not have installed them yet.
+        for optional in SUPPLEMENTAL_INDEXES.get(table, {}):
+            if optional not in actual_indexes:
+                expected_indexes.pop(optional)
+        if (actual_indexes != expected_indexes or any(index.data_columns for index in description.indexes)
+                or description.ttl_settings is not None):
             raise ValueError(f"YDB index or TTL mismatch: {table}")
     rows = db.execute("SELECT name,value FROM metadata WHERE name IN ('schema_version','schema_hash');")[0].rows
     values = {row.name: row.value for row in rows}

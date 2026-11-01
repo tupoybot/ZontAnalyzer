@@ -202,6 +202,9 @@ class YdbDatabase:
         for name, definition in TABLES.items():
             if name not in existing:
                 self.execute(f"CREATE TABLE IF NOT EXISTS `{name}` ({definition});")
+        from .read_indexes import ensure_read_indexes
+
+        ensure_read_indexes(self)
         # A future schema upgrade must explicitly handle the recorded version.
         def version(tx: Transaction) -> None:
             rows = tx.execute("SELECT value FROM metadata WHERE name = 'schema_version';")[0].rows

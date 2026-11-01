@@ -243,6 +243,13 @@ def test_gas_reuses_calibration_and_batched_revisions_without_freezing_correctio
     assert len({window for batch_windows in revision_batches for window in batch_windows}) == sum(
         len(batch_windows) for batch_windows in revision_batches
     )
+    # A fresh publication job validates its complete interval inputs but reuses
+    # the durable fitted model, preserving the entire report context.
+    restarted = GasService(runtime.db, runtime.config).context(
+        *runtime.analysis(no_ai=True).local_day_window(date(2026, 1, 10))
+    )
+    assert restarted == first
+    assert fit_calls == 1
 
     seed_samples(runtime.db, [TelemetryPoint(
         device_id='1', entity_id='boiler', source_type='z3k_boiler_adapter',

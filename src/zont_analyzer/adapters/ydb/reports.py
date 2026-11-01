@@ -423,13 +423,40 @@ class ReportRepository:
         query = """
         DECLARE $before AS Int64;
         DECLARE $limit AS Uint64;
-        SELECT id FROM reports
+        SELECT id,period_end FROM reports VIEW by_kind_end
         WHERE kind = 'daily' AND period_end <= $before
-        ORDER BY period_end DESC, id LIMIT $limit;
+        ORDER BY period_end DESC LIMIT $limit;
         """
         rows = self._select(query, {"$before": _seconds(before),
                                     "$limit": ydb.TypedValue(bound, ydb.PrimitiveType.Uint64)})
-        return self._reports_by_ids([_text(row["id"]) or "" for row in rows])
+        selected = [(_text(row["id"]) or "", int(row["period_end"])) for row in rows]
+        if len(rows) == bound:
+            boundary = int(rows[-1]["period_end"])
+            selected = [item for item in selected if item[1] > boundary]
+            cursor: tuple[int, str] | None = None
+            while True:
+                declarations, condition = "", ""
+                parameters: dict[str, Any] = {"$end": boundary}
+                if cursor is not None:
+                    declarations = "DECLARE $start AS Int64; DECLARE $version AS Utf8; "
+                    condition = "AND (period_start,algorithm_version) > ($start,$version) "
+                    parameters.update(zip(("$start", "$version"), cursor, strict=True))
+                tied = self._select(
+                    "DECLARE $end AS Int64; " + declarations +
+                    "SELECT id,period_start,algorithm_version FROM reports VIEW by_kind_end "
+                    "WHERE kind='daily' AND period_end=$end " + condition +
+                    "ORDER BY period_start,algorithm_version LIMIT 100;",
+                    parameters,
+                )
+                selected.extend((_text(row["id"]) or "", boundary) for row in tied)
+                selected.sort(key=lambda item: (-item[1], item[0]))
+                del selected[bound:]
+                if len(tied) < 100:
+                    break
+                last = tied[-1]
+                cursor = int(last["period_start"]), _text(last["algorithm_version"]) or ""
+        selected.sort(key=lambda item: (-item[1], item[0]))
+        return self._reports_by_ids([report_id for report_id, _end in selected[:bound]])
 
     def completed_reports(self, now: datetime, *, limit: int = 1000) -> list[Report]:
         bound = max(0, min(limit, 1000))
@@ -452,25 +479,37 @@ class ReportRepository:
 
     def latest_completed_daily_report_start(self, now: datetime) -> datetime | None:
         """Find the latest completed daily period without loading report history."""
-        after_start, after_id = _seconds(now), ""
+        page_size = 16
+        cursor: tuple[int, int, str] | None = None
         while True:
+            declarations, condition = "", ""
+            parameters: dict[str, Any] = {
+                "$now": _seconds(now), "$limit": ydb.TypedValue(page_size, ydb.PrimitiveType.Uint64),
+            }
+            if cursor is not None:
+                declarations = "DECLARE $start AS Int64; DECLARE $end AS Int64; DECLARE $version AS Utf8; "
+                condition = "AND (period_start,period_end,algorithm_version) < ($start,$end,$version) "
+                parameters.update(zip(("$start", "$end", "$version"), cursor, strict=True))
             rows = self._select(
-                "DECLARE $now AS Int64; DECLARE $after_start AS Int64; DECLARE $after_id AS Utf8; "
-                "DECLARE $limit AS Uint64; SELECT id,period_start FROM reports WHERE kind='daily' "
-                "AND period_end <= $now AND (period_start < $after_start OR "
-                "(period_start=$after_start AND id > $after_id)) "
-                "ORDER BY period_start DESC, id LIMIT $limit;",
-                {"$now": _seconds(now), "$after_start": after_start, "$after_id": after_id,
-                 "$limit": ydb.TypedValue(100, ydb.PrimitiveType.Uint64)},
+                "DECLARE $now AS Int64; DECLARE $limit AS Uint64; " + declarations +
+                "SELECT id,period_start,period_end,algorithm_version FROM reports WHERE kind='daily' "
+                "AND period_start < $now " + condition +
+                "ORDER BY period_start DESC,period_end DESC,algorithm_version DESC LIMIT $limit;",
+                parameters,
             )
             if not rows:
                 return None
             for row in rows:
+                if int(row["period_end"]) > _seconds(now):
+                    continue
                 report_id = _text(row["id"]) or ""
                 reports = self._reports_by_ids([report_id])
                 if reports and reports[0].generated_at >= reports[0].period_end:
                     return reports[0].period_start
-            after_start, after_id = int(rows[-1]["period_start"]), _text(rows[-1]["id"]) or ""
+            if len(rows) < page_size:
+                return None
+            last = rows[-1]
+            cursor = int(last["period_start"]), int(last["period_end"]), _text(last["algorithm_version"]) or ""
 
     def _reports_by_ids(self, report_ids: list[str]) -> list[Report]:
         """Fetch payloads only after a key/filter query has selected report IDs."""
