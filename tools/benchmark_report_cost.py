@@ -14,13 +14,14 @@ import json
 import textwrap
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
 import ydb  # type: ignore[import-untyped]
 
+from tools.measure_ydb_bounds import ObserveRpc
 from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.adapters.ydb.database import Transaction, YdbConfig, YdbDatabase
 from zont_analyzer.adapters.ydb.reports import ReportRepository, _seconds
@@ -32,6 +33,7 @@ BASELINE_COMMIT = "3149665386e5a31dc0fe64d7edd2803137022069"
 
 @dataclass
 class Cost:
+    native: dict[str, Any] = field(default_factory=dict)
     queries: int = 0
     result_rows: int = 0
     result_bytes: int = 0
@@ -76,8 +78,10 @@ class Observe:
         self.cost = Cost()
         self._pool_execute = storage.pool.execute_with_retries
         self._tx_execute = Transaction.execute
+        self._rpc = ObserveRpc()
 
     def __enter__(self) -> Cost:
+        self._rpc.__enter__()
         costs, pool = self.cost, self.storage.pool
 
         def pool_execute(
@@ -127,6 +131,8 @@ class Observe:
     def __exit__(self, *_args: object) -> None:
         self.storage.pool.execute_with_retries = self._pool_execute
         Transaction.execute = self._tx_execute  # type: ignore[method-assign]
+        self._rpc.__exit__(*_args)
+        self.cost.native = self._rpc.summary()
 
 
 def _source_methods(path: Path, class_name: str, names: set[str]) -> list[str]:
@@ -187,6 +193,7 @@ def _measure(storage: YdbDatabase, case: str, version: str, call: Callable[[], A
         "cpu_us": cost.cpu_us,
         "queries_with_stats": cost.queries_with_stats,
         "request_units": cost.request_units if cost.request_units_available else None,
+        "native": cost.native,
         "duration_ms": duration_ms,
         "result_count": len(result) if isinstance(result, list) else int(result is not None),
     }, sort_keys=True), flush=True)
@@ -203,19 +210,45 @@ def _latest_old(legacy_reports: Any, now: datetime) -> tuple[datetime | None, bo
 
 
 def _paired(storage: YdbDatabase, db: Database, legacy_db: Any, legacy_reports: Any,
-            now: datetime, history: str) -> None:
-    current_prior = _measure(storage, f"{history}_prior_7", "current",
-                             lambda: db.prior_reports(now, limit=7))
+            now: datetime, history: str, *, upgrade_index: bool = False) -> None:
+    if upgrade_index:
+        # Only the disposable local mode may change schema. YDB's optimizer can
+        # automatically choose a new index even for verbatim baseline SQL.
+        session = storage.driver.table_client.session().create()
+        try:
+            operation = session.alter_table(storage.path + '/reports', drop_indexes=['by_kind_end'])
+            deadline = time.monotonic() + 60
+            while not operation.ready and time.monotonic() < deadline:
+                time.sleep(0.25)
+                operation = operation.get()
+            if not operation.ready:
+                raise TimeoutError('local index removal did not finish')
+        finally:
+            session.delete()
     baseline_prior = _measure(storage, f"{history}_prior_7", "baseline",
                               lambda: legacy_reports.prior_reports(now, limit=7))
-    if [item.id for item in current_prior] != [item.id for item in baseline_prior]:
-        raise AssertionError("prior-seven report selections changed")
-    if current_prior:
-        target = current_prior[0]
+    baseline_period = None
+    if baseline_prior:
+        target = baseline_prior[0]
         baseline_period = _measure(
             storage, f"{history}_single_period", "baseline",
             lambda: legacy_db.report_for_period(target.period_start, target.period_end),
         )
+    baseline_latest_info = _measure(
+        storage, f"{history}_latest_daily", "baseline", lambda: _latest_old(legacy_reports, now),
+    )
+    if upgrade_index:
+        from zont_analyzer.adapters.ydb.read_indexes import ensure_read_indexes
+
+        _write_probe(storage, now, history, 'baseline')
+        ensure_read_indexes(storage)
+        _write_probe(storage, now, history, 'current')
+    current_prior = _measure(storage, f"{history}_prior_7", "current",
+                             lambda: db.prior_reports(now, limit=7))
+    if [item.id for item in current_prior] != [item.id for item in baseline_prior]:
+        raise AssertionError("prior-seven report selections changed")
+    if current_prior:
+        target = current_prior[0]
         current_period = _measure(
             storage, f"{history}_single_period", "current",
             lambda: db.report_for_period(target.period_start, target.period_end),
@@ -223,9 +256,6 @@ def _paired(storage: YdbDatabase, db: Database, legacy_db: Any, legacy_reports: 
         if (baseline_period is None or current_period is None
                 or baseline_period.id != current_period.id):
             raise AssertionError("single-period report selection changed")
-    baseline_latest_info = _measure(
-        storage, f"{history}_latest_daily", "baseline", lambda: _latest_old(legacy_reports, now),
-    )
     baseline_latest, baseline_truncated = baseline_latest_info
     current_latest = _measure(
         storage, f"{history}_latest_daily", "current",
@@ -241,6 +271,27 @@ def _paired(storage: YdbDatabase, db: Database, legacy_db: Any, legacy_reports: 
         "baseline_latest_matches_current": baseline_latest == current_latest,
         "baseline_latest_truncated_at_1000": baseline_truncated,
     }, sort_keys=True), flush=True)
+
+
+def _write_probe(storage: YdbDatabase, now: datetime, history: str, version: str) -> None:
+    """Same synthetic new report row, before/after the additive index.
+
+    This isolates the index's row-write charge, excluding unchanged publication
+    bookkeeping. Probe rows are future periods, outside every selection above.
+    """
+    for attempt in range(3):
+        start = now + timedelta(days=100 + attempt + (10 if version == 'current' else 0))
+        row = _fixture_row(f'write-probe-{version}-{attempt}', start)
+        query = """
+        DECLARE $kind AS Utf8; DECLARE $start AS Int64; DECLARE $end AS Int64;
+        DECLARE $version AS Utf8; DECLARE $id AS Utf8; DECLARE $payload AS Utf8;
+        UPSERT INTO reports (kind,period_start,period_end,algorithm_version,id,payload,revision)
+        VALUES ($kind,$start,$end,$version,$id,$payload,1);
+        """
+        parameters = {'$kind': row['kind'], '$start': row['period_start'], '$end': row['period_end'],
+                      '$version': row['algorithm_version'], '$id': row['id'], '$payload': row['payload']}
+        _measure(storage, f'{history}_index_insert_{attempt}', version,
+                 lambda q=query, p=parameters: storage.execute(q, p))
 
 
 def _fixture_row(report_id: str, start: datetime) -> dict[str, Any]:
@@ -325,7 +376,8 @@ def main() -> None:
                 legacy_db, legacy_reports = _baseline_types(
                     commit_files["application"], commit_files["reports"], storage,
                 )
-                _paired(storage, db, legacy_db, legacy_reports, datetime.now(UTC), f"{years}y")
+                _paired(storage, db, legacy_db, legacy_reports, datetime.now(UTC), f"{years}y",
+                        upgrade_index=True)
             finally:
                 storage.close()
     else:

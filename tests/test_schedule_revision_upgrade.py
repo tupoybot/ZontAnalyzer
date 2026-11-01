@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -52,7 +53,15 @@ def test_schedule_adopts_legacy_signature_without_reanalysis_and_respects_exact_
         raise AssertionError("signature-format adoption must not reanalyse the period")
 
     monkeypatch.setattr(analysis, "analyze_period", unexpected_analysis)
-    assert run_period_schedule(runtime, analysis, date(2026, 9, 8)) == []
+    with (
+        patch.object(runtime.db, "source_event_revision", wraps=runtime.db.source_event_revision) as event_reads,
+        patch.object(runtime.db, "report", wraps=runtime.db.report) as report_reads,
+    ):
+        assert run_period_schedule(runtime, analysis, date(2026, 9, 8)) == []
+        assert event_reads.call_count == 1
+        # One selection and one optimistic signature-upgrade read; legacy
+        # alternatives reuse the selected payload instead of loading it again.
+        assert report_reads.call_count == 2
     adopted = runtime.db.report(original.id)
     assert adopted is not None
     assert adopted.context["schedule_signature"] == schedule_signature(analysis, period)

@@ -137,6 +137,7 @@ def _measure(service_type: type, db: Database, config: AppConfig, *, years: int,
         "sdk_read_bytes": costs.sdk_read_bytes,
         "sdk_cpu_us": costs.sdk_cpu_us,
         "queries_with_stats": costs.queries_with_stats,
+        "native": costs.native,
         "managed_ru": None,
     }, sort_keys=True), flush=True)
     return digest, result

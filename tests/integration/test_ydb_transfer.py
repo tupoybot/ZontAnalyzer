@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -12,9 +13,48 @@ import ydb  # type: ignore[import-untyped]
 from tests.integration.test_ydb_import import _source
 from tests.ydb_support import make_ydb_database
 from tools.import_sqlite import import_backup
-from tools.transfer_ydb_snapshot import _artifact_manifest, _expected_markers, export_snapshot, verify_snapshot
+from tools.transfer_ydb_snapshot import (
+    _artifact_manifest,
+    _check_schema,
+    _expected_indexes,
+    _expected_markers,
+    export_snapshot,
+    verify_snapshot,
+)
 from tools.upload_ydb_snapshot import upload_snapshot
 from zont_analyzer.adapters.ydb.database import YdbDatabase
+
+
+@pytest.mark.ydb
+@pytest.mark.parametrize("name,columns", [
+    ("by_kind_end", ("kind", "period_start")),
+    ("unknown_read_index", ("kind", "period_end")),
+])
+def test_snapshot_schema_accepts_compatible_old_source_and_rejects_unexpected_indexes(
+    name: str, columns: tuple[str, ...],
+) -> None:
+    ydb_database = make_ydb_database(fresh_schema=True)
+    _check_schema(ydb_database)
+    assert _expected_indexes("reports")["by_kind_end"] == ("kind", "period_end")
+    session = ydb_database.driver.table_client.session().create()
+
+    def alter(**changes) -> None:
+        operation = session.alter_table(ydb_database.path + "/reports", **changes)
+        deadline = time.monotonic() + 30
+        while not operation.ready and time.monotonic() < deadline:
+            time.sleep(0.1)
+            operation = operation.get()
+        assert operation.ready, "Disposable test index change did not finish"
+
+    try:
+        alter(drop_indexes=["by_kind_end"])
+        _check_schema(ydb_database)
+        alter(add_indexes=[ydb.TableIndex(name).with_global_index().with_index_columns(*columns)])
+        with pytest.raises(ValueError, match="YDB index or TTL mismatch: reports"):
+            _check_schema(ydb_database)
+    finally:
+        session.delete()
+        ydb_database.close()
 
 
 @pytest.mark.ydb

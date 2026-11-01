@@ -11,11 +11,14 @@ import json
 from bisect import bisect_right
 from collections.abc import Callable
 from dataclasses import asdict
+from dataclasses import fields as dataclass_fields
 from datetime import UTC, date, datetime, time, timedelta
 from functools import wraps
 from hashlib import sha256
 from typing import Any, Concatenate, ParamSpec, TypeVar, cast
 from zoneinfo import ZoneInfo
+
+from pydantic import TypeAdapter, ValidationError
 
 from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.analytics.dhw import parse_opentherm_flags
@@ -43,6 +46,42 @@ FRESHNESS = timedelta(minutes=15)
 P = ParamSpec('P')
 R = TypeVar('R')
 Service = TypeVar('Service', bound='GasService')
+_MODEL_ADAPTER = TypeAdapter(GasModel)
+
+
+def _cached_model(encoded: str | None, inputs: dict[str, Any]) -> GasModel | None:
+    """Read only complete, typed snapshots matching the freshly checked inputs."""
+    if not encoded:
+        return None
+    try:
+        snapshot = json.loads(encoded)
+        if not isinstance(snapshot, dict) or set(snapshot) != {*inputs, 'model'}:
+            return None
+        if _json({key: snapshot[key] for key in inputs}) != _json(inputs):
+            return None
+        payload = snapshot['model']
+        if not isinstance(payload, dict) or set(payload) != {field.name for field in dataclass_fields(GasModel)}:
+            return None
+        # JSON-mode strict validation restores tuple and timezone-aware datetime
+        # fields while rejecting coercions such as strings into numeric rates.
+        model = _MODEL_ADAPTER.validate_json(json.dumps(payload, allow_nan=False), strict=True)
+        count = len(EDGES) - 1
+        if model.version != ALGORITHM_VERSION or model.bin_edges != EDGES:
+            return None
+        if len(model.rates_m3_per_minute) != count or any(
+            values and len(values) != count for values in (
+                model.support_minutes, model.support_intervals,
+                model.rate_lower_m3_per_minute, model.rate_upper_m3_per_minute,
+            )
+        ):
+            return None
+        if any(index < 0 or index >= count for index in (*model.extrapolated_bins, *model.low_support_bins)):
+            return None
+        if model.calibration_end is not None and model.calibration_end.utcoffset() is None:
+            return None
+        return model
+    except (TypeError, ValueError, ValidationError):
+        return None
 
 
 def _validated(method: Callable[Concatenate[Service, P], R]) -> Callable[Concatenate[Service, P], R]:
@@ -459,15 +498,17 @@ class GasService:
             fields = {k: v for k, v in historical.items() if k in self.fields}
         key = _hash([VERSION, ALGORITHM_VERSION, model_readings, fields, [asdict(i) for i in intervals], before])
         if key not in self._models:
-            values = {k: v.get('value') for k, v in fields.items()}
-            model = fit_intervals(intervals, passport_min_m3_per_hour=values.get('gas_min_m3h'),
-                                  passport_max_m3_per_hour=values.get('gas_max_m3h'),
-                                  has_gas_stove=values.get('has_gas_stove'))
+            inputs = {'version': key, 'algorithm': VERSION, 'readings': model_readings,
+                      'profile': fields, 'intervals': [asdict(i) for i in intervals], 'before': before}
+            model = _cached_model(self.db.get_app_meta(f'gas-model:{key}'), inputs)
+            if model is None:
+                values = {k: v.get('value') for k, v in fields.items()}
+                model = fit_intervals(intervals, passport_min_m3_per_hour=values.get('gas_min_m3h'),
+                                      passport_max_m3_per_hour=values.get('gas_max_m3h'),
+                                      has_gas_stove=values.get('has_gas_stove'))
+                self._assert_input_revision()
+                self.db.set_app_meta(f'gas-model:{key}', _json({**inputs, 'model': asdict(model)}))
             self._models[key] = model
-            snapshot = {'version': key, 'algorithm': VERSION, 'model': asdict(model),
-                        'readings': model_readings, 'profile': fields,
-                        'intervals': [asdict(i) for i in intervals], 'before': before}
-            self.db.set_app_meta(f'gas-model:{key}', _json(snapshot))
         result = key, self._models[key], intervals
         self._model_results[before] = result
         return result

@@ -823,7 +823,7 @@ class AnalysisService:
         reliability_inputs: _ComparisonReliabilityInputs | None = None,
     ) -> Report:
         report_id = self.report_id_for(kind, start)
-        previous_report = self.db.report(report_id)
+        previous_report: Report | None = None
         ai_used = False
         reasoning = reasoning_payload(AnalysisResult(summary=""))
         control_context.update(reasoning_context(
@@ -904,6 +904,7 @@ class AnalysisService:
             )
         )
         if should_use_ai:
+            previous_report = self.db.report(report_id)
             assert self.analyst is not None
             try:
                 result = self.analyst.analyze(

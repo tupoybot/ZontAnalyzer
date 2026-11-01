@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
@@ -62,12 +63,20 @@ def scheduled_periods(analysis: AnalysisService, first: date, today: date) -> li
     return priorities + [item for item in ordered if item not in priorities]
 
 
+@dataclass(frozen=True)
+class _SignatureInputs:
+    previous: Report | None
+    source_event_revision: str
+
+
 def schedule_signature(
     analysis: AnalysisService, period: Period, *, legacy_revision: bool = False, legacy_ai_config: bool = False,
     legacy_source_events: bool = False,
+    _inputs: _SignatureInputs | None = None,
 ) -> str:
     period_payload = period.model_dump(mode="json")
-    previous = analysis.db.report(analysis.report_id_for(period.kind, period.start))
+    previous = (_inputs.previous if _inputs is not None else
+                analysis.db.report(analysis.report_id_for(period.kind, period.start)))
     old_period = previous.context.get("period", {}) if previous else {}
     # A switch from an IANA name to ZONT's equivalent fixed offset changes
     # provenance, not the already analysed calendar interval. Preserve its key.
@@ -98,7 +107,8 @@ def schedule_signature(
         ),
     }
     if not legacy_source_events:
-        payload["source_event_revision"] = analysis.db.source_event_revision(period.observed_end)
+        payload["source_event_revision"] = (_inputs.source_event_revision if _inputs is not None else
+                                            analysis.db.source_event_revision(period.observed_end))
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -142,14 +152,15 @@ def run_period_schedule(
     results: list[dict[str, Any]] = []
     for period in scheduled_periods(analysis, first, today):
         identifier = analysis.report_id_for(period.kind, period.start)
-        signature = schedule_signature(analysis, period)
         previous = runtime.db.report(identifier)
+        inputs = _SignatureInputs(previous, runtime.db.source_event_revision(period.observed_end))
+        signature = schedule_signature(analysis, period, _inputs=inputs)
         if previous is not None:
             from zont_analyzer.application.pilot import _report_source_event_revision
 
             stored_event_revision = _report_source_event_revision(runtime.db, previous)
             event_revision_unchanged = (
-                stored_event_revision == runtime.db.source_event_revision(period.observed_end)
+                stored_event_revision == inputs.source_event_revision
             )
         else:
             event_revision_unchanged = False
@@ -157,15 +168,15 @@ def run_period_schedule(
             previous is not None and not _already_current(previous, period, signature)
             and event_revision_unchanged
             and previous.context.get("schedule_signature") in {
-                schedule_signature(analysis, period, legacy_revision=True),
-                schedule_signature(analysis, period, legacy_ai_config=True),
-                schedule_signature(analysis, period, legacy_revision=True, legacy_ai_config=True),
-                schedule_signature(analysis, period, legacy_source_events=True),
+                schedule_signature(analysis, period, legacy_revision=True, _inputs=inputs),
+                schedule_signature(analysis, period, legacy_ai_config=True, _inputs=inputs),
+                schedule_signature(analysis, period, legacy_revision=True, legacy_ai_config=True, _inputs=inputs),
+                schedule_signature(analysis, period, legacy_source_events=True, _inputs=inputs),
                 schedule_signature(
-                    analysis, period, legacy_revision=True, legacy_source_events=True
+                    analysis, period, legacy_revision=True, legacy_source_events=True, _inputs=inputs,
                 ),
                 schedule_signature(
-                    analysis, period, legacy_ai_config=True, legacy_source_events=True
+                    analysis, period, legacy_ai_config=True, legacy_source_events=True, _inputs=inputs,
                 ),
                 schedule_signature(
                     analysis,
@@ -173,6 +184,7 @@ def run_period_schedule(
                     legacy_revision=True,
                     legacy_ai_config=True,
                     legacy_source_events=True,
+                    _inputs=inputs,
                 ),
             }
         ):
