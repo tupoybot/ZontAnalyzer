@@ -61,7 +61,7 @@ from zont_analyzer.reports import render_text
 logger = logging.getLogger(__name__)
 
 
-CALCULATION_VERSION = "stage9-reliability-v2"
+CALCULATION_VERSION = "temperature-quality-v3"
 
 
 def _samples_in_window(
@@ -458,7 +458,11 @@ class AnalysisService:
             if quality_series and temperature_series and quality_series["id"] == temperature_series["id"]
             else self.db.fetch_samples(int(quality_series["id"]), start, end) if quality_series else burner_samples
         )
-        quality = assess_quality(quality_samples, start, end)
+        quality = assess_quality(
+            quality_samples, start, end,
+            expected_interval_seconds=(600 if quality_series
+                                       and quality_series["source_type"] == "z3k_radio_sensor" else None),
+        )
         target_samples = (self.db.fetch_numeric_observations(
             int(target_series["id"]), start, end, include_previous=True,
         ) if target_series else [])
@@ -730,7 +734,11 @@ class AnalysisService:
                 )
             )
         if dhw_temperature_series and boiler_state_series:
-            dhw_quality = assess_quality(dhw_temperature_samples, start, end)
+            dhw_quality = assess_quality(
+                dhw_temperature_samples, start, end,
+                expected_interval_seconds=(600 if dhw_temperature_series
+                                           and dhw_temperature_series["source_type"] == "z3k_radio_sensor" else None),
+            )
             dhw_analysis = analyze_dhw_interactions(
                 period_id=period_id,
                 period_start=start,
@@ -890,10 +898,16 @@ class AnalysisService:
             control_context.get("temporal_evidence", {}).pop("heating_source_windows", None)
         if self.db.source_revision() != source_revision:
             raise ValueError("inputs changed while report was calculated")
+        # A long-period report can explain recorded outages and the limits of
+        # incomplete evidence. Data quality constrains its conclusions, rather
+        # than hiding the whole period. Empty periods still avoid paid calls.
+        long_period_evidence = kind in {"weekly", "monthly", "seasonal"} and (
+            quality.sample_count >= 2 or bool(events)
+        )
         should_use_ai = (
             use_ai
             and self.analyst is not None
-            and (force_ai or quality.score >= self.config.analysis.minimum_quality_score)
+            and (force_ai or long_period_evidence or quality.score >= self.config.analysis.minimum_quality_score)
             and (
                 force_ai
                 or kind in {"weekly", "monthly", "seasonal"}
