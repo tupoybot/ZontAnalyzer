@@ -164,7 +164,7 @@ def _seed(db: Database, start: datetime, end: datetime) -> int:
 def _clear_derived(db: Database) -> None:
     rows = db.storage.execute('SELECT key FROM app_meta;')[0].rows
     keys = [str(row.key) for row in rows if str(row.key).startswith((
-        'gas-exposure:', 'gas-model:', 'telemetry-period-revision:v2:',
+        'gas-exposure:', 'gas-model:', 'gas-statistic:', 'telemetry-period-revision:v2:',
     ))]
     for offset in range(0, len(keys), 128):
         selected = keys[offset:offset + 128]
@@ -195,10 +195,7 @@ def _run(service_type: type, db: Database, config: AppConfig,
         begun = time.perf_counter()
         result = _context(service_type, db, config, start, end)
         elapsed = time.perf_counter() - begun
-    semantic = {key: result.get(key) for key in (
-        'status', 'volume_m3', 'lower_m3', 'upper_m3', 'coverage_pct', 'model_version',
-        'measured_intervals', 'purpose_split', 'savings_status',
-    )}
+    semantic = result
     record = {
         'years': years, 'run': label, 'elapsed_seconds': round(elapsed, 3),
         'queries': cost.queries, 'result_rows': cost.result_rows,

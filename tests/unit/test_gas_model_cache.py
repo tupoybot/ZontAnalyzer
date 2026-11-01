@@ -23,6 +23,11 @@ def service(metadata: dict[str, str]) -> GasService:
     result._pending_exposures = {}
     result._model_results = {}
     result._models = {}
+    result._intervals = {}
+    result.timezone = 'UTC'
+    result.state = None
+    result.series = []
+    result.config = SimpleNamespace(analysis=SimpleNamespace(modulation_capability_profile='unknown'))
     result.readings = []
     result.fields = {}
     result.device_id = None

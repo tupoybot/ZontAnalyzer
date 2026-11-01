@@ -263,14 +263,95 @@ def test_post_midnight_calibration_change_targets_only_adjacent_reports(tmp_path
     assert result["pending_reports"] == 1  # Report windows include a 15-minute edge.
     assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 0
 
-    # A point inside the final boundary day can change the shared model,
-    # including gas context in reports outside that sample's own day.
+    # An exact marker inside calibration does not change the effective model
+    # when its underlying telemetry is unchanged.
     inside = int(datetime(2026, 8, 2, 19, 30, tzinfo=UTC).timestamp())
     _record_change(runtime.db, "telemetry-gas", "2026-08-02T19",
                    {"calibration": True, "change_start": inside, "change_end": inside})
     result = publication.publish_reports(runtime, batch_size=1)
     assert result["rendered_reports"] == 1
+    assert result["pending_reports"] == 1
+
+
+@pytest.mark.ydb
+def test_unchanged_calibration_model_uses_partial_index_and_one_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zont_analyzer.application.owner_context import OwnerContextStore
+
+    runtime = _runtime(tmp_path)
+    reports = _daily_reports(runtime, 4)
+    owner = OwnerContextStore(runtime.db)
+    owner.update_gas(reports[0].id, {"value_m3": "100"})
+    owner.update_gas(reports[1].id, {"value_m3": "102"})
+    publication.publish_reports(runtime)
+    previous = PublicationRepository(runtime.db.storage).load_meta()["gas_model_version"]
+    at = reports[0].period_start + timedelta(hours=12)
+    changed = int(at.timestamp())
+    _record_change(runtime.db, "telemetry-gas", at.strftime("%Y-%m-%dT%H"),
+                   {"calibration": True, "change_start": changed, "change_end": changed})
+    original = GasService.__init__
+    services = []
+
+    def init(self, *args, **kwargs):
+        services.append(self)
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(GasService, "__init__", init)
+    monkeypatch.setattr(PublicationRepository, "load", lambda *args: pytest.fail("full archive load"))
+    result = publication.publish_reports(runtime, batch_size=1)
+    assert result["rendered_reports"] == 1
+    assert result["pending_reports"] == 0
+    assert len(services) == 1
+    assert PublicationRepository(runtime.db.storage).load_meta()["gas_model_version"] == previous
+    monkeypatch.setattr(GasService, "model", lambda *args: pytest.fail("model on idle poll"))
+    assert publication.publish_reports(runtime)["rendered_reports"] == 0
+
+
+@pytest.mark.ydb
+def test_missing_model_checkpoint_stays_broad_and_does_not_swallow_newer_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zont_analyzer.application.owner_context import OwnerContextStore
+
+    runtime = _runtime(tmp_path)
+    reports = _daily_reports(runtime, 4)
+    owner = OwnerContextStore(runtime.db)
+    owner.update_gas(reports[0].id, {"value_m3": "100"})
+    owner.update_gas(reports[1].id, {"value_m3": "102"})
+    publication.publish_reports(runtime)
+    runtime.db.storage.execute("DELETE FROM metadata WHERE name='publication:gas_model_version';")
+    at = reports[0].period_start + timedelta(hours=12)
+
+    def marker(moment):
+        changed = int(moment.timestamp())
+        _record_change(runtime.db, "telemetry-gas", moment.strftime("%Y-%m-%dT%H"),
+                       {"calibration": True, "change_start": changed, "change_end": changed})
+
+    marker(at)
+    upper = runtime.db.source_revision()
+    original = GasService.model
+    injected = False
+
+    def model(self, *args, **kwargs):
+        nonlocal injected
+        result = original(self, *args, **kwargs)
+        if not injected:
+            injected = True
+            marker(at + timedelta(hours=1))
+        return result
+
+    monkeypatch.setattr(GasService, "model", model)
+    result = publication.publish_reports(runtime, batch_size=1)
     assert result["pending_reports"] == 3
+    meta = PublicationRepository(runtime.db.storage).load_meta()
+    assert meta.get("gas_model_version", "") == ""
+    assert meta["gas_model_previous_version"] == ""
+    assert meta["gas_model_refresh_reason"] == "calibration_model_checkpoint_missing"
+    assert int(meta["checkpoint"]) == upper < runtime.db.source_revision()
+    assert publication.publish_reports(runtime, batch_size=8)["rendered_reports"] == 4
+    assert PublicationRepository(runtime.db.storage).load_meta()["gas_model_version"]
+    assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
 def test_exact_calibration_range_and_legacy_hour_with_fractional_timezone() -> None:

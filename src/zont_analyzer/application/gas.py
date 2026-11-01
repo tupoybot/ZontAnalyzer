@@ -47,6 +47,28 @@ P = ParamSpec('P')
 R = TypeVar('R')
 Service = TypeVar('Service', bound='GasService')
 _MODEL_ADAPTER = TypeAdapter(GasModel)
+_INTERVAL_ADAPTER = TypeAdapter(GasInterval)
+_WINDOW_SCALARS = (
+    'minutes', 'flame_minutes', 'observed_minutes', 'unknown_modulation_minutes',
+    'heating_minutes', 'dhw_minutes', 'ambiguous_purpose_minutes',
+    'heating_unknown_modulation_minutes', 'dhw_unknown_modulation_minutes',
+    'ambiguous_purpose_unknown_modulation_minutes', 'weather_hours', 'degree_hours',
+    'temperature_hours', 'target_hours', 'target_degree_hours', 'room_hours', 'room_degree_hours',
+)
+_WINDOW_VECTORS = ('bin_minutes', 'heating_bin_minutes', 'dhw_bin_minutes', 'ambiguous_purpose_bin_minutes')
+
+
+def _read_snapshot(encoded: str | None) -> dict[str, Any] | None:
+    try:
+        value = json.loads(encoded or 'null')
+        json.dumps(value, allow_nan=False)
+        if (isinstance(value, dict) and set(value) == {'revision', 'dependency', 'value', 'checksum'}
+                and isinstance(value['revision'], str) and isinstance(value['dependency'], str)
+                and value['checksum'] == _hash(value['value'])):
+            return value
+    except (ValueError, TypeError):
+        pass
+    return None
 
 
 def _cached_model(encoded: str | None, inputs: dict[str, Any]) -> GasModel | None:
@@ -156,6 +178,7 @@ class GasService:
         self._model_results: dict[datetime | None, tuple[str, GasModel, list[GasInterval]]] = {}
         self._intervals: dict[datetime | None, list[GasInterval]] = {}
         self._slice_revisions: dict[tuple[datetime, datetime], str] = {}
+        self._range_revisions: dict[tuple[datetime, datetime], str] = {}
         self._pending_exposures: dict[str, str] = {}
         self._calculation_depth = 0
         self._cost_slices: dict[
@@ -296,21 +319,63 @@ class GasService:
         key = (start, end)
         if key in self._windows:
             return self._windows[key]
+        cache_key = self._statistics_key('window', start, end)
+        cached = _read_snapshot(self.db.get_app_meta(cache_key))
+        if cached:
+            value = cached['value']
+            if (not isinstance(value, dict) or set(value) != {*_WINDOW_SCALARS, *_WINDOW_VECTORS}
+                    or any(type(value[name]) not in (int, float) for name in _WINDOW_SCALARS)
+                    or any(not isinstance(value[name], list) or len(value[name]) != len(EDGES)-1
+                           or any(type(number) not in (int, float) for number in value[name])
+                           for name in _WINDOW_VECTORS)):
+                cached = None
+        if cached and cached['revision'] == self._input_revision:
+            self._windows[key] = cached['value']
+            return self._windows[key]
+        dependency = self._statistics_dependency(start, end, held=True)
+        if cached and cached['dependency'] == dependency:
+            result = cast(dict[str, Any], cached['value'])
+            self._save_statistic(cache_key, dependency, result)
+            self._windows[key] = result
+            return result
+        self._prefetch_revisions([(start, end)])
         pieces = []
         for left, right in self._slice_ranges(start, end):
             pieces.append(self._slice(left, right))
-        result: dict[str, Any] = {k: sum(p[k] for p in pieces) for k in (
-            'minutes', 'flame_minutes', 'observed_minutes', 'unknown_modulation_minutes',
-            'heating_minutes', 'dhw_minutes', 'ambiguous_purpose_minutes',
-            'heating_unknown_modulation_minutes', 'dhw_unknown_modulation_minutes',
-            'ambiguous_purpose_unknown_modulation_minutes', 'weather_hours', 'degree_hours',
-            'temperature_hours', 'target_hours', 'target_degree_hours', 'room_hours', 'room_degree_hours',
-        )}
-        result['bin_minutes'] = [sum(p['bin_minutes'][i] for p in pieces) for i in range(4)]
-        for field in ('heating_bin_minutes', 'dhw_bin_minutes', 'ambiguous_purpose_bin_minutes'):
+        result = {k: sum(p[k] for p in pieces) for k in _WINDOW_SCALARS}
+        for field in _WINDOW_VECTORS:
             result[field] = [sum(p[field][i] for p in pieces) for i in range(4)]
         self._windows[key] = result
+        self._save_statistic(cache_key, dependency, result)
         return result
+
+    def _statistics_key(self, kind: str, start: datetime, end: datetime, extra: Any = None) -> str:
+        return 'gas-statistic:v1:' + _hash([
+            kind, EXPOSURE_CACHE_VERSION, EXPOSURE_ALGORITHM_VERSION, self.timezone,
+            self.state, self.series, self.config.analysis.modulation_capability_profile, start, end, extra,
+        ])
+
+    def _statistics_dependency(self, start: datetime, end: datetime, *, held: bool = False) -> str:
+        bounds = (start - FRESHNESS, end + FRESHNESS)
+        if bounds not in self._range_revisions:
+            self._range_revisions.update(self.db.telemetry_day_revisions([bounds]))
+        revision = self._range_revisions[bounds]
+        previous = {}
+        if held:
+            for role in ('outdoor_temperature', 'target_temperature', 'control_indoor_temperature'):
+                source = self._unique(role)
+                if source and is_setpoint_series(source['source_type'], source['metric_key']):
+                    series_id = int(source['id'])
+                    previous[series_id] = self.db.fetch_numeric_observations(
+                        series_id, start, start, include_previous=True,
+                    )
+        return _hash([revision, previous])
+
+    def _save_statistic(self, key: str, dependency: str, value: Any) -> None:
+        self._pending_exposures[key] = _json({
+            'revision': self._input_revision, 'dependency': dependency,
+            'value': value, 'checksum': _hash(value),
+        })
 
     def _slice_ranges(self, start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
         ranges = []
@@ -445,19 +510,25 @@ class GasService:
         self._prefetch_revisions([])
         if before in self._intervals:
             return self._intervals[before]
-        windows: list[tuple[datetime, datetime]] = []
+        candidates = []
         for first, last in zip(self.readings, self.readings[1:], strict=False):
             if first['segment'] != last['segment']:
                 continue
             start = _utc(date.fromisoformat(first['day']), self.timezone, 12)
             end = _utc(date.fromisoformat(last['day']), self.timezone, 12)
-            if (before and end + timedelta(hours=12) > before) or end <= start:
+            if ((before and end + timedelta(hours=12) > before) or end <= start
+                    or float(last['value_m3']) < float(first['value_m3'])):
                 continue
-            if float(last['value_m3']) < float(first['value_m3']):
-                continue
-            windows.extend(((start, end), (start-timedelta(hours=12), start+timedelta(hours=12)),
-                            (end-timedelta(hours=12), end+timedelta(hours=12))))
-        self._prefetch_revisions(windows)
+            cache_key = self._statistics_key('interval', start, end, [first, last])
+            candidates.append((cache_key, start, end))
+        cached_values = self.db.get_app_meta_many([key for key, _, _ in candidates])
+        stale_bounds = []
+        for key, start, end in candidates:
+            cached = _read_snapshot(cached_values.get(key))
+            if not cached or cached['revision'] != self._input_revision:
+                stale_bounds.append((start-timedelta(hours=12)-FRESHNESS, end+timedelta(hours=12)+FRESHNESS))
+        if stale_bounds:
+            self._range_revisions.update(self.db.telemetry_day_revisions(stale_bounds))
         intervals = []
         for first, last in zip(self.readings, self.readings[1:], strict=False):
             if first['segment'] != last['segment']:
@@ -469,6 +540,29 @@ class GasService:
             volume = float(last['value_m3']) - float(first['value_m3'])
             if volume < 0 or end <= start:
                 continue
+            cache_key = self._statistics_key('interval', start, end, [first, last])
+            cached = _read_snapshot(cached_values.get(cache_key))
+            interval = None
+            if cached:
+                try:
+                    if set(cached['value']) != {field.name for field in dataclass_fields(GasInterval)}:
+                        raise ValueError('incomplete interval snapshot')
+                    interval = _INTERVAL_ADAPTER.validate_json(_json(cached['value']), strict=True)
+                    if (interval.start != start or interval.end != end or interval.volume_m3 != volume
+                            or len(interval.features) != len(EDGES)-1):
+                        interval = None
+                except (ValueError, TypeError):
+                    pass
+            if interval is not None and cached and cached['revision'] == self._input_revision:
+                intervals.append(interval)
+                continue
+            dependency = self._statistics_dependency(
+                start-timedelta(hours=12), end+timedelta(hours=12),
+            )
+            if interval is not None and cached and cached['dependency'] == dependency:
+                intervals.append(interval)
+                self._save_statistic(cache_key, dependency, asdict(interval))
+                continue
             w = self.window(start, end)
             # Worst observed boundary-day burner exposure, rather than pretending
             # the noon convention is a known reading instant.
@@ -476,9 +570,11 @@ class GasService:
             boundary2 = self.window(end-timedelta(hours=12), end+timedelta(hours=12))
             mean = volume/w['flame_minutes'] if w['flame_minutes'] > 0 else 0
             uncertainty = mean * (boundary['flame_minutes'] + boundary2['flame_minutes'])
-            intervals.append(GasInterval(start, end, volume, tuple(w['bin_minutes']), w['flame_minutes'],
-                                         w['observed_minutes'], w['observed_minutes']/w['minutes'],
-                                         w['unknown_modulation_minutes'], uncertainty))
+            interval = GasInterval(start, end, volume, tuple(w['bin_minutes']), w['flame_minutes'],
+                                   w['observed_minutes'], w['observed_minutes']/w['minutes'],
+                                   w['unknown_modulation_minutes'], uncertainty)
+            intervals.append(interval)
+            self._save_statistic(cache_key, dependency, asdict(interval))
         self._intervals[before] = intervals
         return intervals
 
@@ -489,13 +585,34 @@ class GasService:
         self._prefetch_revisions([])
         if before in self._model_results:
             return self._model_results[before]
-        intervals = self.intervals(before=before)
         model_readings = [r for r in self.readings if before is None or
                           _utc(date.fromisoformat(r['day'])+timedelta(days=1), self.timezone) <= before]
         fields = self.fields
         if before and self.device_id and fields:
             historical = OwnerContextStore(self.db).profile(self.device_id, before)['fields']
             fields = {k: v for k, v in historical.items() if k in self.fields}
+        pointer_key = self._statistics_key('model-inputs', before or datetime.min.replace(tzinfo=UTC),
+                                           before or datetime.min.replace(tzinfo=UTC),
+                                           [VERSION, ALGORITHM_VERSION, model_readings, fields, before])
+        pointer = _read_snapshot(self.db.get_app_meta(pointer_key))
+        if pointer and pointer['revision'] == self._input_revision and isinstance(pointer['value'], str):
+            try:
+                snapshot = json.loads(self.db.get_app_meta('gas-model:' + pointer['value']) or 'null')
+                intervals = [_INTERVAL_ADAPTER.validate_json(_json(item), strict=True)
+                             for item in snapshot['intervals']]
+                key = _hash([VERSION, ALGORITHM_VERSION, model_readings, fields,
+                             [asdict(i) for i in intervals], before])
+                inputs = {'version': key, 'algorithm': VERSION, 'readings': model_readings,
+                          'profile': fields, 'intervals': [asdict(i) for i in intervals], 'before': before}
+                model = _cached_model(_json(snapshot), inputs)
+                if key == pointer['value'] and model is not None:
+                    self._intervals[before] = intervals
+                    self._models[key] = model
+                    self._model_results[before] = key, model, intervals
+                    return self._model_results[before]
+            except (ValueError, TypeError, KeyError):
+                pass
+        intervals = self.intervals(before=before)
         key = _hash([VERSION, ALGORITHM_VERSION, model_readings, fields, [asdict(i) for i in intervals], before])
         if key not in self._models:
             inputs = {'version': key, 'algorithm': VERSION, 'readings': model_readings,
@@ -511,6 +628,7 @@ class GasService:
             self._models[key] = model
         result = key, self._models[key], intervals
         self._model_results[before] = result
+        self._save_statistic(pointer_key, '', key)
         return result
 
     @_validated
@@ -520,7 +638,6 @@ class GasService:
         from zont_analyzer.analytics.gas import estimate_exposure
 
         version, model, intervals = self.model()
-        self._prefetch_revisions([(start, end)])
         w = self.window(start, end)
         exposure = self._exposure(w)
         estimate = estimate_exposure(exposure, model, start=start, end=end)
