@@ -23,23 +23,26 @@ from tools.transfer_ydb_snapshot import (
 )
 from tools.upload_ydb_snapshot import upload_snapshot
 from zont_analyzer.adapters.ydb.database import YdbDatabase
+from zont_analyzer.adapters.ydb.read_indexes import ensure_read_indexes
 
 
 @pytest.mark.ydb
-@pytest.mark.parametrize("name,columns", [
-    ("by_kind_end", ("kind", "period_start")),
-    ("unknown_read_index", ("kind", "period_end")),
+@pytest.mark.parametrize("table,name,columns", [
+    ("reports", "by_kind_end", ("kind", "period_start")),
+    ("reports", "unknown_read_index", ("kind", "period_end")),
+    ("coverage", "by_end", ("device_id", "data_type", "started_at")),
 ])
 def test_snapshot_schema_accepts_compatible_old_source_and_rejects_unexpected_indexes(
-    name: str, columns: tuple[str, ...],
+    table: str, name: str, columns: tuple[str, ...],
 ) -> None:
     ydb_database = make_ydb_database(fresh_schema=True)
     _check_schema(ydb_database)
     assert _expected_indexes("reports")["by_kind_end"] == ("kind", "period_end")
+    assert _expected_indexes("coverage")["by_end"] == ("device_id", "data_type", "ended_at")
     session = ydb_database.driver.table_client.session().create()
 
     def alter(**changes) -> None:
-        operation = session.alter_table(ydb_database.path + "/reports", **changes)
+        operation = session.alter_table(ydb_database.path + "/" + table, **changes)
         deadline = time.monotonic() + 30
         while not operation.ready and time.monotonic() < deadline:
             time.sleep(0.1)
@@ -47,11 +50,14 @@ def test_snapshot_schema_accepts_compatible_old_source_and_rejects_unexpected_in
         assert operation.ready, "Disposable test index change did not finish"
 
     try:
-        alter(drop_indexes=["by_kind_end"])
+        alter(drop_indexes=["by_end" if table == "coverage" else "by_kind_end"])
         _check_schema(ydb_database)
         alter(add_indexes=[ydb.TableIndex(name).with_global_index().with_index_columns(*columns)])
-        with pytest.raises(ValueError, match="YDB index or TTL mismatch: reports"):
+        with pytest.raises(ValueError, match=f"YDB index or TTL mismatch: {table}"):
             _check_schema(ydb_database)
+        if name in {"by_kind_end", "by_end"}:
+            with pytest.raises(ValueError, match=f"incompatible {table}.{name} index"):
+                ensure_read_indexes(ydb_database)
     finally:
         session.delete()
         ydb_database.close()

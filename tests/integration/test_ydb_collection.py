@@ -54,6 +54,39 @@ def test_unavailable_archive_gap_does_not_call_source(tmp_path: Path) -> None:
 
 
 @pytest.mark.ydb
+def test_recent_replay_respects_checked_long_straddling_coverage(tmp_path: Path) -> None:
+    db = make_database(tmp_path)
+    db.save_devices([{"id": "fixture"}])
+    config = AppConfig()
+    config.zont.history_data_types = ["temperature"]
+    client = Mock()
+    client.load_history.return_value = [{"device_id": "fixture", "ok": True}]
+    client.normalize_history.return_value = ([], {})
+    client.load_events.return_value = []
+    client.normalize_events.return_value = []
+    service = CollectionService(db, client, config)
+    end = datetime(2026, 1, 2, tzinfo=UTC)
+    start = end - timedelta(minutes=30)
+    for kind in ("temperature", "raw_events"):
+        db.telemetry.write_window(device_id="fixture", data_type=kind,
+                                  start=end - timedelta(days=3650), end=end + timedelta(days=365), state="empty")
+    checked_after = datetime.now(UTC) - timedelta(minutes=1)
+    result = service.ensure_period(start, end, now=end, replay_recent=True,
+                                   replay_checked_after=checked_after)
+    assert result["complete"] and result["requests"] == 0
+    client.load_history.assert_not_called()
+    client.load_events.assert_not_called()
+    # A newer fixed poll must replay the recent window despite the same old
+    # start bound, then retain progress when that same poll is retried.
+    db.storage.execute("UPDATE coverage SET checked_at=0 WHERE device_id='fixture';")
+    next_poll = datetime.now(UTC)
+    assert service.ensure_period(start, end, now=end, replay_recent=True,
+                                 replay_checked_after=next_poll)["requests"] == 2
+    assert service.ensure_period(start, end, now=end, replay_recent=True,
+                                 replay_checked_after=next_poll)["requests"] == 0
+
+
+@pytest.mark.ydb
 def test_oversized_response_learns_bound_across_invocations(tmp_path: Path) -> None:
     from zont_analyzer.domain import TelemetryPoint
 

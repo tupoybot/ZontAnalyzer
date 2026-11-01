@@ -97,7 +97,8 @@ class CollectionService:
                             rows = self.db.storage.execute(
                                 "DECLARE $device AS Utf8; DECLARE $type AS Utf8; "
                                 "DECLARE $since AS Int64; DECLARE $start AS Int64; DECLARE $end AS Int64; "
-                                "SELECT started_at,ended_at FROM coverage WHERE device_id=$device AND data_type=$type "
+                                "SELECT started_at,ended_at FROM coverage VIEW by_end "
+                                "WHERE device_id=$device AND data_type=$type "
                                 "AND started_at < $end AND ended_at > $start AND checked_at >= $since "
                                 "AND (state='complete' OR state='empty') ORDER BY started_at;",
                                 {"$device": str(device["id"]), "$type": coverage_type,

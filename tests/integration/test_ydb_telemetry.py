@@ -88,6 +88,34 @@ def test_coverage_empty_errors_and_source_horizon(ydb_database: YdbDatabase) -> 
 
 
 @pytest.mark.ydb
+def test_coverage_end_index_preserves_long_straddlers_and_start_order_pagination(
+    ydb_database: YdbDatabase,
+) -> None:
+    repo = TelemetryRepository(ydb_database)
+    windows = [
+        (START - timedelta(days=3650), START + timedelta(days=365), "complete"),
+        (START - timedelta(hours=1), START + timedelta(minutes=10), "failed"),
+        (START - timedelta(hours=1), START + timedelta(minutes=20), "empty"),
+        (START + timedelta(minutes=30), START + timedelta(minutes=45), "complete"),
+        (START - timedelta(hours=1), START, "empty"),
+        (START + timedelta(hours=1), START + timedelta(hours=2), "empty"),
+    ]
+    for left, right, state in windows:
+        repo.write_window(device_id="fixture", data_type="history", start=left, end=right, state=state)
+    expected = [(int(left.timestamp()), int(right.timestamp()), state) for left, right, state in windows[:4]]
+    observed = []
+    after = None
+    while True:
+        page = repo.coverage("fixture", "history", START, START + timedelta(hours=1), after=after, limit=2)
+        observed.extend((row["started_at"], row["ended_at"], row["state"]) for row in page)
+        if len(page) < 2:
+            break
+        after = page[-1]["started_at"], page[-1]["ended_at"]
+    assert observed == expected
+    assert repo.missing_intervals("fixture", "history", START, START + timedelta(hours=1), now=START) == []
+
+
+@pytest.mark.ydb
 def test_concurrent_series_identity_and_late_data(ydb_database: YdbDatabase) -> None:
     repo = TelemetryRepository(ydb_database)
 
