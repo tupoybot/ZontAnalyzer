@@ -22,6 +22,7 @@ from urllib.parse import quote
 import ydb  # type: ignore[import-untyped]
 
 from zont_analyzer.adapters.ydb.database import Transaction, YdbConfig, YdbDatabase
+from zont_analyzer.adapters.ydb.sample_bounds import invalidate
 from zont_analyzer.adapters.ydb.schema import TABLES
 from zont_analyzer.adapters.ydb.telemetry import next_id
 from zont_analyzer.domain import AnalysisResult, Report
@@ -278,6 +279,8 @@ def _upsert(tx: Transaction, table: str, row: Mapping[str, Any]) -> None:
 
 
 def _delete(tx: Transaction, table: str, key: Mapping[str, Any]) -> None:
+    if table == "telemetry_samples":
+        invalidate(tx)
     columns = _columns(table)
     where = " AND ".join(f"{name}=${name}" for name in key)
     declarations = " ".join(f"DECLARE ${name} AS {columns[name]};" for name in key)
@@ -360,6 +363,7 @@ def _import_samples_page(db: YdbDatabase, page: list[dict[str, Any]],
             changed.append(item)
         if not changed:
             return 0
+        invalidate(tx)
         row_type = (ydb.StructType().add_member("series_id", ydb.PrimitiveType.Int64)
                     .add_member("timestamp_utc", ydb.PrimitiveType.Int64)
                     .add_member("value_num", ydb.OptionalType(ydb.PrimitiveType.Double))

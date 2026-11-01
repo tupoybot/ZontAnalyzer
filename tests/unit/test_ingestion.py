@@ -87,17 +87,23 @@ def test_same_second_connection_events_apply_disconnect_before_restore() -> None
 
 
 @pytest.mark.ydb
-def test_discovery_is_reused_until_refresh_interval(tmp_path: Path) -> None:
-    _db, service, client = _service(tmp_path)
+def test_discovery_is_reused_until_refresh_interval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db, service, client = _service(tmp_path)
     service.config.scheduler.discovery_every_minutes = 60
 
     first = service.sync(backfill=timedelta(minutes=30), now=NOW, max_requests=2)
     assert first["complete"] and client.discover_calls == 1
+    execute = Mock(wraps=db.storage.execute)
+    monkeypatch.setattr(db.storage, "execute", execute)
 
     second = service.sync(
         backfill=timedelta(minutes=30), now=NOW + timedelta(minutes=30), max_requests=2,
     )
     assert second["complete"] and client.discover_calls == 1
+    low, high = db.sample_bounds()
+    assert second["history_range"] == {"first_observed": low.isoformat(), "last_observed": high.isoformat()}
+    assert not any("FROM telemetry_samples" in call.args[0] and "LIMIT 1;" in call.args[0]
+                   for call in execute.call_args_list)
 
     third = service.sync(
         backfill=timedelta(minutes=30), now=NOW + timedelta(minutes=61), max_requests=2,

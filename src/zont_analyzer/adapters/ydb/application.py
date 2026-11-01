@@ -18,6 +18,7 @@ from .feedback import FeedbackRepository
 from .jobs import JobLeaseRepository, UsageLedger
 from .owner import OwnerRepository
 from .reports import ReportRepository
+from .sample_bounds import sample_bounds
 from .telemetry import TelemetryRepository, bump_revision, encode, utc_seconds
 
 
@@ -186,25 +187,14 @@ class Database:
         return sorted({timestamp for series in self.list_series() if series["device_id"] == device_id
                        for timestamp in self.fetch_sample_timestamps(series["id"], start, end)})
 
-    def _sample_boundary(self, *, latest: bool) -> datetime | None:
-        ordering = "DESC" if latest else "ASC"
-        values = []
-        for series in self.list_series():
-            rows = self.storage.execute(
-                "DECLARE $id AS Int64; SELECT timestamp_utc FROM telemetry_samples WHERE series_id=$id "
-                f"ORDER BY timestamp_utc {ordering} LIMIT 1;", {"$id": series["id"]},
-            )[0].rows
-            if rows:
-                values.append(int(rows[0].timestamp_utc))
-        if not values:
-            return None
-        return datetime.fromtimestamp((max if latest else min)(values), UTC)
+    def sample_bounds(self) -> tuple[datetime | None, datetime | None]:
+        return sample_bounds(self.storage)
 
     def latest_sample_time(self) -> datetime | None:
-        return self._sample_boundary(latest=True)
+        return self.sample_bounds()[1]
 
     def earliest_sample_time(self) -> datetime | None:
-        return self._sample_boundary(latest=False)
+        return self.sample_bounds()[0]
 
     def get_cursor(self, device_id: str, data_type: str) -> datetime | None:
         return self.telemetry.get_cursor(device_id, data_type)
@@ -281,7 +271,7 @@ class Database:
         pending = self.storage.execute(
             "SELECT COUNT(*) AS count FROM notification_outbox WHERE state='pending';",
         )[0].rows
-        first, last = self.earliest_sample_time(), self.latest_sample_time()
+        first, last = self.sample_bounds()
         return {"storage": "YDB", "schema_revision": self.get_schema_revision(), **counts,
                 "pending_notifications": int(pending[0].count),
                 "earliest_sample": first.isoformat() if first else None,

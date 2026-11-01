@@ -23,13 +23,11 @@ def _application(*, budget=None, state=None, proposals=(), latest=None, override
     ])]
     storage.transaction.side_effect = lambda callback: callback(transaction)
     storage.execute.side_effect = [
-        [SimpleNamespace(rows=[] if latest is None else [SimpleNamespace(id=1)])],
-        *([] if latest is None else [[SimpleNamespace(rows=[SimpleNamespace(timestamp_utc=latest.timestamp())])]]),
         [SimpleNamespace(rows=[] if budget is None else [SimpleNamespace(**budget)])],
         [SimpleNamespace(rows=[] if state is None else [SimpleNamespace(payload=json.dumps(state))])],
         [SimpleNamespace(rows=[SimpleNamespace(payload=json.dumps(row)) for row in proposals])],
     ]
-    db = SimpleNamespace(storage=storage, close=Mock(), latest_sample_time=Mock(return_value=None))
+    db = SimpleNamespace(storage=storage, close=Mock(), latest_sample_time=Mock(return_value=latest))
     return SimpleNamespace(db=db, config=AppConfig())
 
 
@@ -45,7 +43,7 @@ def test_empty_snapshot_does_not_invent_success_time_or_reliability():
     assert "zont_model_review_next_due_timestamp_seconds" not in names
     assert "zont_reliability_uptime_seconds" not in names
     assert "zont_telemetry_timestamp_seconds" not in names
-    assert app.db.storage.execute.call_count == 4
+    assert app.db.storage.execute.call_count == 3
     assert all("SELECT" in call.args[0] and "UPSERT" not in call.args[0]
                for call in app.db.storage.execute.call_args_list)
 
@@ -78,7 +76,7 @@ def test_snapshot_failures_are_isolated_and_emit_failure_gauge(failure):
         app.db.storage.execute.side_effect = RuntimeError("private query content")
     elif failure == "invalid_state":
         app.db.storage.execute.side_effect = [
-            [SimpleNamespace(rows=[])], [SimpleNamespace(rows=[])],
+            [SimpleNamespace(rows=[])],
             [SimpleNamespace(rows=[SimpleNamespace(payload="not JSON")])],
         ]
     events = []
@@ -130,7 +128,7 @@ def test_monitoring_dispatch_reads_without_providers_and_closes_runtime(monkeypa
     timestamps = [value for name, value, _ in events if name == "zont_telemetry_timestamp_seconds"]
     assert timestamps == ([] if latest is None else [latest.timestamp()])
     app.db.close.assert_called_once()
-    app.db.latest_sample_time.assert_not_called()
+    app.db.latest_sample_time.assert_called_once_with()
     factory.reset_mock()
     with pytest.raises(ValueError):
         runtime._dispatch_monitoring({"force_provider": True})
@@ -192,19 +190,19 @@ def test_snapshot_queries_match_native_schema_and_are_read_only(tmp_path):
     assert state[0].version == 1
 
 
-def test_snapshot_series_limit_fails_before_reading_any_samples():
+def test_snapshot_bounds_failure_does_not_invent_freshness():
     app = _application()
-    app.db.storage.execute.side_effect = [[SimpleNamespace(rows=[SimpleNamespace(id=i) for i in range(65)])]]
+    app.db.latest_sample_time.side_effect = RuntimeError("bounds unavailable")
     events = []
     with capture(events.append):
         monitoring.snapshot(app)
     assert ("zont_snapshot_success", 0.0, {}) in events
-    app.db.storage.execute.assert_called_once_with("SELECT id FROM telemetry_series LIMIT 65;")
+    app.db.storage.execute.assert_not_called()
     assert not any(name == "zont_telemetry_timestamp_seconds" for name, _, _ in events)
 
 
 @pytest.mark.ydb
-def test_snapshot_batches_indexed_latest_samples_and_preserves_empty_series(tmp_path, monkeypatch):
+def test_snapshot_reads_materialized_bounds_and_preserves_empty_series(tmp_path, monkeypatch):
     from tests.ydb_support import make_database
 
     db = make_database(tmp_path)
@@ -214,15 +212,23 @@ def test_snapshot_batches_indexed_latest_samples_and_preserves_empty_series(tmp_
         "UPSERT INTO telemetry_samples (series_id,timestamp_utc,value_num) VALUES "
         "(1,1700000000,21.0),(1,1700000300,22.0),(2,1700000600,23.0);",
     )
+    # Empty extra series must neither hide freshness nor impose the old limit of 64.
+    db.storage.execute(
+        "UPSERT INTO telemetry_series (device_id,source_type,entity_id,metric_key,id) VALUES "
+        + ",".join(f"('fixture','t','empty-{i}','value',{i})" for i in range(4, 71)) + ";",
+    )
+    # Upgrade/bootstrap is separate from the steady-state monitoring reads.
+    assert db.latest_sample_time().timestamp() == 1700000600
     execute = Mock(wraps=db.storage.execute)
     monkeypatch.setattr(db.storage, "execute", execute)
     events = []
     with capture(events.append):
         monitoring._snapshot(SimpleNamespace(db=db, config=AppConfig()))
     assert ("zont_telemetry_timestamp_seconds", 1700000600.0, {}) in events
-    samples = [call for call in execute.call_args_list if "FROM telemetry_samples" in call.args[0]]
-    assert len(samples) == 1
-    assert samples[0].args[0].count("LIMIT 1;") == 3
+    assert not any("telemetry_samples" in call.args[0] or "telemetry_series" in call.args[0]
+                   for call in execute.call_args_list)
+    assert any("telemetry-bounds:v1" in call.args[0] or "telemetry-bounds:v1" in repr(call.args[1:])
+               for call in execute.call_args_list)
 
 
 @pytest.mark.parametrize("enabled", [True, False])

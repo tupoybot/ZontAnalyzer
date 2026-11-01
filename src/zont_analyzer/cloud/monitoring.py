@@ -104,23 +104,10 @@ def snapshot(runtime: Runtime) -> None:
 
 
 def _snapshot(runtime: Runtime) -> None:
-    series = runtime.db.storage.execute("SELECT id FROM telemetry_series LIMIT 65;")[0].rows
-    if len(series) > 64:
-        raise ValueError("telemetry snapshot exceeds series bound")
-    latest = 0
-    if series:
-        # Keep each primary-key seek and LIMIT; batching reduces round trips
-        # without scanning the histories of all series to compute MAX().
-        query = " ".join(f"DECLARE $id{i} AS Int64;" for i in range(len(series))) + " " + " ".join(
-            f"SELECT timestamp_utc FROM telemetry_samples WHERE series_id=$id{i} "
-            "ORDER BY timestamp_utc DESC LIMIT 1;" for i in range(len(series))
-        )
-        results = runtime.db.storage.execute(query, {f"$id{i}": int(row.id) for i, row in enumerate(series)})
-        timestamps = (int(row.timestamp_utc) for result in results for row in result.rows)
-        latest = max(0, max(timestamps, default=0))
-    observe("zont_telemetry_present", float(latest > 0))
-    if latest:
-        observe("zont_telemetry_timestamp_seconds", latest)
+    latest = runtime.db.latest_sample_time()
+    observe("zont_telemetry_present", float(latest is not None))
+    if latest is not None:
+        observe("zont_telemetry_timestamp_seconds", latest.timestamp())
     month = datetime.now(UTC).strftime("%Y-%m")
     rows = runtime.db.storage.execute(
         "DECLARE $month AS Utf8; SELECT charged_tokens,reserved_tokens "

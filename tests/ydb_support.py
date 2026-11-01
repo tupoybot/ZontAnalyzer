@@ -345,6 +345,8 @@ def delete_samples(db: Database, start: datetime, end: datetime) -> int:
                 {"$id": series_id, "$start": int(start.timestamp()), "$end": int(rows[-1].timestamp_utc)},
             )
             revision = bump_revision(tx, "telemetry:" + device_id)
+            # Direct fixture deletion bypasses ingestion's materialized bounds.
+            tx.execute("DELETE FROM app_meta WHERE key='telemetry-bounds:v1';")
             days = {datetime.fromtimestamp(row.timestamp_utc, UTC).date().isoformat() for row in rows}
             for day in days:
                 tx.execute(

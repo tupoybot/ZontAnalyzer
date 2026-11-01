@@ -148,7 +148,8 @@ def seed_month_samples(db: Database, start: datetime) -> None:
                 for minute in range(offset, min(offset + 1000, 31 * 1440))]
         db.storage.execute(
             'DECLARE $rows AS List<Struct<series_id:Int64,timestamp_utc:Int64,value_num:Double,quality:Utf8>>; '
-            'UPSERT INTO telemetry_samples SELECT * FROM AS_TABLE($rows);',
+            'UPSERT INTO telemetry_samples SELECT * FROM AS_TABLE($rows); '
+            "DELETE FROM app_meta WHERE key='telemetry-bounds:v1';",
             {'$rows': ydb.TypedValue(rows, ydb.ListType(row_type))},
         )
 

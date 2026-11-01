@@ -13,6 +13,7 @@ import ydb  # type: ignore[import-untyped]
 from zont_analyzer.domain import SourceEvent, TelemetryPoint
 
 from .database import Transaction, YdbDatabase
+from .sample_bounds import extend
 
 CoverageState = Literal["complete", "empty", "failed", "unavailable"]
 
@@ -474,6 +475,7 @@ class TelemetryRepository:
                 )
             if changed:
                 revision = bump_revision(tx, "telemetry:" + device_id, publish=False)
+                extend(tx, [int(row["timestamp_utc"]) for row in rows], device_id, revision)
                 # Keep calibration markers independent: a later temperature
                 # write in the same hour must not overwrite an unconsumed boiler
                 # change. Existing hourly records without this payload remain
