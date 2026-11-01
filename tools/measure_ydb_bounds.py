@@ -10,6 +10,7 @@ import argparse
 import ast
 import hashlib
 import json
+import re
 import statistics
 import threading
 import time
@@ -56,6 +57,13 @@ class ObserveRpc:
                 "status": None,
                 "stats": None,
                 "complete": False,
+                # Inspect only locally; SQL and parameters are never exported.
+                "expects_updates": state.rpc_name == "ExecuteQuery" and bool(re.search(
+                    r"\b(?:UPSERT|INSERT|UPDATE|REPLACE)\b", request.query_content.text, re.IGNORECASE,
+                )),
+                "expects_deletes": state.rpc_name == "ExecuteQuery" and bool(re.search(
+                    r"\bDELETE\b", request.query_content.text, re.IGNORECASE,
+                )),
             }
             owner.records.append(record)
             done = threading.Event()
@@ -118,6 +126,15 @@ class ObserveRpc:
             for p in s.get("query_phases", [])
             for a in p.get("table_access", [])
         ]
+        def missing_write_stats(record, kind):
+            return record.get("expects_" + kind, False) and not any(
+                kind in access
+                for phase in (record["stats"] or {}).get("query_phases", [])
+                for access in phase.get("table_access", [])
+            )
+
+        missing_updates = sum(missing_write_stats(record, "updates") for record in records)
+        missing_deletes = sum(missing_write_stats(record, "deletes") for record in records)
         return {
             "rpc_count": len(records),
             "rpc_counts": dict(Counter(r["rpc"] for r in records)),
@@ -133,6 +150,9 @@ class ObserveRpc:
             ),
             "all_rpc_complete": all(r["complete"] for r in records),
             "queries_with_stats": len(full),
+            "write_stats_complete": not (missing_updates or missing_deletes),
+            "update_stats_missing_rpc_count": missing_updates,
+            "delete_stats_missing_rpc_count": missing_deletes,
             "compile_cpu_us": compile_us,
             "process_cpu_us": process_us,
             "phase_cpu_us": phase_us,
@@ -144,13 +164,13 @@ class ObserveRpc:
             "read_bytes": sum(
                 int(a.get("reads", {}).get("bytes", 0)) for a in accesses
             ),
-            "update_rows": sum(
+            "update_rows": None if missing_updates else sum(
                 int(a.get("updates", {}).get("rows", 0)) for a in accesses
             ),
-            "update_bytes": sum(
+            "update_bytes": None if missing_updates else sum(
                 int(a.get("updates", {}).get("bytes", 0)) for a in accesses
             ),
-            "delete_rows": sum(
+            "delete_rows": None if missing_deletes else sum(
                 int(a.get("deletes", {}).get("rows", 0)) for a in accesses
             ),
         }

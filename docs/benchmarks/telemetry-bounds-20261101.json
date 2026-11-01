@@ -1,0 +1,1917 @@
+{
+  "baseline_commit": "73c2a1722c23530b18124e703560c2aacfbe66d5",
+  "candidate_commit": "9a07ea250bacae5502012d0a5fd8097c946d85c3",
+  "date": "2026-11-01",
+  "fixture": {
+    "years": [
+      1,
+      5,
+      10
+    ],
+    "series": 47,
+    "samples_per_series": "daily plus period endpoints",
+    "repeats": 3
+  },
+  "runtime": {
+    "server_image": "ydbplatform/local-ydb@sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402",
+    "server_cpu_limit": 2,
+    "server_memory_gib": 5,
+    "in_memory": true
+  },
+  "coverage": {
+    "operation_records": 120,
+    "missing_ru_rpc": 0,
+    "failed_rpc": 0,
+    "all_rpc_complete": true
+  },
+  "groups": [
+    {
+      "elapsed_seconds": {
+        "max": 0.2741900219989475,
+        "median": 0.2741900219989475,
+        "min": 0.2741900219989475
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 21345,
+        "median": 21345,
+        "min": 21345
+      },
+      "read_bytes": {
+        "max": 23160,
+        "median": 23160,
+        "min": 23160
+      },
+      "read_rows": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "repeats": 1,
+      "rpc_count": {
+        "max": 96,
+        "median": 96,
+        "min": 96
+      },
+      "scenario": "bounds_cold",
+      "server_ru": {
+        "max": 195,
+        "median": 195,
+        "min": 195
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.1939555749995634,
+        "median": 0.1939555749995634,
+        "min": 0.1939555749995634
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 6114,
+        "median": 6114,
+        "min": 6114
+      },
+      "read_bytes": {
+        "max": 1178,
+        "median": 1178,
+        "min": 1178
+      },
+      "read_rows": {
+        "max": 143,
+        "median": 143,
+        "min": 143
+      },
+      "repeats": 1,
+      "rpc_count": {
+        "max": 53,
+        "median": 53,
+        "min": 53
+      },
+      "scenario": "bounds_cold",
+      "server_ru": {
+        "max": 145,
+        "median": 145,
+        "min": 145
+      },
+      "update_rows": null,
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.25058767601149157,
+        "median": 0.25058767601149157,
+        "min": 0.25058767601149157
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 6068,
+        "median": 6068,
+        "min": 6068
+      },
+      "read_bytes": {
+        "max": 23160,
+        "median": 23160,
+        "min": 23160
+      },
+      "read_rows": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "repeats": 1,
+      "rpc_count": {
+        "max": 96,
+        "median": 96,
+        "min": 96
+      },
+      "scenario": "bounds_final",
+      "server_ru": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.0034834670077543706,
+        "median": 0.0034834670077543706,
+        "min": 0.0034834670077543706
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 128,
+        "median": 128,
+        "min": 128
+      },
+      "read_bytes": {
+        "max": 100,
+        "median": 100,
+        "min": 100
+      },
+      "read_rows": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "repeats": 1,
+      "rpc_count": {
+        "max": 1,
+        "median": 1,
+        "min": 1
+      },
+      "scenario": "bounds_final",
+      "server_ru": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.262673522986006,
+        "median": 0.25308979098917916,
+        "min": 0.21731308300513774
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 31814,
+        "median": 6348,
+        "min": 5791
+      },
+      "read_bytes": {
+        "max": 23160,
+        "median": 23160,
+        "min": 23160
+      },
+      "read_rows": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 96,
+        "median": 96,
+        "min": 96
+      },
+      "scenario": "bounds_warm",
+      "server_ru": {
+        "max": 202,
+        "median": 188,
+        "min": 188
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.005331394000677392,
+        "median": 0.005015491013182327,
+        "min": 0.003549557994119823
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 161,
+        "median": 146,
+        "min": 120
+      },
+      "read_bytes": {
+        "max": 99,
+        "median": 99,
+        "min": 99
+      },
+      "read_rows": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 1,
+        "median": 1,
+        "min": 1
+      },
+      "scenario": "bounds_warm",
+      "server_ru": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.8927066920150537,
+        "median": 0.09713196297525428,
+        "min": 0.07765732798725367
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 793390,
+        "median": 3974,
+        "min": 3572
+      },
+      "read_bytes": {
+        "max": 752,
+        "median": 752,
+        "min": 752
+      },
+      "read_rows": {
+        "max": 94,
+        "median": 94,
+        "min": 94
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 7,
+        "median": 7,
+        "min": 7
+      },
+      "scenario": "monitoring_warm",
+      "server_ru": {
+        "max": 570,
+        "median": 98,
+        "min": 98
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.040354036987992004,
+        "median": 0.015125645993975922,
+        "min": 0.013676684000529349
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 20981,
+        "median": 451,
+        "min": 358
+      },
+      "read_bytes": {
+        "max": 99,
+        "median": 99,
+        "min": 99
+      },
+      "read_rows": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "scenario": "monitoring_warm",
+      "server_ru": {
+        "max": 13,
+        "median": 6,
+        "min": 6
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.03068534197518602,
+        "median": 0.02889147400856018,
+        "min": 0.02887153599294834
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 1226,
+        "median": 1190,
+        "min": 1166
+      },
+      "read_bytes": {
+        "max": 364,
+        "median": 364,
+        "min": 364
+      },
+      "read_rows": {
+        "max": 8,
+        "median": 8,
+        "min": 8
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 14,
+        "median": 14,
+        "min": 14
+      },
+      "scenario": "write_changes_value",
+      "server_ru": {
+        "max": 13,
+        "median": 13,
+        "min": 13
+      },
+      "update_rows": null,
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.035898941016057506,
+        "median": 0.033842901000753045,
+        "min": 0.03369865700369701
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 1489,
+        "median": 1254,
+        "min": 1252
+      },
+      "read_bytes": {
+        "max": 463,
+        "median": 463,
+        "min": 463
+      },
+      "read_rows": {
+        "max": 10,
+        "median": 10,
+        "min": 10
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "scenario": "write_changes_value",
+      "server_ru": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "update_rows": null,
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.03442173800431192,
+        "median": 0.030926506995456293,
+        "min": 0.028819386003306136
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 1496,
+        "median": 1318,
+        "min": 1134
+      },
+      "read_bytes": {
+        "max": 260,
+        "median": 260,
+        "min": 260
+      },
+      "read_rows": {
+        "max": 4,
+        "median": 4,
+        "min": 4
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 14,
+        "median": 14,
+        "min": 14
+      },
+      "scenario": "write_extends_bound",
+      "server_ru": {
+        "max": 13,
+        "median": 13,
+        "min": 13
+      },
+      "update_rows": null,
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.03596558899153024,
+        "median": 0.035244767990661785,
+        "min": 0.0351479229866527
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 1462,
+        "median": 1444,
+        "min": 1346
+      },
+      "read_bytes": {
+        "max": 359,
+        "median": 359,
+        "min": 359
+      },
+      "read_rows": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "scenario": "write_extends_bound",
+      "server_ru": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "update_rows": null,
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.014137048012344167,
+        "median": 0.014080495020607486,
+        "min": 0.013345482002478093
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 550,
+        "median": 454,
+        "min": 441
+      },
+      "read_bytes": {
+        "max": 289,
+        "median": 289,
+        "min": 289
+      },
+      "read_rows": {
+        "max": 4,
+        "median": 4,
+        "min": 4
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "scenario": "write_identical_replay",
+      "server_ru": {
+        "max": 5,
+        "median": 5,
+        "min": 5
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.015624219988239929,
+        "median": 0.014794736984185874,
+        "min": 0.01353875600034371
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 526,
+        "median": 410,
+        "min": 403
+      },
+      "read_bytes": {
+        "max": 289,
+        "median": 289,
+        "min": 289
+      },
+      "read_rows": {
+        "max": 4,
+        "median": 4,
+        "min": 4
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "scenario": "write_identical_replay",
+      "server_ru": {
+        "max": 5,
+        "median": 5,
+        "min": 5
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.030209729011403397,
+        "median": 0.02830248000100255,
+        "min": 0.02752081901417114
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 1227,
+        "median": 1155,
+        "min": 1102
+      },
+      "read_bytes": {
+        "max": 260,
+        "median": 260,
+        "min": 260
+      },
+      "read_rows": {
+        "max": 4,
+        "median": 4,
+        "min": 4
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 14,
+        "median": 14,
+        "min": 14
+      },
+      "scenario": "write_late_point",
+      "server_ru": {
+        "max": 13,
+        "median": 13,
+        "min": 13
+      },
+      "update_rows": null,
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.0377350400085561,
+        "median": 0.03363330298452638,
+        "min": 0.03167070698691532
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 1502,
+        "median": 1292,
+        "min": 1163
+      },
+      "read_bytes": {
+        "max": 359,
+        "median": 359,
+        "min": 359
+      },
+      "read_rows": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "scenario": "write_late_point",
+      "server_ru": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "update_rows": null,
+      "years": 1
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.24432326498208568,
+        "median": 0.24432326498208568,
+        "min": 0.24432326498208568
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 21356,
+        "median": 21356,
+        "min": 21356
+      },
+      "read_bytes": {
+        "max": 23160,
+        "median": 23160,
+        "min": 23160
+      },
+      "read_rows": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "repeats": 1,
+      "rpc_count": {
+        "max": 96,
+        "median": 96,
+        "min": 96
+      },
+      "scenario": "bounds_cold",
+      "server_ru": {
+        "max": 196,
+        "median": 196,
+        "min": 196
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.1798775790084619,
+        "median": 0.1798775790084619,
+        "min": 0.1798775790084619
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 5737,
+        "median": 5737,
+        "min": 5737
+      },
+      "read_bytes": {
+        "max": 1178,
+        "median": 1178,
+        "min": 1178
+      },
+      "read_rows": {
+        "max": 143,
+        "median": 143,
+        "min": 143
+      },
+      "repeats": 1,
+      "rpc_count": {
+        "max": 53,
+        "median": 53,
+        "min": 53
+      },
+      "scenario": "bounds_cold",
+      "server_ru": {
+        "max": 145,
+        "median": 145,
+        "min": 145
+      },
+      "update_rows": null,
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.215486958011752,
+        "median": 0.215486958011752,
+        "min": 0.215486958011752
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 5241,
+        "median": 5241,
+        "min": 5241
+      },
+      "read_bytes": {
+        "max": 23160,
+        "median": 23160,
+        "min": 23160
+      },
+      "read_rows": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "repeats": 1,
+      "rpc_count": {
+        "max": 96,
+        "median": 96,
+        "min": 96
+      },
+      "scenario": "bounds_final",
+      "server_ru": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.004734621004899964,
+        "median": 0.004734621004899964,
+        "min": 0.004734621004899964
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 151,
+        "median": 151,
+        "min": 151
+      },
+      "read_bytes": {
+        "max": 100,
+        "median": 100,
+        "min": 100
+      },
+      "read_rows": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "repeats": 1,
+      "rpc_count": {
+        "max": 1,
+        "median": 1,
+        "min": 1
+      },
+      "scenario": "bounds_final",
+      "server_ru": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.2201602300046943,
+        "median": 0.21082451302208938,
+        "min": 0.21025182999437675
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 5271,
+        "median": 5215,
+        "min": 5154
+      },
+      "read_bytes": {
+        "max": 23160,
+        "median": 23160,
+        "min": 23160
+      },
+      "read_rows": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 96,
+        "median": 96,
+        "min": 96
+      },
+      "scenario": "bounds_warm",
+      "server_ru": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.0047343420155812055,
+        "median": 0.004413037997437641,
+        "min": 0.0038837780011817813
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 156,
+        "median": 138,
+        "min": 130
+      },
+      "read_bytes": {
+        "max": 99,
+        "median": 99,
+        "min": 99
+      },
+      "read_rows": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 1,
+        "median": 1,
+        "min": 1
+      },
+      "scenario": "bounds_warm",
+      "server_ru": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.7976021349895746,
+        "median": 0.08041758398758247,
+        "min": 0.07723785101552494
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 707908,
+        "median": 3594,
+        "min": 3472
+      },
+      "read_bytes": {
+        "max": 752,
+        "median": 752,
+        "min": 752
+      },
+      "read_rows": {
+        "max": 94,
+        "median": 94,
+        "min": 94
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 7,
+        "median": 7,
+        "min": 7
+      },
+      "scenario": "monitoring_warm",
+      "server_ru": {
+        "max": 513,
+        "median": 98,
+        "min": 98
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.038106136984424666,
+        "median": 0.012258342001587152,
+        "min": 0.012176352000096813
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 20353,
+        "median": 333,
+        "min": 332
+      },
+      "read_bytes": {
+        "max": 99,
+        "median": 99,
+        "min": 99
+      },
+      "read_rows": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "scenario": "monitoring_warm",
+      "server_ru": {
+        "max": 14,
+        "median": 6,
+        "min": 6
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.03361259901430458,
+        "median": 0.030586404987843707,
+        "min": 0.02989181099110283
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 1349,
+        "median": 1153,
+        "min": 1026
+      },
+      "read_bytes": {
+        "max": 364,
+        "median": 364,
+        "min": 364
+      },
+      "read_rows": {
+        "max": 8,
+        "median": 8,
+        "min": 8
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 14,
+        "median": 14,
+        "min": 14
+      },
+      "scenario": "write_changes_value",
+      "server_ru": {
+        "max": 13,
+        "median": 13,
+        "min": 13
+      },
+      "update_rows": null,
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.03402731800451875,
+        "median": 0.03384356101742014,
+        "min": 0.03291853301925585
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 1330,
+        "median": 1262,
+        "min": 1167
+      },
+      "read_bytes": {
+        "max": 463,
+        "median": 463,
+        "min": 463
+      },
+      "read_rows": {
+        "max": 10,
+        "median": 10,
+        "min": 10
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "scenario": "write_changes_value",
+      "server_ru": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "update_rows": null,
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.03227814397541806,
+        "median": 0.029642845009220764,
+        "min": 0.028132464998634532
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 1419,
+        "median": 1409,
+        "min": 1091
+      },
+      "read_bytes": {
+        "max": 260,
+        "median": 260,
+        "min": 260
+      },
+      "read_rows": {
+        "max": 4,
+        "median": 4,
+        "min": 4
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 14,
+        "median": 14,
+        "min": 14
+      },
+      "scenario": "write_extends_bound",
+      "server_ru": {
+        "max": 13,
+        "median": 13,
+        "min": 13
+      },
+      "update_rows": null,
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.03320335497846827,
+        "median": 0.03264632399077527,
+        "min": 0.03191178201814182
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 1334,
+        "median": 1219,
+        "min": 1198
+      },
+      "read_bytes": {
+        "max": 359,
+        "median": 359,
+        "min": 359
+      },
+      "read_rows": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "scenario": "write_extends_bound",
+      "server_ru": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "update_rows": null,
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.014977220998844132,
+        "median": 0.01314354600617662,
+        "min": 0.012999753002077341
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 466,
+        "median": 359,
+        "min": 346
+      },
+      "read_bytes": {
+        "max": 289,
+        "median": 289,
+        "min": 289
+      },
+      "read_rows": {
+        "max": 4,
+        "median": 4,
+        "min": 4
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "scenario": "write_identical_replay",
+      "server_ru": {
+        "max": 5,
+        "median": 5,
+        "min": 5
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.014925461990060285,
+        "median": 0.01374902599491179,
+        "min": 0.012904175004223362
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 458,
+        "median": 375,
+        "min": 374
+      },
+      "read_bytes": {
+        "max": 289,
+        "median": 289,
+        "min": 289
+      },
+      "read_rows": {
+        "max": 4,
+        "median": 4,
+        "min": 4
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "scenario": "write_identical_replay",
+      "server_ru": {
+        "max": 5,
+        "median": 5,
+        "min": 5
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.03136800101492554,
+        "median": 0.029383009008597583,
+        "min": 0.02832570398459211
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 1266,
+        "median": 1160,
+        "min": 1036
+      },
+      "read_bytes": {
+        "max": 260,
+        "median": 260,
+        "min": 260
+      },
+      "read_rows": {
+        "max": 4,
+        "median": 4,
+        "min": 4
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 14,
+        "median": 14,
+        "min": 14
+      },
+      "scenario": "write_late_point",
+      "server_ru": {
+        "max": 13,
+        "median": 13,
+        "min": 13
+      },
+      "update_rows": null,
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.03476176399271935,
+        "median": 0.03459178100456484,
+        "min": 0.032591219001915306
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 1316,
+        "median": 1239,
+        "min": 1197
+      },
+      "read_bytes": {
+        "max": 359,
+        "median": 359,
+        "min": 359
+      },
+      "read_rows": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "scenario": "write_late_point",
+      "server_ru": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "update_rows": null,
+      "years": 5
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.23282502600341104,
+        "median": 0.23282502600341104,
+        "min": 0.23282502600341104
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 18481,
+        "median": 18481,
+        "min": 18481
+      },
+      "read_bytes": {
+        "max": 23160,
+        "median": 23160,
+        "min": 23160
+      },
+      "read_rows": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "repeats": 1,
+      "rpc_count": {
+        "max": 96,
+        "median": 96,
+        "min": 96
+      },
+      "scenario": "bounds_cold",
+      "server_ru": {
+        "max": 193,
+        "median": 193,
+        "min": 193
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.19016645901137963,
+        "median": 0.19016645901137963,
+        "min": 0.19016645901137963
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 5803,
+        "median": 5803,
+        "min": 5803
+      },
+      "read_bytes": {
+        "max": 1178,
+        "median": 1178,
+        "min": 1178
+      },
+      "read_rows": {
+        "max": 143,
+        "median": 143,
+        "min": 143
+      },
+      "repeats": 1,
+      "rpc_count": {
+        "max": 53,
+        "median": 53,
+        "min": 53
+      },
+      "scenario": "bounds_cold",
+      "server_ru": {
+        "max": 145,
+        "median": 145,
+        "min": 145
+      },
+      "update_rows": null,
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.23569676000624895,
+        "median": 0.23569676000624895,
+        "min": 0.23569676000624895
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 5803,
+        "median": 5803,
+        "min": 5803
+      },
+      "read_bytes": {
+        "max": 23160,
+        "median": 23160,
+        "min": 23160
+      },
+      "read_rows": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "repeats": 1,
+      "rpc_count": {
+        "max": 96,
+        "median": 96,
+        "min": 96
+      },
+      "scenario": "bounds_final",
+      "server_ru": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.0037719040119554847,
+        "median": 0.0037719040119554847,
+        "min": 0.0037719040119554847
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 143,
+        "median": 143,
+        "min": 143
+      },
+      "read_bytes": {
+        "max": 100,
+        "median": 100,
+        "min": 100
+      },
+      "read_rows": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "repeats": 1,
+      "rpc_count": {
+        "max": 1,
+        "median": 1,
+        "min": 1
+      },
+      "scenario": "bounds_final",
+      "server_ru": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.22526915799244307,
+        "median": 0.2234610489977058,
+        "min": 0.21507202900829725
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 5745,
+        "median": 5519,
+        "min": 5210
+      },
+      "read_bytes": {
+        "max": 23160,
+        "median": 23160,
+        "min": 23160
+      },
+      "read_rows": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 96,
+        "median": 96,
+        "min": 96
+      },
+      "scenario": "bounds_warm",
+      "server_ru": {
+        "max": 188,
+        "median": 188,
+        "min": 188
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.005098823981825262,
+        "median": 0.004819805995794013,
+        "min": 0.003513314004521817
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 154,
+        "median": 154,
+        "min": 134
+      },
+      "read_bytes": {
+        "max": 99,
+        "median": 99,
+        "min": 99
+      },
+      "read_rows": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 1,
+        "median": 1,
+        "min": 1
+      },
+      "scenario": "bounds_warm",
+      "server_ru": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.8253851259942167,
+        "median": 0.07997382801841013,
+        "min": 0.07812065200414509
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 724948,
+        "median": 3616,
+        "min": 3559
+      },
+      "read_bytes": {
+        "max": 752,
+        "median": 752,
+        "min": 752
+      },
+      "read_rows": {
+        "max": 94,
+        "median": 94,
+        "min": 94
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 7,
+        "median": 7,
+        "min": 7
+      },
+      "scenario": "monitoring_warm",
+      "server_ru": {
+        "max": 525,
+        "median": 98,
+        "min": 98
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.038864252011990175,
+        "median": 0.012951696990057826,
+        "min": 0.012162872008047998
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 19751,
+        "median": 355,
+        "min": 334
+      },
+      "read_bytes": {
+        "max": 99,
+        "median": 99,
+        "min": 99
+      },
+      "read_rows": {
+        "max": 2,
+        "median": 2,
+        "min": 2
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "scenario": "monitoring_warm",
+      "server_ru": {
+        "max": 14,
+        "median": 6,
+        "min": 6
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.029774892987916246,
+        "median": 0.029758862976450473,
+        "min": 0.028617320000194013
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 1181,
+        "median": 1147,
+        "min": 1085
+      },
+      "read_bytes": {
+        "max": 364,
+        "median": 364,
+        "min": 364
+      },
+      "read_rows": {
+        "max": 8,
+        "median": 8,
+        "min": 8
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 14,
+        "median": 14,
+        "min": 14
+      },
+      "scenario": "write_changes_value",
+      "server_ru": {
+        "max": 13,
+        "median": 13,
+        "min": 13
+      },
+      "update_rows": null,
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.033876754983793944,
+        "median": 0.033837665017927065,
+        "min": 0.032674088986823335
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 1289,
+        "median": 1258,
+        "min": 1209
+      },
+      "read_bytes": {
+        "max": 463,
+        "median": 463,
+        "min": 463
+      },
+      "read_rows": {
+        "max": 10,
+        "median": 10,
+        "min": 10
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "scenario": "write_changes_value",
+      "server_ru": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "update_rows": null,
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.03359391700359993,
+        "median": 0.03114514600019902,
+        "min": 0.030385093006771058
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 1375,
+        "median": 1287,
+        "min": 1177
+      },
+      "read_bytes": {
+        "max": 260,
+        "median": 260,
+        "min": 260
+      },
+      "read_rows": {
+        "max": 4,
+        "median": 4,
+        "min": 4
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 14,
+        "median": 14,
+        "min": 14
+      },
+      "scenario": "write_extends_bound",
+      "server_ru": {
+        "max": 13,
+        "median": 13,
+        "min": 13
+      },
+      "update_rows": null,
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.0348650680098217,
+        "median": 0.032781742978841066,
+        "min": 0.03147666298900731
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 1303,
+        "median": 1301,
+        "min": 1201
+      },
+      "read_bytes": {
+        "max": 359,
+        "median": 359,
+        "min": 359
+      },
+      "read_rows": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "scenario": "write_extends_bound",
+      "server_ru": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "update_rows": null,
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.015800339984707534,
+        "median": 0.014934593986254185,
+        "min": 0.01405061999685131
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 451,
+        "median": 413,
+        "min": 361
+      },
+      "read_bytes": {
+        "max": 289,
+        "median": 289,
+        "min": 289
+      },
+      "read_rows": {
+        "max": 4,
+        "median": 4,
+        "min": 4
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "scenario": "write_identical_replay",
+      "server_ru": {
+        "max": 5,
+        "median": 5,
+        "min": 5
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.014830303989583626,
+        "median": 0.013986131991259754,
+        "min": 0.013008324021939188
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 472,
+        "median": 396,
+        "min": 383
+      },
+      "read_bytes": {
+        "max": 289,
+        "median": 289,
+        "min": 289
+      },
+      "read_rows": {
+        "max": 4,
+        "median": 4,
+        "min": 4
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "scenario": "write_identical_replay",
+      "server_ru": {
+        "max": 5,
+        "median": 5,
+        "min": 5
+      },
+      "update_rows": {
+        "max": 0,
+        "median": 0,
+        "min": 0
+      },
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.030378813011338934,
+        "median": 0.02858541999012232,
+        "min": 0.027422640996519476
+      },
+      "label": "baseline",
+      "query_cpu_us": {
+        "max": 1180,
+        "median": 1179,
+        "min": 991
+      },
+      "read_bytes": {
+        "max": 260,
+        "median": 260,
+        "min": 260
+      },
+      "read_rows": {
+        "max": 4,
+        "median": 4,
+        "min": 4
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 14,
+        "median": 14,
+        "min": 14
+      },
+      "scenario": "write_late_point",
+      "server_ru": {
+        "max": 13,
+        "median": 13,
+        "min": 13
+      },
+      "update_rows": null,
+      "years": 10
+    },
+    {
+      "elapsed_seconds": {
+        "max": 0.03568605499458499,
+        "median": 0.0327383830153849,
+        "min": 0.03256584401242435
+      },
+      "label": "candidate",
+      "query_cpu_us": {
+        "max": 1337,
+        "median": 1193,
+        "min": 1192
+      },
+      "read_bytes": {
+        "max": 359,
+        "median": 359,
+        "min": 359
+      },
+      "read_rows": {
+        "max": 6,
+        "median": 6,
+        "min": 6
+      },
+      "repeats": 3,
+      "rpc_count": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "scenario": "write_late_point",
+      "server_ru": {
+        "max": 16,
+        "median": 16,
+        "min": 16
+      },
+      "update_rows": null,
+      "years": 10
+    }
+  ],
+  "managed_billing_proven": false,
+  "measurement_source": "local_server_x-ydb-consumed-units",
+  "semantic_mismatches": [],
+  "write_statistics_note": "Buffered transaction write counters were not available in this run; null does not mean no writes. Server RU coverage is complete."
+}
