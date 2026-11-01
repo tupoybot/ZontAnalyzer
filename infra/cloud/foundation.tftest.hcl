@@ -4,7 +4,7 @@ run "production_database_is_separate_and_capped" {
   command = plan
   variables {
     enable_production_database              = true
-    production_ydb_request_units_per_second = 1000
+    production_ydb_request_units_per_second = 10000
     application_writes_enabled              = false
   }
   override_resource {
@@ -17,7 +17,7 @@ run "production_database_is_separate_and_capped" {
     }
   }
   assert {
-    condition     = yandex_ydb_database_serverless.production[0].deletion_protection && one(yandex_ydb_database_serverless.production[0].serverless_database).throttling_rcu_limit == 1000 && one(yandex_ydb_database_serverless.production[0].serverless_database).provisioned_rcu_limit == 0
+    condition     = yandex_ydb_database_serverless.production[0].deletion_protection && one(yandex_ydb_database_serverless.production[0].serverless_database).throttling_rcu_limit == 10000 && one(yandex_ydb_database_serverless.production[0].serverless_database).provisioned_rcu_limit == 0
     error_message = "Production must be protected, capped and billed on demand."
   }
   assert {
@@ -434,7 +434,7 @@ run "monitored_maintenance_timer" {
     }
   }
   assert {
-    condition     = length(yandex_function_trigger.maintenance) == 1 && yandex_function_trigger.maintenance[0].container[0].id == yandex_serverless_container.application.id && yandex_function_trigger.maintenance[0].container[0].path == "/internal/maintenance"
+    condition     = length(yandex_function_trigger.maintenance) == 1 && yandex_function_trigger.maintenance[0].container[0].id == yandex_serverless_container.application.id && yandex_function_trigger.maintenance[0].container[0].path == "/internal/maintenance" && yandex_function_trigger.maintenance[0].timer[0].cron_expression == "2/5 * * * ? *"
     error_message = "The opt-in maintenance timer must invoke the private application maintenance endpoint."
   }
   assert {
@@ -463,7 +463,7 @@ run "monitoring_is_private_and_opt_in" {
     }
   }
   assert {
-    condition     = length(yandex_function_trigger.monitoring) == 1 && yandex_function_trigger.monitoring[0].container[0].path == "/internal/monitoring" && yandex_function_trigger.monitoring[0].timer[0].cron_expression == "0 * * * ? *"
+    condition     = length(yandex_serverless_triggers.monitoring) == 1 && yandex_serverless_triggers.monitoring[0].action[0].invoke_container.path == "/internal/monitoring" && yandex_serverless_triggers.monitoring[0].source.timer.cron_expression == "0 * * * ? *"
     error_message = "Monitoring must be hourly and use only the private application endpoint."
   }
   assert {
@@ -542,7 +542,7 @@ run "configured_scheduler_is_private" {
     values          = { id = "probe-container" }
   }
   assert {
-    condition     = length(yandex_function_trigger.scheduler) == 1 && yandex_function_trigger.scheduler[0].container[0].id == "application-container" && yandex_function_trigger.scheduler[0].container[0].path == "/internal/scheduler"
+    condition     = length(yandex_function_trigger.scheduler) == 1 && yandex_function_trigger.scheduler[0].container[0].id == "application-container" && yandex_function_trigger.scheduler[0].container[0].path == "/internal/scheduler" && yandex_function_trigger.scheduler[0].timer[0].cron_expression == "0,30 * * * ? *"
     error_message = "The configured scheduler must invoke the private application scheduler route."
   }
   assert {
@@ -569,11 +569,11 @@ run "maintenance_disables_writes" {
 run "migration_capacity_remains_capped" {
   command = plan
   variables {
-    ydb_request_units_per_second = 100
+    ydb_request_units_per_second = 10000
     ydb_storage_size_limit_gib   = 5
   }
   assert {
-    condition     = one(yandex_ydb_database_serverless.probe[0].serverless_database).enable_throttling_rcu_limit && one(yandex_ydb_database_serverless.probe[0].serverless_database).throttling_rcu_limit == 100 && one(yandex_ydb_database_serverless.probe[0].serverless_database).storage_size_limit == 5 && one(yandex_ydb_database_serverless.probe[0].serverless_database).provisioned_rcu_limit == 0
+    condition     = one(yandex_ydb_database_serverless.probe[0].serverless_database).enable_throttling_rcu_limit && one(yandex_ydb_database_serverless.probe[0].serverless_database).throttling_rcu_limit == 10000 && one(yandex_ydb_database_serverless.probe[0].serverless_database).storage_size_limit == 5 && one(yandex_ydb_database_serverless.probe[0].serverless_database).provisioned_rcu_limit == 0
     error_message = "Migration capacity must remain explicitly capped without provisioned idle capacity."
   }
 }

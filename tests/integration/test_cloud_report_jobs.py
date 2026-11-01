@@ -6,11 +6,19 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from tests.ydb_support import make_database
-from zont_analyzer.adapters.openai.provider import AIRequestDeferred, AIRequestPending
+from zont_analyzer.adapters.openai.provider import (
+    AIRequestDeferred,
+    AIRequestPending,
+    OpenAIAnalyst,
+    _StructuredAnalysisResult,
+)
+from zont_analyzer.application.analysis import AnalysisService
 from zont_analyzer.cloud.report_jobs import ReportJobRunner, ReportRequest
 from zont_analyzer.config import AppConfig, LoadedConfig, Secrets
 from zont_analyzer.runtime import Runtime
@@ -304,6 +312,200 @@ def test_provider_deadline_deferral_stays_pending_without_losing_report_job(
 
     assert result["status"] == "pending" and result["phase"] == "analyze"
     assert runner.jobs.get(runner.period(ReportRequest.model_validate(payload)).job_key).state != "done"
+
+
+def _slow_ai_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, scheduled: bool = False):
+    from pydantic import SecretStr
+
+    db, runner, _client = _runner(tmp_path)
+    runner.runtime.loaded.secrets.openai_api_key = SecretStr("fixture-not-a-real-key")
+    runner.runtime.config.openai.enabled = True
+    runner.runtime.config.analysis.minimum_quality_score = 0
+    payload = {"kind": "monthly", "year": 2026, "month": 8, "use_ai": True}
+    _seed_archive(db, runner, payload)
+    clock = [0.0]
+    runner.monotonic = lambda: clock[0]
+    monkeypatch.setattr("zont_analyzer.adapters.openai.provider.time.monotonic", lambda: clock[0])
+    monkeypatch.setenv("CLOUD_OPENAI_ACCESS_CONFIRMED", "true")
+    parse = Mock(return_value=SimpleNamespace(
+        output_parsed=_StructuredAnalysisResult(summary="Fixture AI result"),
+        usage=SimpleNamespace(input_tokens=11, output_tokens=7), id="fixture:handoff",
+    ))
+    monkeypatch.setattr("zont_analyzer.cloud.report_jobs.OpenAI", lambda **_kwargs: SimpleNamespace(
+        responses=SimpleNamespace(parse=parse),
+    ))
+    finish = AnalysisService._finish_analysis
+    preparations: list[dict] = []
+
+    def slow_finish(self, *args, **kwargs):
+        if kwargs["include_comparisons"]:
+            clock[0] += 443
+            preparations.append(kwargs)
+        return finish(self, *args, **kwargs)
+
+    monkeypatch.setattr(AnalysisService, "_finish_analysis", slow_finish)
+    packets: list[dict] = []
+    analyze = OpenAIAnalyst.analyze
+
+    def remember_packet(self, packet):
+        packets.append(json.loads(json.dumps(packet)))
+        return analyze(self, packet)
+
+    monkeypatch.setattr(OpenAIAnalyst, "analyze", remember_packet)
+    if scheduled:
+        from zont_analyzer.domain.periods import calendar_period
+
+        period = calendar_period("monthly", datetime(2026, 8, 1).date(), "UTC")
+        monkeypatch.setattr(runner, "run", lambda _payload: runner.run_scheduled(period, use_ai=True))
+    assert runner.run(payload)["phase"] == "analyze"  # Collection only.
+    return db, runner, payload, clock, parse, preparations, packets
+
+
+@pytest.mark.ydb
+@pytest.mark.parametrize("scheduled", [False, True])
+def test_slow_preparation_hands_ai_to_fresh_invocation_then_reuses_exact_packet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scheduled: bool,
+) -> None:
+    db, runner, payload, clock, parse, preparations, packets = _slow_ai_job(
+        tmp_path, monkeypatch, scheduled=scheduled,
+    )
+    deferred = runner.run(payload)
+    assert deferred.get("reason") == "insufficient_time", deferred
+    key = deferred["job_key"]
+    checkpoint = json.loads(db.jobs.get(key).checkpoint)
+    assert checkpoint["phase"] == "analyze" and "prepared_ai_packet" in checkpoint
+    parse.assert_not_called()
+    assert db.storage.execute("SELECT call_key FROM llm_calls;")[0].rows == []
+    assert db.storage.execute("SELECT id FROM reports;")[0].rows == []
+
+    clock[0] = 0
+    assert runner.run(payload)["reason"] == "ai_prepared"
+    assert len(preparations) == 1 and parse.call_count == 1
+    assert db.storage.execute("SELECT id FROM reports;")[0].rows == []
+    clock[0] = 0
+    result = runner.run(payload)
+    assert result["status"] == "done" and result["ai_used"]
+    assert len(preparations) == 2 and parse.call_count == 1
+    assert len(packets) == 3 and packets[0] == packets[1] == packets[2]
+    assert db.report(result["report_id"]).summary == "Fixture AI result"
+
+
+@pytest.mark.ydb
+@pytest.mark.parametrize("changed", ["config", "source"])
+def test_ai_handoff_discards_changed_inputs_before_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str,
+) -> None:
+    db, runner, payload, clock, parse, preparations, _packets = _slow_ai_job(tmp_path, monkeypatch)
+    assert runner.run(payload)["reason"] == "insufficient_time"
+    if changed == "config":
+        runner.runtime.config.analysis.daily_ai_when_normal = True
+    else:
+        db.storage.execute("UPSERT INTO revisions (scope,revision) VALUES ('telemetry:fixture',999);")
+    clock[0] = 0
+    assert runner.run(payload)["reason"] == "inputs_changed"
+    assert len(preparations) == 1
+    parse.assert_not_called()
+    assert db.storage.execute("SELECT call_key FROM llm_calls;")[0].rows == []
+
+
+@pytest.mark.ydb
+def test_ai_handoff_survives_unrelated_publication_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db, runner, payload, clock, parse, _preparations, packets = _slow_ai_job(tmp_path, monkeypatch)
+    assert runner.run(payload)["reason"] == "insufficient_time"
+    # Another report can be saved while this lane waits for its next delivery.
+    # That changes the global publication counter without changing these facts.
+    db.storage.execute("UPSERT INTO revisions (scope,revision) VALUES ('publication',999);")
+    clock[0] = 0
+    assert runner.run(payload)["reason"] == "ai_prepared"
+    clock[0] = 0
+    result = runner.run(payload)
+    assert result["status"] == "done" and result["ai_used"]
+    assert parse.call_count == 1 and packets[0] == packets[1] == packets[2]
+
+
+@pytest.mark.ydb
+def test_ai_handoff_crash_after_cached_success_does_not_dispatch_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db, runner, payload, clock, parse, _preparations, _packets = _slow_ai_job(tmp_path, monkeypatch)
+    key = runner.period(ReportRequest.model_validate(payload)).job_key
+    assert runner.run(payload)["reason"] == "insufficient_time"
+    save = runner._save_checkpoint
+
+    def fail_after_ai(lease, checkpoint):
+        if checkpoint == {"phase": "analyze"}:
+            raise RuntimeError("fixture crash after AI cache commit")
+        return save(lease, checkpoint)
+
+    monkeypatch.setattr(runner, "_save_checkpoint", fail_after_ai)
+    clock[0] = 0
+    with pytest.raises(RuntimeError, match="fixture crash"):
+        runner.run(payload)
+    checkpoint = json.loads(db.jobs.get(key).checkpoint)
+    assert checkpoint["phase"] == "analyze" and "prepared_ai_packet" in checkpoint
+    assert parse.call_count == 1
+    monkeypatch.setattr(runner, "_save_checkpoint", save)
+    clock[0] = 0
+    assert runner.run(payload)["reason"] == "ai_prepared"
+    assert parse.call_count == 1
+
+
+@pytest.mark.ydb
+def test_ai_handoff_unresolved_dispatch_requires_reconciliation_without_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _db, runner, payload, clock, parse, _preparations, _packets = _slow_ai_job(tmp_path, monkeypatch)
+    assert runner.run(payload)["reason"] == "insufficient_time"
+    parse.side_effect = TimeoutError("fixture unknown response")
+    clock[0] = 0
+    assert runner.run(payload)["status"] == "reconciliation_required"
+    clock[0] = 0
+    assert runner.run(payload)["status"] == "reconciliation_required"
+    assert parse.call_count == 1
+
+
+@pytest.mark.ydb
+def test_ai_handoff_rejects_mismatched_period_before_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db, runner, payload, clock, parse, _preparations, _packets = _slow_ai_job(tmp_path, monkeypatch)
+    assert runner.run(payload)["reason"] == "insufficient_time"
+    key = runner.period(ReportRequest.model_validate(payload)).job_key
+    checkpoint = json.loads(db.jobs.get(key).checkpoint)
+    checkpoint["prepared_ai_packet"]["period"]["kind"] = "daily"
+    db.storage.execute(
+        "DECLARE $key AS Utf8; DECLARE $checkpoint AS Utf8; UPDATE jobs SET checkpoint=$checkpoint WHERE job_key=$key;",
+        {"$key": key, "$checkpoint": json.dumps(checkpoint)},
+    )
+    clock[0] = 0
+    with pytest.raises(ValueError, match="invalid prepared AI packet"):
+        runner.run(payload)
+    parse.assert_not_called()
+
+
+@pytest.mark.ydb
+def test_ai_handoff_rechecks_inputs_after_loading_packet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db, runner, payload, clock, parse, _preparations, _packets = _slow_ai_job(tmp_path, monkeypatch)
+    assert runner.run(payload)["reason"] == "insufficient_time"
+    state = runner._input_state
+    changed = False
+
+    def change_after_validation(request=None):
+        nonlocal changed
+        result = state(request)
+        if not changed:
+            changed = True
+            db.storage.execute("UPSERT INTO revisions (scope,revision) VALUES ('owner-gas:installation',999);")
+        return result
+
+    monkeypatch.setattr(runner, "_input_state", change_after_validation)
+    clock[0] = 0
+    assert runner.run(payload)["reason"] == "inputs_changed"
+    parse.assert_not_called()
 
 
 @pytest.mark.ydb

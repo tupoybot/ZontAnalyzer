@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from math import ceil, sqrt
 from typing import Any
 
-ALGORITHM_VERSION = "gas-model-v3"
+ALGORITHM_VERSION = "gas-model-v4"
 DEFAULT_BIN_EDGES = (0.0, 25.0, 50.0, 75.0, 100.0)
 MIN_CALIBRATION_COVERAGE = 0.8
 MIN_ESTIMATE_COVERAGE = 0.8
@@ -116,7 +116,6 @@ class GasModel:
 class GasEstimate:
     volume_m3: float | None
     status: str  # measured, estimated, extrapolated, unknown
-    reliability_index: float
     uncertainty_m3: tuple[float, float] | None
     coverage: float
     flame_minutes: float
@@ -609,7 +608,10 @@ def fit_intervals(
             for row in validation
         ]
         validation_error = sum(errors) / len(errors)
-        validation_relative = sum(errors) / max(1e-9, sum(row.volume_m3 for row in validation))
+        measured_volume = sum(row.volume_m3 for row in validation)
+        # A zero denominator cannot support a percentage. The absolute error
+        # and number of checks remain usable evidence in that case.
+        validation_relative = sum(errors) / measured_volume if measured_volume > 0 else None
 
     fitted = _fit_candidate(usable, selected_groups, low, high)
     assert fitted is not None
@@ -733,7 +735,6 @@ def _unknown_estimate(
     return GasEstimate(
         None,
         "unknown",
-        0.0,
         None,
         coverage,
         flame,
@@ -875,51 +876,11 @@ def estimate_exposure(
     )
     status = "extrapolated" if extrapolated else "estimated"
 
-    if model.usable_interval_count == 0:
-        reliability, cap = 18.0 * coverage, 20.0
-    else:
-        sample_factor = min(1.0, model.usable_interval_count / 8.0)
-        validation_factor = (
-            0.65
-            if model.validation_relative_error is None
-            else max(0.25, 1.0 - min(0.75, model.validation_relative_error))
-        )
-        reliability, cap = (45.0 + 45.0 * sample_factor) * validation_factor * coverage, 100.0
-        if model.heldout_interval_count == 0:
-            cap = min(cap, 45.0)
-        if model.usable_interval_count == 1:
-            cap = min(cap, 25.0)
-        elif model.usable_interval_count == 2:
-            cap = min(cap, 35.0)
-        elif model.usable_interval_count == 3:
-            cap = min(cap, 45.0)
-        if model.diversity_rank < min(2, len(model.rates_m3_per_minute)):
-            cap = min(cap, 50.0)
-    if used_uncertain_bins or unknown_modulation > 0:
-        reliability *= 0.70
-        cap = min(cap, 55.0)
-    if coverage < 0.8:
-        reliability *= coverage
-        cap = min(cap, 40.0)
-    if model.has_gas_stove is True:
-        reliability *= 0.65
-        cap = min(cap, 35.0)
-    elif model.has_gas_stove is None:
-        reliability *= 0.80
-        cap = min(cap, 50.0)
-    if model.boundary_relative_uncertainty > 0.2:
-        cap = min(cap, 45.0)
-    if age_days is not None and age_days > 30:
-        reliability *= max(0.35, 1.0 - (age_days - 30.0) / 730.0)
-        if age_days > 180:
-            cap = min(cap, 40.0)
-
     if flame <= 0:
         reasons.append("observed_burner_off")
     return GasEstimate(
         volume,
         status,
-        max(0.0, min(100.0, cap, reliability)),
         (lower_bound, upper_bound),
         coverage,
         flame,

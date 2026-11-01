@@ -1,13 +1,13 @@
 """Create a deliberately sparse, complete archive for the browser E2E test."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
 from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.application.publication import publish_reports
-from zont_analyzer.domain import Hypothesis, MetricValue, TimeInterval
+from zont_analyzer.domain import Hypothesis, MetricValue, ObservedPattern, QualityResult, TimeInterval, Unknown
 from zont_analyzer.reports import render_html, render_text
 from zont_analyzer.runtime import build_runtime
 
@@ -48,6 +48,7 @@ for selected in (date(2026, 8, 1), date(2026, 8, 3), date(2026, 8, 5)):
     gas = {"status": status, "volume_m3": None if status == "unknown" else 12.3,
            "lower_m3": 10, "upper_m3": 15, "reliability_index_pct": 72,
            "coverage_pct": 88, "model_version": "gas-browser-1", "observed_days": 1,
+           "model": {"validation_relative_error": .12, "heldout_interval_count": 3},
            "observed_hours": 20, "flame_hours": 4, "flame_pct": 20,
            "scope": "boiler", "reasons": ["неполный интервал"], "complete": False,
            "ai_stale": selected.day == 5}
@@ -95,3 +96,31 @@ layout_report.context["gas"] = {
     },
 }
 Path("/publish/gas-layout.html").write_text(render_html(layout_report))
+
+# Cross-season comparisons must be readable before engineering details, including on mobile.
+season_report = report.model_copy(deep=True)
+season_report.kind = "seasonal"
+season_report.period_start = datetime(2026, 9, 1, tzinfo=UTC)
+season_report.period_end = datetime(2026, 11, 1, tzinfo=UTC)
+season_report.quality = QualityResult(
+    score=.9, coverage_pct=99, max_gap_seconds=60, stuck_pct=0, implausible_jumps=0, sample_count=100,
+)
+season_report.metrics = [MetricValue(id="room", name="mean_temperature_c", value=22.3, unit="°C")]
+interval = TimeInterval(started_at=season_report.period_start, ended_at=season_report.period_end,
+                        timezone=season_report.timezone)
+season_report.observed_patterns = [ObservedPattern(
+    id="pattern:season", statement="Синтетическое наблюдение: в комнате стало теплее.", interval=interval,
+    epistemic_level="derived",
+)]
+season_report.unknowns = [Unknown(id="unknown:season", statement="Синтетическое ограничение.", interval=interval)]
+season_report.context["period_comparisons"] = [{
+    "label": "Прошлая осень", "selection": "Сравнение выбранных суток, не итог всего сезона.",
+    "matched_windows": [{
+        "before_start": "2025-10-01T00:00:00+00:00", "before_end": "2025-10-02T00:00:00+00:00",
+        "after_start": "2026-10-01T00:00:00+00:00", "after_end": "2026-10-02T00:00:00+00:00",
+        "status": "limited", "confounders": ["weather_not_comparable"],
+        "metrics": [{"name": "room_mean_c", "unit": "celsius", "before": 21.2,
+                     "after": 22.3, "absolute_change": 1.1, "relative_change_pct": 5.19}],
+    }],
+}]
+Path("/publish/season-comparison.html").write_text(render_html(season_report))

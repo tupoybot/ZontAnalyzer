@@ -34,202 +34,584 @@
   },
   "panels": [
     {
+      "id": 100,
+      "title": "Состояние и задания",
+      "type": "row",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
       "id": 1,
-      "title": "Результат синхронизации (1 — успех)",
-      "type": "timeseries",
+      "title": "Результат синхронизации",
+      "type": "status-history",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
-        "y": 0,
-        "w": 12,
-        "h": 8
+        "y": 1,
+        "w": 8,
+        "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "min(last_over_time(zont_sync_success{environment=\"$environment\"}[48h]) and (last_over_time(zont_sync_observed_timestamp_seconds{environment=\"$environment\"}[48h]) == on (environment) group_left max by (environment) (last_over_time(zont_sync_observed_timestamp_seconds{environment=\"$environment\"}[48h]))))",
+          "expr": "min (min_over_time(zont_sync_success{environment=\"$environment\"}[$__interval])) or on () vector(-1)",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+          "legendFormat": "Синхронизация",
+          "instant": false,
+          "range": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none"
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Ошибка синхронизации",
+                  "color": "red",
+                  "index": 2
+                },
+                "1": {
+                  "text": "Без ошибок",
+                  "color": "green",
+                  "index": 1
+                },
+                "-1": {
+                  "text": "Нет измерений",
+                  "color": "transparent",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 100,
+            "axisPlacement": "hidden"
+          }
         },
         "overrides": []
       },
-      "options": {}
+      "options": {
+        "showValue": "never",
+        "rowHeight": 0.4,
+        "colWidth": 0.65,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "interval": "1m",
+      "maxDataPoints": 90,
+      "description": "Цветные деления показывают результаты измерений за интервал времени среди экземпляров приложения. Зелёный — без ошибок, красный — ошибка синхронизации. Хотя бы один неблагоприятный замер делает интервал красным. Без измерений остаётся фон панели. Интервал зависит от выбранного диапазона, минимум — одна минута; заканчивается в указанное время. Подробности доступны при наведении. Отсутствие ошибок не означает завершения догрузки телеметрии."
     },
     {
-      "id": 2,
-      "title": "Возраст последней телеметрии",
-      "type": "timeseries",
+      "id": 28,
+      "title": "Наличие телеметрии",
+      "type": "status-history",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
       "gridPos": {
-        "x": 12,
-        "y": 0,
-        "w": 12,
-        "h": 8
+        "x": 8,
+        "y": 1,
+        "w": 8,
+        "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "time() - max(last_over_time(zont_telemetry_timestamp_seconds{environment=\"$environment\"}[48h]))",
+          "expr": "min (min_over_time(zont_telemetry_present{environment=\"$environment\"}[$__interval])) or on () vector(-1)",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+          "legendFormat": "Телеметрия",
+          "instant": false,
+          "range": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Телеметрии нет",
+                  "color": "red",
+                  "index": 2
+                },
+                "1": {
+                  "text": "Есть телеметрия",
+                  "color": "green",
+                  "index": 1
+                },
+                "-1": {
+                  "text": "Нет измерений",
+                  "color": "transparent",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 100,
+            "axisPlacement": "hidden"
+          }
         },
         "overrides": []
       },
-      "options": {}
+      "options": {
+        "showValue": "never",
+        "rowHeight": 0.4,
+        "colWidth": 0.65,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "interval": "1m",
+      "maxDataPoints": 90,
+      "description": "Цветные деления показывают результаты измерений за интервал времени среди экземпляров приложения. Зелёный — есть телеметрия, красный — телеметрии нет. Хотя бы один неблагоприятный замер делает интервал красным. Без измерений остаётся фон панели. Интервал зависит от выбранного диапазона, минимум — одна минута; заканчивается в указанное время. Подробности доступны при наведении."
     },
     {
-      "id": 3,
-      "title": "Возраст полученных точек при сборе",
-      "type": "timeseries",
+      "id": 29,
+      "title": "Ежечасная проверка мониторинга",
+      "type": "status-history",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 1,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min (min_over_time(zont_cloud_job_success{environment=\"$environment\",operation=\"monitoring\"}[$__interval])) or on () vector(-1)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Мониторинг",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Ошибка",
+                  "color": "red",
+                  "index": 2
+                },
+                "1": {
+                  "text": "Успех",
+                  "color": "green",
+                  "index": 1
+                },
+                "-1": {
+                  "text": "Нет измерений",
+                  "color": "transparent",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 100,
+            "axisPlacement": "hidden"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "never",
+        "rowHeight": 0.4,
+        "colWidth": 0.65,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "interval": "1m",
+      "maxDataPoints": 90,
+      "description": "Цветные деления показывают результаты измерений за интервал времени среди экземпляров приложения. Зелёный — успех, красный — ошибка. Хотя бы один неблагоприятный замер делает интервал красным. Без измерений остаётся фон панели. Интервал зависит от выбранного диапазона, минимум — одна минута; заканчивается в указанное время. Подробности доступны при наведении."
+    },
+    {
+      "id": 30,
+      "title": "Готовность прокси",
+      "type": "status-history",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
-        "y": 8,
-        "w": 12,
-        "h": 8
+        "y": 5,
+        "w": 8,
+        "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max(last_over_time(zont_telemetry_lag_seconds{environment=\"$environment\"}[48h]))",
+          "expr": "min(min_over_time(zont_proxy_ready{environment=\"$environment\"}[$__interval])) or on () vector(-1)",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+          "legendFormat": "Прокси",
+          "instant": false,
+          "range": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Не готов",
+                  "color": "red",
+                  "index": 1
+                },
+                "1": {
+                  "text": "Готов",
+                  "color": "green",
+                  "index": 2
+                },
+                "-1": {
+                  "text": "Нет измерений",
+                  "color": "transparent",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 100,
+            "axisPlacement": "hidden"
+          }
         },
         "overrides": []
       },
-      "options": {}
+      "options": {
+        "showValue": "never",
+        "rowHeight": 0.4,
+        "colWidth": 0.65,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "interval": "1m",
+      "maxDataPoints": 90,
+      "description": "Проверки готовности локального прокси при обработке заданий. Зелёное деление — получены только успешные проверки, красное — хотя бы одна неуспешная среди экземпляров приложения; без измерений остаётся фон панели. Интервал зависит от выбранного диапазона, минимум — одна минута. Деление относится к интервалу, заканчивающемуся в указанное время; прежняя готовность не переносится вперёд. Подробности доступны при наведении."
     },
     {
-      "id": 4,
-      "title": "Длительность операций",
-      "type": "timeseries",
+      "id": 22,
+      "title": "Результат чтения состояния",
+      "type": "status-history",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
       "gridPos": {
-        "x": 12,
-        "y": 8,
-        "w": 12,
-        "h": 8
+        "x": 8,
+        "y": 5,
+        "w": 8,
+        "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "{__name__=~\"zont_(cloud_job|analysis|report)_duration_seconds\",environment=\"$environment\"}",
+          "expr": "min (min_over_time(zont_snapshot_success{environment=\"$environment\"}[$__interval])) or on () vector(-1)",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "legendFormat": "{{__name__}} {{operation}}"
+          "legendFormat": "Чтение состояния",
+          "instant": false,
+          "range": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Ошибка",
+                  "color": "red",
+                  "index": 2
+                },
+                "1": {
+                  "text": "Успех",
+                  "color": "green",
+                  "index": 1
+                },
+                "-1": {
+                  "text": "Нет измерений",
+                  "color": "transparent",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 100,
+            "axisPlacement": "hidden"
+          }
         },
         "overrides": []
       },
-      "options": {}
+      "options": {
+        "showValue": "never",
+        "rowHeight": 0.4,
+        "colWidth": 0.65,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "interval": "1m",
+      "maxDataPoints": 90,
+      "description": "Цветные деления показывают результаты измерений за интервал времени среди экземпляров приложения. Зелёный — успех, красный — ошибка. Хотя бы один неблагоприятный замер делает интервал красным. Без измерений остаётся фон панели. Интервал зависит от выбранного диапазона, минимум — одна минута; заканчивается в указанное время. Подробности доступны при наведении."
     },
     {
-      "id": 5,
-      "title": "Ошибки и таймауты вызовов за час",
-      "type": "timeseries",
+      "id": 13,
+      "title": "Прямой обход прокси",
+      "type": "status-history",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 5,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max (max_over_time(zont_direct_fallback_allowed{environment=\"$environment\"}[$__interval])) or on () vector(-1)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Обход прокси",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Обход запрещён",
+                  "color": "green",
+                  "index": 1
+                },
+                "1": {
+                  "text": "Обход разрешён",
+                  "color": "red",
+                  "index": 2
+                },
+                "-1": {
+                  "text": "Нет измерений",
+                  "color": "transparent",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 100,
+            "axisPlacement": "hidden"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "never",
+        "rowHeight": 0.4,
+        "colWidth": 0.65,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "interval": "1m",
+      "maxDataPoints": 90,
+      "description": "Цветные деления показывают результаты измерений за интервал времени среди экземпляров приложения. Зелёный — обход запрещён, красный — обход разрешён. Хотя бы один неблагоприятный замер делает интервал красным. Без измерений остаётся фон панели. Интервал зависит от выбранного диапазона, минимум — одна минута; заканчивается в указанное время. Подробности доступны при наведении."
+    },
+    {
+      "id": 14,
+      "title": "Результаты заданий",
+      "type": "status-history",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
-        "y": 16,
+        "y": 9,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (operation, outcome) (increase(zont_invocations_total{environment=\"$environment\",outcome!=\"success\"}[1h]))",
+          "expr": "min by (operation) (min_over_time(zont_cloud_job_success{environment=\"$environment\",operation!=\"\"}[$__interval])) or on (operation) (-1 * group by (operation) (count_over_time(zont_cloud_job_success{environment=\"$environment\",operation!=\"\"}[$__range] @ end())))",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+          "legendFormat": "{{operation}}",
+          "instant": false,
+          "range": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 6,
-      "title": "Вызовы контейнера за час",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 16,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (operation) (increase(zont_invocations_total{environment=\"$environment\"}[1h]))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
           },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Ошибка",
+                  "color": "red",
+                  "index": 2
+                },
+                "1": {
+                  "text": "Успех",
+                  "color": "green",
+                  "index": 1
+                },
+                "-1": {
+                  "text": "Нет измерений",
+                  "color": "transparent",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 100,
+            "axisPlacement": "auto"
+          }
         },
         "overrides": []
       },
-      "options": {}
+      "options": {
+        "showValue": "never",
+        "rowHeight": 0.75,
+        "colWidth": 0.65,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "interval": "1m",
+      "maxDataPoints": 90,
+      "description": "Цветные деления показывают результаты измерений за интервал времени среди экземпляров приложения. Зелёный — успех, красный — ошибка. Хотя бы один неблагоприятный замер делает интервал красным. Без измерений остаётся фон панели. Интервал зависит от выбранного диапазона, минимум — одна минута; заканчивается в указанное время. Подробности доступны при наведении. Каждая операция показана отдельной строкой; общий результат HTTP-запроса без operation исключён."
     },
     {
       "id": 35,
@@ -240,9 +622,9 @@
         "uid": "${datasource}"
       },
       "gridPos": {
-        "x": 0,
-        "y": 24,
-        "w": 24,
+        "x": 12,
+        "y": 9,
+        "w": 12,
         "h": 8
       },
       "description": "Ожидающие публикации отчёты и ручные задания по состояниям. Последние замеры; отсутствие или ошибка свежих данных не означают пустую очередь. При ограниченном чтении — нижняя граница числа заданий.",
@@ -311,6 +693,1092 @@
       }
     },
     {
+      "id": 101,
+      "title": "Телеметрия и отчёты",
+      "type": "row",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 2,
+      "title": "Возраст последней телеметрии",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - max(last_over_time(zont_telemetry_timestamp_seconds{environment=\"$environment\"}[48h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "title": "Возраст полученных точек при сборе",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(last_over_time(zont_telemetry_lag_seconds{environment=\"$environment\"}[48h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 25,
+      "title": "Непрерывная работа по последнему отчёту",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "zont_reliability_uptime_seconds{environment=\"$environment\"}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{component}} {{quality}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 26,
+      "title": "Признаки качества данных о непрерывной работе",
+      "type": "status-history",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min(min_over_time(zont_reliability_evidence{environment=\"$environment\",component=\"boiler\",quality=\"data_fresh\"}[$__interval])) or on () vector(-1)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Котёл · данные свежие",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "max(max_over_time(zont_reliability_evidence{environment=\"$environment\",component=\"boiler\",quality=\"continuity_uncertain\"}[$__interval])) or on () vector(-1)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Котёл · непрерывность не подтверждена",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "max(max_over_time(zont_reliability_evidence{environment=\"$environment\",component=\"boiler\",quality=\"lower_bound\"}[$__interval])) or on () vector(-1)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Котёл · оценка снизу",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "D",
+          "expr": "min(min_over_time(zont_reliability_evidence{environment=\"$environment\",component=\"zont\",quality=\"data_fresh\"}[$__interval])) or on () vector(-1)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "ZONT · данные свежие",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "E",
+          "expr": "max(max_over_time(zont_reliability_evidence{environment=\"$environment\",component=\"zont\",quality=\"continuity_uncertain\"}[$__interval])) or on () vector(-1)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "ZONT · непрерывность не подтверждена",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "F",
+          "expr": "max(max_over_time(zont_reliability_evidence{environment=\"$environment\",component=\"zont\",quality=\"lower_bound\"}[$__interval])) or on () vector(-1)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "ZONT · оценка снизу",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Нет",
+                  "color": "red",
+                  "index": 1
+                },
+                "1": {
+                  "text": "Да",
+                  "color": "green",
+                  "index": 2
+                },
+                "-1": {
+                  "text": "Нет измерений",
+                  "color": "transparent",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 100,
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "Нет",
+                        "color": "green",
+                        "index": 1
+                      },
+                      "1": {
+                        "text": "Да",
+                        "color": "yellow",
+                        "index": 2
+                      },
+                      "-1": {
+                        "text": "Нет измерений",
+                        "color": "transparent",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "Нет",
+                        "color": "green",
+                        "index": 1
+                      },
+                      "1": {
+                        "text": "Да",
+                        "color": "blue",
+                        "index": 2
+                      },
+                      "-1": {
+                        "text": "Нет измерений",
+                        "color": "transparent",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "E"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "Нет",
+                        "color": "green",
+                        "index": 1
+                      },
+                      "1": {
+                        "text": "Да",
+                        "color": "yellow",
+                        "index": 2
+                      },
+                      "-1": {
+                        "text": "Нет измерений",
+                        "color": "transparent",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "F"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "Нет",
+                        "color": "green",
+                        "index": 1
+                      },
+                      "1": {
+                        "text": "Да",
+                        "color": "blue",
+                        "index": 2
+                      },
+                      "-1": {
+                        "text": "Нет измерений",
+                        "color": "transparent",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showValue": "never",
+        "rowHeight": 0.7,
+        "colWidth": 0.65,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "interval": "1m",
+      "maxDataPoints": 90,
+      "description": "Отдельные признаки для котла и ZONT по сформированным отчётам. Свежие данные: да — зелёный, нет — красный. Неподтверждённая непрерывность: да — жёлтый. Оценка снизу: да — синий, это характеристика оценки, а не отказ. При смешанных измерениях интервала сохраняется неблагоприятный признак. Без измерений остаётся фон панели. Интервал зависит от диапазона, минимум — одна минута; заканчивается в указанное время."
+    },
+    {
+      "id": 27,
+      "title": "Время формирования последнего отчёта",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 24,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(last_over_time(zont_report_generated_timestamp_seconds{environment=\"$environment\"}[$__range]) > 0) * 1000",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Время формирования последнего отчёта",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "decimals": 0,
+          "noValue": "Нет измерений в диапазоне",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "text": {
+          "value": 24
+        }
+      },
+      "description": "Самое позднее время формирования отчёта среди измерений выбранного диапазона, показанное одной датой. Отсутствие измерений не подменяется датой начала эпохи."
+    },
+    {
+      "id": 102,
+      "title": "Модели",
+      "type": "row",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 15,
+      "title": "Следующий пересмотр модели",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 39,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(min(last_over_time(zont_model_review_next_due_timestamp_seconds{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h])))) and (min(last_over_time(zont_model_review_enabled{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h])))) == 1)) * 1000",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Следующий пересмотр",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "decimals": 0,
+          "noValue": "Срок не определён",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "text": {
+          "value": 24
+        }
+      },
+      "description": "Срок следующего пересмотра по последнему наблюдению состояния не старше двух часов. При выключенном пересмотре или неизвестном сроке дата не подменяется нулём."
+    },
+    {
+      "id": 16,
+      "title": "Последний успешный пересмотр",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 39,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max((last_over_time(zont_model_review_last_success_timestamp_seconds{environment=\"$environment\"}[2h]) > 0) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_snapshot_success{environment=\"$environment\"}[2h]) == 1)) * 1000",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Последний успешный пересмотр модели",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "decimals": 0,
+          "noValue": "Нет свежих данных",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "text": {
+          "value": 24
+        }
+      },
+      "description": "Значение из последнего снимка состояния на конец выбранного диапазона. Снимок должен быть успешным и не старше двух часов. Копии от экземпляров приложения не суммируются. Старый снимок с большим значением не перекрывает новый. Отсутствие свежих данных не подменяется нулём. Дата передаётся в миллисекундах и показывается в часовом поясе Grafana."
+    },
+    {
+      "id": 17,
+      "title": "Попытки текущего пересмотра",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 39,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(last_over_time(zont_model_review_attempts{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_snapshot_success{environment=\"$environment\"}[2h]) == 1))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Попытки текущего пересмотра модели",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Нет свежих данных",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "text": {
+          "value": 24
+        }
+      },
+      "description": "Значение из последнего снимка состояния на конец выбранного диапазона. Снимок должен быть успешным и не старше двух часов. Копии от экземпляров приложения не суммируются. Старый снимок с большим значением не перекрывает новый. Отсутствие свежих данных не подменяется нулём. Это попытки текущего цикла, а не накопительное число всех запусков; после завершения цикла значение сбрасывается."
+    },
+    {
+      "id": 24,
+      "title": "Пересмотр модели",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 12,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min(last_over_time(zont_model_review_enabled{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]))))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Пересмотр модели",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Нет свежих данных",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Выключен"
+                },
+                "1": {
+                  "text": "Включён"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "text": {
+          "value": 24
+        }
+      },
+      "description": "Настройка пересмотра модели из последнего наблюдения не старше двух часов. Выключенный пересмотр не обозначает ошибку."
+    },
+    {
+      "id": 18,
+      "title": "Ошибка пересмотра модели",
+      "type": "status-history",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 43,
+        "w": 12,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max (max_over_time(zont_model_review_error{environment=\"$environment\"}[$__interval])) or on () vector(-1)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Пересмотр модели",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Нет ошибки",
+                  "color": "green",
+                  "index": 1
+                },
+                "1": {
+                  "text": "Ошибка",
+                  "color": "red",
+                  "index": 2
+                },
+                "-1": {
+                  "text": "Нет измерений",
+                  "color": "transparent",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 100,
+            "axisPlacement": "hidden"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "never",
+        "rowHeight": 0.4,
+        "colWidth": 0.65,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "interval": "1m",
+      "maxDataPoints": 90,
+      "description": "Цветные деления показывают результаты измерений за интервал времени среди экземпляров приложения. Зелёный — нет ошибки, красный — ошибка. Хотя бы один неблагоприятный замер делает интервал красным. Без измерений остаётся фон панели. Интервал зависит от выбранного диапазона, минимум — одна минута; заканчивается в указанное время. Подробности доступны при наведении."
+    },
+    {
+      "id": 19,
+      "title": "Предложения по моделям",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 47,
+        "w": 24,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (status) (last_over_time(zont_model_review_proposals{environment=\"$environment\"}[2h]) and ignoring (status) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and ignoring (status) (last_over_time(zont_snapshot_success{environment=\"$environment\"}[2h]) == 1))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{status}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Нет свежих данных",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "open"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Открытые"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "deferred"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Отложенные"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "accepted"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Принятые"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rejected"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Отклонённые"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "superseded"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Заменённые"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "vertical",
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "text": {
+          "titleSize": 16,
+          "valueSize": 36
+        },
+        "wideLayout": false
+      },
+      "description": "Число предложений в каждом состоянии из последнего снимка на конец выбранного диапазона. Снимок должен быть успешным и не старше двух часов. Экземпляры приложения не суммируются. Ноль означает отсутствие предложений, отсутствие свежего успешного снимка показано отдельно."
+    },
+    {
+      "id": 103,
+      "title": "OpenAI и бюджет",
+      "type": "row",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 52,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 20,
+      "title": "Расход токенов за месяц",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 53,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(last_over_time(zont_monthly_ai_tokens{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_snapshot_success{environment=\"$environment\"}[2h]) == 1))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Расход токенов за месяц",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Нет свежих данных",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "text": {
+          "value": 24
+        }
+      },
+      "description": "Значение из последнего снимка состояния на конец выбранного диапазона. Снимок должен быть успешным и не старше двух часов. Копии от экземпляров приложения не суммируются. Старый снимок с большим значением не перекрывает новый. Отсутствие свежих данных не подменяется нулём."
+    },
+    {
+      "id": 21,
+      "title": "Месячный бюджет токенов",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 53,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(last_over_time(zont_monthly_ai_token_budget{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_snapshot_success{environment=\"$environment\"}[2h]) == 1))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Месячный бюджет токенов",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Нет свежих данных",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "text": {
+          "value": 24
+        }
+      },
+      "description": "Значение из последнего снимка состояния на конец выбранного диапазона. Снимок должен быть успешным и не старше двух часов. Копии от экземпляров приложения не суммируются. Старый снимок с большим значением не перекрывает новый. Отсутствие свежих данных не подменяется нулём."
+    },
+    {
+      "id": 23,
+      "title": "Зарезервированные токены за месяц",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 53,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(last_over_time(zont_monthly_ai_reserved_tokens{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]))) and (last_over_time(zont_snapshot_success{environment=\"$environment\"}[2h]) == 1))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Резерв токенов",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Нет свежих данных",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "text": {
+          "value": 24
+        }
+      },
+      "description": "Значение из последнего снимка состояния на конец выбранного диапазона. Снимок должен быть успешным и не старше двух часов. Копии от экземпляров приложения не суммируются. Старый снимок с большим значением не перекрывает новый. Отсутствие свежих данных не подменяется нулём."
+    },
+    {
       "id": 7,
       "title": "Вызовы и ошибки OpenAI за час",
       "type": "timeseries",
@@ -320,14 +1788,58 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 32,
+        "y": 57,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (__name__) (increase({__name__=~\"zont_openai_(calls|failures)_total\",environment=\"$environment\"}[1h]))",
+          "expr": "sum (increase(zont_openai_calls_total{environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Вызовы"
+        },
+        {
+          "refId": "B",
+          "expr": "sum (increase(zont_openai_failures_total{environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Ошибки"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Прирост счётчиков за последний час с учётом перезапусков. Измерения экземпляров приложения суммируются отдельно по видам событий. Отсутствие измерений не подменяется нулём."
+    },
+    {
+      "id": 8,
+      "title": "Токены OpenAI за час",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 57,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (increase(zont_openai_tokens_total{environment=\"$environment\"}[1h]))",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -344,8 +1856,111 @@
       "options": {}
     },
     {
-      "id": 8,
-      "title": "Токены OpenAI за час",
+      "id": 104,
+      "title": "Выполнение и сеть",
+      "type": "row",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 65,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 4,
+      "title": "Длительность операций — максимум за интервал",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 66,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (operation) (max_over_time(zont_cloud_job_duration_seconds{environment=\"$environment\",operation!=\"\"}[$__interval]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "max (max_over_time(zont_analysis_duration_seconds{environment=\"$environment\"}[$__interval]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Анализ",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "max (max_over_time(zont_report_duration_seconds{environment=\"$environment\"}[$__interval]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Отчёт",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "points",
+            "showPoints": "always",
+            "pointSize": 6,
+            "lineWidth": 0,
+            "fillOpacity": 0,
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "description": "Максимальная измеренная длительность каждой операции за интервал времени среди экземпляров приложения. Точка расположена в конце интервала. Интервал зависит от выбранного диапазона, минимум — одна минута. Точки не соединяются: без измерений интервал остаётся пустым, последний замер не продлевается. Общая длительность HTTP-запроса без operation исключена.",
+      "interval": "1m",
+      "maxDataPoints": 120
+    },
+    {
+      "id": 6,
+      "title": "Вызовы контейнера за час",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -353,14 +1968,47 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 32,
+        "y": 66,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (kind) (increase(zont_openai_tokens_total{environment=\"$environment\"}[1h]))",
+          "expr": "sum by (operation) (increase(zont_invocations_total{environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "title": "Ошибки и таймауты вызовов за час",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 74,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (operation, outcome) (increase(zont_invocations_total{environment=\"$environment\",outcome!=\"success\"}[1h]))",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -385,29 +2033,40 @@
         "uid": "${datasource}"
       },
       "gridPos": {
-        "x": 0,
-        "y": 40,
+        "x": 12,
+        "y": 74,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (__name__) (increase({__name__=~\"zont_(ydb_errors|publication_failures)_total\",environment=\"$environment\"}[1h]))",
+          "expr": "sum (increase(zont_ydb_errors_total{environment=\"$environment\"}[1h]))",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+          "legendFormat": "Хранилище"
+        },
+        {
+          "refId": "B",
+          "expr": "sum (increase(zont_publication_failures_total{environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Публикация"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none"
+          "unit": "none",
+          "min": 0
         },
         "overrides": []
       },
-      "options": {}
+      "options": {},
+      "description": "Прирост счётчиков за последний час с учётом перезапусков. Измерения экземпляров приложения суммируются отдельно по видам событий. Отсутствие измерений не подменяется нулём."
     },
     {
       "id": 10,
@@ -418,8 +2077,8 @@
         "uid": "${datasource}"
       },
       "gridPos": {
-        "x": 12,
-        "y": 40,
+        "x": 0,
+        "y": 82,
         "w": 12,
         "h": 8
       },
@@ -451,29 +2110,40 @@
         "uid": "${datasource}"
       },
       "gridPos": {
-        "x": 0,
-        "y": 48,
+        "x": 12,
+        "y": 82,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (__name__, destination) (increase({__name__=~\"zont_(proxy_failures|upstream_failures)_total\",environment=\"$environment\"}[1h]))",
+          "expr": "sum by (destination) (increase(zont_proxy_failures_total{environment=\"$environment\"}[1h]))",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+          "legendFormat": "Прокси · {{destination}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (destination) (increase(zont_upstream_failures_total{environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Внешний API · {{destination}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none"
+          "unit": "none",
+          "min": 0
         },
         "overrides": []
       },
-      "options": {}
+      "options": {},
+      "description": "Прирост счётчиков за последний час с учётом перезапусков. Измерения экземпляров приложения суммируются отдельно по видам событий. Отсутствие измерений не подменяется нулём."
     },
     {
       "id": 12,
@@ -484,623 +2154,40 @@
         "uid": "${datasource}"
       },
       "gridPos": {
-        "x": 12,
-        "y": 48,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (__name__) (increase({__name__=~\"zont_egress_(denials|limit)_total\",environment=\"$environment\"}[1h]))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 13,
-      "title": "Разрешён прямой обход прокси (должен быть 0)",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
         "x": 0,
-        "y": 56,
-        "w": 12,
+        "y": 90,
+        "w": 24,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max(last_over_time(zont_direct_fallback_allowed{environment=\"$environment\"}[2h]))",
+          "expr": "sum (increase(zont_egress_denials_total{environment=\"$environment\"}[1h]))",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
+          "legendFormat": "Запрещённые обращения"
         },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 14,
-      "title": "Результаты заданий",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 56,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
         {
-          "refId": "A",
-          "expr": "min by (operation) (last_over_time(zont_cloud_job_success{environment=\"$environment\"}[2h]))",
+          "refId": "B",
+          "expr": "sum (increase(zont_egress_limit_total{environment=\"$environment\"}[1h]))",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+          "legendFormat": "Превышения лимита"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none"
+          "unit": "none",
+          "min": 0
         },
         "overrides": []
       },
-      "options": {}
-    },
-    {
-      "id": 15,
-      "title": "Срок следующего пересмотра модели",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 64,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "(min(last_over_time(zont_model_review_next_due_timestamp_seconds{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h])))) and (min(last_over_time(zont_model_review_enabled{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h])))) == 1)) * 1000",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{status}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "dateTimeAsIso"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 16,
-      "title": "Последний успешный пересмотр модели",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 64,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_model_review_last_success_timestamp_seconds{environment=\"$environment\"} * 1000",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{status}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "dateTimeAsIso"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 17,
-      "title": "Попытки пересмотра модели",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 72,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_model_review_attempts{environment=\"$environment\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{status}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 18,
-      "title": "Ошибка пересмотра модели",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 72,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_model_review_error{environment=\"$environment\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{status}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 19,
-      "title": "Предложения по моделям",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 80,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_model_review_proposals{environment=\"$environment\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{status}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 20,
-      "title": "Расход токенов за месяц",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 80,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_monthly_ai_tokens{environment=\"$environment\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{status}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 21,
-      "title": "Месячный бюджет токенов",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 88,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_monthly_ai_token_budget{environment=\"$environment\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{status}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 22,
-      "title": "Результат чтения состояния",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 88,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_snapshot_success{environment=\"$environment\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{status}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 23,
-      "title": "Зарезервированные токены за месяц",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 96,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_monthly_ai_reserved_tokens{environment=\"$environment\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{component}} {{quality}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 24,
-      "title": "Пересмотр модели включён (1 — да)",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 96,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "min(last_over_time(zont_model_review_enabled{environment=\"$environment\"}[2h]) and (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]) == on (environment) group_left max by (environment) (last_over_time(zont_snapshot_observed_timestamp_seconds{environment=\"$environment\"}[2h]))))",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{component}} {{quality}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 25,
-      "title": "Непрерывная работа по последнему отчёту",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 104,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_reliability_uptime_seconds{environment=\"$environment\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{component}} {{quality}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 26,
-      "title": "Качество доказательств непрерывной работы",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 104,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_reliability_evidence{environment=\"$environment\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{component}} {{quality}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 27,
-      "title": "Время формирования последнего отчёта",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 112,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_report_generated_timestamp_seconds{environment=\"$environment\"} * 1000",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{component}} {{quality}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "dateTimeAsIso"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 28,
-      "title": "Наличие телеметрии (1 — есть)",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 112,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_telemetry_present{environment=\"$environment\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 29,
-      "title": "Ежечасная проверка мониторинга",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 120,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_cloud_job_success{environment=\"$environment\",operation=\"monitoring\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
-    },
-    {
-      "id": 30,
-      "title": "Готовность прокси (1 — готов)",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 120,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "zont_proxy_ready{environment=\"$environment\"}",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "options": {}
+      "options": {},
+      "description": "Прирост счётчиков за последний час с учётом перезапусков. Измерения экземпляров приложения суммируются отдельно по видам событий. Отсутствие измерений не подменяется нулём."
     }
   ]
 }
