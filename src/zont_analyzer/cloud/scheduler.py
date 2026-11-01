@@ -43,7 +43,7 @@ def _observe_lane(lane: str, result: dict[str, Any]) -> None:
     operation = "scheduler_" + lane
     observe("zont_cloud_job_observed_timestamp_seconds", time.time(), operation=operation)
     observe("zont_cloud_job_success", float(not failed), operation=operation)
-    observe("zont_invocations_total", operation=operation, outcome="failure" if failed else "success")
+    observe("zont_scheduler_lane_runs_total", lane=lane, outcome="failure" if failed else "success")
 
 
 def daily_needs_report(analysis: AnalysisService, selected: date, yesterday: date) -> bool:

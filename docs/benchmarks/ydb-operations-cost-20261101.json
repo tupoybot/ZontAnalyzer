@@ -1,0 +1,1592 @@
+{
+  "date": "2026-11-01",
+  "baseline_commit": "273dfcacb1559932f62f333a3b83bf0693dc554c",
+  "candidate_base_commit": "c83c0ab2df21ab71a9b740e1ea9a01f1d6b48a89",
+  "candidate_sources": [
+    {
+      "path": "src/zont_analyzer/runtime.py",
+      "sha256": "933bef4c083637ccc149bb37e4e07d5ac0e25f6598b61eab394e5026c7baf6d4"
+    },
+    {
+      "path": "src/zont_analyzer/domain/models.py",
+      "sha256": "cecfc728fa1cf1dbfdea60b724d24f82d1efd781e6b4b2ee42c4a2c1023d3351"
+    },
+    {
+      "path": "src/zont_analyzer/domain/experiments.py",
+      "sha256": "e37fbd4beb91961cb7b6958d9bbc0dfeb3153f96729b0a6432395a542c9d56db"
+    },
+    {
+      "path": "src/zont_analyzer/domain/__init__.py",
+      "sha256": "d4577e5c4b34150083d5b94a00a52d28443ccf54bcddca0969db7ce955e7b12e"
+    },
+    {
+      "path": "src/zont_analyzer/domain/periods.py",
+      "sha256": "831cf6d9fd416e9f939b622559971a62336b9bc31b84fc3824342485af8893b7"
+    },
+    {
+      "path": "src/zont_analyzer/domain/reasoning.py",
+      "sha256": "4016f0d7089db9c68a44807578a4337e582243fe1813cd8e8f51c6a7d176e0e8"
+    },
+    {
+      "path": "src/zont_analyzer/doctor.py",
+      "sha256": "660e8c39f651acefe590e571a82e2868daae2284b44b5d0cc5a84b88e7c4a5c5"
+    },
+    {
+      "path": "src/zont_analyzer/cli.py",
+      "sha256": "077df53a7586f5e1383381b4d22bbe545462f55971132a01ad5f80b0afbf18b3"
+    },
+    {
+      "path": "src/zont_analyzer/logging.py",
+      "sha256": "348c9d040921d82323f9c3e84c073132c4f4e0b90d0d9d1516b3f2454b4ab314"
+    },
+    {
+      "path": "src/zont_analyzer/application/gas_comparison.py",
+      "sha256": "7966c4859df3d16e72e142e1d8f28c2053e8496202746f29a0157aa8f7bd2cbb"
+    },
+    {
+      "path": "src/zont_analyzer/application/gas.py",
+      "sha256": "4e06aa908f67b280563e80c295e2261cbbc97c6db69a07728a4e8007389f53e5"
+    },
+    {
+      "path": "src/zont_analyzer/application/gas_tariffs.py",
+      "sha256": "201bae9f3ca77f92b1ce5ce0d6638606438c3541bbbad1cb92e79384e96c1407"
+    },
+    {
+      "path": "src/zont_analyzer/application/ingestion.py",
+      "sha256": "1a5409cc03463dd958a969f61244cf1c1a172e3db2a84f691300d160ded20f71"
+    },
+    {
+      "path": "src/zont_analyzer/application/gas_cost.py",
+      "sha256": "272d744a8fd9533520178fb19bfce31bcd58425cce2e262d658ed95156eeb956"
+    },
+    {
+      "path": "src/zont_analyzer/application/feedback.py",
+      "sha256": "33e3c917fcab30b33f3c97e455a1cb03272591de93ffdaf1fdb59fd857f367e9"
+    },
+    {
+      "path": "src/zont_analyzer/application/reasoning_context.py",
+      "sha256": "5a3a01f9f3d07826436f5e67882f1bb018df28f1995753258d412f3104c80482"
+    },
+    {
+      "path": "src/zont_analyzer/application/long_periods.py",
+      "sha256": "51a1e44074dac3cdc3f2a84d9455b34a01560c44975236123d704147aa82bd23"
+    },
+    {
+      "path": "src/zont_analyzer/application/timezone.py",
+      "sha256": "866712825424adc2b8ae996c21e5df23776e6e5767f23a9ee56726331848d757"
+    },
+    {
+      "path": "src/zont_analyzer/application/model_review.py",
+      "sha256": "5c13279ff4f3a4a730cae01969619cacb8fa20ec435eb3f726f4a5c6ba351a80"
+    },
+    {
+      "path": "src/zont_analyzer/application/pilot.py",
+      "sha256": "7ff9520ff6cac1ef8564263d24362f286b19e4d2b6345cacb9db47fa8bff19e6"
+    },
+    {
+      "path": "src/zont_analyzer/application/analysis.py",
+      "sha256": "da4d12df134d4209494692e9ce678b6f9cd851d12ac94ba0c35e934c9f68ef23"
+    },
+    {
+      "path": "src/zont_analyzer/application/incremental_publication.py",
+      "sha256": "5633c5cd467b66f02c10e5c1bb27fe7c80215dd260b278c3f109c8b4e6934377"
+    },
+    {
+      "path": "src/zont_analyzer/application/ai_maintenance.py",
+      "sha256": "cc304f2c2fd7f7384a039a463e25954f3a7ae0ca2b66d786a478e552fb770a83"
+    },
+    {
+      "path": "src/zont_analyzer/application/owner_context.py",
+      "sha256": "cee5f379d4722274e1ffe51175e7070ecc56d9bbc164220cfba53caba5edab38"
+    },
+    {
+      "path": "src/zont_analyzer/application/heating_context.py",
+      "sha256": "a0982edb693a8599fc427cd2f0b01220885506c9155a6582a64722eda55294b7"
+    },
+    {
+      "path": "src/zont_analyzer/application/__init__.py",
+      "sha256": "f0d0ab3d814fa056a063266b535ededf681faad737f769d81b8b841386f9a94c"
+    },
+    {
+      "path": "src/zont_analyzer/application/ai_settings.py",
+      "sha256": "c9a25464a5e2f33b88a468c8009a0b745cd3b5cac421d8adf2300b85405b5059"
+    },
+    {
+      "path": "src/zont_analyzer/application/comparison_context.py",
+      "sha256": "d38b9c43e61606b69d85d05fef2929417097d6f3cb59ae5e5d8032c81ed36f54"
+    },
+    {
+      "path": "src/zont_analyzer/application/collection.py",
+      "sha256": "5786e79fc1a693070d760f941f038708e989a506280398d2df4ec37dbf7f3025"
+    },
+    {
+      "path": "src/zont_analyzer/application/publication.py",
+      "sha256": "7b6fcfa765c9bcc238f3a813843b1e2c6f09dfcc04cbffd1e0605b48adb72a5f"
+    },
+    {
+      "path": "src/zont_analyzer/application/regeneration.py",
+      "sha256": "c2d234c48fbf90259c495d7cb485f4437be3a8d8805ce43b56d3619d071a4ff8"
+    },
+    {
+      "path": "src/zont_analyzer/application/period_schedule.py",
+      "sha256": "38f6164f36c5841cf09c58928917452e802c9f0bdd0dd23ba2a58c32ac8e0217"
+    },
+    {
+      "path": "src/zont_analyzer/application/period_comparison.py",
+      "sha256": "2b9bee4bf4e2d31e4f0b72d4de1fa90e4bf16ea7824374dcbf1a61d2a85c7dbe"
+    },
+    {
+      "path": "src/zont_analyzer/application/ai_provenance.py",
+      "sha256": "b4c7598909c59bc65c9657e4a49901c005975288557faed37b49d328478e39be"
+    },
+    {
+      "path": "src/zont_analyzer/__init__.py",
+      "sha256": "e39316cb3eb60b92e5b13a8b6f5502c843dfc7fa91328bb08e3b81a40b337df7"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/gas.py",
+      "sha256": "737cecdc5b3b8e52508fa34516c0e23c233fd70c6a56ca5b26ab5e2380b45673"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/context.py",
+      "sha256": "958158e26d4a6f16c24da5d59f6584c9027917ef9c920fd1274dd4f8bad071e0"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/evidence.py",
+      "sha256": "4ffa73acef161cc9698c48c02b726fc249505fc77667f4f85b0d920026330598"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/gas_savings.py",
+      "sha256": "637acfb5e58064980004324790c13b8540999f6a1b6965040a721e1a17e0ec71"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/settings.py",
+      "sha256": "c99bd8c41e1ab1c637c7d453a4fb2544f0a81d8a18c91d5de717cfd8a99c1cc9"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/series_semantics.py",
+      "sha256": "4c282c72408256965a6967d3e206e7f567f8058818abdbc9467bbd1c8d0be60e"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/__init__.py",
+      "sha256": "36c23da7e0e1f9cd3cf4504db0c3b4fc246948cb093727e76ea26280f8655257"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/flame.py",
+      "sha256": "5389863897a3b702540ff84d5716ebbf2278842f4f0be3077d6ce046d6c9aa2e"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/heating.py",
+      "sha256": "00a7ba340421e8f7a1237464493121558c1c714f691df0a79e05e394e4b6b097"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/dhw.py",
+      "sha256": "505e3f96347d76d54c9ed5e56267fb9d8a2e61e2e3a802f9a5d6417378f53e8f"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/metrics.py",
+      "sha256": "b405e9f73a80c6ab798ca42e4796b81db4c6b514c810ecc4e0ad49e9f5da94ca"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/reliability.py",
+      "sha256": "59b4714bad7054ff23a46520663f1357bc73912b165dbfd869ae99206fdd3060"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/events.py",
+      "sha256": "27de87bd1be1b645e762599f51c665c8b74332c9ac6aa536b6351c4b5a3d0609"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/quality.py",
+      "sha256": "f832691509015a7eb88aa928c0470620a18222e4c960a2b80ac59f00c9938930"
+    },
+    {
+      "path": "src/zont_analyzer/analytics/burner_usage.py",
+      "sha256": "33c0ee2d962a9304d4d93c03351372ad3910bc867585100b2912fce0f063be89"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/telemetry.py",
+      "sha256": "91663691e1c7651d3b804579bb5227db19aed0a115a10aca922a1bc4451fd45d"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/site.py",
+      "sha256": "38802849eafcdcdbb7908a10fa983615e8bc83e5cbf32684f9f9ab9d0c7f1996"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/runtime.py",
+      "sha256": "f61513bb94fdee6b1ffc27dc9c593cd59ebaab29b3f954466ed32fa90f2af07e"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/egress.py",
+      "sha256": "eb05712c8abfa0ffb889924f6d5f105740f8f3aa76373ef13e3750cb961595d6"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/monitoring.py",
+      "sha256": "dacf6ebf5dcf9ca85c49a5d1d467ef9a1dddc397ec409494fff35c2cd48d6a6e"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/analytics.py",
+      "sha256": "4a8f5e603304cf670b7a32f99221a950b08835a74ddcb375ce9e2a4bd70807e5"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/__init__.py",
+      "sha256": "969a42a1a4cfd4f069228d6ae79f5b16472fb5f9a69a4b1bb6cc205437cce2bc"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/report_jobs.py",
+      "sha256": "d653d735cb4f420f1ba9255cadb872a61717e433336b089c6e8b2a28142c0109"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/user_jobs.py",
+      "sha256": "9572e32570258d7b1de7af4825daf2ca0a63816d8080a97d7fee6af5fa8da105"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/object_storage.py",
+      "sha256": "b0be89c555dc52c6bbfe5aab0037c5b4b43ed4d602d459a5678a9691d1dddbf2"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/heavy_work.py",
+      "sha256": "16621fbaab8124e79ce333bd37aaacf8033f2c54219194b7522100b19adaba4b"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/publication.py",
+      "sha256": "778bea8927b12c81c61fc27d9006ac7caa5690f43ee1d113e995045999e5d1ec"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/integrations.py",
+      "sha256": "22c224e90ddea8e1bef76086dd2db1cf00ec749eb02e89d70a0324d089a6b251"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/limits.py",
+      "sha256": "f3c1335329f5e47c6f19c830b0bf81532e1281c33f5aeb47521cd4f3bf43a0e5"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/auth.py",
+      "sha256": "6cc978141801838bc7b76fcfa77b9268fcf8cca5f7f61a8432dd0cdc6e62778e"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/web_api.py",
+      "sha256": "cda084daa7ad17dd791045c6caaf862d9aca79ae99593eea916e52bf446bcbad"
+    },
+    {
+      "path": "src/zont_analyzer/cloud/scheduler.py",
+      "sha256": "40503536a6a6e1119b1cb5f996e9eb8894d35ba993ddeb0b1269812ae5d9c2d0"
+    },
+    {
+      "path": "src/zont_analyzer/observability.py",
+      "sha256": "3381c9e70ad8b2fe91c020f35987393431592a1d59b54f3cd843f2e32f1974bf"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/openai/provider.py",
+      "sha256": "52a2231b61efd713442eb61f8d82be52952216d80b5714d154b1198084aa1d5b"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/openai/model_catalog.py",
+      "sha256": "281d9e8fb832b764e2e5adfa891a11034850c510f348a55aa73b818e252ea640"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/openai/__init__.py",
+      "sha256": "b5fbcfc0341a8151d5ac44ba9fef26cf48e8bb877920fbe74f00efee896f77a0"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/__init__.py",
+      "sha256": "b709b09ae1982ec4702a167f9809d2b4eb8accd93ec121995444d622fbd487cd"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/reports.py",
+      "sha256": "8b9eeabf2b822e46706aca25a7e64ded10c610e95cbbd9d446cc5f82eb512274"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/telemetry.py",
+      "sha256": "b45d9c45b17f7d2c030c7f5d50edcdb8f3a49b5a37bbbdd68632ce7a4260f15f"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/feedback.py",
+      "sha256": "73a514f1dc211175264ead25237754259d472b1e5e83e130e38650dda3fa58e1"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/database.py",
+      "sha256": "4aa9403dda8bb89e335a7c33a88000f7abbb900bc6eedd2c7e0562b21be06b41"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/schema.py",
+      "sha256": "a3a290d915e53d3286b2b9a2bcf3ed4afada15f04c8652ba944e3dc19dc9f285"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/model_settings.py",
+      "sha256": "6e869e102a4456ad95f2941c4ad878b29288e1f146c09c2fced1914685c356c7"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/jobs.py",
+      "sha256": "efc27feb9a233fac1a362388d818bd56618d65130b64b5f5a3ff9c814442c9f2"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/period_revisions.py",
+      "sha256": "a7f6e11051aac06b33160d5a5bed8a4ce6661c262aabf8b56173e04c6b60d096"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/__init__.py",
+      "sha256": "32af84a7b981eb6a44180ea5a60f7e490fbd2ded2c0a790158ec6427b10b88a9"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/ai.py",
+      "sha256": "f547a99f7583f1afb4da43e6a1bd0001f62cf25d38a7e54000ae0accdbf28e1a"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/publication.py",
+      "sha256": "392e05587194f6931395757cf238d55af7a648dc992fca9588840e94711949f0"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/owner.py",
+      "sha256": "b8b2f3aaf68159d96d69e3522dd11e09eaf3f330f318a9456c5c0695a2fb3271"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/revisions.py",
+      "sha256": "5a458963eaafd0f28b0c2296743d2b486d7cdad7c21c99bca955662c737ee737"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/sample_bounds.py",
+      "sha256": "110a821b66a154883b022ff66bd251fba189d6e098346ff256e2629e2c076286"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/ai_usage.py",
+      "sha256": "9bf98ae439ffd290686367ac677e4a570e191f4dfa0c48ba1881f09c4f9589a4"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/latest_report.py",
+      "sha256": "4ea72f73cda7760419d972a961bd163c9fdd96b4e1928ae2c208c698dc9ca0f9"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/read_indexes.py",
+      "sha256": "a0075ec2985a6ed535440d3473c850d4700af8aacc7ef8e94a0afbaa9386cf0c"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/owner_data.py",
+      "sha256": "c7160ebf2c22f5178996fec563fc4aae7694b956ca4975d66b65fbcfe54e3baf"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/ydb/application.py",
+      "sha256": "cbaa0d4979edd2741ce7b9f6e1d0bc191ea124176b79159f07b3b2ed6106f41a"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/zont_readonly/__init__.py",
+      "sha256": "8cf6be776b0eb859ba7c0a34f0b365f980bc0d75568b6c370598c0c02f4cc0de"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/zont_readonly/equipment.py",
+      "sha256": "c3cada7f33820d01960932f80eb008bb8ae15835a9538239266424f4ee56095f"
+    },
+    {
+      "path": "src/zont_analyzer/adapters/zont_readonly/client.py",
+      "sha256": "e09c7a6a81f7b1f1e90a926601a25033b604a4122e93cade452382e78eee29a8"
+    },
+    {
+      "path": "src/zont_analyzer/evaluation/dataset.py",
+      "sha256": "d2f7633dc059d385db17a6e8887d91b5cbad658406167161eff4fe521048c0a4"
+    },
+    {
+      "path": "src/zont_analyzer/evaluation/runner.py",
+      "sha256": "c6f04333498e8ff496097775c979478b6ced1a992a56b4f2f295fdc75d71ee05"
+    },
+    {
+      "path": "src/zont_analyzer/evaluation/__init__.py",
+      "sha256": "eef780bc04800d9354ff2c2ed2eb99603133e5e62b9574c43d7059c468938679"
+    },
+    {
+      "path": "src/zont_analyzer/evaluation/__main__.py",
+      "sha256": "1d405547492e83db636c7b417dd4e5d7d2f1c906f91f7373dabb7ab48a954451"
+    },
+    {
+      "path": "src/zont_analyzer/healthcheck.py",
+      "sha256": "f87b97e6f0c9ac66a121defa7dba67d388902fc7ca67d9d45e912bc2d886574e"
+    },
+    {
+      "path": "src/zont_analyzer/config.py",
+      "sha256": "9b13a826f033eccd1be210c9b98cd438a34b7b9f4073fb33764edd5046c518a9"
+    },
+    {
+      "path": "src/zont_analyzer/reports/charts/gas.py",
+      "sha256": "9608bc3bb558d63a064a2c13c0be7547bea1fd7252708c3303018809d6a06118"
+    },
+    {
+      "path": "src/zont_analyzer/reports/charts/__init__.py",
+      "sha256": "7d6f0df01fd6d5f2ddb6d4dff316ef53563ea378c94169715f02fbab4df31552"
+    },
+    {
+      "path": "src/zont_analyzer/reports/charts/render.py",
+      "sha256": "f1b68f83249ee59a2481a2ece57972af5b6782cbad408c60c01aaad70a055718"
+    },
+    {
+      "path": "src/zont_analyzer/reports/charts/theme.py",
+      "sha256": "8e79f126f8477f39caff06ff29fe9c7975ea10bbbde4a29809593ee72594c637"
+    },
+    {
+      "path": "src/zont_analyzer/reports/chart_data.py",
+      "sha256": "242f69dcea8f739c3d0ef9faa5a4755780ded7da9b80efc5ac34f7a8eeb8968c"
+    },
+    {
+      "path": "src/zont_analyzer/reports/wording.py",
+      "sha256": "dc241b3bac824d7a89bbe7ae2b4af8d659dcb96df2d91bed1ef21d851df75793"
+    },
+    {
+      "path": "src/zont_analyzer/reports/language.py",
+      "sha256": "6623ffcba53049cfbb7a14592d72d4aba1faff98389dfbf3367e64dcecad4e8e"
+    },
+    {
+      "path": "src/zont_analyzer/reports/owner_script.py",
+      "sha256": "baca2188072b355ae107000d3eaa2c37761618059f350ad4b14d77fcf94823d3"
+    },
+    {
+      "path": "src/zont_analyzer/reports/gas_validation.py",
+      "sha256": "ed72c84fa3bf87f3b2f16dde8c86029e19dfcdef63da2baf14b43fb5172107bb"
+    },
+    {
+      "path": "src/zont_analyzer/reports/experiment_forms.py",
+      "sha256": "f4bb6041c79ae75915493254ba7af8ba055ed5c20192d508ac4546c3f563a410"
+    },
+    {
+      "path": "src/zont_analyzer/reports/__init__.py",
+      "sha256": "06265db7aebc7f27e0cbb98deb4c6a4a96660773b91586bc419b989f447a3a11"
+    },
+    {
+      "path": "src/zont_analyzer/reports/presentation.py",
+      "sha256": "6741ab87a9080db172e93b5dfe4981c435dcfd1d0db292084881152904881280"
+    },
+    {
+      "path": "src/zont_analyzer/reports/regeneration.py",
+      "sha256": "1b99751c33d183f35266e1506bfef1915e441b24869313851f4f59c780d0a781"
+    },
+    {
+      "path": "src/zont_analyzer/reports/renderers.py",
+      "sha256": "2b2846ea8aeaaaef8c53de7d421aa2703a72b9f340a37a0d62ee7fdf2a1d0b00"
+    },
+    {
+      "path": "src/zont_analyzer/reports/owner_forms.py",
+      "sha256": "815aee3957c3d7ce7e1007aa7a2fb2f46f55e3dd851d9c04560c7866d6dcb44b"
+    },
+    {
+      "path": "src/zont_analyzer/reports/theme.py",
+      "sha256": "b51f05cc13daf65000a54c3a0e11e0c7beb9163b6401c6e5d662cbd24994465c"
+    },
+    {
+      "path": "src/zont_analyzer/reports/period_context.py",
+      "sha256": "7642905bd8a29f8266ce9a132a73ffaf1a69872a1a497177f9f4e9cb934c4d9e"
+    },
+    {
+      "path": "src/zont_analyzer/reports/event_highlights.py",
+      "sha256": "d04f6a6c869eba7e55d238b9173e008df683739589e925e9e0be9c7d3c4d927c"
+    },
+    {
+      "path": "src/zont_analyzer/reports/control_settings.py",
+      "sha256": "91b21b1a2d4f3295f37da7ea6a0246b880aa027691812060f841019f21dde5c7"
+    },
+    {
+      "path": "src/zont_analyzer/reports/ai_forms.py",
+      "sha256": "8724843dbaf8b6454c003c08cf3948fe0ca4b90383dd91e6e39ad0c17fa7190a"
+    },
+    {
+      "path": "src/zont_analyzer/reports/timezone_labels.py",
+      "sha256": "a1ee6e08eead39abc6f0cb9be1d5eb6eb424d9266949aaa1734d17f0aa8e86af"
+    },
+    {
+      "path": "tools/benchmark_operations_cost.py",
+      "sha256": "e1c0a7488d176da92e6ad496e2b000a2225e7a60522a653106281c8bbd50172c"
+    },
+    {
+      "path": "tools/benchmark_ydb_cost.py",
+      "sha256": "476fc6bfc80d1153c82aceb087a280f71b98d9148d808173c6af9df3bb3361b6"
+    },
+    {
+      "path": "tools/measure_ydb_bounds.py",
+      "sha256": "21da5d8084e4ad0a5a4b1f0f3c78302a1b858790fc493708094ec1d03d6fe62d"
+    },
+    {
+      "path": "deploy/measure-operations-cost.sh",
+      "sha256": "b8af9a607c89b89723aa0d4a828e46e5dcd324425acd7fde493514c6fbc36df0"
+    }
+  ],
+  "environment": "disposable local in-memory YDB",
+  "ydb_image": "ydbplatform/local-ydb@sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402",
+  "fixture_validation": [
+    {
+      "artifacts_sha256": "77cfeae38470cfc0fbe09a99546d4c70a0e2e304abd6a4195f22d2e9298299ff",
+      "canonical_sha256": "d627548c0ee99b605b5df75a727a1b12f4c8b6d1f400e326ac48aa57d85eb75f",
+      "completed_reports": 10,
+      "days": 10,
+      "fixture_source_calls": 4,
+      "label": "baseline",
+      "normalization": "manifest published_at filesystem mtime only",
+      "operation": "validation",
+      "seed_points": 36,
+      "sync_fixture": "archived coverage with a one-hour missing tail"
+    },
+    {
+      "artifacts_sha256": "77cfeae38470cfc0fbe09a99546d4c70a0e2e304abd6a4195f22d2e9298299ff",
+      "canonical_sha256": "d627548c0ee99b605b5df75a727a1b12f4c8b6d1f400e326ac48aa57d85eb75f",
+      "completed_reports": 10,
+      "days": 10,
+      "fixture_source_calls": 4,
+      "label": "candidate",
+      "normalization": "manifest published_at filesystem mtime only",
+      "operation": "validation",
+      "seed_points": 36,
+      "sync_fixture": "archived coverage with a one-hour missing tail"
+    }
+  ],
+  "difference_paths": [],
+  "full_artifacts_equal": true,
+  "full_reports_equal": true,
+  "operations": {
+    "baseline": {
+      "publication_cold_batch": {
+        "elapsed_seconds": 0.584,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 144873,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 7767,
+          "process_cpu_us": 6700,
+          "queries_with_stats": 109,
+          "queries_with_total_cpu": 109,
+          "query_cpu_components_us": 159340,
+          "query_cpu_us": 159340,
+          "read_bytes": 1077399,
+          "read_rows": 231,
+          "result_rows": 153,
+          "rpc_count": 142,
+          "rpc_counts": {
+            "CommitTransaction": 33,
+            "ExecuteQuery": 109
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 142,
+          "server_ru": 549,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 11,
+          "write_stats_complete": false
+        }
+      },
+      "publication_failed_batch": {
+        "elapsed_seconds": 0.3314,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 60197,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 5382,
+          "process_cpu_us": 4316,
+          "queries_with_stats": 75,
+          "queries_with_total_cpu": 75,
+          "query_cpu_components_us": 69895,
+          "query_cpu_us": 69895,
+          "read_bytes": 215693,
+          "read_rows": 116,
+          "result_rows": 82,
+          "rpc_count": 92,
+          "rpc_counts": {
+            "CommitTransaction": 17,
+            "ExecuteQuery": 75
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 92,
+          "server_ru": 217,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 4,
+          "write_stats_complete": false
+        }
+      },
+      "publication_idle_retry_1": {
+        "elapsed_seconds": 0.0768,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 11455,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 734,
+          "process_cpu_us": 1055,
+          "queries_with_stats": 21,
+          "queries_with_total_cpu": 21,
+          "query_cpu_components_us": 13244,
+          "query_cpu_us": 13244,
+          "read_bytes": 4489,
+          "read_rows": 35,
+          "result_rows": 34,
+          "rpc_count": 28,
+          "rpc_counts": {
+            "CommitTransaction": 7,
+            "ExecuteQuery": 21
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 28,
+          "server_ru": 44,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 3,
+          "write_stats_complete": false
+        }
+      },
+      "publication_idle_retry_2": {
+        "elapsed_seconds": 0.0737,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 750,
+          "process_cpu_us": 1178,
+          "queries_with_stats": 21,
+          "queries_with_total_cpu": 21,
+          "query_cpu_components_us": 1928,
+          "query_cpu_us": 1928,
+          "read_bytes": 4489,
+          "read_rows": 35,
+          "result_rows": 34,
+          "rpc_count": 28,
+          "rpc_counts": {
+            "CommitTransaction": 7,
+            "ExecuteQuery": 21
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 28,
+          "server_ru": 44,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 3,
+          "write_stats_complete": false
+        }
+      },
+      "publication_idle_retry_3": {
+        "elapsed_seconds": 0.0794,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 845,
+          "process_cpu_us": 1355,
+          "queries_with_stats": 21,
+          "queries_with_total_cpu": 21,
+          "query_cpu_components_us": 2200,
+          "query_cpu_us": 2200,
+          "read_bytes": 4489,
+          "read_rows": 35,
+          "result_rows": 34,
+          "rpc_count": 28,
+          "rpc_counts": {
+            "CommitTransaction": 7,
+            "ExecuteQuery": 21
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 28,
+          "server_ru": 44,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 3,
+          "write_stats_complete": false
+        }
+      },
+      "publication_retry_batch_1": {
+        "elapsed_seconds": 0.4033,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 24080,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 8979,
+          "process_cpu_us": 6074,
+          "queries_with_stats": 107,
+          "queries_with_total_cpu": 107,
+          "query_cpu_components_us": 39133,
+          "query_cpu_us": 39133,
+          "read_bytes": 361684,
+          "read_rows": 175,
+          "result_rows": 123,
+          "rpc_count": 134,
+          "rpc_counts": {
+            "CommitTransaction": 27,
+            "ExecuteQuery": 107
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 134,
+          "server_ru": 291,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 10,
+          "write_stats_complete": false
+        }
+      },
+      "publication_retry_batch_2": {
+        "elapsed_seconds": 0.3637,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 5998,
+          "process_cpu_us": 5566,
+          "queries_with_stats": 110,
+          "queries_with_total_cpu": 110,
+          "query_cpu_components_us": 11564,
+          "query_cpu_us": 11564,
+          "read_bytes": 362915,
+          "read_rows": 176,
+          "result_rows": 126,
+          "rpc_count": 137,
+          "rpc_counts": {
+            "CommitTransaction": 27,
+            "ExecuteQuery": 110
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 137,
+          "server_ru": 289,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 10,
+          "write_stats_complete": false
+        }
+      },
+      "publication_retry_batch_3": {
+        "elapsed_seconds": 0.384,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 6709,
+          "process_cpu_us": 5948,
+          "queries_with_stats": 110,
+          "queries_with_total_cpu": 110,
+          "query_cpu_components_us": 12657,
+          "query_cpu_us": 12657,
+          "read_bytes": 362525,
+          "read_rows": 174,
+          "result_rows": 126,
+          "rpc_count": 137,
+          "rpc_counts": {
+            "CommitTransaction": 27,
+            "ExecuteQuery": 110
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 137,
+          "server_ru": 287,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 10,
+          "write_stats_complete": false
+        }
+      },
+      "publication_retry_batch_4": {
+        "elapsed_seconds": 0.3829,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 6648,
+          "process_cpu_us": 5987,
+          "queries_with_stats": 110,
+          "queries_with_total_cpu": 110,
+          "query_cpu_components_us": 12635,
+          "query_cpu_us": 12635,
+          "read_bytes": 357824,
+          "read_rows": 171,
+          "result_rows": 125,
+          "rpc_count": 137,
+          "rpc_counts": {
+            "CommitTransaction": 27,
+            "ExecuteQuery": 110
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 137,
+          "server_ru": 285,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 10,
+          "write_stats_complete": false
+        }
+      },
+      "report_calculation_cold": {
+        "elapsed_seconds": 6.2633,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 371321,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 229492,
+          "process_cpu_us": 89849,
+          "queries_with_stats": 1429,
+          "queries_with_total_cpu": 1429,
+          "query_cpu_components_us": 690662,
+          "query_cpu_us": 690662,
+          "read_bytes": 8458342,
+          "read_rows": 1494,
+          "result_rows": 1349,
+          "rpc_count": 1858,
+          "rpc_counts": {
+            "CommitTransaction": 429,
+            "ExecuteQuery": 1429
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 1858,
+          "server_ru": 4103,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 170,
+          "write_stats_complete": false
+        }
+      },
+      "report_freshness_warm_1": {
+        "elapsed_seconds": 0.3087,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 3743,
+          "process_cpu_us": 5759,
+          "queries_with_stats": 70,
+          "queries_with_total_cpu": 70,
+          "query_cpu_components_us": 9502,
+          "query_cpu_us": 9502,
+          "read_bytes": 644183,
+          "read_rows": 80,
+          "result_rows": 70,
+          "rpc_count": 130,
+          "rpc_counts": {
+            "CommitTransaction": 60,
+            "ExecuteQuery": 70
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 130,
+          "server_ru": 240,
+          "update_bytes": 0,
+          "update_rows": 0,
+          "update_stats_missing_rpc_count": 0,
+          "write_stats_complete": true
+        }
+      },
+      "report_freshness_warm_2": {
+        "elapsed_seconds": 0.3119,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 4146,
+          "process_cpu_us": 5775,
+          "queries_with_stats": 70,
+          "queries_with_total_cpu": 70,
+          "query_cpu_components_us": 9921,
+          "query_cpu_us": 9921,
+          "read_bytes": 644183,
+          "read_rows": 80,
+          "result_rows": 70,
+          "rpc_count": 130,
+          "rpc_counts": {
+            "CommitTransaction": 60,
+            "ExecuteQuery": 70
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 130,
+          "server_ru": 240,
+          "update_bytes": 0,
+          "update_rows": 0,
+          "update_stats_missing_rpc_count": 0,
+          "write_stats_complete": true
+        }
+      },
+      "report_freshness_warm_3": {
+        "elapsed_seconds": 0.2905,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 3509,
+          "process_cpu_us": 5524,
+          "queries_with_stats": 70,
+          "queries_with_total_cpu": 70,
+          "query_cpu_components_us": 9033,
+          "query_cpu_us": 9033,
+          "read_bytes": 644183,
+          "read_rows": 80,
+          "result_rows": 70,
+          "rpc_count": 130,
+          "rpc_counts": {
+            "CommitTransaction": 60,
+            "ExecuteQuery": 70
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 130,
+          "server_ru": 240,
+          "update_bytes": 0,
+          "update_rows": 0,
+          "update_stats_missing_rpc_count": 0,
+          "write_stats_complete": true
+        }
+      },
+      "sync_cold": {
+        "elapsed_seconds": 0.0956,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 29936,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 760,
+          "process_cpu_us": 1314,
+          "queries_with_stats": 19,
+          "queries_with_total_cpu": 19,
+          "query_cpu_components_us": 32010,
+          "query_cpu_us": 32010,
+          "read_bytes": 218,
+          "read_rows": 7,
+          "result_rows": 3,
+          "rpc_count": 23,
+          "rpc_counts": {
+            "CommitTransaction": 4,
+            "ExecuteQuery": 19
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 23,
+          "server_ru": 34,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 8,
+          "write_stats_complete": false
+        }
+      },
+      "sync_idle_1": {
+        "elapsed_seconds": 0.0155,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 242,
+          "process_cpu_us": 227,
+          "queries_with_stats": 6,
+          "queries_with_total_cpu": 6,
+          "query_cpu_components_us": 469,
+          "query_cpu_us": 469,
+          "read_bytes": 278,
+          "read_rows": 8,
+          "result_rows": 8,
+          "rpc_count": 6,
+          "rpc_counts": {
+            "ExecuteQuery": 6
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 6,
+          "server_ru": 10,
+          "update_bytes": 0,
+          "update_rows": 0,
+          "update_stats_missing_rpc_count": 0,
+          "write_stats_complete": true
+        }
+      },
+      "sync_idle_2": {
+        "elapsed_seconds": 0.013,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 172,
+          "process_cpu_us": 201,
+          "queries_with_stats": 6,
+          "queries_with_total_cpu": 6,
+          "query_cpu_components_us": 373,
+          "query_cpu_us": 373,
+          "read_bytes": 278,
+          "read_rows": 8,
+          "result_rows": 8,
+          "rpc_count": 6,
+          "rpc_counts": {
+            "ExecuteQuery": 6
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 6,
+          "server_ru": 10,
+          "update_bytes": 0,
+          "update_rows": 0,
+          "update_stats_missing_rpc_count": 0,
+          "write_stats_complete": true
+        }
+      },
+      "sync_idle_3": {
+        "elapsed_seconds": 0.0147,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 194,
+          "process_cpu_us": 209,
+          "queries_with_stats": 6,
+          "queries_with_total_cpu": 6,
+          "query_cpu_components_us": 403,
+          "query_cpu_us": 403,
+          "read_bytes": 278,
+          "read_rows": 8,
+          "result_rows": 8,
+          "rpc_count": 6,
+          "rpc_counts": {
+            "ExecuteQuery": 6
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 6,
+          "server_ru": 10,
+          "update_bytes": 0,
+          "update_rows": 0,
+          "update_stats_missing_rpc_count": 0,
+          "write_stats_complete": true
+        }
+      }
+    },
+    "candidate": {
+      "publication_cold_batch": {
+        "elapsed_seconds": 0.6488,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 158634,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 7460,
+          "process_cpu_us": 7669,
+          "queries_with_stats": 107,
+          "queries_with_total_cpu": 107,
+          "query_cpu_components_us": 173763,
+          "query_cpu_us": 173763,
+          "read_bytes": 1078738,
+          "read_rows": 222,
+          "result_rows": 145,
+          "rpc_count": 140,
+          "rpc_counts": {
+            "CommitTransaction": 33,
+            "ExecuteQuery": 107
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 140,
+          "server_ru": 548,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 11,
+          "write_stats_complete": false
+        }
+      },
+      "publication_failed_batch": {
+        "elapsed_seconds": 0.3238,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 53175,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 4837,
+          "process_cpu_us": 4328,
+          "queries_with_stats": 75,
+          "queries_with_total_cpu": 75,
+          "query_cpu_components_us": 62340,
+          "query_cpu_us": 62340,
+          "read_bytes": 217148,
+          "read_rows": 116,
+          "result_rows": 82,
+          "rpc_count": 92,
+          "rpc_counts": {
+            "CommitTransaction": 17,
+            "ExecuteQuery": 75
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 92,
+          "server_ru": 211,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 4,
+          "write_stats_complete": false
+        }
+      },
+      "publication_idle_retry_1": {
+        "elapsed_seconds": 0.0729,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 11621,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 556,
+          "process_cpu_us": 959,
+          "queries_with_stats": 21,
+          "queries_with_total_cpu": 21,
+          "query_cpu_components_us": 13136,
+          "query_cpu_us": 13136,
+          "read_bytes": 4699,
+          "read_rows": 37,
+          "result_rows": 36,
+          "rpc_count": 28,
+          "rpc_counts": {
+            "CommitTransaction": 7,
+            "ExecuteQuery": 21
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 28,
+          "server_ru": 47,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 3,
+          "write_stats_complete": false
+        }
+      },
+      "publication_idle_retry_2": {
+        "elapsed_seconds": 0.0571,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 515,
+          "process_cpu_us": 931,
+          "queries_with_stats": 21,
+          "queries_with_total_cpu": 21,
+          "query_cpu_components_us": 1446,
+          "query_cpu_us": 1446,
+          "read_bytes": 4699,
+          "read_rows": 37,
+          "result_rows": 36,
+          "rpc_count": 28,
+          "rpc_counts": {
+            "CommitTransaction": 7,
+            "ExecuteQuery": 21
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 28,
+          "server_ru": 46,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 3,
+          "write_stats_complete": false
+        }
+      },
+      "publication_idle_retry_3": {
+        "elapsed_seconds": 0.0579,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 525,
+          "process_cpu_us": 884,
+          "queries_with_stats": 21,
+          "queries_with_total_cpu": 21,
+          "query_cpu_components_us": 1409,
+          "query_cpu_us": 1409,
+          "read_bytes": 4699,
+          "read_rows": 37,
+          "result_rows": 36,
+          "rpc_count": 28,
+          "rpc_counts": {
+            "CommitTransaction": 7,
+            "ExecuteQuery": 21
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 28,
+          "server_ru": 46,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 3,
+          "write_stats_complete": false
+        }
+      },
+      "publication_retry_batch_1": {
+        "elapsed_seconds": 0.3574,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 23359,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 5152,
+          "process_cpu_us": 5353,
+          "queries_with_stats": 104,
+          "queries_with_total_cpu": 104,
+          "query_cpu_components_us": 33864,
+          "query_cpu_us": 33864,
+          "read_bytes": 363314,
+          "read_rows": 169,
+          "result_rows": 117,
+          "rpc_count": 131,
+          "rpc_counts": {
+            "CommitTransaction": 27,
+            "ExecuteQuery": 104
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 131,
+          "server_ru": 283,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 10,
+          "write_stats_complete": false
+        }
+      },
+      "publication_retry_batch_2": {
+        "elapsed_seconds": 0.34,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 5379,
+          "process_cpu_us": 5269,
+          "queries_with_stats": 107,
+          "queries_with_total_cpu": 107,
+          "query_cpu_components_us": 10648,
+          "query_cpu_us": 10648,
+          "read_bytes": 364545,
+          "read_rows": 170,
+          "result_rows": 120,
+          "rpc_count": 134,
+          "rpc_counts": {
+            "CommitTransaction": 27,
+            "ExecuteQuery": 107
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 134,
+          "server_ru": 282,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 10,
+          "write_stats_complete": false
+        }
+      },
+      "publication_retry_batch_3": {
+        "elapsed_seconds": 0.3373,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 5390,
+          "process_cpu_us": 5157,
+          "queries_with_stats": 107,
+          "queries_with_total_cpu": 107,
+          "query_cpu_components_us": 10547,
+          "query_cpu_us": 10547,
+          "read_bytes": 364155,
+          "read_rows": 168,
+          "result_rows": 120,
+          "rpc_count": 134,
+          "rpc_counts": {
+            "CommitTransaction": 27,
+            "ExecuteQuery": 107
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 134,
+          "server_ru": 280,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 10,
+          "write_stats_complete": false
+        }
+      },
+      "publication_retry_batch_4": {
+        "elapsed_seconds": 0.3415,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 5230,
+          "process_cpu_us": 5271,
+          "queries_with_stats": 107,
+          "queries_with_total_cpu": 107,
+          "query_cpu_components_us": 10501,
+          "query_cpu_us": 10501,
+          "read_bytes": 359485,
+          "read_rows": 166,
+          "result_rows": 120,
+          "rpc_count": 134,
+          "rpc_counts": {
+            "CommitTransaction": 27,
+            "ExecuteQuery": 107
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 134,
+          "server_ru": 279,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 10,
+          "write_stats_complete": false
+        }
+      },
+      "report_calculation_cold": {
+        "elapsed_seconds": 5.8891,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 388173,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 432407,
+          "process_cpu_us": 81522,
+          "queries_with_stats": 1436,
+          "queries_with_total_cpu": 1436,
+          "query_cpu_components_us": 902102,
+          "query_cpu_us": 902102,
+          "read_bytes": 8471278,
+          "read_rows": 1590,
+          "result_rows": 1343,
+          "rpc_count": 1858,
+          "rpc_counts": {
+            "CommitTransaction": 422,
+            "ExecuteQuery": 1436
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 1858,
+          "server_ru": 4387,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 170,
+          "write_stats_complete": false
+        }
+      },
+      "report_freshness_warm_1": {
+        "elapsed_seconds": 0.2904,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 3569,
+          "process_cpu_us": 5600,
+          "queries_with_stats": 70,
+          "queries_with_total_cpu": 70,
+          "query_cpu_components_us": 9169,
+          "query_cpu_us": 9169,
+          "read_bytes": 644183,
+          "read_rows": 80,
+          "result_rows": 70,
+          "rpc_count": 130,
+          "rpc_counts": {
+            "CommitTransaction": 60,
+            "ExecuteQuery": 70
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 130,
+          "server_ru": 240,
+          "update_bytes": 0,
+          "update_rows": 0,
+          "update_stats_missing_rpc_count": 0,
+          "write_stats_complete": true
+        }
+      },
+      "report_freshness_warm_2": {
+        "elapsed_seconds": 0.2867,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 3588,
+          "process_cpu_us": 5299,
+          "queries_with_stats": 70,
+          "queries_with_total_cpu": 70,
+          "query_cpu_components_us": 8887,
+          "query_cpu_us": 8887,
+          "read_bytes": 644183,
+          "read_rows": 80,
+          "result_rows": 70,
+          "rpc_count": 130,
+          "rpc_counts": {
+            "CommitTransaction": 60,
+            "ExecuteQuery": 70
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 130,
+          "server_ru": 240,
+          "update_bytes": 0,
+          "update_rows": 0,
+          "update_stats_missing_rpc_count": 0,
+          "write_stats_complete": true
+        }
+      },
+      "report_freshness_warm_3": {
+        "elapsed_seconds": 0.3189,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 4079,
+          "process_cpu_us": 6327,
+          "queries_with_stats": 70,
+          "queries_with_total_cpu": 70,
+          "query_cpu_components_us": 10406,
+          "query_cpu_us": 10406,
+          "read_bytes": 644183,
+          "read_rows": 80,
+          "result_rows": 70,
+          "rpc_count": 130,
+          "rpc_counts": {
+            "CommitTransaction": 60,
+            "ExecuteQuery": 70
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 130,
+          "server_ru": 240,
+          "update_bytes": 0,
+          "update_rows": 0,
+          "update_stats_missing_rpc_count": 0,
+          "write_stats_complete": true
+        }
+      },
+      "sync_cold": {
+        "elapsed_seconds": 0.0925,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 23346,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 1345,
+          "process_cpu_us": 1498,
+          "queries_with_stats": 19,
+          "queries_with_total_cpu": 19,
+          "query_cpu_components_us": 26189,
+          "query_cpu_us": 26189,
+          "read_bytes": 273,
+          "read_rows": 9,
+          "result_rows": 3,
+          "rpc_count": 23,
+          "rpc_counts": {
+            "CommitTransaction": 4,
+            "ExecuteQuery": 19
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 23,
+          "server_ru": 31,
+          "update_bytes": null,
+          "update_rows": null,
+          "update_stats_missing_rpc_count": 8,
+          "write_stats_complete": false
+        }
+      },
+      "sync_idle_1": {
+        "elapsed_seconds": 0.0179,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 393,
+          "process_cpu_us": 283,
+          "queries_with_stats": 6,
+          "queries_with_total_cpu": 6,
+          "query_cpu_components_us": 676,
+          "query_cpu_us": 676,
+          "read_bytes": 443,
+          "read_rows": 14,
+          "result_rows": 8,
+          "rpc_count": 6,
+          "rpc_counts": {
+            "ExecuteQuery": 6
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 6,
+          "server_ru": 16,
+          "update_bytes": 0,
+          "update_rows": 0,
+          "update_stats_missing_rpc_count": 0,
+          "write_stats_complete": true
+        }
+      },
+      "sync_idle_2": {
+        "elapsed_seconds": 0.0188,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 388,
+          "process_cpu_us": 220,
+          "queries_with_stats": 6,
+          "queries_with_total_cpu": 6,
+          "query_cpu_components_us": 608,
+          "query_cpu_us": 608,
+          "read_bytes": 443,
+          "read_rows": 14,
+          "result_rows": 8,
+          "rpc_count": 6,
+          "rpc_counts": {
+            "ExecuteQuery": 6
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 6,
+          "server_ru": 16,
+          "update_bytes": 0,
+          "update_rows": 0,
+          "update_stats_missing_rpc_count": 0,
+          "write_stats_complete": true
+        }
+      },
+      "sync_idle_3": {
+        "elapsed_seconds": 0.0167,
+        "native": {
+          "all_rpc_complete": true,
+          "compile_cpu_us": 0,
+          "delete_rows": 0,
+          "delete_stats_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "phase_cpu_us": 424,
+          "process_cpu_us": 278,
+          "queries_with_stats": 6,
+          "queries_with_total_cpu": 6,
+          "query_cpu_components_us": 702,
+          "query_cpu_us": 702,
+          "read_bytes": 443,
+          "read_rows": 14,
+          "result_rows": 8,
+          "rpc_count": 6,
+          "rpc_counts": {
+            "ExecuteQuery": 6
+          },
+          "ru_missing_rpc_count": 0,
+          "ru_present_rpc_count": 6,
+          "server_ru": 16,
+          "update_bytes": 0,
+          "update_rows": 0,
+          "update_stats_missing_rpc_count": 0,
+          "write_stats_complete": true
+        }
+      }
+    }
+  }
+}

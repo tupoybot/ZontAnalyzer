@@ -693,6 +693,164 @@
       }
     },
     {
+      "id": 36,
+      "title": "События публикации с начала учёта",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 16,
+        "h": 6
+      },
+      "description": "Накопленные числа добавленных, завершённых и повторно поставленных элементов с начала текущего периода учёта. Завершение прежнего остатка очереди может дать больше завершённых, чем добавленных. Между экземплярами выбирается максимум только для последнего периода учёта. Повреждение сохранённого состояния мониторинга начинает новый период, не останавливая публикацию. Последний замер доступен 20 минут; затем линия прерывается.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (event) (last_over_time(zont_publication_queue_events{environment=\"$environment\",event=~\"added|completed|requeued\"}[20m]) and ignoring (event) (last_over_time(zont_publication_queue_tracking_started_timestamp_seconds{environment=\"$environment\"}[20m]) == scalar(max(last_over_time(zont_publication_queue_tracking_started_timestamp_seconds{environment=\"$environment\"}[20m])))))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{event}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "Нет измерений",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "added"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Добавлено"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "completed"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Завершено"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "requeued"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Повторно поставлено"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      }
+    },
+    {
+      "id": 37,
+      "title": "Начало учёта событий публикации",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 17,
+        "w": 8,
+        "h": 6
+      },
+      "description": "Начало текущего периода накопления событий очереди. История до этой даты не восстанавливается; завершение существовавшей очереди учитывается после этой даты. При повреждении состояния мониторинга начинается новый видимый период; публикация продолжается. Через 20 минут без замера карточка не показывает данные.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(last_over_time(zont_publication_queue_tracking_started_timestamp_seconds{environment=\"$environment\"}[20m])) * 1000",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Начало учёта",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "decimals": 0,
+          "noValue": "Нет данных",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center"
+      }
+    },
+    {
       "id": 101,
       "title": "Телеметрия и отчёты",
       "type": "row",
@@ -700,7 +858,7 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 17,
+        "y": 23,
         "w": 24,
         "h": 1
       }
@@ -715,7 +873,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 18,
+        "y": 24,
         "w": 12,
         "h": 8
       },
@@ -748,7 +906,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 18,
+        "y": 24,
         "w": 12,
         "h": 8
       },
@@ -781,7 +939,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 26,
+        "y": 32,
         "w": 12,
         "h": 8
       },
@@ -814,7 +972,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 26,
+        "y": 32,
         "w": 12,
         "h": 8
       },
@@ -1083,7 +1241,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 34,
+        "y": 40,
         "w": 24,
         "h": 4
       },
@@ -1139,7 +1297,7 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 38,
+        "y": 44,
         "w": 24,
         "h": 1
       }
@@ -1154,7 +1312,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 39,
+        "y": 45,
         "w": 8,
         "h": 4
       },
@@ -1212,7 +1370,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 39,
+        "y": 45,
         "w": 8,
         "h": 4
       },
@@ -1270,7 +1428,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 39,
+        "y": 45,
         "w": 8,
         "h": 4
       },
@@ -1328,7 +1486,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 43,
+        "y": 49,
         "w": 12,
         "h": 4
       },
@@ -1399,7 +1557,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 43,
+        "y": 49,
         "w": 12,
         "h": 4
       },
@@ -1480,7 +1638,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 47,
+        "y": 53,
         "w": 24,
         "h": 5
       },
@@ -1599,7 +1757,7 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 52,
+        "y": 58,
         "w": 24,
         "h": 1
       }
@@ -1614,7 +1772,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 53,
+        "y": 59,
         "w": 8,
         "h": 4
       },
@@ -1672,7 +1830,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 53,
+        "y": 59,
         "w": 8,
         "h": 4
       },
@@ -1730,7 +1888,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 53,
+        "y": 59,
         "w": 8,
         "h": 4
       },
@@ -1788,7 +1946,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 57,
+        "y": 63,
         "w": 12,
         "h": 8
       },
@@ -1832,7 +1990,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 57,
+        "y": 63,
         "w": 12,
         "h": 8
       },
@@ -1863,7 +2021,7 @@
       "panels": [],
       "gridPos": {
         "x": 0,
-        "y": 65,
+        "y": 71,
         "w": 24,
         "h": 1
       }
@@ -1878,7 +2036,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 66,
+        "y": 72,
         "w": 12,
         "h": 8
       },
@@ -1960,7 +2118,7 @@
     },
     {
       "id": 6,
-      "title": "Вызовы контейнера за час",
+      "title": "Запуски заданий и ветвей планировщика за час",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -1968,21 +2126,31 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 66,
+        "y": 72,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (operation) (increase(zont_invocations_total{environment=\"$environment\"}[1h]))",
+          "expr": "sum by (operation, outcome) (increase(zont_invocations_total{operation!~\"scheduler_.*\",environment=\"$environment\"}[1h]))",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "legendFormat": "{{operation}} {{outcome}} {{kind}} {{destination}} {{direction}}"
+          "legendFormat": "Задание: {{operation}} — {{outcome}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (lane, outcome) (increase(zont_scheduler_lane_runs_total{environment=\"$environment\"}[1h]))",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "Планировщик: {{lane}} — {{outcome}}"
         }
       ],
+      "description": "Задания приложения и внутренние ветви планировщика показаны отдельно. Это учёт обработанных приложением операций, а не число запусков контейнера провайдером.",
       "fieldConfig": {
         "defaults": {
           "unit": "none"
@@ -1993,7 +2161,7 @@
     },
     {
       "id": 5,
-      "title": "Ошибки и таймауты вызовов за час",
+      "title": "Ошибки и таймауты заданий приложения за час",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -2001,14 +2169,14 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 74,
+        "y": 80,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (operation, outcome) (increase(zont_invocations_total{environment=\"$environment\",outcome!=\"success\"}[1h]))",
+          "expr": "sum by (operation, outcome) (increase(zont_invocations_total{operation!~\"scheduler_.*\",environment=\"$environment\",outcome!=\"success\"}[1h]))",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -2034,7 +2202,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 74,
+        "y": 80,
         "w": 12,
         "h": 8
       },
@@ -2078,7 +2246,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 82,
+        "y": 88,
         "w": 12,
         "h": 8
       },
@@ -2111,7 +2279,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 82,
+        "y": 88,
         "w": 12,
         "h": 8
       },
@@ -2155,7 +2323,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 90,
+        "y": 96,
         "w": 24,
         "h": 8
       },

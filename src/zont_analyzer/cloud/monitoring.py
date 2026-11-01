@@ -43,6 +43,17 @@ def queues(
             # Clear a previous nonempty sample when oldest is unavailable.
             observe("zont_queue_oldest_timestamp_seconds", oldest or 0, kind=kind)
             observe("zont_queue_snapshot_success", 1, kind=kind)
+            metrics = publication.get("queue_metrics") if kind == "publication" and publication is not None else None
+            if isinstance(metrics, dict):
+                # Durable absolute counts since activation, not request-local
+                # deltas: the exporter adds *_total values across observations.
+                for event in ("added", "completed", "requeued"):
+                    count = metrics.get(event)
+                    if isinstance(count, (int, float)):
+                        observe("zont_publication_queue_events", count, event=event)
+                started = metrics.get("started_timestamp_seconds")
+                if isinstance(started, (int, float)):
+                    observe("zont_publication_queue_tracking_started_timestamp_seconds", started)
         finally:
             observe("zont_queue_observed_timestamp_seconds", time.time(), kind=kind)
 

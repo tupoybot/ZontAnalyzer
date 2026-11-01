@@ -103,7 +103,8 @@ def main() -> None:
             added = {item["href"]: item for item in additions}
             # The previous latest was dirty in the shorter dataset. It remains
             # dirty after expansion, giving both implementations identical input.
-            if not repository.save(added, {}, {}, {}, expected_checkpoint=0,
+            seed_meta = repository.load_meta()
+            if not repository.save(added, {}, dict(seed_meta), seed_meta, expected_checkpoint=0,
                                    lease_owner="benchmark", lease_attempt=lease.attempt):
                 raise RuntimeError("queue seed was not saved")
             seeded = total
@@ -130,13 +131,18 @@ def main() -> None:
             changed = copy.deepcopy(previous)
             for item in changed.values():
                 item["digest"] += ":updated"
-            save_args: tuple[Any, ...] = (changed, previous, {}, {})
+            # Seed-time metric initialization stays outside the measurement.
+            # Both implementations receive the same real metadata snapshot;
+            # independent copies prevent either save from changing the other's input.
+            saved_meta = repository.load_meta()
+            old_save_args: tuple[Any, ...] = (changed, previous, dict(saved_meta), dict(saved_meta))
+            new_save_args: tuple[Any, ...] = (changed, previous, dict(saved_meta), dict(saved_meta))
             kwargs = {"expected_checkpoint": 0, "lease_owner": "benchmark",
                       "lease_attempt": lease.attempt}
             old_saved, old_seconds, old_costs = _measure(
-                storage, lambda args=save_args, options=kwargs: baseline_save(repository, *args, **options))
+                storage, lambda args=old_save_args, options=kwargs: baseline_save(repository, *args, **options))
             new_saved, new_seconds, new_costs = _measure(
-                storage, lambda args=save_args, options=kwargs: repository.save(*args, **options))
+                storage, lambda args=new_save_args, options=kwargs: repository.save(*args, **options))
             if not old_saved or not new_saved:
                 raise AssertionError("queue save was not fenced successfully")
             _record(years, "baseline", "save", old_seconds, old_costs, old[0], old[1])

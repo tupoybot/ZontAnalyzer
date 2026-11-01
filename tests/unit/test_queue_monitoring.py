@@ -81,6 +81,22 @@ def test_successful_publication_reuses_exact_count_without_queue_read():
     assert "FROM jobs" in app.db.storage.execute.call_args.args[0]
 
 
+def test_durable_publication_events_are_absolute_and_missing_state_is_not_zero():
+    app = _app()
+    app.db.storage.execute.side_effect = [[SimpleNamespace(rows=[])], [SimpleNamespace(rows=[])]]
+    result = {"pending_reports": 0, "queue_metrics": {
+        "started_timestamp_seconds": 123, "added": 2, "completed": 4, "requeued": 3,
+    }}
+    first, second = _measure(app, result), _measure(app, result)
+    for event, count in (("added", 2), ("completed", 4), ("requeued", 3)):
+        point = ("zont_publication_queue_events", float(count), {"event": event})
+        assert point in first and point in second
+    assert ("zont_publication_queue_tracking_started_timestamp_seconds", 123.0, {}) in first
+    assert app.db.storage.execute.call_count == 2  # Manual snapshots only.
+    missing = _measure(_app(), {"pending_reports": 0})
+    assert not any(name.startswith("zont_publication_queue_") for name, _, _ in missing)
+
+
 def test_capped_samples_show_lower_bounds_and_suppress_unproven_oldest():
     events = _measure(_app(publication=[1_000_000] * 1001, manual=[_job()] * 1001))
     for kind in ("publication", "manual"):
