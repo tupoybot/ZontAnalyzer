@@ -1,0 +1,1055 @@
+{
+  "measured_at": "2026-11-02",
+  "issue": 89,
+  "application_source_commit": "d4f2cfd3d16e0e267f70b7be58428771ca6cc4f0",
+  "scripts_sha256": {
+    "tools/verify_gas_periods.py": "21e00072acdc0685dd8f71da7645b76d074c4c786f533e90f8daf34733487f98",
+    "tools/benchmark_gas_updates.py": "c21a73c6f582b8bc1c52d818341873c4062d90fcc052c3700a088aea460f1656",
+    "deploy/measure-gas-acceptance.sh": "54a6b84aa77ee2e03ec982f6d245e1123bef5ffc101c8952ae298666ee915d9c"
+  },
+  "environment": {
+    "provider": "disposable local YDB",
+    "ydb_image": "ydbplatform/local-ydb@sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402",
+    "ydb_storage": "in-memory PDisks",
+    "ydb_memory_limit_bytes": 5368709120,
+    "client_memory_limit_bytes": 1073741824,
+    "ydb_cpu_limit": 2,
+    "client_cpu_limit": 2,
+    "separate_ydb_and_client_per_case": true,
+    "external_calls": 0
+  },
+  "limitations": [
+    "One measured pass per history; elapsed times are observations, not medians.",
+    "Sparse monthly archives with one daily, weekly and seasonal report; no daily-archive capacity claim.",
+    "Synthetic stored AI and heat metrics; no analysis, live source or AI request.",
+    "Local YDB native RU are not managed-service billing.",
+    "Setup and verification reads excluded from operation costs; included in per-case memory peaks.",
+    "Changed-reading cycle is the sum of addition, intervals, model and complete publication, each reusing prior persisted work.",
+    "Non-identifiable bounded calibration in scale fixture; full-period oracle shares established fitting/estimation math."
+  ],
+  "full_period_oracle": {
+    "checks": [
+      {
+        "case": "weekly_dst_fall",
+        "phase": "initial",
+        "hours": 169,
+        "raw_points": 17617,
+        "observed_minutes": 9780,
+        "status": "extrapolated",
+        "volume_m3": 168.7746065617498,
+        "full_period_equal": true,
+        "closed_form_exposure_equal": true,
+        "warm_reuse": true
+      },
+      {
+        "case": "weekly_dst_spring",
+        "phase": "initial",
+        "hours": 167,
+        "raw_points": 17617,
+        "observed_minutes": 10020,
+        "status": "extrapolated",
+        "volume_m3": 166.95652173913044,
+        "full_period_equal": true,
+        "closed_form_exposure_equal": true,
+        "warm_reuse": true
+      },
+      {
+        "case": "monthly",
+        "phase": "initial",
+        "hours": 720,
+        "raw_points": 17617,
+        "observed_minutes": 43200,
+        "status": "estimated",
+        "volume_m3": 720,
+        "full_period_equal": true,
+        "closed_form_exposure_equal": true,
+        "warm_reuse": true
+      },
+      {
+        "case": "season_cross_year",
+        "phase": "initial",
+        "hours": 4368,
+        "raw_points": 17617,
+        "observed_minutes": 261360,
+        "status": "extrapolated",
+        "volume_m3": 4367.476823571685,
+        "full_period_equal": true,
+        "closed_form_exposure_equal": true,
+        "warm_reuse": true
+      },
+      {
+        "case": "weekly_dst_fall",
+        "phase": "corrected_telemetry",
+        "hours": 169,
+        "raw_points": 17617,
+        "observed_minutes": 9780,
+        "status": "extrapolated",
+        "volume_m3": 168.8893411685219,
+        "full_period_equal": true,
+        "closed_form_exposure_equal": true,
+        "warm_reuse": true
+      },
+      {
+        "case": "weekly_dst_spring",
+        "phase": "corrected_telemetry",
+        "hours": 167,
+        "raw_points": 17617,
+        "observed_minutes": 10020,
+        "status": "extrapolated",
+        "volume_m3": 167.0700203942896,
+        "full_period_equal": true,
+        "closed_form_exposure_equal": true,
+        "warm_reuse": true
+      },
+      {
+        "case": "monthly",
+        "phase": "corrected_telemetry",
+        "hours": 720,
+        "raw_points": 17617,
+        "observed_minutes": 43200,
+        "status": "estimated",
+        "volume_m3": 720.2284160435079,
+        "full_period_equal": true,
+        "closed_form_exposure_equal": true,
+        "warm_reuse": true
+      },
+      {
+        "case": "season_cross_year",
+        "phase": "corrected_telemetry",
+        "hours": 4368,
+        "raw_points": 17617,
+        "observed_minutes": 261360,
+        "status": "extrapolated",
+        "volume_m3": 4370.1841104325495,
+        "full_period_equal": true,
+        "closed_form_exposure_equal": true,
+        "warm_reuse": true
+      },
+      {
+        "case": "weekly_dst_fall",
+        "phase": "corrected_reading",
+        "hours": 169,
+        "raw_points": 17617,
+        "observed_minutes": 9780,
+        "status": "extrapolated",
+        "volume_m3": 168.8893411685219,
+        "full_period_equal": true,
+        "closed_form_exposure_equal": true,
+        "warm_reuse": true
+      },
+      {
+        "case": "weekly_dst_spring",
+        "phase": "corrected_reading",
+        "hours": 167,
+        "raw_points": 17617,
+        "observed_minutes": 10020,
+        "status": "extrapolated",
+        "volume_m3": 167.0700203942896,
+        "full_period_equal": true,
+        "closed_form_exposure_equal": true,
+        "warm_reuse": true
+      },
+      {
+        "case": "monthly",
+        "phase": "corrected_reading",
+        "hours": 720,
+        "raw_points": 17617,
+        "observed_minutes": 43200,
+        "status": "estimated",
+        "volume_m3": 720.2284160435079,
+        "full_period_equal": true,
+        "closed_form_exposure_equal": true,
+        "warm_reuse": true
+      },
+      {
+        "case": "season_cross_year",
+        "phase": "corrected_reading",
+        "hours": 4368,
+        "raw_points": 17617,
+        "observed_minutes": 261360,
+        "status": "extrapolated",
+        "volume_m3": 4370.1841104325495,
+        "full_period_equal": true,
+        "closed_form_exposure_equal": true,
+        "warm_reuse": true
+      },
+      {
+        "mutation_invalidated": true,
+        "stale_snapshot_rejected": true,
+        "meter_replacement_intervals": 4,
+        "external_calls": 0
+      }
+    ],
+    "ydb_peak_memory_bytes_including_setup": 647811072
+  },
+  "histories": [
+    {
+      "years": 1,
+      "result": {
+        "case_elapsed_seconds_including_setup": 34.342,
+        "completed_changed_publications": 15,
+        "completed_changed_reports": 15,
+        "daily_volume_after_m3": 28,
+        "daily_volume_before_m3": 24,
+        "history_days": 365,
+        "limits": [
+          "Sparse long archive; no daily-report archive capacity claim.",
+          "Stored synthetic AI reports; analysis/AI/source retrieval excluded.",
+          "Local YDB native RU; not managed-service billing.",
+          "Two unchanged intervals and one new interval; non-identifiable bounded model."
+        ],
+        "model_after": "304f472d312c78701a1259ef",
+        "model_before": "fee7fee8ae75408b6a27045a",
+        "model_identifiable": false,
+        "operation": "acceptance",
+        "passed": true,
+        "peak_rss_bytes": 118005760,
+        "report_cadence": {
+          "daily": 1,
+          "monthly": 12,
+          "seasonal": 1,
+          "weekly": 1
+        },
+        "seed_points": {
+          "dense_10_minute_32_days": 13827,
+          "sparse_three_points_per_day_rest": 1002
+        },
+        "volume_changed_reports": 3,
+        "years": 1
+      },
+      "operations": [
+        {
+          "operation": "initial_full_publication",
+          "elapsed_seconds": 2.8938,
+          "server_ru": 27368,
+          "rpc_count": 930,
+          "query_count": 810,
+          "read_rows": 27060,
+          "read_bytes": 1911379,
+          "query_cpu_us": 344050,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 43,
+          "result": {
+            "batches": [
+              {
+                "pending_reports": 7,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 0,
+                "rendered_reports": 7
+              }
+            ],
+            "completed_batches": 2,
+            "rendered_reports": 15
+          }
+        },
+        {
+          "operation": "warm_unchanged",
+          "elapsed_seconds": 0.138,
+          "server_ru": 122,
+          "rpc_count": 54,
+          "query_count": 45,
+          "read_rows": 111,
+          "read_bytes": 17008,
+          "query_cpu_us": 16357,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 3,
+          "result": {
+            "batches": [
+              {
+                "pending_reports": 0,
+                "rendered_reports": 0
+              }
+            ],
+            "completed_batches": 1,
+            "raw_and_day_dependency_reads": 0,
+            "rendered_reports": 0
+          }
+        },
+        {
+          "operation": "owner_reading_addition",
+          "elapsed_seconds": 0.067,
+          "server_ru": 37,
+          "rpc_count": 29,
+          "query_count": 22,
+          "read_rows": 30,
+          "read_bytes": 27728,
+          "query_cpu_us": 2601,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 6
+        },
+        {
+          "operation": "calibration_interval_reuse",
+          "elapsed_seconds": 0.1428,
+          "server_ru": 561,
+          "rpc_count": 49,
+          "query_count": 47,
+          "read_rows": 548,
+          "read_bytes": 31380,
+          "query_cpu_us": 4080,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": true,
+          "update_rows": 8,
+          "update_bytes": 5247,
+          "update_stats_missing_rpc_count": 0,
+          "result": {
+            "new_intervals": 1,
+            "unchanged_intervals_reused": 2,
+            "window_calculations": 3
+          }
+        },
+        {
+          "operation": "model_recalibration",
+          "elapsed_seconds": 0.0526,
+          "server_ru": 54,
+          "rpc_count": 23,
+          "query_count": 21,
+          "read_rows": 48,
+          "read_bytes": 7219,
+          "query_cpu_us": 1495,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": true,
+          "update_rows": 2,
+          "update_bytes": 3284,
+          "update_stats_missing_rpc_count": 0
+        },
+        {
+          "operation": "changed_full_publication",
+          "elapsed_seconds": 4.3664,
+          "server_ru": 3388,
+          "rpc_count": 1668,
+          "query_count": 1548,
+          "read_rows": 2816,
+          "read_bytes": 958492,
+          "query_cpu_us": 162518,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 73,
+          "result": {
+            "batches": [
+              {
+                "pending_reports": 7,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 0,
+                "rendered_reports": 7
+              }
+            ],
+            "completed_batches": 2,
+            "rendered_reports": 15
+          }
+        },
+        {
+          "operation": "exact_owner_replay",
+          "elapsed_seconds": 0.0423,
+          "server_ru": 30,
+          "rpc_count": 20,
+          "query_count": 13,
+          "read_rows": 28,
+          "read_bytes": 28903,
+          "query_cpu_us": 1528,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": true,
+          "update_rows": 0,
+          "update_bytes": 0,
+          "update_stats_missing_rpc_count": 0
+        },
+        {
+          "operation": "exact_replay_publication",
+          "elapsed_seconds": 0.0558,
+          "server_ru": 55,
+          "rpc_count": 28,
+          "query_count": 21,
+          "read_rows": 47,
+          "read_bytes": 7178,
+          "query_cpu_us": 1341,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 3,
+          "result": {
+            "batches": [
+              {
+                "pending_reports": 0,
+                "rendered_reports": 0
+              }
+            ],
+            "completed_batches": 1,
+            "rendered_reports": 0
+          }
+        }
+      ],
+      "complete_changed_reading_cycle": {
+        "server_ru": 4040,
+        "rpc_count": 1769,
+        "query_count": 1638,
+        "elapsed_seconds": 4.6288,
+        "read_rows": 3442,
+        "read_bytes": 1024819
+      },
+      "ydb_peak_memory_bytes_including_setup": 662335488
+    },
+    {
+      "years": 5,
+      "result": {
+        "case_elapsed_seconds_including_setup": 107.077,
+        "completed_changed_publications": 63,
+        "completed_changed_reports": 63,
+        "daily_volume_after_m3": 28,
+        "daily_volume_before_m3": 24,
+        "history_days": 1826,
+        "limits": [
+          "Sparse long archive; no daily-report archive capacity claim.",
+          "Stored synthetic AI reports; analysis/AI/source retrieval excluded.",
+          "Local YDB native RU; not managed-service billing.",
+          "Two unchanged intervals and one new interval; non-identifiable bounded model."
+        ],
+        "model_after": "bd27670d3f46966ae435b415",
+        "model_before": "9486d4bb11d9dfba3c322f45",
+        "model_identifiable": false,
+        "operation": "acceptance",
+        "passed": true,
+        "peak_rss_bytes": 188645376,
+        "report_cadence": {
+          "daily": 1,
+          "monthly": 60,
+          "seasonal": 1,
+          "weekly": 1
+        },
+        "seed_points": {
+          "dense_10_minute_32_days": 13827,
+          "sparse_three_points_per_day_rest": 5385
+        },
+        "volume_changed_reports": 3,
+        "years": 5
+      },
+      "operations": [
+        {
+          "operation": "initial_full_publication",
+          "elapsed_seconds": 10.843,
+          "server_ru": 42077,
+          "rpc_count": 4092,
+          "query_count": 3624,
+          "read_rows": 41049,
+          "read_bytes": 5406273,
+          "query_cpu_us": 792264,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 175,
+          "result": {
+            "batches": [
+              {
+                "pending_reports": 55,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 47,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 39,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 31,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 23,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 15,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 7,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 0,
+                "rendered_reports": 7
+              }
+            ],
+            "completed_batches": 8,
+            "rendered_reports": 63
+          }
+        },
+        {
+          "operation": "warm_unchanged",
+          "elapsed_seconds": 0.145,
+          "server_ru": 125,
+          "rpc_count": 55,
+          "query_count": 46,
+          "read_rows": 112,
+          "read_bytes": 17350,
+          "query_cpu_us": 17015,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 4,
+          "result": {
+            "batches": [
+              {
+                "pending_reports": 0,
+                "rendered_reports": 0
+              }
+            ],
+            "completed_batches": 1,
+            "raw_and_day_dependency_reads": 0,
+            "rendered_reports": 0
+          }
+        },
+        {
+          "operation": "owner_reading_addition",
+          "elapsed_seconds": 0.0723,
+          "server_ru": 37,
+          "rpc_count": 29,
+          "query_count": 22,
+          "read_rows": 30,
+          "read_bytes": 27728,
+          "query_cpu_us": 2291,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 6
+        },
+        {
+          "operation": "calibration_interval_reuse",
+          "elapsed_seconds": 0.1337,
+          "server_ru": 561,
+          "rpc_count": 49,
+          "query_count": 47,
+          "read_rows": 548,
+          "read_bytes": 31409,
+          "query_cpu_us": 3533,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": true,
+          "update_rows": 8,
+          "update_bytes": 5247,
+          "update_stats_missing_rpc_count": 0,
+          "result": {
+            "new_intervals": 1,
+            "unchanged_intervals_reused": 2,
+            "window_calculations": 3
+          }
+        },
+        {
+          "operation": "model_recalibration",
+          "elapsed_seconds": 0.0556,
+          "server_ru": 54,
+          "rpc_count": 23,
+          "query_count": 21,
+          "read_rows": 48,
+          "read_bytes": 7219,
+          "query_cpu_us": 1408,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": true,
+          "update_rows": 2,
+          "update_bytes": 3284,
+          "update_stats_missing_rpc_count": 0
+        },
+        {
+          "operation": "changed_full_publication",
+          "elapsed_seconds": 21.404,
+          "server_ru": 19008,
+          "rpc_count": 7821,
+          "query_count": 7353,
+          "read_rows": 16451,
+          "read_bytes": 5405602,
+          "query_cpu_us": 488212,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 301,
+          "result": {
+            "batches": [
+              {
+                "pending_reports": 55,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 47,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 39,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 31,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 23,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 15,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 7,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 0,
+                "rendered_reports": 7
+              }
+            ],
+            "completed_batches": 8,
+            "rendered_reports": 63
+          }
+        },
+        {
+          "operation": "exact_owner_replay",
+          "elapsed_seconds": 0.0497,
+          "server_ru": 30,
+          "rpc_count": 20,
+          "query_count": 13,
+          "read_rows": 28,
+          "read_bytes": 28903,
+          "query_cpu_us": 1471,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": true,
+          "update_rows": 0,
+          "update_bytes": 0,
+          "update_stats_missing_rpc_count": 0
+        },
+        {
+          "operation": "exact_replay_publication",
+          "elapsed_seconds": 0.067,
+          "server_ru": 56,
+          "rpc_count": 29,
+          "query_count": 22,
+          "read_rows": 47,
+          "read_bytes": 7209,
+          "query_cpu_us": 1507,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 4,
+          "result": {
+            "batches": [
+              {
+                "pending_reports": 0,
+                "rendered_reports": 0
+              }
+            ],
+            "completed_batches": 1,
+            "rendered_reports": 0
+          }
+        }
+      ],
+      "complete_changed_reading_cycle": {
+        "server_ru": 19660,
+        "rpc_count": 7922,
+        "query_count": 7443,
+        "elapsed_seconds": 21.6656,
+        "read_rows": 17077,
+        "read_bytes": 5471958
+      },
+      "ydb_peak_memory_bytes_including_setup": 786980864
+    },
+    {
+      "years": 10,
+      "result": {
+        "case_elapsed_seconds_including_setup": 194.118,
+        "completed_changed_publications": 123,
+        "completed_changed_reports": 123,
+        "daily_volume_after_m3": 28,
+        "daily_volume_before_m3": 24,
+        "history_days": 3653,
+        "limits": [
+          "Sparse long archive; no daily-report archive capacity claim.",
+          "Stored synthetic AI reports; analysis/AI/source retrieval excluded.",
+          "Local YDB native RU; not managed-service billing.",
+          "Two unchanged intervals and one new interval; non-identifiable bounded model."
+        ],
+        "model_after": "f73a73e164244ed52a62f681",
+        "model_before": "66551174b4de9e3dc6a215c2",
+        "model_identifiable": false,
+        "operation": "acceptance",
+        "passed": true,
+        "peak_rss_bytes": 276717568,
+        "report_cadence": {
+          "daily": 1,
+          "monthly": 120,
+          "seasonal": 1,
+          "weekly": 1
+        },
+        "seed_points": {
+          "dense_10_minute_32_days": 13827,
+          "sparse_three_points_per_day_rest": 10866
+        },
+        "volume_changed_reports": 3,
+        "years": 10
+      },
+      "operations": [
+        {
+          "operation": "initial_full_publication",
+          "elapsed_seconds": 19.637,
+          "server_ru": 63242,
+          "rpc_count": 8080,
+          "query_count": 7172,
+          "read_rows": 61602,
+          "read_bytes": 10229256,
+          "query_cpu_us": 881212,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 343,
+          "result": {
+            "batches": [
+              {
+                "pending_reports": 115,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 107,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 99,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 91,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 83,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 75,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 67,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 59,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 51,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 43,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 35,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 27,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 19,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 11,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 3,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 0,
+                "rendered_reports": 3
+              }
+            ],
+            "completed_batches": 16,
+            "rendered_reports": 123
+          }
+        },
+        {
+          "operation": "warm_unchanged",
+          "elapsed_seconds": 0.14,
+          "server_ru": 124,
+          "rpc_count": 55,
+          "query_count": 46,
+          "read_rows": 112,
+          "read_bytes": 17354,
+          "query_cpu_us": 15093,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 4,
+          "result": {
+            "batches": [
+              {
+                "pending_reports": 0,
+                "rendered_reports": 0
+              }
+            ],
+            "completed_batches": 1,
+            "raw_and_day_dependency_reads": 0,
+            "rendered_reports": 0
+          }
+        },
+        {
+          "operation": "owner_reading_addition",
+          "elapsed_seconds": 0.0618,
+          "server_ru": 37,
+          "rpc_count": 29,
+          "query_count": 22,
+          "read_rows": 30,
+          "read_bytes": 27728,
+          "query_cpu_us": 2115,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 6
+        },
+        {
+          "operation": "calibration_interval_reuse",
+          "elapsed_seconds": 0.1272,
+          "server_ru": 561,
+          "rpc_count": 49,
+          "query_count": 47,
+          "read_rows": 548,
+          "read_bytes": 31427,
+          "query_cpu_us": 3244,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": true,
+          "update_rows": 8,
+          "update_bytes": 5247,
+          "update_stats_missing_rpc_count": 0,
+          "result": {
+            "new_intervals": 1,
+            "unchanged_intervals_reused": 2,
+            "window_calculations": 3
+          }
+        },
+        {
+          "operation": "model_recalibration",
+          "elapsed_seconds": 0.0514,
+          "server_ru": 54,
+          "rpc_count": 23,
+          "query_count": 21,
+          "read_rows": 48,
+          "read_bytes": 7219,
+          "query_cpu_us": 1413,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": true,
+          "update_rows": 2,
+          "update_bytes": 3284,
+          "update_stats_missing_rpc_count": 0
+        },
+        {
+          "operation": "changed_full_publication",
+          "elapsed_seconds": 40.9379,
+          "server_ru": 46376,
+          "rpc_count": 15547,
+          "query_count": 14639,
+          "read_rows": 41295,
+          "read_bytes": 14251506,
+          "query_cpu_us": 950598,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 589,
+          "result": {
+            "batches": [
+              {
+                "pending_reports": 115,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 107,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 99,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 91,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 83,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 75,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 67,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 59,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 51,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 43,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 35,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 27,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 19,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 11,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 3,
+                "rendered_reports": 8
+              },
+              {
+                "pending_reports": 0,
+                "rendered_reports": 3
+              }
+            ],
+            "completed_batches": 16,
+            "rendered_reports": 123
+          }
+        },
+        {
+          "operation": "exact_owner_replay",
+          "elapsed_seconds": 0.0563,
+          "server_ru": 30,
+          "rpc_count": 20,
+          "query_count": 13,
+          "read_rows": 28,
+          "read_bytes": 28903,
+          "query_cpu_us": 1553,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": true,
+          "update_rows": 0,
+          "update_bytes": 0,
+          "update_stats_missing_rpc_count": 0
+        },
+        {
+          "operation": "exact_replay_publication",
+          "elapsed_seconds": 0.0605,
+          "server_ru": 57,
+          "rpc_count": 29,
+          "query_count": 22,
+          "read_rows": 48,
+          "read_bytes": 7525,
+          "query_cpu_us": 1437,
+          "all_rpc_complete": true,
+          "ru_missing_rpc_count": 0,
+          "failed_rpc_count": 0,
+          "write_stats_complete": false,
+          "update_rows": null,
+          "update_bytes": null,
+          "update_stats_missing_rpc_count": 4,
+          "result": {
+            "batches": [
+              {
+                "pending_reports": 0,
+                "rendered_reports": 0
+              }
+            ],
+            "completed_batches": 1,
+            "rendered_reports": 0
+          }
+        }
+      ],
+      "complete_changed_reading_cycle": {
+        "server_ru": 47028,
+        "rpc_count": 15648,
+        "query_count": 14729,
+        "elapsed_seconds": 41.1783,
+        "read_rows": 41921,
+        "read_bytes": 14317880
+      },
+      "ydb_peak_memory_bytes_including_setup": 850751488
+    }
+  ]
+}
