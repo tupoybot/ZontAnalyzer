@@ -973,8 +973,11 @@ def quality(report: Report) -> str:
     reasons = []
     if q.coverage_pct < 95:
         reasons.append("В периоде есть пропуски измерений; часть динамики неизвестна.")
-    if q.stuck_pct > 0:
-        reasons.append("Температура менялась редко; оценка динамики может быть менее уверенной.")
+    if "large_gap" in q.flags:
+        reasons.append(
+            "Наибольший интервал между показаниями: "
+            + number(q.max_gap_seconds / 60, "мин") + ". Динамика внутри пропуска неизвестна."
+        )
     if q.implausible_jumps:
         reasons.append("Есть подозрительные скачки температуры.")
     if q.score < 0.8 and not reasons:

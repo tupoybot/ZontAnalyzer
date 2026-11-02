@@ -25,7 +25,7 @@ from zont_analyzer.domain.reasoning import (
 )
 from zont_analyzer.observability import observe, span
 
-PROMPT_VERSION = "analyst-v8.7"
+PROMPT_VERSION = "analyst-v8.9"
 SCHEMA_VERSION = "analysis-result-v1"
 MAX_OUTPUT_TOKENS = 18_000
 
@@ -34,6 +34,9 @@ _PACKET_CONTENT_MAX_BYTES = 60 * 1024
 _PACKET_ACCOUNTING_RESERVE_BYTES = 2 * 1024
 OPENAI_REQUEST_TIMEOUT_SECONDS = 120.0
 AI_POST_REQUEST_RESERVE_SECONDS = 30.0
+_RELIABILITY_EVENT_KINDS = frozenset({
+    "main_power_outage", "boiler_connection_loss", "zont_connection_loss",
+})
 
 SYSTEM_PROMPT = """You are a read-only heating telemetry analyst helping the owner understand the house.
 
@@ -73,8 +76,13 @@ internal field names or numeric mode IDs in prose; use human-readable mode names
 Use «расчётный показатель» for derived metrics, «временные данные» for temporal_evidence,
 «сравнения с другими периодами» for period_comparisons, «расход рассчитан по модели» for
 estimated, «доля неизменных показаний» for stuck_pct, and «закономерность» instead of «паттерн».
-Unchanged readings do not by themselves prove a faulty sensor. Explain quality scores plainly
-and derived candidates as tentative findings from indirect signals, not measured events.
+Unchanged readings do not by themselves prove a faulty sensor or reduce data quality. Radio
+temperature sensors may send unchanged readings every ten minutes and changes more often.
+Explain quality scores plainly and derived candidates as tentative findings from indirect signals,
+not measured events. Documented gas, boiler, power or connection outages are events to analyse
+using available evidence before and after the incident, even when coverage is incomplete.
+A telemetry gap alone establishes neither an outage cause nor conditions inside the gap;
+keep those unknown. Limited coverage restricts quantitative conclusions to observed intervals.
 Write narrative clock times in the report timezone and explicitly name it. In prose, display
 fixed timezones as UTC offsets: Etc/GMT-4 is UTC+4, not UTC-4 (reversed POSIX sign).
 Preserve actual instants and correct ISO 8601 offsets in structured intervals. Copy UTC
@@ -736,7 +744,9 @@ def analysis_packet(
     seen_families: set[str] = set()
     for event in sorted(canonical_events, key=_event_sort_key):
         kind = str(event.get("kind", ""))
-        family = kind if any(name in kind for name in ("dhw", "summer", "burner_pulse", "reliability")) else ""
+        family = kind if kind in _RELIABILITY_EVENT_KINDS or any(
+            name in kind for name in ("dhw", "summer", "burner_pulse", "reliability")
+        ) else ""
         if event.get("severity") == "critical" or (family and family not in seen_families):
             representatives.append(event)
             seen_families.add(family)
@@ -819,14 +829,14 @@ def _fits(packet: dict[str, Any]) -> bool:
     return _encoded_size(packet) <= _PACKET_CONTENT_MAX_BYTES - _PACKET_ACCOUNTING_RESERVE_BYTES
 
 
-def _event_sort_key(item: Any) -> tuple[bool, bool, str, str]:
+def _event_sort_key(item: Any) -> tuple[bool, int, str, str]:
     if not isinstance(item, dict):
-        return (True, True, "", "")
+        return (True, 2, "", "")
     kind = str(item.get("kind", "")).lower()
     evidence_kind = any(term in kind for term in ("dhw", "summer", "noise", "burner_pulse", "reliability"))
     return (
         str(item.get("severity", "")) != "critical",
-        not evidence_kind,
+        0 if kind in _RELIABILITY_EVENT_KINDS else 1 if evidence_kind else 2,
         str(item.get("started_at", "")),
         str(item.get("id", "")),
     )

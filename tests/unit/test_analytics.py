@@ -144,6 +144,93 @@ def test_quality_uses_regular_radio_cadence_despite_short_burst() -> None:
     assert quality.flags == []
 
 
+def test_constant_monthly_temperature_is_not_a_sensor_fault() -> None:
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    end = start + timedelta(days=31)
+    samples = [(start + timedelta(minutes=10 * index), 20.0) for index in range(31 * 144)]
+
+    quality = assess_quality(samples, start, end, expected_interval_seconds=600)
+
+    assert quality.coverage_pct > 99.9
+    assert quality.score > 0.999
+    assert quality.stuck_pct == 100
+    assert quality.flags == []
+
+
+def test_same_gap_has_a_proportional_cost_for_daily_and_monthly_quality() -> None:
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    results = []
+    for days in (1, 31):
+        end = start + timedelta(days=days)
+        samples = [
+            (start + timedelta(minutes=10 * index), 20.0)
+            for index in range(days * 144 + 1)
+            if not 6 < index < 22
+        ]
+        results.append(assess_quality(samples, start, end, expected_interval_seconds=600))
+
+    daily, monthly = results
+    # A 160-minute gap contributes only its missing duration; it does not
+    # impose the same fixed score reduction on a day and on a whole month.
+    assert daily.max_gap_seconds == monthly.max_gap_seconds == 160 * 60
+    missing_seconds = 160 * 60 - 1500
+    assert daily.score == pytest.approx(1 - missing_seconds / 86400, abs=0.0001)
+    assert monthly.score == pytest.approx(1 - missing_seconds / (31 * 86400), abs=0.0001)
+    assert monthly.score > 0.99
+    assert "large_gap" in daily.flags and "large_gap" in monthly.flags
+
+
+def test_known_heartbeat_survives_many_short_change_updates() -> None:
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    end = start + timedelta(days=1)
+    samples = [(start + timedelta(minutes=index), 20 + index / 10000) for index in range(960)]
+    samples.extend((start + timedelta(minutes=index), 20.1) for index in range(960, 1441, 10))
+
+    quality = assess_quality(samples, start, end, expected_interval_seconds=600)
+
+    assert quality.coverage_pct == 100
+    assert quality.score == 1
+    assert quality.flags == []
+
+
+@pytest.mark.parametrize("interval_hours", [1, 24])
+def test_uniformly_sparse_samples_cannot_infer_full_coverage(interval_hours: int) -> None:
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    end = start + timedelta(days=31)
+    samples = [
+        (start + timedelta(hours=hour), 20.0)
+        for hour in range(0, 31 * 24 + 1, interval_hours)
+    ]
+
+    quality = assess_quality(samples, start, end)
+
+    assert quality.coverage_pct < 50
+    assert quality.score < 0.5
+    assert "low_coverage" in quality.flags
+    assert "large_gap" in quality.flags
+
+
+def test_quality_ignores_samples_outside_period_but_accepts_end_boundary() -> None:
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    end = start + timedelta(hours=1)
+    samples = [(start - timedelta(hours=1), 100.0), (end + timedelta(hours=1), -100.0)]
+    samples.extend((start + timedelta(minutes=10 * index), 20.0) for index in range(7))
+
+    quality = assess_quality(samples, start, end, expected_interval_seconds=600)
+
+    assert quality.sample_count == 7
+    assert quality.coverage_pct == 100
+    assert quality.score == 1
+    assert quality.implausible_jumps == 0
+
+
+@pytest.mark.parametrize("interval", [0, -1, float("inf"), float("nan")])
+def test_quality_rejects_invalid_expected_interval(interval: float) -> None:
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    with pytest.raises(ValueError, match="expected_interval_seconds"):
+        assess_quality([], start, start + timedelta(days=1), expected_interval_seconds=interval)
+
+
 def test_burner_metrics_count_cycles() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     values = [0, 1, 1, 0, 0, 1, 0]

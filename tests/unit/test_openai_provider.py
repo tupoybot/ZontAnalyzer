@@ -235,6 +235,45 @@ def test_packet_shares_budget_between_dhw_dynamics_and_aggregate_metrics() -> No
     assert packet["provenance"]["truncation"]["serialized_bytes"] <= ANALYSIS_PACKET_MAX_BYTES
 
 
+def test_saturated_month_keeps_complete_outages_before_repeated_dhw_events() -> None:
+    events = [_event(index) for index in range(200)]
+    for event in events:
+        event.kind = "dhw_reheat_episode"
+        event.details = {"facts": {"episode_description": "x" * 2_000}}
+    critical = _event(201)
+    critical.severity = "critical"
+    events.append(critical)
+    outages = []
+    for index, kind in enumerate(("main_power_outage", "boiler_connection_loss", "zont_connection_loss"), 202):
+        event = _event(index)
+        event.kind = kind
+        event.ended_at = event.started_at + timedelta(hours=3)
+        event.details = {
+            "duration_seconds": 10_800,
+            "service_impact": "unknown" if kind != "main_power_outage" else "confirmed_service_failure",
+            "source_event_ids": [f"source:{kind}:lost", f"source:{kind}:restored"],
+        }
+        outages.append(event)
+    events.extend(outages)
+    metrics = [MetricValue(id=f"metric:{index:03}", name="temperature", value=index, unit="°C") for index in range(44)]
+    arguments = {
+        "quality": {"score": 0.9969}, "metrics": metrics, "period": {"kind": "monthly"},
+        "context": {"temporal_evidence": {"windows": [_window(1)], "provenance_note": "x" * 42_000}},
+    }
+
+    packet = analysis_packet(events=events, **arguments)
+
+    retained = {event["id"]: event for event in packet["events"]}
+    for outage in outages:
+        assert retained[outage.id] == outage.model_dump(mode="json")
+    assert packet["events"][0]["id"] == critical.id
+    assert [event["id"] for event in packet["events"][1:4]] == [event.id for event in outages]
+    assert len(packet["metrics"]) == len(metrics)
+    assert packet["provenance"]["truncation"]["omitted"]["events"]["items"] > 0
+    assert len(json.dumps(packet, ensure_ascii=False, sort_keys=True).encode("utf-8")) <= ANALYSIS_PACKET_MAX_BYTES
+    assert packet == analysis_packet(events=list(reversed(events)), **arguments)
+
+
 def test_weekly_allocator_keeps_new_context_metrics_and_representative_dhw_event() -> None:
     metrics = [
         MetricValue(id=f"legacy:{index:02d}", name="comfort_metric", value=index, unit="C") for index in range(43)
