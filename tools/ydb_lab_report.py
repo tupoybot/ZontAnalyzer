@@ -46,6 +46,16 @@ def _finite(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _queue_age_seconds(row: dict[str, Any]) -> float | None:
+    """Accept physical age only when its clock is monotonic; an empty queue has age zero."""
+    depth = _finite(row.get("queue_depth"))
+    if depth == 0:
+        return 0.0
+    if row.get("queue_age_clock") != "monotonic":
+        return None
+    return _finite(row.get("queue_age_seconds"))
+
+
 def _observation_complete(row: dict[str, Any]) -> bool:
     cache = row.get("_report_cache") or {}
     if "observation_complete" in cache:
@@ -157,7 +167,7 @@ def _summarize_group(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "io_complete": bool(observations) and all(obs.get("io_complete") is True for obs in observations),
         "errors": sum(int((row.get("observation") or {}).get("failed_rpc_count", 0)) for row in rows),
         "queue_depth": _spread([_finite(row.get("queue_depth")) for row in rows]),
-        "queue_age_seconds": _spread([_finite(row.get("queue_age_seconds")) for row in rows]),
+        "queue_age_seconds": _spread([_queue_age_seconds(row) for row in rows]),
     }
 
 
@@ -559,6 +569,7 @@ def _metric_lines(summary: dict[str, Any]) -> str:
                               if isinstance(row.get("scenario"), str) and len(row["scenario"]) <= 32 and
                               row["scenario"].replace("_", "").isalnum()})[:MAX_SCENARIO_LABELS]
     coverage_counts: dict[tuple[str, str, str, str, str], list[int]] = {}
+    rate_windows: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
     for row in summary.get("windows", []):
         if row.get("phase") != "operation":
             continue
@@ -578,26 +589,45 @@ def _metric_lines(summary: dict[str, Any]) -> str:
             groups[key] = {}
             for width in ("1", "60"):
                 coverage_counts[(*key, width)] = [0, 0]
-        entry = groups.setdefault(key, {})
+                rate_windows[(*key, width)] = {
+                    "duration": 0.0, "measured_ru": 0.0, "max_ru_rate": None,
+                    "ru_complete": True, "rpc_complete": True,
+                    "rpc_count": 0.0, "rpc_duration": 0.0,
+                }
         width = row.get("width_seconds")
         if width is None and row.get("start_seconds") is not None and row.get("end_seconds") is not None:
             width = row["end_seconds"] - row["start_seconds"]
         ru = _finite(row.get("measured_ru"))
         if width in (1.0, 60.0):
             window = str(int(width))
-            metric_key = f"ru_rate_{window}"
             start, end = _finite(row.get("start_seconds")), _finite(row.get("end_seconds"))
             duration = None if start is None or end is None else end - start
-            if ru is not None and duration is not None and duration > 0:
-                rate = ru / duration
-                entry[metric_key] = max(entry.get(metric_key, float("-inf")), rate)
-                entry[f"{metric_key}_sum"] = entry.get(f"{metric_key}_sum", 0.0) + rate
-                entry[f"{metric_key}_count"] = entry.get(f"{metric_key}_count", 0) + 1
+            state = rate_windows.setdefault((*key, window), {
+                "duration": 0.0, "measured_ru": 0.0, "max_ru_rate": None,
+                "ru_complete": True, "rpc_complete": True,
+                "rpc_count": 0.0, "rpc_duration": 0.0,
+            })
+            if duration is not None and duration > 0:
+                state["duration"] += duration
+                if (row.get("measurement_complete") is True and
+                        row.get("all_billed_rpc_complete") is True and
+                        row.get("ru_missing_rpc_count", 0) == 0 and
+                        row.get("unattributed_rpc_count", 0) == 0 and ru is not None):
+                    state["measured_ru"] += ru
+                    rate = ru / duration
+                    state["max_ru_rate"] = (rate if state["max_ru_rate"] is None
+                                             else max(state["max_ru_rate"], rate))
+                else:
+                    state["ru_complete"] = False
+            else:
+                state["ru_complete"] = False
+                state["rpc_complete"] = False
             rpc_count = _finite(row.get("rpc_count"))
             if rpc_count is not None and duration is not None and duration > 0:
-                rpc_rate = rpc_count / duration
-                entry[f"rpc_rate_{window}_sum"] = entry.get(f"rpc_rate_{window}_sum", 0.0) + rpc_rate
-                entry[f"rpc_rate_{window}_count"] = entry.get(f"rpc_rate_{window}_count", 0) + 1
+                state["rpc_count"] += rpc_count
+                state["rpc_duration"] += duration
+            else:
+                state["rpc_complete"] = False
             present = row.get("ru_present_rpc_count", 0)
             missing = row.get("ru_missing_rpc_count", 0)
             if isinstance(present, int) and isinstance(missing, int):
@@ -640,26 +670,24 @@ def _metric_lines(summary: dict[str, Any]) -> str:
                 f'{name}{{variant="{variant}",years="{years}",suite="{suite}",'
                 f'scenario="{scenario}"}} {value:g}')
     for window in ("1", "60"):
-        for (variant, years, suite, scenario), values in sorted(groups.items()):
-            value = values.get(f"ru_rate_{window}")
-            if value is not None:
-                lines.append(
-                    f'zont_lab_ru_per_second{{variant="{variant}",years="{years}",suite="{suite}",'
-                    f'scenario="{scenario}",window="{window}"}} {value:g}')
-            count = values.get(f"ru_rate_{window}_count", 0)
-            total = values.get(f"ru_rate_{window}_sum", 0.0)
-            if count:
-                mean = total / count
+        for (variant, years, suite, scenario, width), values in sorted(rate_windows.items()):
+            if width != window:
+                continue
+            if values["ru_complete"] and values["duration"] > 0:
+                value = values["max_ru_rate"]
+                mean = values["measured_ru"] / values["duration"]
+                if value is not None:
+                    lines.append(
+                        f'zont_lab_ru_per_second{{variant="{variant}",years="{years}",suite="{suite}",'
+                        f'scenario="{scenario}",window="{window}"}} {value:.12g}')
                 lines.append(
                     f'zont_lab_ru_per_second_mean{{variant="{variant}",years="{years}",suite="{suite}",'
-                    f'scenario="{scenario}",window="{window}"}} {mean:g}')
-            rpc_count = values.get(f"rpc_rate_{window}_count", 0)
-            rpc_sum = values.get(f"rpc_rate_{window}_sum", 0.0)
-            if rpc_count:
-                rpc_mean = rpc_sum / rpc_count
+                    f'scenario="{scenario}",window="{window}"}} {mean:.12g}')
+            if values["rpc_complete"] and values["rpc_duration"] > 0:
+                rpc_mean = values["rpc_count"] / values["rpc_duration"]
                 lines.append(
                     f'zont_lab_rpc_per_second{{variant="{variant}",years="{years}",suite="{suite}",'
-                    f'scenario="{scenario}",window="{window}"}} {rpc_mean:g}')
+                    f'scenario="{scenario}",window="{window}"}} {rpc_mean:.12g}')
     for (variant, years, suite, scenario, window), (present, missing) in sorted(coverage_counts.items()):
         if present + missing:
             coverage = present / (present + missing)

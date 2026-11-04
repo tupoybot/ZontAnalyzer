@@ -57,11 +57,12 @@ git -C "$ROOT" archive "$BASELINE" src | tar -x -C "$OUTPUT/baseline"
 git -C "$ROOT" diff --binary > "$OUTPUT/candidate.patch"
 mkdir "$OUTPUT/candidate-source"
 git -C "$ROOT" ls-files -z --cached --others --exclude-standard \
-    -- src tools deploy tests pyproject.toml Dockerfile .dockerignore \
+    -- src tools deploy tests pyproject.toml Dockerfile .dockerignore README.md \
     > "$OUTPUT/source-files.nul"
 [ -s "$OUTPUT/source-files.nul" ] || { echo 'candidate source selection is empty' >&2; exit 2; }
-(cd "$ROOT" && tar --null --files-from="$OUTPUT/source-files.nul" -cf -) \
-    | tar -xf - -C "$OUTPUT/candidate-source"
+tar -C "$ROOT" --null --files-from="$OUTPUT/source-files.nul" -cf "$OUTPUT/source.tar"
+tar -xf "$OUTPUT/source.tar" -C "$OUTPUT/candidate-source"
+rm "$OUTPUT/source.tar"
 (cd "$OUTPUT/candidate-source" && find . -type f -print0 | sort -z \
     | xargs -0 -r sha256sum) > "$OUTPUT/source-sha256.txt"
 CANDIDATE_SOURCE_SHA=$(sha256sum "$OUTPUT/source-sha256.txt" | awk '{print $1}')
@@ -75,8 +76,10 @@ printf '%s\n' "$BASELINE" > "$OUTPUT/baseline-sha.txt"
 printf '%s\n' "$CANDIDATE" > "$OUTPUT/candidate-sha.txt"
 
 LAB_TAG="zont-analyzer:ydb-lab-$PROJECT"
-docker build --target test --tag "$LAB_TAG" "$ROOT"
+docker build --target test --tag "$LAB_TAG" "$OUTPUT/candidate-source"
 LAB_IMAGE_ID=$(docker image inspect "$LAB_TAG" --format '{{.Id}}')
+docker image save "$LAB_IMAGE_ID" --output "$OUTPUT/lab-image.tar"
+gzip "$OUTPUT/lab-image.tar"
 LAB_IMAGE=$LAB_IMAGE_ID
 docker pull "$YDB_PIN" >/dev/null
 docker pull "$PROM_TAG" >/dev/null

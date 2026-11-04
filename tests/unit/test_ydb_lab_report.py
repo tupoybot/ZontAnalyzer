@@ -236,6 +236,83 @@ class YdbLabReportTests(unittest.TestCase):
         self.assertIn("zont_lab_delete_rows", metrics)
         self.assertNotIn("zont_lab_write_bytes", metrics)
 
+    def test_queue_age_requires_monotonic_clock_unless_queue_is_empty(self):
+        rows = complete_rows()
+        legacy = [row for row in rows if row.get("kind") == "operation" and
+                  row["variant"] == "baseline" and row["suite"] == "application" and
+                  row["years"] == 1]
+        for row in legacy:
+            row["queue_age_seconds"] = 3_500_000
+            row.pop("queue_age_clock", None)
+        monotonic = [row for row in rows if row.get("kind") == "operation" and
+                     row["variant"] == "candidate" and row["suite"] == "application" and
+                     row["years"] == 1]
+        for row in monotonic:
+            row["queue_age_seconds"] = 2.5
+            row["queue_age_clock"] = "monotonic"
+        empty_rows = [row for row in rows if row.get("kind") == "operation" and
+                      row["variant"] == "baseline" and row["suite"] == "gas" and
+                      row["years"] == 1]
+        for row in empty_rows:
+            row["queue_depth"] = 0
+            row["queue_age_seconds"] = None
+        self.write_rows(rows)
+        summary = summarize_output(self.output)
+        legacy_group = next(row for row in summary["operations"] if
+                            row["variant"] == "baseline" and row["suite"] == "application" and
+                            row["years"] == 1)
+        monotonic_group = next(row for row in summary["operations"] if
+                               row["variant"] == "candidate" and row["suite"] == "application" and
+                               row["years"] == 1)
+        empty_group = next(row for row in summary["operations"] if
+                           row["variant"] == "baseline" and row["suite"] == "gas" and
+                           row["years"] == 1)
+        self.assertIsNone(legacy_group["queue_age_seconds"]["median"])
+        self.assertEqual(monotonic_group["queue_age_seconds"]["median"], 2.5)
+        self.assertEqual(empty_group["queue_age_seconds"]["median"], 0.0)
+
+    def test_window_means_weight_partial_windows_by_actual_duration(self):
+        summary = {"windows": [
+            {"variant": "baseline", "years": 1, "suite": "application", "scenario": "lookup",
+             "phase": "operation", "repeat": 3, "width_seconds": 1,
+             "start_seconds": 0, "end_seconds": 1, "measured_ru": 0,
+             "measurement_complete": True, "all_billed_rpc_complete": True,
+             "ru_missing_rpc_count": 0, "unattributed_rpc_count": 0, "rpc_count": 10},
+            {"variant": "baseline", "years": 1, "suite": "application", "scenario": "lookup",
+             "phase": "operation", "repeat": 3, "width_seconds": 1,
+             "start_seconds": 1, "end_seconds": 1.01, "measured_ru": 20,
+             "measurement_complete": True, "all_billed_rpc_complete": True,
+             "ru_missing_rpc_count": 0, "unattributed_rpc_count": 0, "rpc_count": 5},
+        ], "operations": []}
+        metrics = _metric_lines(summary)
+        ru_mean = next(line for line in metrics.splitlines()
+                       if line.startswith("zont_lab_ru_per_second_mean{"))
+        rpc_mean = next(line for line in metrics.splitlines()
+                        if line.startswith("zont_lab_rpc_per_second{"))
+        self.assertAlmostEqual(float(ru_mean.rsplit(" ", 1)[1]), 20 / 1.01)
+        self.assertAlmostEqual(float(rpc_mean.rsplit(" ", 1)[1]), 15 / 1.01)
+        ru_max = next(line for line in metrics.splitlines()
+                      if line.startswith("zont_lab_ru_per_second{"))
+        self.assertAlmostEqual(float(ru_max.rsplit(" ", 1)[1]), 2000)
+
+    def test_unknown_cost_window_suppresses_full_ru_rates_but_keeps_rpc_rate(self):
+        summary = {"windows": [
+            {"variant": "baseline", "years": 1, "suite": "application", "scenario": "lookup",
+             "phase": "operation", "repeat": 3, "width_seconds": 1,
+             "start_seconds": 0, "end_seconds": 1, "measured_ru": 4,
+             "measurement_complete": True, "all_billed_rpc_complete": True,
+             "ru_missing_rpc_count": 0, "unattributed_rpc_count": 0, "rpc_count": 10},
+            {"variant": "baseline", "years": 1, "suite": "application", "scenario": "lookup",
+             "phase": "operation", "repeat": 3, "width_seconds": 1,
+             "start_seconds": 1, "end_seconds": 1.01, "measured_ru": None,
+             "measurement_complete": False, "all_billed_rpc_complete": False,
+             "ru_missing_rpc_count": 1, "unattributed_rpc_count": 1, "rpc_count": 2},
+        ], "operations": []}
+        metrics = _metric_lines(summary)
+        self.assertNotIn("zont_lab_ru_per_second{", metrics)
+        self.assertNotIn("zont_lab_ru_per_second_mean{", metrics)
+        self.assertIn("zont_lab_rpc_per_second{", metrics)
+
     def test_scenario_label_cardinality_is_capped(self):
         rows = []
         for index in range(140):

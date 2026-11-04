@@ -23,6 +23,7 @@ from unittest.mock import patch
 from uuid import UUID
 
 from tools.ydb_lab_observer import ObserveRpc, summarize
+from tools.ydb_lab_queue import QueueClock, observe_publication_queue
 
 
 def digest(value):
@@ -36,6 +37,7 @@ class Harness:
         self.runtime = None
         self.observer = None
         self.claimed = set()
+        self.queue_clock = QueueClock()
 
     def emit(self, record):
         record = {"variant": self.args.variant, "source_sha": self.args.source_sha,
@@ -71,13 +73,13 @@ class Harness:
         elapsed = max([elapsed, *(r.get("completed_seconds") or 0 for r in events)])
         observation = summarize(events)
         pending = result.get("pending_reports") if isinstance(result, dict) else None
-        oldest = result.get("pending_oldest_timestamp_seconds") if isinstance(result, dict) else None
         self.emit({"kind": "operation", "scenario": name, "phase": phase,
                    "elapsed_seconds": elapsed, "statistics_mode": "default" if phase == "setup" else "basic",
                    "observation": observation, "events": events,
                    "expected_error": expected is not None, "error": type(failure).__name__ if failure else None,
                    "result_sha256": digest(result), "queue_depth": pending,
-                   "queue_age_seconds": max(0, time.time() - oldest) if oldest else (0 if pending == 0 else None)})
+                   "queue_age_clock": "monotonic",
+                   "queue_age_seconds": self.queue_clock.age(pending) if type(pending) is int else None})
         print(f"{self.args.variant} {self.years}y repeat {self.repeat} {name}: "
               f"{observation['measured_ru']} RU, {elapsed:.2f}s", flush=True)
         if failure is not None and (expected is None or not isinstance(failure, expected)):
@@ -437,7 +439,7 @@ def main():
         for repeat in range(1, args.repeats + 1):
             for suite in args.suites:
                 h = Harness(args, years, repeat, suite)
-                with ObserveRpc(collect_stats=False) as h.observer:
+                with ObserveRpc(collect_stats=False) as h.observer, observe_publication_queue(h.queue_clock):
                     try:
                         (application_suite if suite == "application" else gas_suite)(h)
                     finally:
