@@ -1,5 +1,10 @@
 #!/bin/sh
 # Isolated, local YDB benchmark lab with a private output directory.
+# Keep the running launcher independent of later edits in the working tree.
+if [ "${ZONT_LAB_SCRIPT_LOADED:-0}" != 1 ]; then
+    export ZONT_LAB_SCRIPT_LOADED=1
+    exec sh -c "$(cat -- "$0")" "$0" "$@"
+fi
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 COMPOSE_FILE=$ROOT/deploy/ydb-lab/compose.yaml
