@@ -1,0 +1,1188 @@
+{
+  "accounting_complete": false,
+  "accounting_incomplete_reasons": [
+    "billable_rpc_incomplete",
+    "incomplete_cpu_stats",
+    "incomplete_io_stats",
+    "measurement_incomplete",
+    "missing_ru",
+    "missing_ru_header",
+    "rpc_not_complete"
+  ],
+  "application_revisions": [
+    "ed614754042adee292960055721466e81e0632ae"
+  ],
+  "date": "2026-11-04",
+  "final_smoke": {
+    "hash_parity": true,
+    "image_saved": true,
+    "nonempty_queue_age_seconds": [
+      0.0089964650105685,
+      0.009019507007906213
+    ],
+    "queue_age_clock": "monotonic",
+    "repeats_per_variant": 1,
+    "suites": [
+      "application",
+      "gas"
+    ],
+    "years": [
+      1
+    ]
+  },
+  "hash_parity": true,
+  "limits": [
+    "Синтетическая разреженная история. Вместимость полного ежедневного архива и облачная оплата не измеряются.",
+    "Недоступные RU ReadTable и ошибок остаются null; известная часть не является полным расходом.",
+    "CPU и ввод-вывод покрыты не полностью; отсутствие статистики не означает нулевой расход.",
+    "Cold/warm обозначает первый и повторный запрос в новом пространстве, без очистки всех кэшей сервера.",
+    "Накладные расходы включают статистику, обработку, хеши и запись результатов пяти чтений.",
+    "Ориентир для проверки: ceil(максимум шести измерений * 1.10), только для этого набора и окружения.",
+    "Ориентиры не являются лимитом сервера, автоматическим запретом CI, рабочим SLA или целью экономии.",
+    "Возраст непустой очереди в исходной матрице неизвестен из-за фиксированных часов; исправленные часы проверяются отдельно."
+  ],
+  "measurement_code_commit": "c6eb127a176289d155ef68f718d9100ea6c79ada",
+  "operation_totals": [
+    {
+      "accounting_complete": false,
+      "accounting_incomplete_reasons": [
+        "incomplete_cpu_stats",
+        "incomplete_io_stats",
+        "measurement_incomplete",
+        "missing_ru",
+        "missing_ru_header"
+      ],
+      "estimated_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "measured_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "missing_ru_repeat_count": 3,
+      "partial_known_ru_total": {
+        "max": 8887.0,
+        "median": 8864.0,
+        "min": 8857.0
+      },
+      "repeat_count": 3,
+      "suite": "application",
+      "variant": "baseline",
+      "years": 1
+    },
+    {
+      "accounting_complete": true,
+      "accounting_incomplete_reasons": [
+        "incomplete_cpu_stats",
+        "incomplete_io_stats"
+      ],
+      "estimated_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "measured_ru_total": {
+        "max": 36566.0,
+        "median": 36564.0,
+        "min": 36564.0
+      },
+      "missing_ru_repeat_count": 0,
+      "partial_known_ru_total": {
+        "max": 36566.0,
+        "median": 36564.0,
+        "min": 36564.0
+      },
+      "repeat_count": 3,
+      "suite": "gas",
+      "variant": "baseline",
+      "years": 1
+    },
+    {
+      "accounting_complete": false,
+      "accounting_incomplete_reasons": [
+        "incomplete_cpu_stats",
+        "incomplete_io_stats",
+        "measurement_incomplete",
+        "missing_ru",
+        "missing_ru_header"
+      ],
+      "estimated_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "measured_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "missing_ru_repeat_count": 3,
+      "partial_known_ru_total": {
+        "max": 41769.0,
+        "median": 41750.0,
+        "min": 41733.0
+      },
+      "repeat_count": 3,
+      "suite": "application",
+      "variant": "baseline",
+      "years": 10
+    },
+    {
+      "accounting_complete": true,
+      "accounting_incomplete_reasons": [
+        "incomplete_cpu_stats",
+        "incomplete_io_stats"
+      ],
+      "estimated_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "measured_ru_total": {
+        "max": 148665.0,
+        "median": 148647.0,
+        "min": 148645.0
+      },
+      "missing_ru_repeat_count": 0,
+      "partial_known_ru_total": {
+        "max": 148665.0,
+        "median": 148647.0,
+        "min": 148645.0
+      },
+      "repeat_count": 3,
+      "suite": "gas",
+      "variant": "baseline",
+      "years": 10
+    },
+    {
+      "accounting_complete": false,
+      "accounting_incomplete_reasons": [
+        "billable_rpc_incomplete",
+        "incomplete_cpu_stats",
+        "incomplete_io_stats",
+        "measurement_incomplete",
+        "missing_ru",
+        "missing_ru_header",
+        "rpc_not_complete"
+      ],
+      "estimated_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "measured_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "missing_ru_repeat_count": 3,
+      "partial_known_ru_total": {
+        "max": 23502.0,
+        "median": 23482.0,
+        "min": 23470.0
+      },
+      "repeat_count": 3,
+      "suite": "application",
+      "variant": "baseline",
+      "years": 5
+    },
+    {
+      "accounting_complete": true,
+      "accounting_incomplete_reasons": [
+        "incomplete_cpu_stats",
+        "incomplete_io_stats"
+      ],
+      "estimated_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "measured_ru_total": {
+        "max": 79339.0,
+        "median": 79334.0,
+        "min": 79334.0
+      },
+      "missing_ru_repeat_count": 0,
+      "partial_known_ru_total": {
+        "max": 79339.0,
+        "median": 79334.0,
+        "min": 79334.0
+      },
+      "repeat_count": 3,
+      "suite": "gas",
+      "variant": "baseline",
+      "years": 5
+    },
+    {
+      "accounting_complete": false,
+      "accounting_incomplete_reasons": [
+        "incomplete_cpu_stats",
+        "incomplete_io_stats",
+        "measurement_incomplete",
+        "missing_ru",
+        "missing_ru_header"
+      ],
+      "estimated_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "measured_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "missing_ru_repeat_count": 3,
+      "partial_known_ru_total": {
+        "max": 8906.0,
+        "median": 8905.0,
+        "min": 8897.0
+      },
+      "repeat_count": 3,
+      "suite": "application",
+      "variant": "candidate",
+      "years": 1
+    },
+    {
+      "accounting_complete": true,
+      "accounting_incomplete_reasons": [
+        "incomplete_cpu_stats",
+        "incomplete_io_stats"
+      ],
+      "estimated_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "measured_ru_total": {
+        "max": 36581.0,
+        "median": 36577.0,
+        "min": 36567.0
+      },
+      "missing_ru_repeat_count": 0,
+      "partial_known_ru_total": {
+        "max": 36581.0,
+        "median": 36577.0,
+        "min": 36567.0
+      },
+      "repeat_count": 3,
+      "suite": "gas",
+      "variant": "candidate",
+      "years": 1
+    },
+    {
+      "accounting_complete": false,
+      "accounting_incomplete_reasons": [
+        "incomplete_cpu_stats",
+        "incomplete_io_stats",
+        "measurement_incomplete",
+        "missing_ru",
+        "missing_ru_header"
+      ],
+      "estimated_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "measured_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "missing_ru_repeat_count": 3,
+      "partial_known_ru_total": {
+        "max": 41773.0,
+        "median": 41760.0,
+        "min": 41742.0
+      },
+      "repeat_count": 3,
+      "suite": "application",
+      "variant": "candidate",
+      "years": 10
+    },
+    {
+      "accounting_complete": true,
+      "accounting_incomplete_reasons": [
+        "incomplete_cpu_stats",
+        "incomplete_io_stats"
+      ],
+      "estimated_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "measured_ru_total": {
+        "max": 148651.0,
+        "median": 148647.0,
+        "min": 148640.0
+      },
+      "missing_ru_repeat_count": 0,
+      "partial_known_ru_total": {
+        "max": 148651.0,
+        "median": 148647.0,
+        "min": 148640.0
+      },
+      "repeat_count": 3,
+      "suite": "gas",
+      "variant": "candidate",
+      "years": 10
+    },
+    {
+      "accounting_complete": false,
+      "accounting_incomplete_reasons": [
+        "billable_rpc_incomplete",
+        "incomplete_cpu_stats",
+        "incomplete_io_stats",
+        "measurement_incomplete",
+        "missing_ru",
+        "missing_ru_header",
+        "rpc_not_complete"
+      ],
+      "estimated_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "measured_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "missing_ru_repeat_count": 3,
+      "partial_known_ru_total": {
+        "max": 23504.0,
+        "median": 23499.0,
+        "min": 23498.0
+      },
+      "repeat_count": 3,
+      "suite": "application",
+      "variant": "candidate",
+      "years": 5
+    },
+    {
+      "accounting_complete": true,
+      "accounting_incomplete_reasons": [
+        "incomplete_cpu_stats",
+        "incomplete_io_stats"
+      ],
+      "estimated_ru_total": {
+        "max": null,
+        "median": null,
+        "min": null
+      },
+      "measured_ru_total": {
+        "max": 79349.0,
+        "median": 79346.0,
+        "min": 79341.0
+      },
+      "missing_ru_repeat_count": 0,
+      "partial_known_ru_total": {
+        "max": 79349.0,
+        "median": 79346.0,
+        "min": 79341.0
+      },
+      "repeat_count": 3,
+      "suite": "gas",
+      "variant": "candidate",
+      "years": 5
+    }
+  ],
+  "overhead": [
+    {
+      "cpu_overhead_seconds": {
+        "max": 0.001145364999995735,
+        "median": 0.001099668999998471,
+        "min": 0.0010960450000006006
+      },
+      "observed_cpu_seconds": {
+        "max": 0.00451335700000044,
+        "median": 0.004325810999997515,
+        "min": 0.004252825999998322
+      },
+      "observed_wall_seconds": {
+        "max": 0.007587036001496017,
+        "median": 0.007473167002899572,
+        "min": 0.00728434999473393
+      },
+      "queries": 5,
+      "repeat_count": 3,
+      "suite": "application",
+      "unobserved_cpu_seconds": {
+        "max": 0.003417311999999839,
+        "median": 0.00318044600000178,
+        "min": 0.003153156999999851
+      },
+      "unobserved_wall_seconds": {
+        "max": 0.006519937014672905,
+        "median": 0.006374104996211827,
+        "min": 0.006362419982906431
+      },
+      "variant": "baseline",
+      "wall_overhead_seconds": {
+        "max": 0.0010990620066877455,
+        "median": 0.0010670989868231118,
+        "min": 0.0009219300118274987
+      },
+      "years": 1
+    },
+    {
+      "cpu_overhead_seconds": {
+        "max": 0.001486036999949647,
+        "median": 0.0012074049999455383,
+        "min": 0.0009855729999799223
+      },
+      "observed_cpu_seconds": {
+        "max": 0.00507338299996718,
+        "median": 0.004358122999974512,
+        "min": 0.004316017999997257
+      },
+      "observed_wall_seconds": {
+        "max": 0.008587289979914203,
+        "median": 0.007411158992908895,
+        "min": 0.007265962980454788
+      },
+      "queries": 5,
+      "repeat_count": 3,
+      "suite": "application",
+      "unobserved_cpu_seconds": {
+        "max": 0.003587346000017533,
+        "median": 0.0033304450000173347,
+        "min": 0.0031507180000289736
+      },
+      "unobserved_wall_seconds": {
+        "max": 0.007205149973742664,
+        "median": 0.006435237999539822,
+        "min": 0.006325706985080615
+      },
+      "variant": "baseline",
+      "wall_overhead_seconds": {
+        "max": 0.0013821400061715394,
+        "median": 0.0010854520078282803,
+        "min": 0.0008307249809149653
+      },
+      "years": 10
+    },
+    {
+      "cpu_overhead_seconds": {
+        "max": 0.0035788719999914065,
+        "median": 0.001375896999988413,
+        "min": 0.001127380000014
+      },
+      "observed_cpu_seconds": {
+        "max": 0.007096870999987459,
+        "median": 0.004724964999994086,
+        "min": 0.004432147000017039
+      },
+      "observed_wall_seconds": {
+        "max": 0.010423238010844216,
+        "median": 0.007851181988371536,
+        "min": 0.007604420999996364
+      },
+      "queries": 5,
+      "repeat_count": 3,
+      "suite": "application",
+      "unobserved_cpu_seconds": {
+        "max": 0.0035179989999960526,
+        "median": 0.0033490680000056727,
+        "min": 0.0033047670000030394
+      },
+      "unobserved_wall_seconds": {
+        "max": 0.006749682012014091,
+        "median": 0.0065680879924912006,
+        "min": 0.006459469994297251
+      },
+      "variant": "baseline",
+      "wall_overhead_seconds": {
+        "max": 0.0036735559988301247,
+        "median": 0.001391711994074285,
+        "min": 0.0010363330075051636
+      },
+      "years": 5
+    },
+    {
+      "cpu_overhead_seconds": {
+        "max": 0.001345027999995807,
+        "median": 0.00122422400000044,
+        "min": 0.0008918000000051052
+      },
+      "observed_cpu_seconds": {
+        "max": 0.005135019999997326,
+        "median": 0.004527029000000127,
+        "min": 0.004463651000001789
+      },
+      "observed_wall_seconds": {
+        "max": 0.008652790013002232,
+        "median": 0.00774379400536418,
+        "min": 0.007721378991845995
+      },
+      "queries": 5,
+      "repeat_count": 3,
+      "suite": "application",
+      "unobserved_cpu_seconds": {
+        "max": 0.0037899920000015186,
+        "median": 0.003571850999996684,
+        "min": 0.0033028049999996867
+      },
+      "unobserved_wall_seconds": {
+        "max": 0.007298604003153741,
+        "median": 0.006665921013336629,
+        "min": 0.006454177026171237
+      },
+      "variant": "candidate",
+      "wall_overhead_seconds": {
+        "max": 0.0013541860098484904,
+        "median": 0.001267201965674758,
+        "min": 0.001077872992027551
+      },
+      "years": 1
+    },
+    {
+      "cpu_overhead_seconds": {
+        "max": 0.001739027000041915,
+        "median": 0.00162202600006367,
+        "min": 0.0007710280000310377
+      },
+      "observed_cpu_seconds": {
+        "max": 0.0050189940000109345,
+        "median": 0.004929353000022729,
+        "min": 0.004435734000026059
+      },
+      "observed_wall_seconds": {
+        "max": 0.008668611000757664,
+        "median": 0.008215884998207912,
+        "min": 0.007361444004345685
+      },
+      "queries": 5,
+      "repeat_count": 3,
+      "suite": "application",
+      "unobserved_cpu_seconds": {
+        "max": 0.0036647059999950216,
+        "median": 0.0033969679999472646,
+        "min": 0.0031903259999808142
+      },
+      "unobserved_wall_seconds": {
+        "max": 0.007134857005439699,
+        "median": 0.006535513006383553,
+        "min": 0.006418745004339144
+      },
+      "variant": "candidate",
+      "wall_overhead_seconds": {
+        "max": 0.002249865996418521,
+        "median": 0.0016803719918243587,
+        "min": 0.00022658699890598655
+      },
+      "years": 10
+    },
+    {
+      "cpu_overhead_seconds": {
+        "max": 0.0029669199999773355,
+        "median": 0.0012201419999939844,
+        "min": 0.0008376450000184832
+      },
+      "observed_cpu_seconds": {
+        "max": 0.006304247000002761,
+        "median": 0.00516135699999154,
+        "min": 0.004339221999998699
+      },
+      "observed_wall_seconds": {
+        "max": 0.010464216000400484,
+        "median": 0.009659656003350392,
+        "min": 0.007418886991217732
+      },
+      "queries": 5,
+      "repeat_count": 3,
+      "suite": "application",
+      "unobserved_cpu_seconds": {
+        "max": 0.003941214999997555,
+        "median": 0.003501576999980216,
+        "min": 0.003337327000025425
+      },
+      "unobserved_wall_seconds": {
+        "max": 0.008035541977733374,
+        "median": 0.006540856993524358,
+        "min": 0.006514084001537412
+      },
+      "variant": "candidate",
+      "wall_overhead_seconds": {
+        "max": 0.0031455720018129796,
+        "median": 0.00242867402266711,
+        "min": 0.0008780299976933748
+      },
+      "years": 5
+    }
+  ],
+  "reporting_code_commit": "4a7fa313d883ea5d15deb91d1e7e7a06bc813f6f",
+  "review_budgets": [
+    {
+      "components": [
+        "owner_reading_addition",
+        "calibration_interval_reuse",
+        "model_recalibration",
+        "changed_full_publication"
+      ],
+      "measured_ru": {
+        "max": 3774.0,
+        "median": 3774.0,
+        "min": 3774.0
+      },
+      "review_budget_ru": 4152,
+      "samples": 6,
+      "scenario": "gas_reading_update",
+      "suite": "gas",
+      "years": 1
+    },
+    {
+      "components": [
+        "owner_reading_addition",
+        "calibration_interval_reuse",
+        "model_recalibration",
+        "changed_full_publication"
+      ],
+      "measured_ru": {
+        "max": 18384.0,
+        "median": 18384.0,
+        "min": 18384.0
+      },
+      "review_budget_ru": 20223,
+      "samples": 6,
+      "scenario": "gas_reading_update",
+      "suite": "gas",
+      "years": 5
+    },
+    {
+      "components": [
+        "owner_reading_addition",
+        "calibration_interval_reuse",
+        "model_recalibration",
+        "changed_full_publication"
+      ],
+      "measured_ru": {
+        "max": 43799.0,
+        "median": 43799.0,
+        "min": 43799.0
+      },
+      "review_budget_ru": 48179,
+      "samples": 6,
+      "scenario": "gas_reading_update",
+      "suite": "gas",
+      "years": 10
+    },
+    {
+      "components": [
+        "gas_reading_correction",
+        "gas_corrected_publication"
+      ],
+      "measured_ru": {
+        "max": 3252.0,
+        "median": 3252.0,
+        "min": 3252.0
+      },
+      "review_budget_ru": 3578,
+      "samples": 6,
+      "scenario": "gas_reading_correction",
+      "suite": "gas",
+      "years": 1
+    },
+    {
+      "components": [
+        "gas_reading_correction",
+        "gas_corrected_publication"
+      ],
+      "measured_ru": {
+        "max": 17865.0,
+        "median": 17865.0,
+        "min": 17865.0
+      },
+      "review_budget_ru": 19652,
+      "samples": 6,
+      "scenario": "gas_reading_correction",
+      "suite": "gas",
+      "years": 5
+    },
+    {
+      "components": [
+        "gas_reading_correction",
+        "gas_corrected_publication"
+      ],
+      "measured_ru": {
+        "max": 43284.0,
+        "median": 43284.0,
+        "min": 43284.0
+      },
+      "review_budget_ru": 47613,
+      "samples": 6,
+      "scenario": "gas_reading_correction",
+      "suite": "gas",
+      "years": 10
+    },
+    {
+      "components": [
+        "late_modulation",
+        "late_model_refresh",
+        "late_publication"
+      ],
+      "measured_ru": {
+        "max": 2189.0,
+        "median": 2185.5,
+        "min": 2183.0
+      },
+      "review_budget_ru": 2408,
+      "samples": 6,
+      "scenario": "late_modulation_cycle",
+      "suite": "gas",
+      "years": 1
+    },
+    {
+      "components": [
+        "late_modulation",
+        "late_model_refresh",
+        "late_publication"
+      ],
+      "measured_ru": {
+        "max": 2261.0,
+        "median": 2261.0,
+        "min": 2261.0
+      },
+      "review_budget_ru": 2488,
+      "samples": 6,
+      "scenario": "late_modulation_cycle",
+      "suite": "gas",
+      "years": 5
+    },
+    {
+      "components": [
+        "late_modulation",
+        "late_model_refresh",
+        "late_publication"
+      ],
+      "measured_ru": {
+        "max": 2384.0,
+        "median": 2384.0,
+        "min": 2384.0
+      },
+      "review_budget_ru": 2623,
+      "samples": 6,
+      "scenario": "late_modulation_cycle",
+      "suite": "gas",
+      "years": 10
+    },
+    {
+      "components": [
+        "exact_owner_replay",
+        "exact_replay_publication"
+      ],
+      "measured_ru": {
+        "max": 85.0,
+        "median": 85.0,
+        "min": 85.0
+      },
+      "review_budget_ru": 94,
+      "samples": 6,
+      "scenario": "exact_reading_replay",
+      "suite": "gas",
+      "years": 1
+    },
+    {
+      "components": [
+        "exact_owner_replay",
+        "exact_replay_publication"
+      ],
+      "measured_ru": {
+        "max": 86.0,
+        "median": 86.0,
+        "min": 86.0
+      },
+      "review_budget_ru": 95,
+      "samples": 6,
+      "scenario": "exact_reading_replay",
+      "suite": "gas",
+      "years": 5
+    },
+    {
+      "components": [
+        "exact_owner_replay",
+        "exact_replay_publication"
+      ],
+      "measured_ru": {
+        "max": 87.0,
+        "median": 87.0,
+        "min": 87.0
+      },
+      "review_budget_ru": 96,
+      "samples": 6,
+      "scenario": "exact_reading_replay",
+      "suite": "gas",
+      "years": 10
+    },
+    {
+      "components": [
+        "control_write"
+      ],
+      "measured_ru": {
+        "max": 1.0,
+        "median": 1.0,
+        "min": 1.0
+      },
+      "review_budget_ru": 2,
+      "samples": 6,
+      "scenario": "control_write",
+      "suite": "application",
+      "years": 1
+    },
+    {
+      "components": [
+        "control_write"
+      ],
+      "measured_ru": {
+        "max": 1.0,
+        "median": 1.0,
+        "min": 1.0
+      },
+      "review_budget_ru": 2,
+      "samples": 6,
+      "scenario": "control_write",
+      "suite": "application",
+      "years": 5
+    },
+    {
+      "components": [
+        "control_write"
+      ],
+      "measured_ru": {
+        "max": 1.0,
+        "median": 1.0,
+        "min": 1.0
+      },
+      "review_budget_ru": 2,
+      "samples": 6,
+      "scenario": "control_write",
+      "suite": "application",
+      "years": 10
+    },
+    {
+      "components": [
+        "control_read_cold"
+      ],
+      "measured_ru": {
+        "max": 1.0,
+        "median": 1.0,
+        "min": 1.0
+      },
+      "review_budget_ru": 2,
+      "samples": 6,
+      "scenario": "control_read_cold",
+      "suite": "application",
+      "years": 1
+    },
+    {
+      "components": [
+        "control_read_cold"
+      ],
+      "measured_ru": {
+        "max": 1.0,
+        "median": 1.0,
+        "min": 1.0
+      },
+      "review_budget_ru": 2,
+      "samples": 6,
+      "scenario": "control_read_cold",
+      "suite": "application",
+      "years": 5
+    },
+    {
+      "components": [
+        "control_read_cold"
+      ],
+      "measured_ru": {
+        "max": 1.0,
+        "median": 1.0,
+        "min": 1.0
+      },
+      "review_budget_ru": 2,
+      "samples": 6,
+      "scenario": "control_read_cold",
+      "suite": "application",
+      "years": 10
+    },
+    {
+      "components": [
+        "control_read_warm"
+      ],
+      "measured_ru": {
+        "max": 1.0,
+        "median": 1.0,
+        "min": 1.0
+      },
+      "review_budget_ru": 2,
+      "samples": 6,
+      "scenario": "control_read_warm",
+      "suite": "application",
+      "years": 1
+    },
+    {
+      "components": [
+        "control_read_warm"
+      ],
+      "measured_ru": {
+        "max": 1.0,
+        "median": 1.0,
+        "min": 1.0
+      },
+      "review_budget_ru": 2,
+      "samples": 6,
+      "scenario": "control_read_warm",
+      "suite": "application",
+      "years": 5
+    },
+    {
+      "components": [
+        "control_read_warm"
+      ],
+      "measured_ru": {
+        "max": 1.0,
+        "median": 1.0,
+        "min": 1.0
+      },
+      "review_budget_ru": 2,
+      "samples": 6,
+      "scenario": "control_read_warm",
+      "suite": "application",
+      "years": 10
+    },
+    {
+      "components": [
+        "telemetry_bounds"
+      ],
+      "measured_ru": {
+        "max": 4.0,
+        "median": 4.0,
+        "min": 4.0
+      },
+      "review_budget_ru": 5,
+      "samples": 6,
+      "scenario": "telemetry_bounds",
+      "suite": "application",
+      "years": 1
+    },
+    {
+      "components": [
+        "telemetry_bounds"
+      ],
+      "measured_ru": {
+        "max": 4.0,
+        "median": 4.0,
+        "min": 4.0
+      },
+      "review_budget_ru": 5,
+      "samples": 6,
+      "scenario": "telemetry_bounds",
+      "suite": "application",
+      "years": 5
+    },
+    {
+      "components": [
+        "telemetry_bounds"
+      ],
+      "measured_ru": {
+        "max": 4.0,
+        "median": 4.0,
+        "min": 4.0
+      },
+      "review_budget_ru": 5,
+      "samples": 6,
+      "scenario": "telemetry_bounds",
+      "suite": "application",
+      "years": 10
+    },
+    {
+      "components": [
+        "monitoring"
+      ],
+      "measured_ru": {
+        "max": 13.0,
+        "median": 11.0,
+        "min": 9.0
+      },
+      "review_budget_ru": 15,
+      "samples": 6,
+      "scenario": "monitoring",
+      "suite": "application",
+      "years": 1
+    },
+    {
+      "components": [
+        "monitoring"
+      ],
+      "measured_ru": {
+        "max": 13.0,
+        "median": 11.5,
+        "min": 10.0
+      },
+      "review_budget_ru": 15,
+      "samples": 6,
+      "scenario": "monitoring",
+      "suite": "application",
+      "years": 5
+    },
+    {
+      "components": [
+        "monitoring"
+      ],
+      "measured_ru": {
+        "max": 14.0,
+        "median": 11.0,
+        "min": 11.0
+      },
+      "review_budget_ru": 16,
+      "samples": 6,
+      "scenario": "monitoring",
+      "suite": "application",
+      "years": 10
+    },
+    {
+      "components": [
+        "maintenance_idle"
+      ],
+      "measured_ru": {
+        "max": 7.0,
+        "median": 7.0,
+        "min": 6.0
+      },
+      "review_budget_ru": 8,
+      "samples": 6,
+      "scenario": "maintenance_idle",
+      "suite": "application",
+      "years": 1
+    },
+    {
+      "components": [
+        "maintenance_idle"
+      ],
+      "measured_ru": {
+        "max": 8.0,
+        "median": 7.0,
+        "min": 6.0
+      },
+      "review_budget_ru": 9,
+      "samples": 6,
+      "scenario": "maintenance_idle",
+      "suite": "application",
+      "years": 5
+    },
+    {
+      "components": [
+        "maintenance_idle"
+      ],
+      "measured_ru": {
+        "max": 8.0,
+        "median": 6.5,
+        "min": 6.0
+      },
+      "review_budget_ru": 9,
+      "samples": 6,
+      "scenario": "maintenance_idle",
+      "suite": "application",
+      "years": 10
+    },
+    {
+      "components": [
+        "scheduler_idle"
+      ],
+      "measured_ru": {
+        "max": 30.0,
+        "median": 30.0,
+        "min": 29.0
+      },
+      "review_budget_ru": 33,
+      "samples": 6,
+      "scenario": "scheduler_idle",
+      "suite": "application",
+      "years": 1
+    },
+    {
+      "components": [
+        "scheduler_idle"
+      ],
+      "measured_ru": {
+        "max": 31.0,
+        "median": 30.0,
+        "min": 29.0
+      },
+      "review_budget_ru": 35,
+      "samples": 6,
+      "scenario": "scheduler_idle",
+      "suite": "application",
+      "years": 5
+    },
+    {
+      "components": [
+        "scheduler_idle"
+      ],
+      "measured_ru": {
+        "max": 30.0,
+        "median": 29.0,
+        "min": 29.0
+      },
+      "review_budget_ru": 33,
+      "samples": 6,
+      "scenario": "scheduler_idle",
+      "suite": "application",
+      "years": 10
+    }
+  ],
+  "rpc_coverage": {
+    "all_billed_rpc_complete": false,
+    "billed_rpc_count": 1530342,
+    "control_rpc_count": 4339,
+    "cpu_complete_rpc_count": 1662,
+    "failed_rpc_count": 18,
+    "io_complete_rpc_count": 0,
+    "measurement_complete": false,
+    "rpc_count": 1534681,
+    "rpc_counts": {
+      "AlterTable": 72,
+      "AttachSession": 36,
+      "CommitTransaction": 40836,
+      "CreateSession": 450,
+      "DeleteSession": 450,
+      "DescribeTable": 144,
+      "ExecuteQuery": 1491990,
+      "GetOperation": 144,
+      "ListDirectory": 36,
+      "ListEndpoints": 55,
+      "MakeDirectory": 36,
+      "RemoveDirectory": 36,
+      "RollbackTransaction": 18,
+      "StreamReadTable": 378
+    },
+    "ru_missing_rpc_count": 396,
+    "ru_present_rpc_count": 1529946,
+    "stats_missing_rpc_count": 1142322,
+    "stats_present_rpc_count": 388020
+  },
+  "schema_version": 1,
+  "scope": {
+    "completed_runs": 36,
+    "repeats_per_variant": 3,
+    "same_application_revision": true,
+    "suites": [
+      "application",
+      "gas"
+    ],
+    "variants": [
+      "baseline",
+      "candidate"
+    ],
+    "years": [
+      1,
+      5,
+      10
+    ]
+  },
+  "validation_passed": true,
+  "ydb_image": "ydbplatform/local-ydb@sha256:9e46fd45875551a75bcf34d0bb9ca0baa1d8763a4ccf2070af45f4467c4b7402",
+  "ydb_sdk_version": "3.32.0"
+}

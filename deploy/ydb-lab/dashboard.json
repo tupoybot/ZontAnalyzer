@@ -1,0 +1,153 @@
+{
+  "annotations": {"list": []},
+  "description": "Снимки результатов завершённых локальных сценариев. Панель RU/с показывает максимум и среднее по окнам завершения запросов последнего повтора; это не временной график выполнения запросов. Точный ход окон — в windows.csv. Отсутствующее значение означает, что измерение неизвестно.",
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Доля запросов с известными серверными RU и полнота статистики CPU/чтения-записи. Флаги полноты: 1 — полные данные, 0 — неполные; отсутствие ряда — неизвестно.",
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "noValue": "Нет данных (неизвестно)"}, "overrides": []},
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "zont_lab_ru_coverage_ratio", "legendFormat": "RU {{variant}} / {{suite}} / {{years}} лет / {{scenario}} / {{window}} с", "refId": "A"},
+        {"expr": "zont_lab_stats_coverage_ratio", "legendFormat": "Статистика {{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "B"},
+        {"expr": "zont_lab_stats_complete", "legendFormat": "Все статистики {{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "C"},
+        {"expr": "zont_lab_cpu_complete", "legendFormat": "CPU {{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "D"},
+        {"expr": "zont_lab_io_complete", "legendFormat": "Ввод-вывод {{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "E"}
+      ],
+      "title": "Покрытие RU и статистики",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Снимок по завершённым запросам последнего повтора: максимум и среднее среди окон, куда запросы отнесены по времени завершения. Это не профиль нагрузки по времени; точные окна приведены в windows.csv.",
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "Нет данных (неизвестно)"}, "overrides": []},
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "options": {"showHeader": true, "cellHeight": "sm"},
+      "targets": [
+        {"expr": "zont_lab_ru_per_second", "format": "table", "instant": true, "legendFormat": "Максимум {{variant}} / {{suite}} / {{years}} лет / {{scenario}} / окно {{window}} с", "refId": "A"},
+        {"expr": "zont_lab_ru_per_second_mean", "format": "table", "instant": true, "legendFormat": "Среднее {{variant}} / {{suite}} / {{years}} лет / {{scenario}} / окно {{window}} с", "refId": "B"}
+      ],
+      "title": "RU/с — максимум и среднее последнего повтора",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Фактически измеренные сервером RU на операцию. Пустое значение не заменяется нулём.",
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "Нет данных (неизвестно)"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 9},
+      "id": 3,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "zont_lab_ru_per_operation", "legendFormat": "{{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "A"}],
+      "title": "Измеренные RU на операцию",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Оценка RU на операцию, рассчитанная по доступной статистике. Это отдельная оценка, а не серверное измерение.",
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "Нет данных (неизвестно)"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 9},
+      "id": 4,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "zont_lab_estimated_ru", "legendFormat": "Оценка {{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "A"}],
+      "title": "Оценка RU на операцию",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Итог для сценария: полные измеренные RU, известная часть при неполном учёте и расчётная оценка выводятся раздельно.",
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "Нет данных (неизвестно)"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 9},
+      "id": 5,
+      "options": {"showHeader": true, "cellHeight": "sm"},
+      "targets": [
+        {"expr": "zont_lab_ru_total", "format": "table", "instant": true, "legendFormat": "Измерено {{variant}} / {{suite}} / {{years}} лет", "refId": "A"},
+        {"expr": "zont_lab_ru_partial_known_total", "format": "table", "instant": true, "legendFormat": "Известная часть {{variant}} / {{suite}} / {{years}} лет", "refId": "B"},
+        {"expr": "zont_lab_estimated_ru_total", "format": "table", "instant": true, "legendFormat": "Оценка {{variant}} / {{suite}} / {{years}} лет", "refId": "C"}
+      ],
+      "title": "RU за сценарии: измерено, частично, оценка",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Сводные значения завершённых сценариев. CPU учитывает только доступные компоненты статистики.",
+      "fieldConfig": {"defaults": {"unit": "s", "noValue": "Нет данных (неизвестно)"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 17},
+      "id": 6,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "zont_lab_cpu_seconds", "legendFormat": "CPU {{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "A"},
+        {"expr": "zont_lab_operation_seconds", "legendFormat": "Время операции {{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "B"}
+      ],
+      "title": "CPU и длительность операции",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Байты чтения и записи по статистике доступа к таблицам; отсутствующие сведения не трактуются как ноль.",
+      "fieldConfig": {"defaults": {"unit": "bytes", "noValue": "Нет данных (неизвестно)"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 17},
+      "id": 7,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "zont_lab_read_bytes", "legendFormat": "Чтение {{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "A"},
+        {"expr": "zont_lab_update_bytes", "legendFormat": "Запись {{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "B"}
+      ],
+      "title": "Объём чтения и записи",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Количество ошибок YDB в завершённых операциях сценария.",
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "Нет данных (неизвестно)"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 25},
+      "id": 8,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "zont_lab_errors", "legendFormat": "{{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "A"}],
+      "title": "Ошибки запросов",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Состояние очереди после сценария. Пустое значение означает, что соответствующая статистика неизвестна.",
+      "fieldConfig": {"defaults": {"noValue": "Нет данных (неизвестно)"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 25},
+      "id": 9,
+      "options": {"showHeader": true, "cellHeight": "sm"},
+      "targets": [
+        {"expr": "zont_lab_queue_depth", "format": "table", "instant": true, "legendFormat": "Заданий в очереди {{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "A"},
+        {"expr": "zont_lab_queue_age_seconds", "format": "table", "instant": true, "legendFormat": "Возраст очереди, с {{variant}} / {{suite}} / {{years}} лет / {{scenario}}", "refId": "B"}
+      ],
+      "title": "Очередь публикации после сценария",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Разница времени измеренного запуска с наблюдателем и холостого запуска без наблюдателя.",
+      "fieldConfig": {"defaults": {"unit": "s", "noValue": "Нет данных (неизвестно)"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 25},
+      "id": 10,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "zont_lab_observer_overhead_seconds", "legendFormat": "{{variant}} / {{suite}} / {{years}} лет", "refId": "A"}],
+      "title": "Накладные расходы наблюдателя",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "2s",
+  "schemaVersion": 41,
+  "tags": ["local", "ydb", "benchmark"],
+  "templating": {"list": []},
+  "time": {"from": "now-15m", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Лаборатория измерений YDB",
+  "uid": "ydb-benchmark-lab",
+  "version": 2
+}

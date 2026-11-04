@@ -1,0 +1,135 @@
+name: zont-ydb-lab
+
+services:
+  ydb:
+    image: ${YDB_IMAGE:?set YDB_IMAGE to a pinned image digest}
+    hostname: ydb
+    networks:
+      default:
+        aliases: [ydb]
+    mem_limit: 5g
+    memswap_limit: 5g
+    cpus: 2
+    environment:
+      GRPC_PORT: "2136"
+      MON_PORT: "8765"
+      YDB_USE_IN_MEMORY_PDISKS: "true"
+      YDB_DEFAULT_LOG_LEVEL: WARN
+
+  exporter:
+    image: ${LAB_IMAGE:?set LAB_IMAGE to the pinned local test image}
+    entrypoint: ["python", "/workspace/tools/ydb_lab.py"]
+    command: ["serve", "--output", "/artifacts", "--port", "8000"]
+    user: "${LAB_UID:?set LAB_UID}:${LAB_GID:?set LAB_GID}"
+    environment:
+      PYTHONPATH: /workspace/src:/workspace
+    networks: [default]
+    volumes:
+      - type: bind
+        source: ${LAB_REPO:?set LAB_REPO}
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ${LAB_OUTPUT:?set LAB_OUTPUT}
+        target: /artifacts
+        read_only: true
+    mem_limit: 256m
+    cpus: 0.5
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:?set PROMETHEUS_IMAGE to a pinned digest}
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=2d
+      - --web.enable-lifecycle
+    networks: [default, ui]
+    ports:
+      - target: 9090
+        published: "0"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ./prometheus.yml
+        target: /etc/prometheus/prometheus.yml
+        read_only: true
+      - prometheus-data:/prometheus
+    depends_on: [exporter]
+    mem_limit: 512m
+    cpus: 0.5
+
+  grafana:
+    image: ${GRAFANA_IMAGE:?set GRAFANA_IMAGE to a pinned digest}
+    networks: [default, ui]
+    ports:
+      - target: 3000
+        published: "0"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - type: bind
+        source: ./grafana-datasources.yml
+        target: /etc/grafana/provisioning/datasources/datasources.yml
+        read_only: true
+      - type: bind
+        source: ./grafana-dashboards.yml
+        target: /etc/grafana/provisioning/dashboards/dashboards.yml
+        read_only: true
+      - type: bind
+        source: ./dashboard.json
+        target: /var/lib/grafana/dashboards/ydb-lab.json
+        read_only: true
+    depends_on: [prometheus]
+    mem_limit: 512m
+    cpus: 0.5
+
+  runner:
+    image: ${LAB_IMAGE:?set LAB_IMAGE to the pinned local test image}
+    entrypoint: ["python", "/workspace/tools/ydb_lab.py"]
+    working_dir: /workspace
+    user: "${LAB_UID:?set LAB_UID}:${LAB_GID:?set LAB_GID}"
+    networks: [default]
+    volumes:
+      - type: bind
+        source: ${LAB_REPO:?set LAB_REPO}
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ${LAB_OUTPUT:?set LAB_OUTPUT}
+        target: /artifacts
+      - type: bind
+        source: ${LAB_OUTPUT:?set LAB_OUTPUT}/baseline
+        target: /artifacts/baseline
+        read_only: true
+    environment:
+      YDB_ENDPOINT: grpc://ydb:2136
+      YDB_DATABASE: /local
+      YDB_ANONYMOUS_CREDENTIALS: "1"
+      PYTHONPATH: /workspace/src:/workspace
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 2
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m
+
+networks:
+  default:
+    internal: true
+  # Host access for the local dashboards only; disabling masquerade prevents egress NAT.
+  ui:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+
+volumes:
+  prometheus-data:
