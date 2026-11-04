@@ -21,7 +21,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from itertools import islice
 from pathlib import Path
 from urllib.parse import quote
@@ -264,25 +264,28 @@ def read_versions(rows, versions, *, fence=lambda: None):
 
 
 def prepare_cleanup(repository, storage, versions, artifacts, plan_name="cleanup-plan.json", *,
-                    backup_deleted_objects=True):
+                    backup_deleted_objects=True, fence=lambda: None):
     if type(backup_deleted_objects) is not bool:
         raise MaintenanceError("invalid deleted-object backup policy")
-    state, values = snapshot(repository, storage, verify_reports=True)
-    inventory = versions.inventory()
+    fence()
+    state, values = snapshot(repository, storage, verify_reports=True, fence=fence)
+    inventory = versions.inventory(fence=fence)
     selected = candidates(inventory, state["reachable"])
     backups = {}
     if backup_deleted_objects:
-        for row, value in read_versions((row for row in selected if not row["delete_marker"]), versions):
+        for row, value in read_versions((row for row in selected if not row["delete_marker"]), versions, fence=fence):
             if value.etag != row["etag"] or len(value.body) != row["size"]:
                 raise MaintenanceError("cleanup backup differs from listed version")
             backups[fingerprint(row)] = artifacts.backup(value.body)
     for value in values:
         if value is not None:
             artifacts.backup(value.body)
-    if snapshot(repository, storage)[0] != state or versions.inventory() != inventory:
+    fence()
+    if snapshot(repository, storage, fence=fence)[0] != state or versions.inventory(fence=fence) != inventory:
         raise MaintenanceError("publication changed while preparing cleanup backup")
     plan = {"version": 1, "target": storage_target(storage), "state": state, "inventory": inventory,
             "deletions": selected, "backup_deleted_objects": backup_deleted_objects, "backups": backups}
+    fence()
     artifacts.write(plan_name, encoded(plan))
     retained_null = sum(r["version_id"] == "null" and allowed_key(r["key"])
                         and not LEGACY_KEY.fullmatch(r["key"]) for r in inventory["versions"])
@@ -306,7 +309,7 @@ def append_deletions(artifacts, name, rows):
         os.fsync(stream.fileno())
 
 
-def apply_cleanup(repository, jobs, storage, versions, artifacts, plan_name):
+def apply_cleanup(repository, jobs, storage, versions, artifacts, plan_name, *, lease=None):
     raw = artifacts.read(plan_name)
     if raw is None:
         raise MaintenanceError("cleanup plan does not exist")
@@ -318,7 +321,9 @@ def apply_cleanup(repository, jobs, storage, versions, artifacts, plan_name):
     if type(backup_deleted_objects) is not bool or not isinstance(plan.get("backups"), dict):
         raise MaintenanceError("invalid deleted-object backup policy or map")
     deleted = []
-    with publication_lease(jobs) as (_, _, fence):
+    context = publication_lease(jobs) if lease is None else nullcontext(lease)
+    with context as (_, _, fence):
+        fence()
         state, _ = snapshot(repository, storage, verify_reports=True, fence=fence)
         inventory = versions.inventory(fence=fence)
         if state != plan.get("state") or inventory != plan.get("inventory"):

@@ -27,6 +27,7 @@ from tools.publication_storage_admin import (
     digest,
     encoded,
     parse_json,
+    publication_lease,
     read_iam_token,
     storage_target,
     validate_manifest,
@@ -534,6 +535,67 @@ def test_cleanup_cli_prepares_explicit_no_backup_plan_without_obsolete_reads(set
     result = json.loads(capsys.readouterr().out)
     assert result["backup_deleted_objects"] is False and result["backup_objects"] == 0
     assert parse_json(artifacts.read("cleanup-plan.json"))["backup_deleted_objects"] is False
+
+
+def test_cleanup_reuses_shared_publication_lease_without_second_acquire_or_release(setup):
+    repo, jobs, storage, artifacts, versions = stable_setup(setup)
+    attempts, releases = jobs.attempt, jobs.released
+    with publication_lease(jobs) as lease:
+        prepare_cleanup(repo, storage, versions, artifacts, backup_deleted_objects=False, fence=lease[2])
+        result = apply_cleanup(repo, jobs, storage, versions, artifacts, "cleanup-plan.json", lease=lease)
+        assert result["deleted_versions"] > 0
+        assert jobs.attempt == attempts + 1 and jobs.released == releases
+    assert jobs.released == releases + 1
+
+
+def test_cleanup_supplied_lost_lease_refuses_before_storage_verification_or_deletion(setup, monkeypatch):
+    repo, jobs, storage, artifacts, versions = stable_setup(setup)
+    prepare_cleanup(repo, storage, versions, artifacts, backup_deleted_objects=False)
+    with publication_lease(jobs) as lease:
+        jobs.lost = True
+
+        def forbidden_inventory(**kwargs):
+            raise AssertionError("lost lease must fail before inventory verification")
+
+        monkeypatch.setattr(versions, "inventory", forbidden_inventory)
+        with pytest.raises(MaintenanceError, match="lease was lost"):
+            apply_cleanup(repo, jobs, storage, versions, artifacts, "cleanup-plan.json", lease=lease)
+    assert not versions.deleted
+
+
+@pytest.mark.parametrize("phase", ["initial", "report", "inventory", "backup", "final"])
+def test_cleanup_prepare_renews_supplied_fence_throughout_plan_preparation(setup, monkeypatch, phase):
+    repo, _, storage, artifacts, versions = stable_setup(setup)
+    stage = "initial"
+    original_get, original_inventory = storage.get, versions.inventory
+    original_version = versions.get_version
+
+    def get(key):
+        nonlocal stage
+        if key.startswith("daily/"):
+            stage = "report"
+        return original_get(key)
+
+    def inventory(**kwargs):
+        nonlocal stage
+        stage = "inventory" if stage != "backup" else "final"
+        return original_inventory(**kwargs)
+
+    def get_version(row):
+        nonlocal stage
+        stage = "backup"
+        return original_version(row)
+
+    def fence():
+        if stage == phase:
+            raise MaintenanceError("injected lease loss")
+
+    monkeypatch.setattr(storage, "get", get)
+    monkeypatch.setattr(versions, "inventory", inventory)
+    monkeypatch.setattr(versions, "get_version", get_version)
+    with pytest.raises(MaintenanceError, match="lease loss"):
+        prepare_cleanup(repo, storage, versions, artifacts, fence=fence)
+    assert artifacts.read("cleanup-plan.json") is None and not versions.deleted
 
 
 @pytest.mark.parametrize("change", ["index", "inventory", "target", "plan", "backup"])
