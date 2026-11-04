@@ -81,6 +81,26 @@ def test_conditional_request_conflict_is_retryable_but_other_failures_are_errors
                 storage.compare_and_swap('site-index.json', b'index', 'application/json', expected_etag=None)
 
 
+def test_conditional_put_returns_written_etag_without_followup_read():
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, headers={'ETag': '"written-version"'})
+
+    storage = ObjectStorage('test-bucket', token=lambda: 'test', transport=httpx.MockTransport(respond))
+    assert storage.conditional_put('latest.html', b'HTML', 'text/html', expected_etag='"old"') == '"written-version"'
+    assert len(requests) == 1 and requests[0].headers['if-match'] == '"old"'
+
+
+def test_conditional_put_requires_response_etag():
+    storage = ObjectStorage('test-bucket', token=lambda: 'test', transport=httpx.MockTransport(
+        lambda request: httpx.Response(200)
+    ))
+    with pytest.raises(StorageError, match='no ETag'):
+        storage.conditional_put('latest.html', b'HTML', 'text/html', expected_etag=None)
+
+
 def test_storage_rejects_paths_redirects_and_redacts_errors():
     requests = []
 

@@ -1,11 +1,14 @@
-"""Immutable report artifacts and a browser index derived from committed YDB state."""
+"""Fenced period artifacts and a browser index derived from committed YDB state."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.cloud.object_storage import StorageError, valid_key
@@ -17,6 +20,7 @@ if TYPE_CHECKING:
 
 SITE_INDEX_KEY = "site-index.json"
 SITE_INDEX_ATTEMPTS = 3
+REPORT_HREF = re.compile(r"(?:daily|weekly|monthly|seasonal)/\d{4}-\d{2}-\d{2}\.html\Z")
 
 
 class CloudPublication:
@@ -49,6 +53,8 @@ class CloudPublication:
             manifest_object = self.storage.get(manifest_key)
             if manifest_object is None:
                 raise StorageError("committed publication manifest missing")
+            if meta.get("manifest_etag") and manifest_object.etag != meta["manifest_etag"]:
+                raise StorageError("publication manifest differs from committed version")
             try:
                 manifest = json.loads(manifest_object.body)
                 if (not isinstance(manifest, dict) or manifest.get("version") != 1
@@ -57,10 +63,13 @@ class CloudPublication:
                     raise ValueError("invalid manifest")
             except (ValueError, UnicodeError):
                 raise StorageError("invalid committed publication manifest") from None
-            body = json.dumps({
+            index = {
                 "version": 1, "updated_at": manifest["updated_at"], "manifest_key": manifest_key,
                 "latest_key": latest_key, "reports": manifest["reports"],
-            }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+            }
+            if "generation" in manifest:
+                index["generation"] = manifest["generation"]
+            body = json.dumps(index, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
             if current is not None and current.body == body:
                 return
             if self.storage.compare_and_swap(
@@ -81,11 +90,33 @@ class CloudPublication:
             raise RuntimeError("published object has no ETag")
         return key, etag
 
-    def report(self, report: Report, href: str, html: str, now: datetime) -> tuple[dict[str, Any], str, str]:
-        html_key, html_etag = self.put("reports", "html", html.encode("utf-8"), "text/html; charset=utf-8")
-        json_key, json_etag = self.put(
-            "reports", "json", (report.model_dump_json(indent=2) + "\n").encode("utf-8"),
-            "application/json; charset=utf-8",
+    def _replace(self, key: str, body: bytes, content_type: str, fence: Callable[[], None]) -> tuple[str, str]:
+        """Never retry a prepared payload against a newly read object version."""
+        current = self.storage.get(key)
+        if current is not None and not current.etag:
+            raise StorageError("publication object has no ETag")
+        fence()
+        etag = self.storage.conditional_put(key, body, content_type,
+                                            expected_etag=current.etag if current else None)
+        if etag is None:
+            raise StorageError("publication object update conflicted; retry publication")
+        return key, etag
+
+    def _html(self, key: str, html: str, fence: Callable[[], None]) -> tuple[str, str]:
+        body = (html + f"\n<!-- zont-publication-generation:{uuid4()} -->\n").encode("utf-8")
+        return self._replace(key, body, "text/html; charset=utf-8", fence)
+
+    def report(self, report: Report, href: str, html: str, now: datetime, *,
+               fence: Callable[[], None]) -> tuple[dict[str, Any], str, str]:
+        if not REPORT_HREF.fullmatch(href):
+            raise ValueError("invalid report publication path")
+        html_key, html_etag = self._html(href, html, fence)
+        payload = report.model_dump(mode="json")
+        payload["context"]["_publication"] = {"generation": str(uuid4())}
+        json_key, json_etag = self._replace(
+            href.removesuffix(".html") + ".json",
+            (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+            "application/json; charset=utf-8", fence,
         )
         zone = ZoneInfo(report.timezone)
         entry = {
@@ -103,14 +134,16 @@ class CloudPublication:
         }
         return entry, html_etag, json_etag
 
-    def manifest(self, entries: list[dict[str, Any]], now: datetime) -> str:
+    def manifest(self, entries: list[dict[str, Any]], now: datetime, *,
+                 fence: Callable[[], None]) -> tuple[str, str]:
         body = json.dumps({
             "version": 1, "updated_at": now.astimezone(UTC).isoformat(), "reports": entries,
+            "generation": str(uuid4()),
         }, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
-        return self.put("manifests", "json", body, "application/json; charset=utf-8")[0]
+        return self._replace("reports.json", body, "application/json; charset=utf-8", fence)
 
-    def latest(self, html: str) -> str:
-        return self.put("latest", "html", html.encode("utf-8"), "text/html; charset=utf-8")[0]
+    def latest(self, html: str, *, fence: Callable[[], None]) -> tuple[str, str]:
+        return self._html("latest.html", html, fence)
 
     def valid_entry(self, entry: dict[str, Any], html_etag: str, json_etag: str) -> bool:
         return bool(entry.get("html_key") and entry.get("json_key") and html_etag and json_etag

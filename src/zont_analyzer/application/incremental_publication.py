@@ -49,6 +49,15 @@ def _unpublished_basis(meta: dict[str, str]) -> str:
     return json.dumps([meta.get("checkpoint", "0"), meta.get("count", "0")], separators=(",", ":"))
 
 
+def _cloud_object_current(cloud: CloudPublication, meta: dict[str, str], name: str) -> bool:
+    key = meta.get(f"{name}_key", "")
+    if not key:
+        return False
+    etag = cloud.storage.head(key)
+    expected = meta.get(f"{name}_etag")
+    return bool(etag) and (not expected or etag == expected)
+
+
 def _windows(report: Report) -> tuple[float, float]:
     """Conservative union of observation, savings and comparison source windows."""
     bounds = [report.period_start.timestamp(), report.period_end.timestamp()]
@@ -247,6 +256,14 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         if runtime.db.jobs.renew("publication", owner, attempt, LEASE_SECONDS) is None:
             raise RuntimeError("publisher lost its YDB lease")
 
+    meta_hint = repository.load_meta()
+    storage_target = cloud.storage_target if cloud else ""
+    if (cloud and meta_hint.get("storage_target") == storage_target
+            and meta_hint.get("manifest_key", "").startswith("publication/")):
+        # The separate migration copies the exact published bytes. Do not let
+        # an ordinary release replace the archive with freshly rendered data.
+        raise RuntimeError("published archive requires the separate stable-path migration")
+
     apply_device_timezone(runtime.db, runtime.config)
     owner_store = OwnerContextStore(runtime.db)
     profiles = [owner_store.profile(str(device["id"]), now) for device in runtime.db.list_devices()]
@@ -255,15 +272,12 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
     config_values = (VERSION, runtime.config.home.model_dump(), runtime.config.home.effective_timezone,
                      runtime.config.preferences.model_dump(), runtime.config.analysis.model_dump(),
                      runtime.config.feedback.public_api_base_url)
-    storage_target = cloud.storage_target if cloud else ""
     config_digest = _digest(config_values + (storage_target,) if cloud else config_values)
     review_digest = _digest(ai_review)
-    meta_hint = repository.load_meta()
     checkpoint = int(meta_hint.get("checkpoint", "0"))
     upper = runtime.db.source_revision()
     manifest_path = output / "reports.json"
-    manifest_current = (bool(meta_hint.get("manifest_key")) and
-                        bool(cloud.storage.head(meta_hint["manifest_key"]))) if cloud else (
+    manifest_current = _cloud_object_current(cloud, meta_hint, "manifest") if cloud else (
                             meta_hint.get("manifest_stamp") == _stamp(manifest_path) and manifest_path.exists())
     if (
         not rebuild and upper == checkpoint and meta_hint.get("identity") == runtime.db.identity
@@ -277,8 +291,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         and not repository.has_dirty()
     ):
         latest_hint = repository.latest_daily()
-        latest_current = (bool(meta_hint.get("latest_key")) and
-                          bool(cloud.storage.head(meta_hint["latest_key"]))) if cloud else (
+        latest_current = _cloud_object_current(cloud, meta_hint, "latest") if cloud else (
                               meta_hint.get("latest_stamp") == _stamp(output / "latest.html"))
         if latest_hint is None or latest_current:
             audit_hint = repository.audit_page(meta_hint.get("audit", ""), AUDIT_SIZE)
@@ -358,8 +371,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
     )
     latest_hint = repository.latest_daily() if partial else None
     if partial:
-        latest_current = (bool(meta_hint.get("latest_key")) and
-                          bool(cloud.storage.head(meta_hint["latest_key"]))) if cloud else (
+        latest_current = _cloud_object_current(cloud, meta_hint, "latest") if cloud else (
                               meta_hint.get("latest_stamp") == _stamp(output / "latest.html"))
         partial = latest_hint is None or latest_current
     items, meta = ((repository.pending_items(
@@ -468,7 +480,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
               max((item for item in items.values() if item["kind"] == "daily"),
                   key=lambda item: (item["start"], item["href"]), default=None))
     latest_href = latest["href"] if latest else ""
-    latest_missing = (not meta.get("latest_key") or not cloud.storage.head(meta["latest_key"])) if cloud else (
+    latest_missing = not _cloud_object_current(cloud, meta, "latest") if cloud else (
         meta.get("latest_stamp") != _stamp(output / "latest.html"))
     if latest and latest_missing:
         _enqueue(items, RENDER, now, lambda item: item["href"] == latest_href)
@@ -547,7 +559,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                 old_entry = json.loads(item["entry"]) if item["entry"] is not None else None
                 old_valid = bool(old_entry and cloud.valid_entry(
                     old_entry, item["html_stamp"], item["json_stamp"]))
-                entry, html_stamp, json_stamp = cloud.report(report, item["href"], html, now)
+                entry, html_stamp, json_stamp = cloud.report(report, item["href"], html, now, fence=fence)
                 if old_entry is not None and old_valid and item["html_stamp"] == html_stamp \
                         and item["json_stamp"] == json_stamp:
                     entry = old_entry
@@ -585,14 +597,16 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                                for href, item in items.items()) or bool(previous.keys() - items.keys())
     if cloud:
         meta["storage_target"] = storage_target
+        meta["storage_layout"] = "period-v1"
         if latest is None:
             meta["latest_key"] = ""
+            meta["latest_etag"] = ""
         if (manifest_changed or recovering or not meta.get("manifest_key")
-                or not cloud.storage.head(meta["manifest_key"])):
-            meta["manifest_key"] = cloud.manifest(entries, now)
+                or not manifest_current):
+            meta["manifest_key"], meta["manifest_etag"] = cloud.manifest(entries, now, fence=fence)
         if newest is not None:
             fence()
-            meta["latest_key"] = cloud.latest(render(newest, is_latest=True))
+            meta["latest_key"], meta["latest_etag"] = cloud.latest(render(newest, is_latest=True), fence=fence)
     else:
         if (manifest_changed or recovering or meta.get("manifest_stamp") != _stamp(manifest_path)
                 or not manifest_path.exists()):

@@ -44,11 +44,38 @@ locals {
       }
     },
     {
+      for path in ["daily", "weekly", "monthly", "seasonal"] : "/objects/${path}/{file}" => {
+        parameters = [{ name = "file", in = "path", required = true, schema = { type = "string" } }]
+        get = {
+          security  = local.identity_security
+          responses = { "200" = { description = "Private stable report object" } }
+          "x-yc-apigateway-integration" = {
+            type               = "object_storage"
+            bucket             = yandex_storage_bucket.publication.bucket
+            object             = "${var.application_publication_prefix}/${path}/{file}"
+            service_account_id = var.timer_service_account_id
+          }
+        }
+      }
+    },
+    {
+      "/objects/latest.html" = {
+        get = {
+          security  = local.identity_security
+          responses = { "200" = { description = "Private latest report" } }
+          "x-yc-apigateway-integration" = {
+            type               = "object_storage"
+            bucket             = yandex_storage_bucket.publication.bucket
+            object             = "${var.application_publication_prefix}/latest.html"
+            service_account_id = var.timer_service_account_id
+          }
+        }
+      }
       "/objects/publication/{path+}" = {
         parameters = [{ name = "path", in = "path", required = true, schema = { type = "string" } }]
         get = {
           security  = local.identity_security
-          responses = { "200" = { description = "Private immutable report object" } }
+          responses = { "200" = { description = "Legacy private immutable report object" } }
           "x-yc-apigateway-integration" = {
             type               = "object_storage"
             bucket             = yandex_storage_bucket.publication.bucket

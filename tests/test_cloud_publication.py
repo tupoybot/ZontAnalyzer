@@ -1,4 +1,4 @@
-"""Cloud publication projects only committed YDB state into private Object Storage."""
+"""Stable objects recover independently; the browser index follows fenced YDB state."""
 from __future__ import annotations
 
 import hashlib
@@ -43,11 +43,18 @@ class MemoryStorage:
         return etag
 
     def compare_and_swap(self, key: str, body: bytes, content_type: str, *, expected_etag: str | None) -> bool:
+        return self.conditional_put(key, body, content_type, expected_etag=expected_etag) is not None
+
+    def conditional_put(self, key: str, body: bytes, content_type: str, *, expected_etag: str | None) -> str | None:
+        category = {"latest.html": "latest", "reports.json": "manifests"}.get(key, "reports")
+        if self.fail_category == category:
+            self.fail_category = ""
+            raise OSError("interrupted upload")
         current = self.objects.get(key)
         if expected_etag != (current.etag if current else None):
-            return False
+            return None
         self.objects[key] = StoredObject(body, content_type, hashlib.sha256(body).hexdigest())
-        return True
+        return self.objects[key].etag
 
 
 def _runtime(tmp_path: Path) -> Runtime:
@@ -101,7 +108,7 @@ def test_cloud_archive_latest_and_idle_pass(tmp_path: Path, monkeypatch: pytest.
 
 
 @pytest.mark.ydb
-def test_interrupted_latest_upload_keeps_old_pointer_then_retries(
+def test_interrupted_latest_upload_keeps_old_latest_and_index_then_repairs_manifest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
@@ -120,17 +127,18 @@ def test_interrupted_latest_upload_keeps_old_pointer_then_retries(
     assert failed_meta["latest_key"] == old_meta["latest_key"]
     assert failed_latest == old_latest
     assert storage.objects[SITE_INDEX_KEY] == old_index
-    assert any("/manifests/" in key and key != old_meta["manifest_key"] for key in storage.objects)
+    assert storage.objects["reports.json"].etag != old_meta["manifest_etag"]
     result = publication.publish_reports(runtime)
     meta, manifest, latest = _active(runtime, storage)
     assert result["pending_reports"] == 0
-    assert meta["manifest_key"] != old_meta["manifest_key"]
+    assert meta["manifest_key"] == old_meta["manifest_key"] == "reports.json"
+    assert meta["manifest_etag"] != old_meta["manifest_etag"]
     assert newer.id in latest
     assert len(manifest["reports"]) == 2
 
 
 @pytest.mark.ydb
-def test_replaced_lease_cannot_activate_uploaded_objects(
+def test_replaced_lease_cannot_commit_index_and_retry_repairs_complete_objects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
@@ -138,7 +146,7 @@ def test_replaced_lease_cannot_activate_uploaded_objects(
     storage = MemoryStorage()
     _activate(monkeypatch, storage)
     publication.publish_reports(runtime)
-    old_meta, _, old_latest = _active(runtime, storage)
+    old_meta, _, _ = _active(runtime, storage)
     old_index = storage.objects[SITE_INDEX_KEY]
     newer = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 2), use_ai=False)
     original_save = PublicationRepository.save
@@ -159,7 +167,9 @@ def test_replaced_lease_cannot_activate_uploaded_objects(
     meta, _, latest = _active(runtime, storage)
     assert meta["manifest_key"] == old_meta["manifest_key"]
     assert meta["latest_key"] == old_meta["latest_key"]
-    assert latest == old_latest
+    # Independent stable objects are already complete and may be visible while
+    # the old index remains committed. The next owner repairs the checkpoint.
+    assert newer.id in latest
     assert storage.objects[SITE_INDEX_KEY] == old_index
     monkeypatch.setattr(PublicationRepository, "save", original_save)
     assert runtime.db.jobs.release("publication", "replacement", replacement_attempt)
@@ -174,6 +184,66 @@ def test_content_addressed_put_is_idempotent() -> None:
     second = publisher.put("reports", "html", b"<p>report</p>", "text/html")
     assert first == second
     assert len(storage.objects) == 1
+
+
+@pytest.mark.ydb
+def test_paused_old_publisher_cannot_overwrite_new_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    original = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
+    storage = MemoryStorage()
+    _activate(monkeypatch, storage)
+    publication.publish_reports(runtime)
+    stale = original.model_copy(update={"summary": "older prepared report",
+                                        "generated_at": original.generated_at + timedelta(seconds=1)})
+    runtime.db.save_report(stale, "older")
+    newer = original.model_copy(update={"summary": "newest accepted report",
+                                        "generated_at": original.generated_at + timedelta(seconds=2)})
+    put = storage.conditional_put
+    accepted: dict[str, StoredObject] = {}
+    paused = False
+
+    def interleave(key, body, content_type, *, expected_etag):
+        nonlocal paused
+        if key == "daily/2026-08-01.html" and not paused:
+            paused = True
+            lease = runtime.db.jobs.get("publication")
+            assert lease and runtime.db.jobs.release("publication", lease.owner, lease.attempt)
+            runtime.db.save_report(newer, "newer")
+            publication.publish_reports(runtime)
+            accepted.update(storage.objects)
+        return put(key, body, content_type, expected_etag=expected_etag)
+
+    monkeypatch.setattr(storage, "conditional_put", interleave)
+    with pytest.raises(StorageError, match="conflicted"):
+        publication.publish_reports(runtime)
+    assert storage.objects == accepted
+    assert b"newest accepted report" in storage.objects["daily/2026-08-01.html"].body
+    assert "older prepared report" not in storage.objects["latest.html"].body.decode()
+    assert publication.publish_reports(runtime)["rendered_reports"] == 0
+
+
+@pytest.mark.ydb
+def test_legacy_layout_requires_exact_byte_migration_before_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    storage = MemoryStorage()
+    _activate(monkeypatch, storage)
+    publisher = CloudPublication(storage)  # type: ignore[arg-type]
+    for name, value in {"storage_target": publisher.storage_target,
+                        "manifest_key": "publication/manifests/legacy.json"}.items():
+        runtime.db.storage.execute(
+            "DECLARE $name AS Utf8; DECLARE $value AS Utf8; "
+            "UPSERT INTO metadata (name,value) VALUES ($name,$value);",
+            {"$name": "publication:" + name, "$value": value},
+        )
+    monkeypatch.setattr(publication, "render_html", lambda *_a, **_k: pytest.fail("migration rendered"))
+    with pytest.raises(RuntimeError, match="separate stable-path migration"):
+        publication.publish_reports(runtime)
+    assert not storage.objects
+    assert runtime.db.jobs.get("publication").state != "running"
 
 
 @pytest.mark.ydb
@@ -219,7 +289,7 @@ def test_bounded_audit_restores_missing_archived_object(
     result = publication.publish_reports(runtime)
     assert result["rendered_reports"] == 1
     assert missing in storage.objects
-    assert PublicationRepository(runtime.db.storage).load_meta()["manifest_key"] != old_meta["manifest_key"]
+    assert PublicationRepository(runtime.db.storage).load_meta()["manifest_etag"] != old_meta["manifest_etag"]
 
 
 @pytest.mark.ydb
@@ -261,7 +331,8 @@ def test_index_failure_after_ydb_commit_is_repaired_by_idle_retry(
     with pytest.raises(OSError, match="index upload interrupted"):
         publication.publish_reports(runtime)
     committed = PublicationRepository(runtime.db.storage).load_meta()
-    assert committed["manifest_key"] != json.loads(old_index.body)["manifest_key"]
+    assert committed["manifest_key"] == json.loads(old_index.body)["manifest_key"] == "reports.json"
+    assert json.loads(storage.objects["reports.json"].body)["generation"] != json.loads(old_index.body)["generation"]
     assert not PublicationRepository(runtime.db.storage).has_dirty()
     assert storage.objects[SITE_INDEX_KEY] == old_index
 

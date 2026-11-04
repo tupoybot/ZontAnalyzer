@@ -110,6 +110,21 @@ run "reject_wrong_cloud" {
 
 run "isolated_defaults" {
   command = plan
+  override_resource {
+    target          = yandex_logging_group.runtime
+    override_during = plan
+    values          = { id = "test-log-group" }
+  }
+
+  assert {
+    condition     = var.publication_versioning_enabled && one(yandex_storage_bucket.publication.versioning).enabled && var.publication_bucket_max_size_bytes == null
+    error_message = "New publication buckets must enable versioning and leave the optional size limit unset by default."
+  }
+
+  assert {
+    condition     = var.cloud_logging_enabled && !one(yandex_serverless_container.application.log_options).disabled && one(yandex_serverless_container.application.log_options).log_group_id == yandex_logging_group.runtime.id && one(yandex_serverless_container.application.log_options).min_level == "INFO" && !one(yandex_serverless_container.probe.log_options).disabled && one(yandex_serverless_container.probe.log_options).log_group_id == yandex_logging_group.runtime.id && one(yandex_serverless_container.probe.log_options).min_level == "INFO" && !one(yandex_api_gateway.probe.log_options).disabled && one(yandex_api_gateway.probe.log_options).log_group_id == yandex_logging_group.runtime.id && one(yandex_api_gateway.probe.log_options).min_level == "WARN"
+    error_message = "Cloud logs must remain enabled with the runtime log group and configured levels by default."
+  }
 
   assert {
     condition     = var.identity == null && !contains(keys(yandex_serverless_container.application.image[0].environment), "CLOUD_OIDC_ISSUER")
@@ -167,6 +182,30 @@ run "isolated_defaults" {
   }
 }
 
+run "publication_versioning_and_cloud_logging_can_be_disabled" {
+  command = plan
+  variables {
+    publication_versioning_enabled    = false
+    publication_bucket_max_size_bytes = 1073741824
+    cloud_logging_enabled             = false
+  }
+  override_resource {
+    target          = yandex_logging_group.runtime
+    override_during = plan
+    values          = { id = "test-log-group" }
+  }
+
+  assert {
+    condition     = !one(yandex_storage_bucket.publication.versioning).enabled && yandex_storage_bucket.publication.max_size == 1073741824 && var.publication_bucket_max_size_bytes == 1073741824
+    error_message = "The accepted private configuration must be able to suspend publication versioning and set a bucket size input."
+  }
+
+  assert {
+    condition     = one(yandex_serverless_container.application.log_options).disabled && one(yandex_serverless_container.application.log_options).log_group_id == null && one(yandex_serverless_container.application.log_options).min_level == null && one(yandex_serverless_container.probe.log_options).disabled && one(yandex_serverless_container.probe.log_options).log_group_id == null && one(yandex_serverless_container.probe.log_options).min_level == null && one(yandex_api_gateway.probe.log_options).disabled && one(yandex_api_gateway.probe.log_options).log_group_id == null && one(yandex_api_gateway.probe.log_options).min_level == null
+    error_message = "Disabling cloud logging must disable logs on probe, application and gateway."
+  }
+}
+
 run "identity_protects_native_publication" {
   command = plan
   variables {
@@ -205,6 +244,11 @@ run "identity_protects_native_publication" {
     condition = alltrue([for path, object in {
       "/reports.json"                = "reports/site-index.json"
       "/za/reports.json"             = "reports/site-index.json"
+      "/objects/daily/{file}"        = "reports/daily/{file}"
+      "/objects/weekly/{file}"       = "reports/weekly/{file}"
+      "/objects/monthly/{file}"      = "reports/monthly/{file}"
+      "/objects/seasonal/{file}"     = "reports/seasonal/{file}"
+      "/objects/latest.html"         = "reports/latest.html"
       "/objects/publication/{path+}" = "reports/publication/{path}"
       } : (
       yamldecode(yandex_api_gateway.probe.spec).paths[path].get["x-yc-apigateway-integration"].type == "object_storage" &&
@@ -609,7 +653,7 @@ run "production_publication_is_isolated" {
     values          = { id = "test-probe" }
   }
   assert {
-    condition     = yandex_serverless_container.application.image[0].environment.CLOUD_PUBLICATION_PREFIX == "production" && yamldecode(yandex_api_gateway.probe.spec).paths["/reports.json"].get["x-yc-apigateway-integration"].object == "production/site-index.json" && yamldecode(yandex_api_gateway.probe.spec).paths["/objects/publication/{path+}"].get["x-yc-apigateway-integration"].object == "production/publication/{path}"
+    condition     = yandex_serverless_container.application.image[0].environment.CLOUD_PUBLICATION_PREFIX == "production" && yamldecode(yandex_api_gateway.probe.spec).paths["/reports.json"].get["x-yc-apigateway-integration"].object == "production/site-index.json" && yamldecode(yandex_api_gateway.probe.spec).paths["/objects/daily/{file}"].get["x-yc-apigateway-integration"].object == "production/daily/{file}" && yamldecode(yandex_api_gateway.probe.spec).paths["/objects/latest.html"].get["x-yc-apigateway-integration"].object == "production/latest.html" && yamldecode(yandex_api_gateway.probe.spec).paths["/objects/publication/{path+}"].get["x-yc-apigateway-integration"].object == "production/publication/{path}"
     error_message = "Publisher and protected gateway must switch to the same isolated object prefix."
   }
 }

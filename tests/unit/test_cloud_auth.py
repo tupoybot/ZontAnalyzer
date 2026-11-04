@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import http.client
+import json
 import socket
 import threading
 import time
@@ -151,9 +152,28 @@ def test_login_form_body_stays_under_input_deadline(server: CloudServer, monkeyp
         connection.shutdown(socket.SHUT_WR)
         assert b" 400 " in connection.recv(1024)
     with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=2) as connection:
+        deadline = time.monotonic() + 1
         connection.sendall(head + b"username=a")
         time.sleep(0.2)
-        assert connection.recv(1024) == b""
+        response = bytearray()
+        while True:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, "incomplete login body must be rejected within one second"
+            connection.settimeout(remaining)
+            chunk = connection.recv(1024)
+            if not chunk:
+                break
+            response.extend(chunk)
+            assert len(response) <= 4096
+        # The total-input timer can close first, or the socket timeout can
+        # finish a complete HTTP error first. Both enforce the same deadline.
+        if response:
+            headers, body = bytes(response).split(b"\r\n\r\n", 1)
+            status, *header_lines = headers.split(b"\r\n")
+            assert status.split()[1] == b"408"
+            fields = dict(line.split(b":", 1) for line in header_lines)
+            assert int(fields[b"Content-Length"]) == len(body)
+            assert json.loads(body) == {"error": "input_timeout"}
 
 
 def test_cookie_authorizes_same_origin_api_mutation_only(

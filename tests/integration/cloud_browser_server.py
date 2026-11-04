@@ -38,7 +38,9 @@ def object_request(request: httpx.Request) -> httpx.Response:
             assert request.headers.get("Cache-Control") == "private, no-store"
             match = request.headers.get("If-Match")
             if match is not None:
-                assert key == "site-index.json" and "If-None-Match" not in request.headers
+                # Stable report files use the same conditional replacement as
+                # the browser index. Reject stale ETags for every object.
+                assert "If-None-Match" not in request.headers
                 if existing is None or existing[2] != match:
                     return httpx.Response(412)
             else:
@@ -121,7 +123,7 @@ finally:
 
 # Keep the transport and YDB in this process while exercising the real HTTP job route.
 # Production uses a bounded child; this fixture calls the same dispatcher directly so
-# an in-memory immutable object map remains visible to the browser between requests.
+# an in-memory object map remains visible to the browser between requests.
 cloud_runtime.run_bounded = lambda dispatcher, payload, _timeout, _cancelled: dispatcher(payload)
 
 

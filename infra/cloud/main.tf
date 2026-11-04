@@ -65,7 +65,7 @@ resource "yandex_ydb_database_serverless" "production" {
 resource "yandex_storage_bucket" "publication" {
   folder_id     = data.yandex_resourcemanager_folder.project.id
   bucket        = var.publication_bucket_name
-  max_size      = 1073741824
+  max_size      = var.publication_bucket_max_size_bytes
   force_destroy = false
   anonymous_access_flags {
     read        = false
@@ -73,12 +73,11 @@ resource "yandex_storage_bucket" "publication" {
     config_read = false
   }
   versioning {
-    enabled = true
+    enabled = var.publication_versioning_enabled
   }
   lifecycle {
-    # Storage policy changes require a separate review from application releases.
-    # Keep the creation defaults while preserving an existing bucket's policy.
-    ignore_changes = [max_size, versioning, lifecycle_rule]
+    # Bucket size remains outside routine releases; versioning follows explicit inputs.
+    ignore_changes = [max_size, lifecycle_rule]
   }
 }
 
@@ -133,8 +132,9 @@ resource "yandex_serverless_container" "probe" {
     }
   }
   log_options {
-    log_group_id = yandex_logging_group.runtime.id
-    min_level    = "INFO"
+    disabled     = !var.cloud_logging_enabled
+    log_group_id = var.cloud_logging_enabled ? yandex_logging_group.runtime.id : null
+    min_level    = var.cloud_logging_enabled ? "INFO" : null
   }
   depends_on = [
     yandex_container_registry_iam_binding.pull,
