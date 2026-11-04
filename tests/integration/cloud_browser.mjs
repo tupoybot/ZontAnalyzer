@@ -50,6 +50,8 @@ try {
     new Set(["daily", "weekly", "monthly", "seasonal"]));
   for (const entry of manifest.reports) {
     assert.match(entry.href, /^(daily|weekly|monthly|seasonal)\/\d{4}-\d{2}-\d{2}\.html$/);
+    assert.equal(entry.html_key, entry.href, "HTML uses its stable period key");
+    assert.equal(entry.json_key, entry.href.replace(/\.html$/, ".json"), "JSON uses its stable period key");
     for (const path of [entry.href, entry.href.replace(/\.html$/, ".json")]) {
       const response = await context.request.get(`${base}/${path}`);
       assert.equal(response.status(), 200, path);
@@ -94,6 +96,10 @@ try {
   await page.locator("[data-profile-save]").click();
   await page.locator("[data-profile-message]").filter({ hasText: "сохранён" }).waitFor();
   await drain();
+  const updatedManifest = await (await context.request.get(`${base}/reports.json`)).json();
+  assert.notEqual(updatedManifest.generation, manifest.generation, "profile edit replaces the published generation");
+  assert.deepEqual(updatedManifest.reports.map(entry => [entry.html_key, entry.json_key]),
+    manifest.reports.map(entry => [entry.html_key, entry.json_key]), "republishing preserves period keys");
   await page.reload({ waitUntil: "networkidle" });
   assert.equal(await notes.inputValue(), "Cloud owner <safe>");
   assert.equal(await page.locator('[data-field="installation_notes"] safe').count(), 0);
