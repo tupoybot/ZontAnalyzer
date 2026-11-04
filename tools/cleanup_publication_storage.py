@@ -7,13 +7,15 @@ lease. Every delete names an exact VersionId; missing version support fails clos
 All current period report pairs, including archive dates absent from the manifest,
 are retained. Stable null versions are retained because a suspended bucket can
 reuse their identifiers. Stop legacy writers before cleanup. There is no age rule
-and no recursive or prefix delete.
+and no recursive or prefix delete. Preparation can explicitly omit deleted-object
+backups with --no-deleted-object-backup; apply follows the policy saved in the plan.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import stat
 import sys
 import time
@@ -261,26 +263,31 @@ def read_versions(rows, versions, *, fence=lambda: None):
             fence()
 
 
-def prepare_cleanup(repository, storage, versions, artifacts, plan_name="cleanup-plan.json"):
+def prepare_cleanup(repository, storage, versions, artifacts, plan_name="cleanup-plan.json", *,
+                    backup_deleted_objects=True):
+    if type(backup_deleted_objects) is not bool:
+        raise MaintenanceError("invalid deleted-object backup policy")
     state, values = snapshot(repository, storage, verify_reports=True)
     inventory = versions.inventory()
     selected = candidates(inventory, state["reachable"])
     backups = {}
-    for row, value in read_versions((row for row in selected if not row["delete_marker"]), versions):
-        if value.etag != row["etag"] or len(value.body) != row["size"]:
-            raise MaintenanceError("cleanup backup differs from listed version")
-        backups[fingerprint(row)] = artifacts.backup(value.body)
+    if backup_deleted_objects:
+        for row, value in read_versions((row for row in selected if not row["delete_marker"]), versions):
+            if value.etag != row["etag"] or len(value.body) != row["size"]:
+                raise MaintenanceError("cleanup backup differs from listed version")
+            backups[fingerprint(row)] = artifacts.backup(value.body)
     for value in values:
         if value is not None:
             artifacts.backup(value.body)
     if snapshot(repository, storage)[0] != state or versions.inventory() != inventory:
         raise MaintenanceError("publication changed while preparing cleanup backup")
     plan = {"version": 1, "target": storage_target(storage), "state": state, "inventory": inventory,
-            "deletions": selected, "backups": backups}
+            "deletions": selected, "backup_deleted_objects": backup_deleted_objects, "backups": backups}
     artifacts.write(plan_name, encoded(plan))
     retained_null = sum(r["version_id"] == "null" and allowed_key(r["key"])
                         and not LEGACY_KEY.fullmatch(r["key"]) for r in inventory["versions"])
     return {"delete_versions": len(selected), "backup_objects": len(backups), "applied": False,
+            "backup_deleted_objects": backup_deleted_objects,
             "retained_stable_null_versions": retained_null,
             "plan_sha256": fingerprint(plan)}
 
@@ -307,6 +314,9 @@ def apply_cleanup(repository, jobs, storage, versions, artifacts, plan_name):
     if (not isinstance(plan, dict) or plan.get("version") != 1
             or plan.get("target") != storage_target(storage)):
         raise MaintenanceError("cleanup plan target differs")
+    backup_deleted_objects = plan.get("backup_deleted_objects")
+    if type(backup_deleted_objects) is not bool or not isinstance(plan.get("backups"), dict):
+        raise MaintenanceError("invalid deleted-object backup policy or map")
     deleted = []
     with publication_lease(jobs) as (_, _, fence):
         state, _ = snapshot(repository, storage, verify_reports=True, fence=fence)
@@ -316,13 +326,19 @@ def apply_cleanup(repository, jobs, storage, versions, artifacts, plan_name):
         selected = candidates(inventory, state["reachable"])
         if selected != plan.get("deletions"):
             raise MaintenanceError("cleanup plan contains unsafe deletions")
-        for row, value in read_versions((row for row in selected if not row["delete_marker"]),
-                                        versions, fence=fence):
-            backup = artifacts.read(plan["backups"].get(fingerprint(row), "missing"))
-            if backup is None or "sha256-" + digest(backup) != plan["backups"].get(fingerprint(row)):
-                raise MaintenanceError("cleanup rollback backup is missing or changed")
-            if value.etag != row["etag"] or value.body != backup:
-                raise MaintenanceError("cleanup version changed after planning")
+        expected_backups = {fingerprint(row) for row in selected if not row["delete_marker"]}
+        if (set(plan["backups"]) != (expected_backups if backup_deleted_objects else set())
+                or any(not isinstance(name, str) or not re.fullmatch(r"sha256-[a-f0-9]{64}", name)
+                       for name in plan["backups"].values())):
+            raise MaintenanceError("cleanup backup map disagrees with saved policy")
+        if backup_deleted_objects:
+            for row, value in read_versions((row for row in selected if not row["delete_marker"]),
+                                            versions, fence=fence):
+                backup = artifacts.read(plan["backups"][fingerprint(row)])
+                if backup is None or "sha256-" + digest(backup) != plan["backups"][fingerprint(row)]:
+                    raise MaintenanceError("cleanup rollback backup is missing or changed")
+                if value.etag != row["etag"] or value.body != backup:
+                    raise MaintenanceError("cleanup version changed after planning")
         # The plan names every exact version. Keep bounded append-only chunks
         # during execution and write the full summary only on exit. A process
         # killed mid-chunk has an ambiguous tail and requires a fresh plan.
@@ -332,6 +348,7 @@ def apply_cleanup(repository, jobs, storage, versions, artifacts, plan_name):
         def summary():
             artifacts.write("cleanup-apply.json", encoded({
                 "plan_sha256": digest(raw), "journal": journal_name, "deleted": deleted,
+                "backup_deleted_objects": backup_deleted_objects,
             }))
 
         summary()
@@ -365,6 +382,7 @@ def apply_cleanup(repository, jobs, storage, versions, artifacts, plan_name):
     retained_null = sum(r["version_id"] == "null" and allowed_key(r["key"])
                         and not LEGACY_KEY.fullmatch(r["key"]) for r in inventory["versions"])
     return {"deleted_versions": len(deleted), "applied": True, "plan_sha256": digest(raw),
+            "backup_deleted_objects": backup_deleted_objects,
             "retained_stable_null_versions": retained_null}
 
 
@@ -375,6 +393,8 @@ def main():
     parser.add_argument("--iam-token-file", type=Path,
                         help="owner-only mounted IAM token for YDB and Object Storage; otherwise metadata credentials")
     parser.add_argument("--plan", type=Path)
+    parser.add_argument("--no-deleted-object-backup", action="store_true",
+                        help="preparation only: omit deleted bytes; current reports remain verified")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true")
     mode.add_argument("--dry-run", action="store_true")
@@ -384,6 +404,8 @@ def main():
         artifacts = PrivateArtifacts(args.artifacts)
         if args.apply and args.plan is None:
             raise MaintenanceError("cleanup apply requires an explicit plan")
+        if args.apply and args.no_deleted_object_backup:
+            raise MaintenanceError("backup policy is selected during preparation, not apply")
         plan_path = args.plan.absolute() if args.plan else artifacts.path / "cleanup-plan.json"
         if plan_path.parent != artifacts.path:
             raise MaintenanceError("cleanup plan must be inside private artifacts")
@@ -392,7 +414,8 @@ def main():
         if args.apply:
             result = apply_cleanup(repository, jobs, storage, versions, artifacts, plan_path.name)
         else:
-            result = prepare_cleanup(repository, storage, versions, artifacts, plan_path.name)
+            result = prepare_cleanup(repository, storage, versions, artifacts, plan_path.name,
+                                     backup_deleted_objects=not args.no_deleted_object_backup)
         print(json.dumps(result, sort_keys=True))
     except Exception:
         print("publication cleanup failed; inspect private plan and deletion journal", file=sys.stderr)

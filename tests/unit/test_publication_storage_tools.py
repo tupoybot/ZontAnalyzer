@@ -430,6 +430,112 @@ def test_cleanup_retains_all_current_stable_archive_pairs_and_unrelated_keys(set
     assert all(row["version_id"] for row in versions.deleted)
 
 
+def test_cleanup_without_deleted_backups_never_reads_obsolete_bodies_and_keeps_current_files(setup, monkeypatch):
+    repo, jobs, storage, artifacts, versions = stable_setup(setup)
+    current = [copy.deepcopy(row) for row in versions.rows
+               if row["is_latest"] and not row["key"].startswith("publication/")]
+    calls = []
+
+    def forbidden_get(row):
+        calls.append(row)
+        raise AssertionError("obsolete body must not be downloaded")
+
+    monkeypatch.setattr(versions, "get_version", forbidden_get)
+    result = prepare_cleanup(repo, storage, versions, artifacts, backup_deleted_objects=False)
+    plan = parse_json(artifacts.read("cleanup-plan.json"))
+    assert plan["backup_deleted_objects"] is False and plan["backups"] == {}
+    assert result["backup_objects"] == 0 and result["backup_deleted_objects"] is False
+    result = apply_cleanup(repo, jobs, storage, versions, artifacts, "cleanup-plan.json")
+    assert result["deleted_versions"] == len(plan["deletions"]) and not calls
+    assert result["backup_deleted_objects"] is False
+    assert all(row in versions.rows for row in current)
+
+
+@pytest.mark.parametrize("change", ["inventory", "unsafe_deletion", "current_pair"])
+def test_no_backup_cleanup_still_rejects_changed_or_unsafe_state(setup, change):
+    repo, jobs, storage, artifacts, versions = stable_setup(setup)
+    prepare_cleanup(repo, storage, versions, artifacts, backup_deleted_objects=False)
+    plan = parse_json(artifacts.read("cleanup-plan.json"))
+    if change == "inventory":
+        versions.add("daily/2000-01-01.html", b"changed inventory", "newer")
+    elif change == "unsafe_deletion":
+        plan["deletions"].append(next(r for r in versions.rows if r["key"] == "reports.json" and r["is_latest"]))
+        artifacts.write("cleanup-plan.json", encoded(plan))
+    else:
+        storage.seed("daily/2024-01-01.json", b"uncommitted current bytes")
+    with pytest.raises(MaintenanceError):
+        apply_cleanup(repo, jobs, storage, versions, artifacts, "cleanup-plan.json")
+    assert not versions.deleted
+
+
+@pytest.mark.parametrize("policy", [None, 0, 1, "false", [], {}])
+def test_cleanup_rejects_non_boolean_saved_backup_policy(setup, policy):
+    repo, jobs, storage, artifacts, versions = stable_setup(setup)
+    prepare_cleanup(repo, storage, versions, artifacts, backup_deleted_objects=False)
+    plan = parse_json(artifacts.read("cleanup-plan.json"))
+    plan["backup_deleted_objects"] = policy
+    artifacts.write("cleanup-plan.json", encoded(plan))
+    with pytest.raises(MaintenanceError, match="backup policy"):
+        apply_cleanup(repo, jobs, storage, versions, artifacts, "cleanup-plan.json")
+    assert not versions.deleted
+
+
+@pytest.mark.parametrize("policy,backups", [(False, {"extra": "sha256-" + "0" * 64}),
+                                          (False, []), (True, {}), (True, {"extra": "../unsafe"})])
+def test_cleanup_rejects_backup_map_inconsistent_with_saved_policy(setup, policy, backups):
+    repo, jobs, storage, artifacts, versions = stable_setup(setup)
+    prepare_cleanup(repo, storage, versions, artifacts, backup_deleted_objects=False)
+    plan = parse_json(artifacts.read("cleanup-plan.json"))
+    plan.update(backup_deleted_objects=policy, backups=backups)
+    artifacts.write("cleanup-plan.json", encoded(plan))
+    with pytest.raises(MaintenanceError, match="backup"):
+        apply_cleanup(repo, jobs, storage, versions, artifacts, "cleanup-plan.json")
+    assert not versions.deleted
+
+
+def test_cleanup_rejects_non_boolean_prepare_backup_policy(setup):
+    repo, _, storage, artifacts, versions = stable_setup(setup)
+    with pytest.raises(MaintenanceError, match="backup policy"):
+        prepare_cleanup(repo, storage, versions, artifacts, backup_deleted_objects="false")
+
+
+def test_cleanup_cli_rejects_apply_backup_override_before_opening_dependencies(tmp_path, monkeypatch):
+    import tools.cleanup_publication_storage as cleanup
+
+    artifacts = tmp_path / "private-cli"
+    monkeypatch.setattr("sys.argv", ["cleanup", "--target-namespace", "application", "--artifacts", str(artifacts),
+                                     "--plan", str(artifacts / "cleanup-plan.json"),
+                                     "--apply", "--no-deleted-object-backup"])
+
+    def forbidden_open(*args):
+        raise AssertionError("invalid flags must fail before opening dependencies")
+
+    monkeypatch.setattr(cleanup, "open_dependencies", forbidden_open)
+    with pytest.raises(SystemExit) as exc:
+        cleanup.main()
+    assert exc.value.code == 1
+
+
+def test_cleanup_cli_prepares_explicit_no_backup_plan_without_obsolete_reads(setup, monkeypatch, capsys):
+    import tools.cleanup_publication_storage as cleanup
+
+    repo, jobs, storage, artifacts, versions = stable_setup(setup)
+    monkeypatch.setattr("sys.argv", ["cleanup", "--target-namespace", "application", "--artifacts", str(artifacts.path),
+                                     "--no-deleted-object-backup"])
+    monkeypatch.setattr(cleanup, "open_dependencies", lambda *args: (SimpleNamespace(close=lambda: None),
+                                                                   repo, jobs, storage))
+    monkeypatch.setattr(cleanup, "VersionInventory", lambda value: versions)
+
+    def forbidden_get(row):
+        raise AssertionError("CLI opt-out must not download obsolete bodies")
+
+    monkeypatch.setattr(versions, "get_version", forbidden_get)
+    cleanup.main()
+    result = json.loads(capsys.readouterr().out)
+    assert result["backup_deleted_objects"] is False and result["backup_objects"] == 0
+    assert parse_json(artifacts.read("cleanup-plan.json"))["backup_deleted_objects"] is False
+
+
 @pytest.mark.parametrize("change", ["index", "inventory", "target", "plan", "backup"])
 def test_cleanup_apply_rejects_stale_or_tampered_plan(setup, change):
     repo, jobs, storage, artifacts, versions = stable_setup(setup)
