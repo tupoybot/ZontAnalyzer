@@ -298,6 +298,7 @@ class PublicationRepository:
         changed = [item for href, item in items.items() if previous.get(href) != item]
         removed = [href for href in previous if href not in items]
         changed_meta = {key: value for key, value in meta.items() if old_meta.get(key) != value}
+        removed_meta = ["publication:" + key for key in old_meta if key not in meta]
 
         def write(tx: Transaction) -> bool:
             rows = tx.execute(
@@ -325,6 +326,12 @@ class PublicationRepository:
                 current = int(rows[0].value) if rows else 0
             if current != expected_checkpoint:
                 return False
+            for offset in range(0, len(removed_meta), SAVE_BATCH_SIZE):
+                tx.execute(
+                    "DECLARE $names AS List<Utf8>; DELETE FROM metadata WHERE name IN $names;",
+                    {"$names": ydb.TypedValue(removed_meta[offset:offset + SAVE_BATCH_SIZE],
+                                               ydb.ListType(ydb.PrimitiveType.Utf8))},
+                )
             for href in removed:
                 tx.execute("DECLARE $href AS Utf8; DELETE FROM publication_items WHERE href=$href;", {"$href": href})
             item_type = (ydb.StructType()

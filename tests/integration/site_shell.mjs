@@ -198,6 +198,35 @@ try {
   assert.equal((await directDownload).suggestedFilename(), "2026-09-26.json");
   await jsonDirect.context.close(); passed++;
 
+  const stableIndex = {version:1, manifest_key:"reports.json", latest_key:"latest.html",
+    reports:[{href:"daily/2026-09-26.html", html_key:"daily/2026-09-26.html", json_key:"daily/2026-09-26.json"}]};
+  const stable = await fixture({index:stableIndex});
+  await stable.login();
+  await stable.page.locator("#report").waitFor();
+  assert.ok(stable.requests.some(request => new URL(request.url).pathname === "/objects/daily/2026-09-26.html"));
+  assert.equal(stable.requests.some(request => new URL(request.url).pathname.startsWith("/api/")), false,
+    "static archive reads do not call application or YDB routes");
+  await stable.context.close(); passed++;
+
+  const stableLatest = await fixture({index:stableIndex});
+  await stableLatest.login("/");
+  await stableLatest.page.locator("#report").waitFor();
+  assert.ok(stableLatest.requests.some(request => new URL(request.url).pathname === "/objects/latest.html"));
+  await stableLatest.context.close(); passed++;
+
+  for (const entry of [
+    {href:"daily/2026-09-26.html", html_key:"daily/2026-09-27.html", json_key:"daily/2026-09-26.json"},
+    {href:"daily/2026-09-26.html", html_key:"../private.html", json_key:"daily/2026-09-26.json"},
+    {href:"daily/2026-09-26.html", html_key:"weekly/2026-09-26.html", json_key:"daily/2026-09-26.json"},
+  ]) {
+    const f = await fixture({index:{...stableIndex, reports:[entry]}});
+    await f.login();
+    await f.page.waitForFunction(() => document.querySelector("#site-status")?.textContent.includes("недоступен"));
+    assert.equal(f.requests.some(request => new URL(request.url).pathname.startsWith("/objects/")), false,
+      "invalid stable keys are rejected before object fetch");
+    await f.context.close(); passed++;
+  }
+
   for (const keyCount of [35, 128]) {
     const f = await fixture({keyCount});
     await f.login();

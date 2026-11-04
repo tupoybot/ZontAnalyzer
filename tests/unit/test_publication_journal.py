@@ -90,6 +90,32 @@ def test_queue_metrics_cas_handles_ambiguous_commit_and_rejects_stale_saves(tmp_
 
 
 @pytest.mark.ydb
+def test_publication_metadata_removal_is_fenced_and_preserves_other_metadata(tmp_path: Path) -> None:
+    db = _database(tmp_path)
+    repo = PublicationRepository(db.storage)
+    lease = db.jobs.acquire("publication", "rollback-owner", 240)
+    assert lease is not None
+    initial = {"checkpoint": "42", "manifest_key": "reports.json", "manifest_etag": "stable-etag",
+               "storage_layout": "period-v1", "retained": "keep"}
+    assert repo.save({}, {}, initial, {}, expected_checkpoint=0, lease_owner=lease.owner,
+                     lease_attempt=lease.attempt)
+    db.storage.execute("UPSERT INTO metadata (name,value) VALUES ('other:setting','unrelated');")
+    old = repo.load_meta()
+    restored = {key: value for key, value in old.items() if key not in {"manifest_etag", "storage_layout"}}
+    restored["manifest_key"] = "publication/manifests/legacy.json"
+    for owner, checkpoint in (("stale-owner", 42), (lease.owner, 99)):
+        assert not repo.save({}, {}, dict(restored), old, expected_checkpoint=checkpoint,
+                             lease_owner=owner, lease_attempt=lease.attempt)
+        assert repo.load_meta() == old
+    assert repo.save({}, {}, restored, old, expected_checkpoint=42,
+                     lease_owner=lease.owner, lease_attempt=lease.attempt)
+    assert repo.load_meta() == restored
+    assert restored["queue_metrics"] == old["queue_metrics"]
+    rows = db.storage.execute("SELECT value FROM metadata WHERE name='other:setting';")[0].rows
+    assert len(rows) == 1 and rows[0].value == "unrelated"
+
+
+@pytest.mark.ydb
 def test_journal_coalesces_keys_and_keeps_monotonic_high_water_mark(tmp_path: Path) -> None:
     db = _database(tmp_path)
     _record_change(db, "render", "report-1")

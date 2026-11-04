@@ -33,15 +33,27 @@
     const redirectUri = location.origin + "/auth/callback";
     const maxAge = 600000;
     const reportPath = /^(?:daily|weekly|monthly|seasonal)\/\d{4}-\d{2}-\d{2}\.(?:html|json)$/;
-    const isKey = (value, kind, extension) => typeof value === "string"
+    const stableKey = /^(?:daily|weekly|monthly|seasonal)\/\d{4}-\d{2}-\d{2}\.(?:html|json)$/;
+    const legacyKey = (value, kind, extension) => typeof value === "string"
       && new RegExp("^publication/" + kind + "/[a-f0-9]{64}\\." + extension + "$").test(value);
+    const isManifestKey = value => value === "reports.json" || legacyKey(value, "manifests", "json");
+    const isLatestKey = value => value === "latest.html" || legacyKey(value, "latest", "html");
+    const isReportKey = (value, href, extension) => value === href.replace(/\.html$/, "." + extension)
+      || legacyKey(value, "reports", extension);
+    const objectUrl = key => {
+      if (key === "latest.html") return "/objects/latest.html";
+      if (stableKey.test(key)) return "/objects/" + key;
+      const match = /^publication\/(reports|manifests|latest)\/([a-f0-9]{64})\.(html|json)$/.exec(key);
+      if (!match) throw Error("Object key");
+      return "/objects/publication/" + key.slice("publication/".length);
+    };
     const normalize = path => path.replace(/^\/za(?=\/|$)/, "") || "/";
     const isReportPath = path => ["/", "/index.html", "/latest.html"].includes(normalize(path))
       || reportPath.test(normalize(path).slice(1));
     const protectedPath = path => {
       const normalized = normalize(path);
       return normalized === "/reports.json" || normalized.startsWith("/api/")
-        || normalized.startsWith("/objects/publication/");
+        || normalized.startsWith("/objects/");
     };
     const bytes = value => Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
     const base64url = value => btoa(String.fromCharCode(...new Uint8Array(value))).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
@@ -186,7 +198,6 @@
       if (response.status === 401 || response.status === 403) { authFailure(); throw Error("Access denied"); }
       return response;
     };
-    const objectUrl = key => "/objects/" + key;
     const json = async url => {
       const response = await fetch(url);
       if (!response.ok) throw Error("Report index");
@@ -219,12 +230,12 @@
     const render = async () => {
       const epoch = generation;
       const index = await json("/reports.json");
-      if (!index || index.version !== 1 || !isKey(index.manifest_key, "manifests", "json")
-          || !(index.latest_key === "" || isKey(index.latest_key, "latest", "html")) || !Array.isArray(index.reports)) throw Error("Index");
+      if (!index || index.version !== 1 || !isManifestKey(index.manifest_key)
+          || !(index.latest_key === "" || isLatestKey(index.latest_key)) || !Array.isArray(index.reports)) throw Error("Index");
       entries = new Map();
       for (const entry of index.reports) {
         if (!entry || typeof entry.href !== "string" || !reportPath.test(entry.href) || !entry.href.endsWith(".html")
-            || !isKey(entry.html_key, "reports", "html") || !isKey(entry.json_key, "reports", "json") || entries.has(entry.href)) throw Error("Index entry");
+            || !isReportKey(entry.html_key, entry.href, "html") || !isReportKey(entry.json_key, entry.href, "json") || entries.has(entry.href)) throw Error("Index entry");
         entries.set(entry.href, entry);
       }
       const path = normalize(location.pathname);

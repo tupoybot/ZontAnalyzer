@@ -98,8 +98,9 @@ resource "yandex_serverless_container" "application" {
   }
 
   log_options {
-    log_group_id = yandex_logging_group.runtime.id
-    min_level    = "INFO"
+    disabled     = !var.cloud_logging_enabled
+    log_group_id = var.cloud_logging_enabled ? yandex_logging_group.runtime.id : null
+    min_level    = var.cloud_logging_enabled ? "INFO" : null
   }
 
   depends_on = [

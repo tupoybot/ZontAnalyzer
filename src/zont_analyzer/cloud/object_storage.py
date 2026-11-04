@@ -134,10 +134,18 @@ class ObjectStorage:
 
     def compare_and_swap(self, key: str, body: bytes, content_type: str, *, expected_etag: str | None) -> bool:
         """Create only if absent, or replace exactly the object read by the caller."""
+        return self.conditional_put(key, body, content_type, expected_etag=expected_etag) is not None
+
+    def conditional_put(self, key: str, body: bytes, content_type: str, *, expected_etag: str | None) -> str | None:
+        """Return the written object's ETag, or None when its precondition failed."""
         if expected_etag is not None and (
             not expected_etag or expected_etag == "*" or expected_etag.startswith("W/")
             or "\r" in expected_etag or "\n" in expected_etag
         ):
             raise ValueError("invalid conditional publication ETag")
-        return self._request("PUT", key, body, content_type,
-                             conditional=True, expected_etag=expected_etag) is not None
+        result = self._request("PUT", key, body, content_type, conditional=True, expected_etag=expected_etag)
+        if result is None:
+            return None
+        if not result.etag:
+            raise StorageError("published object has no ETag")
+        return result.etag

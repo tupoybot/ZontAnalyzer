@@ -48,6 +48,19 @@ variable "publication_bucket_name" {
   sensitive = true
 }
 
+variable "publication_versioning_enabled" {
+  description = "Enable object versioning on the private publication bucket. Set false only for the accepted storage policy."
+  type        = bool
+  default     = true
+}
+
+variable "publication_bucket_max_size_bytes" {
+  description = "Optional publication bucket size limit. Null leaves the provider default and preserves an existing limit."
+  type        = number
+  default     = null
+  nullable    = true
+}
+
 variable "probe_image" {
   type      = string
   sensitive = true
@@ -78,6 +91,12 @@ variable "application_revision" {
 
 variable "application_writes_enabled" {
   description = "Allow API mutations and background jobs; disable during cutover maintenance."
+  type        = bool
+  default     = true
+}
+
+variable "cloud_logging_enabled" {
+  description = "Send probe, application and gateway logs to the configured runtime log group."
   type        = bool
   default     = true
 }

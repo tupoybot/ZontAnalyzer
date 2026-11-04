@@ -23,6 +23,7 @@
 | Переключение production и восстановление | [М8: перенос рабочего приложения](./cloud/cloud_first_m8.md) | Проверки импорта, окно переключения, наблюдение и очистка |
 | Хранение и задания в облаке | [M3: YDB](./cloud/cloud_first_m3.md) или [M4: полный цикл](./cloud/cloud_first_m4.md) | [M2: HTTP-задания](./cloud/cloud_first_m2.md), если меняется запуск; [M1](./cloud/cloud_first_m1.md), если меняется каркас |
 | Публикация и сайт в облаке | [М5: Object Storage и защищённый API](./cloud/cloud_first_m5.md) | Контракты форм и локальной публикации, если меняется их поведение |
+| Файлы отчётов, перенос и очистка Object Storage | [Постоянные пути и восстановление](./reports/object-storage.md) | [М5](./cloud/cloud_first_m5.md), если меняется защищённый сайт |
 | Terraform, мониторинг | [Инфраструктура](../infra/README.md) или [Grafana](../infra/grafana/README.md) | Соответствующий контракт облачного плана |
 | Состояние облачного приложения и расходы | [М6: мониторинг](./cloud/cloud_first_m6.md) | [Настройка Grafana](../infra/grafana/README.md) и проверка доставки оповещений |
 | Дорогие чтения YDB и повторная публикация | [Оптимизация YDB](./development/ydb-cost-optimization.md) | [Инкрементальная публикация](./reports/incremental-publication.md), если меняются зависимости или восстановление |
