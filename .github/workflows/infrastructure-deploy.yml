@@ -2,7 +2,7 @@ name: Deploy isolated cloud infrastructure
 
 on:
   push:
-    branches: ['main', 'stageM[0-9]*/**']
+    branches: ['main', 'feat/issue-[0-9]+', 'codex/issue-[0-9]+']
     paths: ['infra/**', '.github/workflows/infrastructure-deploy.yml']
   workflow_dispatch:
     inputs:
@@ -31,6 +31,7 @@ concurrency:
 
 jobs:
   route:
+    if: github.repository == 'tupoybot/ZontAnalyzer'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -62,15 +63,13 @@ jobs:
         with:
           ref: ${{ needs.route.outputs.head }}
           fetch-depth: 0
-      - name: Verify trusted stage branch
+      - name: Verify candidate branch and revision
         env:
           CANDIDATE_BRANCH: ${{ needs.route.outputs.branch }}
           CANDIDATE_HEAD: ${{ needs.route.outputs.head }}
         run: |
           set -euo pipefail
-          [[ "$CANDIDATE_BRANCH" == main || "$CANDIDATE_BRANCH" =~ ^stageM[0-9]+(-[0-9]+)*/[a-z0-9/-]+$ ]]
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_HEAD"
-          git merge-base --is-ancestor origin/main HEAD
+          node infra/scripts/check_candidate_ref.mjs "$CANDIDATE_BRANCH" "$CANDIDATE_HEAD"
           git fetch origin "$CANDIDATE_BRANCH"
           test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_HEAD"
       - name: Prepare private environment configuration
@@ -157,6 +156,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           APPLICATION_RELEASE_RUN_ID: ${{ needs.route.outputs.release_run_id }}
+          CANDIDATE_BRANCH: ${{ needs.route.outputs.branch }}
         run: |
           set -euo pipefail
           private="$RUNNER_TEMP/m1"
@@ -187,7 +187,16 @@ jobs:
               --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")][0].id')
           fi
           [[ "$run_id" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$private/release-run.json"
           gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name application-provenance --dir "$private/provenance"
+          node --input-type=module - "$private" <<'JS'
+          import {readFileSync} from 'node:fs';
+          import {validateProvenance} from './infra/scripts/select_application_candidate.mjs';
+          const directory = process.argv[2];
+          const read = path => JSON.parse(readFileSync(`${directory}/${path}`, 'utf8'));
+          validateProvenance(read('provenance/application-provenance.json'), read('release-run.json'),
+            process.env.GITHUB_REPOSITORY, process.env.CANDIDATE_BRANCH);
+          JS
           jq -e --arg commit "$commit" --arg image "ghcr.io/${GITHUB_REPOSITORY,,}@$digest" \
             '.commit == $commit and .image == $image and .checks == "passed" and .runtime == "cloud"' \
             "$private/provenance/application-provenance.json" >/dev/null

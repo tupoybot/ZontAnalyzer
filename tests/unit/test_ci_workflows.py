@@ -64,7 +64,12 @@ def test_release_calls_complete_ci_before_publishing() -> None:
     assert verify["if"] == publish["if"]
     assert "always()" not in verify["if"] and "always()" not in publish["if"]
     assert "continue-on-error" not in verify and "continue-on-error" not in publish
-    assert publish["needs"] == "verify"
+    assert verify["needs"] == "gate"
+    assert publish["needs"] == ["gate", "verify"]
+    gate = release["jobs"]["gate"]
+    assert "github.ref_type == 'branch'" in gate["if"]
+    assert "github.repository == 'tupoybot/ZontAnalyzer'" in gate["if"]
+    assert "check_candidate_ref.mjs" in gate["steps"][-1]["run"]
     assert publish["permissions"] == {"contents": "read", "packages": "write"}
     publish_commands = "\n".join(step.get("run", "") for step in publish["steps"])
     assert "deploy/check-local.sh all" not in publish_commands
@@ -103,3 +108,15 @@ def test_workflow_changes_trigger_release_and_infrastructure_checks() -> None:
         assert path in infrastructure_paths
     assert ".github/workflows/infrastructure-deploy.yml" in infrastructure_paths
     assert set(infrastructure["on"]["pull_request"]["paths"]) == infrastructure_paths
+
+
+def test_issue_branch_triggers_and_dispatch_policy() -> None:
+    expected = ["main", "feat/issue-[0-9]+", "codex/issue-[0-9]+"]
+    for name in ("application-release.yml", "infrastructure-check.yml", "infrastructure-deploy.yml"):
+        assert workflow(name)["on"]["push"]["branches"] == expected
+    dispatch = workflow("codex-bug-autofix.yml")
+    assert dispatch["on"]["issues"]["types"] == ["opened", "labeled"]
+    condition = dispatch["jobs"]["dispatch"]["if"]
+    assert "github.event.action == 'opened'" in condition
+    assert "github.event.action == 'labeled'" in condition
+    assert "contains(github.event.issue.labels.*.name, 'bug')" in condition

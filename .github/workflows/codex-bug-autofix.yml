@@ -59,7 +59,7 @@ jobs:
               ? Number(context.payload.inputs.issue_number)
               : context.payload.issue.number;
 
-            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+            if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) {
               core.setFailed('issue_number must be a positive integer.');
               return;
             }
@@ -84,6 +84,11 @@ jobs:
 
             if (currentIssue.pull_request) {
               core.setFailed(`#${issueNumber} is a pull request, not an issue.`);
+              return;
+            }
+
+            if (currentIssue.state !== 'open') {
+              core.setFailed(`#${issueNumber} is closed; only open issues can be dispatched.`);
               return;
             }
 
@@ -121,6 +126,32 @@ jobs:
               });
               core.notice(
                 `Issue #${issueNumber} has ambiguous task type labels: ${matchedKinds.join(', ')}`
+              );
+              return;
+            }
+
+            // Manual work is authoritative when a feat/issue-N branch or an open
+            // same-repository PR already owns this issue. Check before creating
+            // the Codex branch or writing its dispatch snapshot. A fork PR does
+            // not claim the repository's manual branch.
+            const manualBranch = `feat/issue-${issueNumber}`;
+            let manualBranchExists = true;
+            try {
+              await github.rest.git.getRef({ owner, repo, ref: `heads/${manualBranch}` });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              manualBranchExists = false;
+            }
+            const manualPulls = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            const manualPullRequestExists = manualPulls.some((pull) =>
+              pull.head?.ref === manualBranch &&
+              pull.head?.repo?.full_name === `${owner}/${repo}`
+            );
+            if (manualBranchExists || manualPullRequestExists) {
+              core.setFailed(
+                `Issue #${issueNumber} has existing manual work on ${manualBranch}; refusing Codex dispatch.`
               );
               return;
             }

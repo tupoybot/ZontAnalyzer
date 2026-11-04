@@ -2,6 +2,8 @@
 import {execFileSync, spawnSync} from 'node:child_process';
 import {readFileSync, appendFileSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
+import {trustedBranch} from './check_candidate_ref.mjs';
+export {trustedBranch} from './check_candidate_ref.mjs';
 
 const sourcePaths = ['src/', 'Dockerfile', '.dockerignore', 'pyproject.toml', 'README.md'];
 export const releasePaths = [...sourcePaths, 'tests/', 'tools/', 'deploy/check-local.sh',
@@ -9,7 +11,7 @@ export const releasePaths = [...sourcePaths, 'tests/', 'tools/', 'deploy/check-l
   'deploy/smoke-cloud-local.sh', 'deploy/compose.yaml', 'deploy/compose.test.yaml',
   'deploy/compose.local.yaml', 'deploy/env.example', 'deploy/nginx-zont-analyzer.conf',
   'deploy/nginx-zont-analyzer-root.conf', '.github/workflows/ci.yml',
-  '.github/workflows/application-release.yml'];
+  '.github/workflows/application-release.yml', 'infra/scripts/check_candidate_ref.mjs'];
 
 function exactMatch(pattern, value) {
   return typeof value === 'string' && value.match(pattern)?.[0] === value;
@@ -25,10 +27,6 @@ function matchesPath(path, pattern) {
 
 export function isReleasePath(path) {
   return releasePaths.some(pattern => matchesPath(path, pattern));
-}
-
-export function trustedBranch(branch) {
-  return branch === 'main' || exactMatch(/^stageM[0-9]+(-[0-9]+)*\/[a-z0-9/-]+$/, branch);
 }
 
 export function trustedReleaseEnvelope(run, repository) {
@@ -93,6 +91,9 @@ function main() {
   const eventName = process.env.GITHUB_EVENT_NAME;
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
   const repository = process.env.GITHUB_REPOSITORY;
+  if (eventName !== 'workflow_run' && process.env.GITHUB_REF_TYPE !== 'branch') {
+    return console.log('Skipping a non-branch event.');
+  }
   if (eventName === 'workflow_run' && !trustedReleaseEnvelope(event.workflow_run, repository)) {
     return console.log('Skipping untrusted or unsuccessful application release.');
   }
