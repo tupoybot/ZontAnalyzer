@@ -2,8 +2,8 @@ name: Verified cloud application candidate
 
 on:
   push:
-    branches: ['main', 'stageM[0-9]*/**']
-    paths: ['src/**', 'tests/**', 'tools/**', 'Dockerfile', '.dockerignore', 'pyproject.toml', 'README.md', 'deploy/check-local.sh', 'deploy/check-ydb.sh', 'deploy/check-tests.sh', 'deploy/assert-ydb-memory.sh', 'deploy/smoke-cloud-local.sh', 'deploy/compose.yaml', 'deploy/compose.test.yaml', 'deploy/compose.local.yaml', 'deploy/env.example', 'deploy/nginx-zont-analyzer.conf', 'deploy/nginx-zont-analyzer-root.conf', '.github/workflows/ci.yml', '.github/workflows/application-release.yml']
+    branches: ['main', 'feat/issue-[0-9]+', 'codex/issue-[0-9]+']
+    paths: ['src/**', 'tests/**', 'tools/**', 'Dockerfile', '.dockerignore', 'pyproject.toml', 'README.md', 'deploy/check-local.sh', 'deploy/check-ydb.sh', 'deploy/check-tests.sh', 'deploy/assert-ydb-memory.sh', 'deploy/smoke-cloud-local.sh', 'deploy/compose.yaml', 'deploy/compose.test.yaml', 'deploy/compose.local.yaml', 'deploy/env.example', 'deploy/nginx-zont-analyzer.conf', 'deploy/nginx-zont-analyzer-root.conf', '.github/workflows/ci.yml', '.github/workflows/application-release.yml', 'infra/scripts/check_candidate_ref.mjs']
   workflow_dispatch:
 
 permissions:
@@ -14,16 +14,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  gate:
+    if: github.repository == 'tupoybot/ZontAnalyzer' && github.ref_type == 'branch' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Verify exact candidate branch, revision and accepted base
+        run: node infra/scripts/check_candidate_ref.mjs "$GITHUB_REF_NAME" "$GITHUB_SHA"
   verify:
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/stageM'))
+    needs: gate
+    if: github.repository == 'tupoybot/ZontAnalyzer'
     permissions:
       contents: read
     uses: ./.github/workflows/ci.yml
     with:
       build_release_candidate: true
   release:
-    needs: verify
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/stageM'))
+    needs: [gate, verify]
+    if: github.repository == 'tupoybot/ZontAnalyzer'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -37,8 +48,7 @@ jobs:
       - name: Verify candidate branch and accepted base
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF_NAME" == main || "$GITHUB_REF_NAME" =~ ^stageM[0-9]+(-[0-9]+)*/[a-z0-9/-]+$ ]]
-          git merge-base --is-ancestor origin/main HEAD
+          node infra/scripts/check_candidate_ref.mjs "$GITHUB_REF_NAME" "$GITHUB_SHA"
       - name: Find an existing immutable tag
         id: existing
         env:

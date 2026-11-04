@@ -3,24 +3,21 @@ import {execFileSync, spawnSync} from 'node:child_process';
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {trustedReleaseEnvelope} from './deployment_trigger.mjs';
 
 class CandidateSelectionError extends Error {}
 
 export function selectCandidate(runs, branch, repository, isCompatible) {
   const selected = runs.find(run =>
-    run.status === 'completed' && run.conclusion === 'success' &&
-    ['push', 'workflow_dispatch'].includes(run.event) &&
-    run.head_branch === branch && run.head_repository?.full_name === repository &&
-    run.path === '.github/workflows/application-release.yml' &&
-    typeof run.head_sha === 'string' && run.head_sha.length === 40 &&
-    /^[0-9a-f]{40}$/.test(run.head_sha) && isCompatible(run.head_sha));
+    trustedReleaseEnvelope(run, repository) && run.head_branch === branch && isCompatible(run.head_sha));
   if (!selected) throw new CandidateSelectionError('No successful compatible application release on this branch; release the candidate first.');
   return selected;
 }
 
 export function validateProvenance(provenance, run, repository, branch) {
   const prefix = `ghcr.io/${repository.toLowerCase()}@sha256:`;
-  if (provenance.commit !== run.head_sha || provenance.source_ref !== branch ||
+  if (!trustedReleaseEnvelope(run, repository) || run.head_branch !== branch ||
+      provenance.commit !== run.head_sha || provenance.source_ref !== branch ||
       provenance.checks !== 'passed' || provenance.runtime !== 'cloud' ||
       provenance.workflow_run !== `https://github.com/${repository}/actions/runs/${run.id}` ||
       typeof provenance.image !== 'string' || provenance.image.length !== prefix.length + 64 ||

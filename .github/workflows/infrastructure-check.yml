@@ -2,10 +2,10 @@ name: Infrastructure checks
 
 on:
   push:
-    branches: ['main', 'stageM[0-9]*/**']
-    paths: ['infra/**', '.github/workflows/infrastructure-check.yml', '.github/workflows/infrastructure-deploy.yml', '.github/workflows/application-release.yml', '.github/workflows/ci.yml', 'deploy/check-local.sh', 'deploy/check-ydb.sh', 'deploy/check-tests.sh', 'deploy/assert-ydb-memory.sh', 'deploy/smoke-cloud-local.sh']
+    branches: ['main', 'feat/issue-[0-9]+', 'codex/issue-[0-9]+']
+    paths: ['infra/**', '.github/workflows/infrastructure-check.yml', '.github/workflows/codex-bug-autofix.yml', '.github/workflows/infrastructure-deploy.yml', '.github/workflows/application-release.yml', '.github/workflows/ci.yml', 'deploy/check-local.sh', 'deploy/check-ydb.sh', 'deploy/check-tests.sh', 'deploy/assert-ydb-memory.sh', 'deploy/smoke-cloud-local.sh']
   pull_request:
-    paths: ['infra/**', '.github/workflows/infrastructure-check.yml', '.github/workflows/infrastructure-deploy.yml', '.github/workflows/application-release.yml', '.github/workflows/ci.yml', 'deploy/check-local.sh', 'deploy/check-ydb.sh', 'deploy/check-tests.sh', 'deploy/assert-ydb-memory.sh', 'deploy/smoke-cloud-local.sh']
+    paths: ['infra/**', '.github/workflows/infrastructure-check.yml', '.github/workflows/codex-bug-autofix.yml', '.github/workflows/infrastructure-deploy.yml', '.github/workflows/application-release.yml', '.github/workflows/ci.yml', 'deploy/check-local.sh', 'deploy/check-ydb.sh', 'deploy/check-tests.sh', 'deploy/assert-ydb-memory.sh', 'deploy/smoke-cloud-local.sh']
   workflow_dispatch:
 
 concurrency:
@@ -45,7 +45,7 @@ jobs:
           --mount type=bind,src=${{ github.workspace }},dst=/repo,readonly
           --workdir /repo m1-tools sh -c 'ruff check --no-cache infra/scripts && cd infra/scripts && python -m unittest -v'
       - name: Check deployment routing and verified candidate selection
-        run: node --test infra/scripts/test_deployment_trigger.mjs infra/scripts/test_select_application_candidate.mjs
+        run: node --test infra/scripts/test_deployment_trigger.mjs infra/scripts/test_select_application_candidate.mjs infra/scripts/test_candidate_ref.mjs infra/scripts/test_issue_dispatch.mjs
       - name: Check monitoring queries and recovery across container restarts
         run: |
           mkdir -p "$RUNNER_TEMP/m6-promql"

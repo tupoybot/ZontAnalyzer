@@ -8,8 +8,8 @@ import {fileURLToPath} from 'node:url';
 
 import {isReleasePath, pushBase, releasePaths, routeTrigger, trustedBranch} from './deployment_trigger.mjs';
 
-test('numbered submilestones use the existing trusted deployment route', () => {
-  assert.equal(trustedBranch('stageM8-3/ydb-cost-optimization'), true);
+test('legacy stage branches no longer grant release trust', () => {
+  assert.equal(trustedBranch('stageM8-3/ydb-cost-optimization'), false);
   assert.equal(trustedBranch('stageM8--3/ydb-cost-optimization'), false);
   assert.equal(trustedBranch('stageM8-3evil/ydb-cost-optimization'), false);
   assert.equal(trustedBranch('stageM8-3/ydb-cost-optimization\n'), false);
