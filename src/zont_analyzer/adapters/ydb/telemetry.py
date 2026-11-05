@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 import ydb  # type: ignore[import-untyped]
 
+from zont_analyzer.adapters.zont_readonly.configuration import configuration_snapshot
 from zont_analyzer.domain import SourceEvent, TelemetryPoint
 
 from .database import Transaction, YdbDatabase
@@ -119,12 +120,11 @@ class TelemetryRepository:
             if not device_id:
                 raise ValueError("device identity is required")
             payload = encode(device)
-            digest = hashlib.sha256(payload.encode()).hexdigest()
             captured_at = int(datetime.now(UTC).timestamp() * 1_000_000)
 
             def write(
                 tx: Transaction, device_id: str = device_id, payload: str = payload,
-                digest: str = digest, captured_at: int = captured_at,
+                captured_at: int = captured_at,
             ) -> None:
                 previous = tx.execute(
                     "DECLARE $id AS Utf8; SELECT payload FROM devices WHERE id=$id;", {"$id": device_id},
@@ -143,20 +143,21 @@ class TelemetryRepository:
                     "UPSERT INTO devices (id,payload) VALUES ($id,$payload);",
                     {"$id": device_id, "$payload": payload},
                 )
-                rows = tx.execute(
-                    "DECLARE $id AS Utf8; DECLARE $hash AS Utf8; "
-                    "SELECT id FROM config_snapshots WHERE device_id=$id AND content_hash=$hash;",
-                    {"$id": device_id, "$hash": digest},
-                )[0].rows
-                if not rows:
+                configuration = configuration_snapshot(current)
+                if prior is None or configuration_snapshot(prior) != configuration:
                     snapshot_id = next_id(tx, "config_snapshots")
+                    snapshot = encode(configuration)
+                    # The event identity preserves A -> B -> A, including two
+                    # discoveries in the same clock tick. Transaction retries
+                    # cannot commit a duplicate event or lose its catalogue write.
+                    digest = f"v2:{snapshot_id:020d}:" + hashlib.sha256(snapshot.encode()).hexdigest()
                     tx.execute(
                         "DECLARE $id AS Utf8; DECLARE $hash AS Utf8; DECLARE $n AS Int64; "
                         "DECLARE $payload AS Utf8; DECLARE $at AS Int64; "
                         "UPSERT INTO config_snapshots (device_id,content_hash,id,payload,captured_at) "
                         "VALUES ($id,$hash,$n,$payload,$at);",
                         {"$id": device_id, "$hash": digest, "$n": snapshot_id,
-                         "$payload": payload, "$at": captured_at},
+                         "$payload": snapshot, "$at": captured_at},
                     )
                 bump_revision(tx, "device:" + device_id)
 
@@ -166,6 +167,23 @@ class TelemetryRepository:
 
     def list_devices(self) -> list[dict[str, Any]]:
         return [json.loads(row.payload) for row in self.db.execute("SELECT payload FROM devices ORDER BY id;")[0].rows]
+
+    def configuration_history(self, device_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Latest observed settings, including legacy full-response snapshots.
+
+        Observation times do not establish exact effective times at the device.
+        Old rows are projected on read; their stored bytes are never rewritten.
+        """
+        if not 1 <= limit <= 1000:
+            raise ValueError("configuration history limit must be between 1 and 1000")
+        rows = self.db.execute(
+            "DECLARE $id AS Utf8; DECLARE $limit AS Uint64; "
+            "SELECT id,payload,captured_at FROM config_snapshots WHERE device_id=$id "
+            "ORDER BY captured_at DESC,id DESC LIMIT $limit;",
+            {"$id": device_id, "$limit": ydb.TypedValue(limit, ydb.PrimitiveType.Uint64)},
+        )[0].rows
+        return [{"id": row.id, "captured_at": row.captured_at,
+                 "configuration": configuration_snapshot(json.loads(row.payload))} for row in rows]
 
     def upsert_entity(
         self, *, entity_id: str, device_id: str, source_type: str, external_id: str,

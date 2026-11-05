@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -154,3 +155,91 @@ def test_rebind_chart_cache_handles_missing_or_corrupt_cache(tmp_path, cache_sta
         db.set_app_meta(key, "not json")
 
     assert chart_data.rebind_chart_cache(db, original, refreshed) is False
+
+
+@pytest.mark.ydb
+def test_rebind_legacy_chart_packet_after_saved_gas_refresh(tmp_path, monkeypatch) -> None:
+    db = make_database(tmp_path)
+    original = _report()
+    db.save_report(original, original.summary)
+    key, digest = chart_data._cache_key(original)
+    legacy_key = f"chart-data:v2:{key.rsplit(':', 1)[1]}:{digest}"
+    packet = {"timezone": "UTC", "series": {"retained": {"points": [1, 2]}}}
+    db.set_app_meta(legacy_key, json.dumps({
+        "schema_version": chart_data.CHART_DATA_SCHEMA_VERSION,
+        "report_digest": digest, "data": packet,
+    }))
+
+    def no_build(*_args):
+        raise AssertionError("gas refresh must not read telemetry")
+
+    monkeypatch.setattr(chart_data, "build_chart_data", no_build)
+    refreshed = original.model_copy(update={"context": {"gas": {"revision": 1}}})
+    db.save_report(refreshed, refreshed.summary)
+    assert chart_data.rebind_chart_cache(db, original, refreshed)
+    assert chart_data.cached_chart_data(db, refreshed) == packet
+
+    newer = refreshed.model_copy(update={"context": {"gas": {"revision": 2}}})
+    db.save_report(newer, newer.summary)
+    assert chart_data.rebind_chart_cache(db, refreshed, newer)
+    encoded = db.get_app_meta(key)
+    assert chart_data.rebind_chart_cache(db, original, refreshed) is False
+    assert db.get_app_meta(key) == encoded
+
+
+@pytest.mark.ydb
+@pytest.mark.parametrize("source", ["v3", "legacy"])
+def test_overlapping_saved_gas_refreshes_carry_packet_atomically(tmp_path, monkeypatch, source) -> None:
+    db = make_database(tmp_path)
+    original = _report()
+    db.save_report(original, original.summary)
+    packet = {"timezone": "UTC", "series": {"retained": {"points": [1, 2]}}}
+    key, digest = chart_data._cache_key(original)
+    source_key = key if source == "v3" else chart_data._legacy_cache_key(original)
+    source_payload = json.dumps({
+        "schema_version": chart_data.CHART_DATA_SCHEMA_VERSION,
+        "report_digest": digest, "data": packet,
+    })
+    db.set_app_meta(source_key, source_payload)
+
+    def no_build(*_args):
+        raise AssertionError("overlapping gas refreshes must retain the original telemetry packet")
+
+    monkeypatch.setattr(chart_data, "build_chart_data", no_build)
+    middle = original.model_copy(update={"context": {"gas": {"revision": 1}}})
+    latest = original.model_copy(update={"context": {"gas": {"revision": 2}}})
+    assert db.reports.replace_context(original, middle, "gas-test:original", "original")
+    assert db.reports.replace_context(middle, latest, "gas-test:middle", "middle")
+    # Both canonical commits finish before either worker's post-save callback.
+    assert chart_data.rebind_chart_cache(db, middle, latest)
+    encoded = db.get_app_meta(key)
+    assert not chart_data.rebind_chart_cache(db, original, middle)
+    assert db.get_app_meta(key) == encoded
+    assert chart_data.cached_chart_data(db, latest) == packet
+    assert db.report(original.id) == latest
+    rows = db.storage.execute("SELECT key FROM app_meta WHERE key LIKE 'chart-data:%';")[0].rows
+    assert len(rows) == (1 if source == "v3" else 2)
+    if source == "legacy":
+        assert db.get_app_meta(source_key) == source_payload
+
+    def no_write(*_args):
+        raise AssertionError("an already carried packet needs no post-save write")
+
+    monkeypatch.setattr(db, "set_report_chart_cache", no_write)
+    assert chart_data.rebind_chart_cache(db, middle, latest)
+
+
+@pytest.mark.ydb
+def test_saved_non_gas_context_change_does_not_carry_chart_packet(tmp_path, monkeypatch) -> None:
+    db = make_database(tmp_path)
+    original = _report()
+    db.save_report(original, original.summary)
+    packet = {"timezone": "UTC", "series": {}}
+    monkeypatch.setattr(chart_data, "build_chart_data", lambda *_args: packet)
+    assert chart_data.cached_chart_data(db, original) == packet
+    key, _digest = chart_data._cache_key(original)
+    original_encoded = db.get_app_meta(key)
+    changed = original.model_copy(update={"context": {"temporal_evidence": {"revision": 2}}})
+    assert db.reports.replace_context(original, changed, "non-gas-test", "original")
+    assert db.get_app_meta(key) == original_encoded
+    assert not chart_data.rebind_chart_cache(db, original, changed)

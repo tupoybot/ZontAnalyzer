@@ -400,9 +400,35 @@ class ReportRepository:
                 "$payload": _json(payload), "$revision": int(row["revision"]) + 1,
                 **cache_parameters(refreshed, int(row["revision"]) + 1),
             })
+            self._carry_chart_cache(tx, original, refreshed)
             return True
 
         return self.db.transaction(write)
+
+    @staticmethod
+    def _carry_chart_cache(tx: Transaction, original: Report, refreshed: Report) -> None:
+        # Import at call time: the chart service also uses the application DB.
+        from zont_analyzer.reports.chart_data import (
+            _cache_key,
+            _legacy_cache_key,
+            _rebound_chart_cache_payload,
+            _report_json_without_gas_context,
+        )
+
+        if _report_json_without_gas_context(original) != _report_json_without_gas_context(refreshed):
+            return
+        target = _cache_key(refreshed)[0]
+        for source in (_cache_key(original)[0], _legacy_cache_key(original)):
+            rows = tx.execute("DECLARE $key AS Utf8; SELECT value FROM app_meta WHERE key=$key;",
+                              {"$key": source})[0].rows
+            encoded = _rebound_chart_cache_payload(original, refreshed, _text(rows[0]["value"]) if rows else None)
+            if encoded is not None:
+                tx.execute(
+                    "DECLARE $key AS Utf8; DECLARE $value AS Utf8; "
+                    "UPSERT INTO app_meta (key,value) VALUES ($key,$value);",
+                    {"$key": target, "$value": encoded},
+                )
+                return
 
     def report_for_period(self, start: datetime, end: datetime) -> Report | None:
         """Load only reports matching one period, using keys before payloads."""

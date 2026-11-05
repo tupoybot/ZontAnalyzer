@@ -209,6 +209,35 @@ class Database:
                                     {"$key": key})[0].rows
         return str(rows[0].value) if rows else None
 
+    def set_report_chart_cache(self, report: Report, key: str, value: str) -> bool:
+        """Replace a chart packet only while its report is still canonical.
+
+        Reading the report and writing the bounded cache in one SerializableRW
+        transaction prevents a delayed renderer from replacing a newer packet.
+        Reports rendered before their first save retain the pre-save contract.
+        """
+        expected = json.dumps(report.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+
+        def write(tx: Transaction) -> bool:
+            rows = tx.execute(
+                "DECLARE $id AS Utf8; SELECT payload FROM reports VIEW by_id WHERE id=$id LIMIT 2;",
+                {"$id": report.id},
+            )[0].rows
+            if len(rows) > 1:
+                return False
+            if rows:
+                stored = Report.model_validate(json.loads(rows[0].payload)["report"])
+                if json.dumps(stored.model_dump(mode="json"), sort_keys=True, separators=(",", ":")) != expected:
+                    return False
+            tx.execute(
+                "DECLARE $key AS Utf8; DECLARE $value AS Utf8; "
+                "UPSERT INTO app_meta (key,value) VALUES ($key,$value);",
+                {"$key": key, "$value": value},
+            )
+            return True
+
+        return self.storage.transaction(write)
+
     def get_app_meta_many(self, keys: list[str]) -> dict[str, str]:
         result: dict[str, str] = {}
         keys = list(dict.fromkeys(keys))

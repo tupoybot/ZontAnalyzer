@@ -1,0 +1,2497 @@
+{
+  "schema": 1,
+  "accepted_baseline": "1f56aeb9e9183edc9982a9c4f22213f21f309646",
+  "physical_inventory": {
+    "source": "YDB DescribeTable statistics; asynchronous estimates, not JSONL size",
+    "tables": [
+      {
+        "table": "migration_records",
+        "physical_rows": 0,
+        "physical_bytes": 0
+      },
+      {
+        "table": "app_meta",
+        "physical_rows": 9460,
+        "physical_bytes": 153733255
+      },
+      {
+        "table": "ai_budget_months",
+        "physical_rows": 5,
+        "physical_bytes": 371
+      },
+      {
+        "table": "data_gaps",
+        "physical_rows": 0,
+        "physical_bytes": 0
+      },
+      {
+        "table": "analysis_periods",
+        "physical_rows": 173,
+        "physical_bytes": 33882
+      },
+      {
+        "table": "metric_values",
+        "physical_rows": 4032,
+        "physical_bytes": 1589680
+      },
+      {
+        "table": "detected_events",
+        "physical_rows": 6578,
+        "physical_bytes": 4590102
+      },
+      {
+        "table": "interventions",
+        "physical_rows": 33,
+        "physical_bytes": 15119
+      },
+      {
+        "table": "intervention_experiments",
+        "physical_rows": 1,
+        "physical_bytes": 16178
+      },
+      {
+        "table": "metadata",
+        "physical_rows": 74,
+        "physical_bytes": 9816
+      },
+      {
+        "table": "sequences",
+        "physical_rows": 6,
+        "physical_bytes": 353
+      },
+      {
+        "table": "devices",
+        "physical_rows": 3,
+        "physical_bytes": 78183
+      },
+      {
+        "table": "entities",
+        "physical_rows": 27,
+        "physical_bytes": 11873
+      },
+      {
+        "table": "config_snapshots",
+        "physical_rows": 11321,
+        "physical_bytes": 227874054
+      },
+      {
+        "table": "telemetry_series",
+        "physical_rows": 52,
+        "physical_bytes": 29146
+      },
+      {
+        "table": "telemetry_samples",
+        "physical_rows": 2707523,
+        "physical_bytes": 177231235
+      },
+      {
+        "table": "coverage",
+        "physical_rows": 40236,
+        "physical_bytes": 6079201
+      },
+      {
+        "table": "ingestion_cursors",
+        "physical_rows": 170,
+        "physical_bytes": 13626
+      },
+      {
+        "table": "source_events",
+        "physical_rows": 1979,
+        "physical_bytes": 845291
+      },
+      {
+        "table": "revisions",
+        "physical_rows": 9,
+        "physical_bytes": 516
+      },
+      {
+        "table": "reports",
+        "physical_rows": 455,
+        "physical_bytes": 69380442
+      },
+      {
+        "table": "jobs",
+        "physical_rows": 118,
+        "physical_bytes": 29676
+      },
+      {
+        "table": "llm_calls",
+        "physical_rows": 124,
+        "physical_bytes": 751042
+      },
+      {
+        "table": "publication_changes",
+        "physical_rows": 2704,
+        "physical_bytes": 500239
+      },
+      {
+        "table": "publication_items",
+        "physical_rows": 555,
+        "physical_bytes": 476407
+      },
+      {
+        "table": "owner_profile_revisions",
+        "physical_rows": 13,
+        "physical_bytes": 5113
+      },
+      {
+        "table": "gas_readings",
+        "physical_rows": 16,
+        "physical_bytes": 4916
+      },
+      {
+        "table": "gas_reading_audit",
+        "physical_rows": 18,
+        "physical_bytes": 12892
+      },
+      {
+        "table": "gas_tariffs",
+        "physical_rows": 1,
+        "physical_bytes": 444
+      },
+      {
+        "table": "gas_tariff_audit",
+        "physical_rows": 1,
+        "physical_bytes": 377
+      },
+      {
+        "table": "ai_settings_revisions",
+        "physical_rows": 8,
+        "physical_bytes": 2078
+      },
+      {
+        "table": "model_review_proposals",
+        "physical_rows": 2,
+        "physical_bytes": 10909
+      },
+      {
+        "table": "model_review_state",
+        "physical_rows": 2,
+        "physical_bytes": 1166
+      },
+      {
+        "table": "gas_meter_boundaries",
+        "physical_rows": 0,
+        "physical_bytes": 0
+      },
+      {
+        "table": "gas_meter_boundary_audit",
+        "physical_rows": 0,
+        "physical_bytes": 0
+      },
+      {
+        "table": "recommendations",
+        "physical_rows": 211,
+        "physical_bytes": 458937
+      },
+      {
+        "table": "recommendation_audit",
+        "physical_rows": 1,
+        "physical_bytes": 179
+      },
+      {
+        "table": "notification_outbox",
+        "physical_rows": 218,
+        "physical_bytes": 5740837
+      },
+      {
+        "table": "ai_response_cache",
+        "physical_rows": 58,
+        "physical_bytes": 712799
+      },
+      {
+        "table": "model_review_runs",
+        "physical_rows": 8,
+        "physical_bytes": 44805
+      }
+    ],
+    "bytes_total": 650285139
+  },
+  "historical_snapshot_rehearsal": {
+    "source_rows": 11321,
+    "retained_events": 69,
+    "source_payload_bytes": 225529190,
+    "compacted_payload_bytes": 1121235,
+    "production_modified": false,
+    "configuration_timeline_preserved": true
+  },
+  "metadata": {
+    "observed_rows": 8958,
+    "chart_rows": 1782,
+    "chart_payload_bytes": 110456305,
+    "chart_report_count": 212,
+    "gas_revision_rows": 4870,
+    "gas_revision_payload_bytes": 29710463
+  },
+  "snapshot_local_benchmark": [
+    {
+      "configuration_transitions_preserved": true,
+      "discoveries": 48,
+      "issued_upsert_statements_by_table": {
+        "config_snapshots": 48,
+        "devices": 48,
+        "publication_changes": 48,
+        "revisions": 96,
+        "sequences": 48
+      },
+      "latest_catalogue_matches_input": true,
+      "limitations": [
+        "Local YDB native RPC statistics are not managed-service billed request units.",
+        "Physical statistics are asynchronous; unavailable or stale estimates do not become zero.",
+        "Growth explores 4 and 24 discoveries daily (scheduler default: 24), with 2 configuration transitions per season.",
+        "Logical payload projections exclude keys, indexes, replicas and compression.",
+        "Physical linear extrapolation is exploratory and excludes all other application tables.",
+        "Telemetry history is unchanged and may dominate total storage over five to ten seasons.",
+        "Issued statements count client attempts, not committed rows or write RPC billing."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 47491,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 95432,
+        "process_cpu_us": 99829,
+        "queries_with_stats": 528,
+        "queries_with_total_cpu": 528,
+        "query_cpu_components_us": 242752,
+        "query_cpu_us": 242752,
+        "read_bytes": 212616,
+        "read_rows": 235,
+        "result_rows": 188,
+        "rpc_count": 576,
+        "rpc_counts": {
+          "CommitTransaction": 48,
+          "ExecuteQuery": 528
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 576,
+        "server_ru": 698,
+        "update_bytes": null,
+        "update_rows": null,
+        "update_stats_missing_rpc_count": 288,
+        "write_stats_complete": false
+      },
+      "physical_inventory": [
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "app_meta"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "sequences"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "devices"
+        },
+        {
+          "error": "asynchronous_statistics_do_not_match_fixture",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "config_snapshots"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "revisions"
+        }
+      ],
+      "projections": [
+        {
+          "baseline_additional_logical_payload_bytes": 3223995,
+          "baseline_additional_snapshot_rows": 720,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 16119975,
+          "baseline_additional_snapshot_rows": 3600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32239950,
+          "baseline_additional_snapshot_rows": 7200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 6537545,
+          "baseline_additional_snapshot_rows": 1460,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32687727,
+          "baseline_additional_snapshot_rows": 7300,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 65375454,
+          "baseline_additional_snapshot_rows": 14600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 19343970,
+          "baseline_additional_snapshot_rows": 4320,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 96719850,
+          "baseline_additional_snapshot_rows": 21600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 193439700,
+          "baseline_additional_snapshot_rows": 43200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 39225272,
+          "baseline_additional_snapshot_rows": 8760,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 196126362,
+          "baseline_additional_snapshot_rows": 43800,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 392252725,
+          "baseline_additional_snapshot_rows": 87600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        }
+      ],
+      "seconds": 1.453842,
+      "setting_A_B_A": false,
+      "snapshot_logical_payload_bytes": 214933,
+      "snapshot_rows": 48,
+      "transaction_rpc_counts": {
+        "CommitTransaction": 48
+      },
+      "variant": "baseline",
+      "write_query_rpc_count": 288,
+      "write_query_server_ru": 405
+    },
+    {
+      "configuration_transitions_preserved": true,
+      "discoveries": 48,
+      "issued_upsert_statements_by_table": {
+        "config_snapshots": 1,
+        "devices": 48,
+        "publication_changes": 48,
+        "revisions": 96,
+        "sequences": 1
+      },
+      "latest_catalogue_matches_input": true,
+      "limitations": [
+        "Local YDB native RPC statistics are not managed-service billed request units.",
+        "Physical statistics are asynchronous; unavailable or stale estimates do not become zero.",
+        "Growth explores 4 and 24 discoveries daily (scheduler default: 24), with 2 configuration transitions per season.",
+        "Logical payload projections exclude keys, indexes, replicas and compression.",
+        "Physical linear extrapolation is exploratory and excludes all other application tables.",
+        "Telemetry history is unchanged and may dominate total storage over five to ten seasons.",
+        "Issued statements count client attempts, not committed rows or write RPC billing."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 40010,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 9369,
+        "process_cpu_us": 19041,
+        "queries_with_stats": 339,
+        "queries_with_total_cpu": 339,
+        "query_cpu_components_us": 68420,
+        "query_cpu_us": 68420,
+        "read_bytes": 212240,
+        "read_rows": 188,
+        "result_rows": 141,
+        "rpc_count": 387,
+        "rpc_counts": {
+          "CommitTransaction": 48,
+          "ExecuteQuery": 339
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 387,
+        "server_ru": 401,
+        "update_bytes": null,
+        "update_rows": null,
+        "update_stats_missing_rpc_count": 194,
+        "write_stats_complete": false
+      },
+      "physical_inventory": [
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "app_meta"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "sequences"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "devices"
+        },
+        {
+          "error": "asynchronous_statistics_do_not_match_fixture",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "config_snapshots"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "revisions"
+        }
+      ],
+      "projections": [
+        {
+          "baseline_additional_logical_payload_bytes": 3223995,
+          "baseline_additional_snapshot_rows": 720,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 16119975,
+          "baseline_additional_snapshot_rows": 3600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32239950,
+          "baseline_additional_snapshot_rows": 7200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 6537545,
+          "baseline_additional_snapshot_rows": 1460,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32687727,
+          "baseline_additional_snapshot_rows": 7300,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 65375454,
+          "baseline_additional_snapshot_rows": 14600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 19343970,
+          "baseline_additional_snapshot_rows": 4320,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 96719850,
+          "baseline_additional_snapshot_rows": 21600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 193439700,
+          "baseline_additional_snapshot_rows": 43200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 39225272,
+          "baseline_additional_snapshot_rows": 8760,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 196126362,
+          "baseline_additional_snapshot_rows": 43800,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 392252725,
+          "baseline_additional_snapshot_rows": 87600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        }
+      ],
+      "seconds": 0.874489,
+      "setting_A_B_A": false,
+      "snapshot_logical_payload_bytes": 4313,
+      "snapshot_rows": 1,
+      "transaction_rpc_counts": {
+        "CommitTransaction": 48
+      },
+      "variant": "candidate",
+      "write_query_rpc_count": 194,
+      "write_query_server_ru": 206
+    },
+    {
+      "configuration_transitions_preserved": true,
+      "discoveries": 48,
+      "issued_upsert_statements_by_table": {
+        "config_snapshots": 48,
+        "devices": 48,
+        "publication_changes": 48,
+        "revisions": 96,
+        "sequences": 48
+      },
+      "latest_catalogue_matches_input": true,
+      "limitations": [
+        "Local YDB native RPC statistics are not managed-service billed request units.",
+        "Physical statistics are asynchronous; unavailable or stale estimates do not become zero.",
+        "Growth explores 4 and 24 discoveries daily (scheduler default: 24), with 2 configuration transitions per season.",
+        "Logical payload projections exclude keys, indexes, replicas and compression.",
+        "Physical linear extrapolation is exploratory and excludes all other application tables.",
+        "Telemetry history is unchanged and may dominate total storage over five to ten seasons.",
+        "Issued statements count client attempts, not committed rows or write RPC billing."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 50357,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 14504,
+        "process_cpu_us": 28620,
+        "queries_with_stats": 528,
+        "queries_with_total_cpu": 528,
+        "query_cpu_components_us": 93481,
+        "query_cpu_us": 93481,
+        "read_bytes": 212616,
+        "read_rows": 235,
+        "result_rows": 188,
+        "rpc_count": 576,
+        "rpc_counts": {
+          "CommitTransaction": 48,
+          "ExecuteQuery": 528
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 576,
+        "server_ru": 594,
+        "update_bytes": null,
+        "update_rows": null,
+        "update_stats_missing_rpc_count": 288,
+        "write_stats_complete": false
+      },
+      "physical_inventory": [
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "app_meta"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "sequences"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "devices"
+        },
+        {
+          "error": "asynchronous_statistics_do_not_match_fixture",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "config_snapshots"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "revisions"
+        }
+      ],
+      "projections": [
+        {
+          "baseline_additional_logical_payload_bytes": 3223995,
+          "baseline_additional_snapshot_rows": 720,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 16119975,
+          "baseline_additional_snapshot_rows": 3600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32239950,
+          "baseline_additional_snapshot_rows": 7200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 6537545,
+          "baseline_additional_snapshot_rows": 1460,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32687727,
+          "baseline_additional_snapshot_rows": 7300,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 65375454,
+          "baseline_additional_snapshot_rows": 14600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 19343970,
+          "baseline_additional_snapshot_rows": 4320,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 96719850,
+          "baseline_additional_snapshot_rows": 21600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 193439700,
+          "baseline_additional_snapshot_rows": 43200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 39225272,
+          "baseline_additional_snapshot_rows": 8760,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 196126362,
+          "baseline_additional_snapshot_rows": 43800,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 392252725,
+          "baseline_additional_snapshot_rows": 87600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        }
+      ],
+      "seconds": 1.287947,
+      "setting_A_B_A": true,
+      "snapshot_logical_payload_bytes": 214933,
+      "snapshot_rows": 48,
+      "transaction_rpc_counts": {
+        "CommitTransaction": 48
+      },
+      "variant": "baseline",
+      "write_query_rpc_count": 288,
+      "write_query_server_ru": 302
+    },
+    {
+      "configuration_transitions_preserved": true,
+      "discoveries": 48,
+      "issued_upsert_statements_by_table": {
+        "config_snapshots": 3,
+        "devices": 48,
+        "publication_changes": 48,
+        "revisions": 96,
+        "sequences": 3
+      },
+      "latest_catalogue_matches_input": true,
+      "limitations": [
+        "Local YDB native RPC statistics are not managed-service billed request units.",
+        "Physical statistics are asynchronous; unavailable or stale estimates do not become zero.",
+        "Growth explores 4 and 24 discoveries daily (scheduler default: 24), with 2 configuration transitions per season.",
+        "Logical payload projections exclude keys, indexes, replicas and compression.",
+        "Physical linear extrapolation is exploratory and excludes all other application tables.",
+        "Telemetry history is unchanged and may dominate total storage over five to ten seasons.",
+        "Issued statements count client attempts, not committed rows or write RPC billing."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 51599,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 110429,
+        "process_cpu_us": 120754,
+        "queries_with_stats": 345,
+        "queries_with_total_cpu": 345,
+        "query_cpu_components_us": 282782,
+        "query_cpu_us": 282782,
+        "read_bytes": 212256,
+        "read_rows": 190,
+        "result_rows": 143,
+        "rpc_count": 393,
+        "rpc_counts": {
+          "CommitTransaction": 48,
+          "ExecuteQuery": 345
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 393,
+        "server_ru": 546,
+        "update_bytes": null,
+        "update_rows": null,
+        "update_stats_missing_rpc_count": 198,
+        "write_stats_complete": false
+      },
+      "physical_inventory": [
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "app_meta"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "sequences"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "devices"
+        },
+        {
+          "error": "asynchronous_statistics_do_not_match_fixture",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "config_snapshots"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "revisions"
+        }
+      ],
+      "projections": [
+        {
+          "baseline_additional_logical_payload_bytes": 3223995,
+          "baseline_additional_snapshot_rows": 720,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 16119975,
+          "baseline_additional_snapshot_rows": 3600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32239950,
+          "baseline_additional_snapshot_rows": 7200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 6537545,
+          "baseline_additional_snapshot_rows": 1460,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32687727,
+          "baseline_additional_snapshot_rows": 7300,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 65375454,
+          "baseline_additional_snapshot_rows": 14600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 19343970,
+          "baseline_additional_snapshot_rows": 4320,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 96719850,
+          "baseline_additional_snapshot_rows": 21600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 193439700,
+          "baseline_additional_snapshot_rows": 43200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 39225272,
+          "baseline_additional_snapshot_rows": 8760,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 196126362,
+          "baseline_additional_snapshot_rows": 43800,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 392252725,
+          "baseline_additional_snapshot_rows": 87600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        }
+      ],
+      "seconds": 1.120943,
+      "setting_A_B_A": true,
+      "snapshot_logical_payload_bytes": 12939,
+      "snapshot_rows": 3,
+      "transaction_rpc_counts": {
+        "CommitTransaction": 48
+      },
+      "variant": "candidate",
+      "write_query_rpc_count": 198,
+      "write_query_server_ru": 348
+    },
+    {
+      "configuration_transitions_preserved": true,
+      "discoveries": 96,
+      "issued_upsert_statements_by_table": {
+        "config_snapshots": 96,
+        "devices": 96,
+        "publication_changes": 96,
+        "revisions": 192,
+        "sequences": 96
+      },
+      "latest_catalogue_matches_input": true,
+      "limitations": [
+        "Local YDB native RPC statistics are not managed-service billed request units.",
+        "Physical statistics are asynchronous; unavailable or stale estimates do not become zero.",
+        "Growth explores 4 and 24 discoveries daily (scheduler default: 24), with 2 configuration transitions per season.",
+        "Logical payload projections exclude keys, indexes, replicas and compression.",
+        "Physical linear extrapolation is exploratory and excludes all other application tables.",
+        "Telemetry history is unchanged and may dominate total storage over five to ten seasons.",
+        "Issued statements count client attempts, not committed rows or write RPC billing."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 44781,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 28486,
+        "process_cpu_us": 56322,
+        "queries_with_stats": 1056,
+        "queries_with_total_cpu": 1056,
+        "query_cpu_components_us": 129589,
+        "query_cpu_us": 129589,
+        "read_bytes": 429772,
+        "read_rows": 475,
+        "result_rows": 380,
+        "rpc_count": 1152,
+        "rpc_counts": {
+          "CommitTransaction": 96,
+          "ExecuteQuery": 1056
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 1152,
+        "server_ru": 1169,
+        "update_bytes": null,
+        "update_rows": null,
+        "update_stats_missing_rpc_count": 576,
+        "write_stats_complete": false
+      },
+      "physical_inventory": [
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "app_meta"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "sequences"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "devices"
+        },
+        {
+          "error": "asynchronous_statistics_do_not_match_fixture",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "config_snapshots"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "revisions"
+        }
+      ],
+      "projections": [
+        {
+          "baseline_additional_logical_payload_bytes": 3224100,
+          "baseline_additional_snapshot_rows": 720,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 16120500,
+          "baseline_additional_snapshot_rows": 3600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32241000,
+          "baseline_additional_snapshot_rows": 7200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 6537758,
+          "baseline_additional_snapshot_rows": 1460,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32688792,
+          "baseline_additional_snapshot_rows": 7300,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 65377583,
+          "baseline_additional_snapshot_rows": 14600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 19344600,
+          "baseline_additional_snapshot_rows": 4320,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 96723000,
+          "baseline_additional_snapshot_rows": 21600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 193446000,
+          "baseline_additional_snapshot_rows": 43200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 39226550,
+          "baseline_additional_snapshot_rows": 8760,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 196132750,
+          "baseline_additional_snapshot_rows": 43800,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 392265500,
+          "baseline_additional_snapshot_rows": 87600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        }
+      ],
+      "seconds": 2.477081,
+      "setting_A_B_A": false,
+      "snapshot_logical_payload_bytes": 429880,
+      "snapshot_rows": 96,
+      "transaction_rpc_counts": {
+        "CommitTransaction": 96
+      },
+      "variant": "baseline",
+      "write_query_rpc_count": 576,
+      "write_query_server_ru": 590
+    },
+    {
+      "configuration_transitions_preserved": true,
+      "discoveries": 96,
+      "issued_upsert_statements_by_table": {
+        "config_snapshots": 1,
+        "devices": 96,
+        "publication_changes": 96,
+        "revisions": 192,
+        "sequences": 1
+      },
+      "latest_catalogue_matches_input": true,
+      "limitations": [
+        "Local YDB native RPC statistics are not managed-service billed request units.",
+        "Physical statistics are asynchronous; unavailable or stale estimates do not become zero.",
+        "Growth explores 4 and 24 discoveries daily (scheduler default: 24), with 2 configuration transitions per season.",
+        "Logical payload projections exclude keys, indexes, replicas and compression.",
+        "Physical linear extrapolation is exploratory and excludes all other application tables.",
+        "Telemetry history is unchanged and may dominate total storage over five to ten seasons.",
+        "Issued statements count client attempts, not committed rows or write RPC billing."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 38616,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 20152,
+        "process_cpu_us": 39750,
+        "queries_with_stats": 675,
+        "queries_with_total_cpu": 675,
+        "query_cpu_components_us": 98518,
+        "query_cpu_us": 98518,
+        "read_bytes": 429012,
+        "read_rows": 380,
+        "result_rows": 285,
+        "rpc_count": 771,
+        "rpc_counts": {
+          "CommitTransaction": 96,
+          "ExecuteQuery": 675
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 771,
+        "server_ru": 785,
+        "update_bytes": null,
+        "update_rows": null,
+        "update_stats_missing_rpc_count": 386,
+        "write_stats_complete": false
+      },
+      "physical_inventory": [
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "app_meta"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "sequences"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "devices"
+        },
+        {
+          "error": "asynchronous_statistics_do_not_match_fixture",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "config_snapshots"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "revisions"
+        }
+      ],
+      "projections": [
+        {
+          "baseline_additional_logical_payload_bytes": 3224100,
+          "baseline_additional_snapshot_rows": 720,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 16120500,
+          "baseline_additional_snapshot_rows": 3600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32241000,
+          "baseline_additional_snapshot_rows": 7200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 6537758,
+          "baseline_additional_snapshot_rows": 1460,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32688792,
+          "baseline_additional_snapshot_rows": 7300,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 65377583,
+          "baseline_additional_snapshot_rows": 14600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 19344600,
+          "baseline_additional_snapshot_rows": 4320,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 96723000,
+          "baseline_additional_snapshot_rows": 21600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 193446000,
+          "baseline_additional_snapshot_rows": 43200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 39226550,
+          "baseline_additional_snapshot_rows": 8760,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 196132750,
+          "baseline_additional_snapshot_rows": 43800,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 392265500,
+          "baseline_additional_snapshot_rows": 87600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        }
+      ],
+      "seconds": 1.758397,
+      "setting_A_B_A": false,
+      "snapshot_logical_payload_bytes": 4313,
+      "snapshot_rows": 1,
+      "transaction_rpc_counts": {
+        "CommitTransaction": 96
+      },
+      "variant": "candidate",
+      "write_query_rpc_count": 386,
+      "write_query_server_ru": 398
+    },
+    {
+      "configuration_transitions_preserved": true,
+      "discoveries": 96,
+      "issued_upsert_statements_by_table": {
+        "config_snapshots": 96,
+        "devices": 96,
+        "publication_changes": 96,
+        "revisions": 192,
+        "sequences": 96
+      },
+      "latest_catalogue_matches_input": true,
+      "limitations": [
+        "Local YDB native RPC statistics are not managed-service billed request units.",
+        "Physical statistics are asynchronous; unavailable or stale estimates do not become zero.",
+        "Growth explores 4 and 24 discoveries daily (scheduler default: 24), with 2 configuration transitions per season.",
+        "Logical payload projections exclude keys, indexes, replicas and compression.",
+        "Physical linear extrapolation is exploratory and excludes all other application tables.",
+        "Telemetry history is unchanged and may dominate total storage over five to ten seasons.",
+        "Issued statements count client attempts, not committed rows or write RPC billing."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 42835,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 24982,
+        "process_cpu_us": 52282,
+        "queries_with_stats": 1056,
+        "queries_with_total_cpu": 1056,
+        "query_cpu_components_us": 120099,
+        "query_cpu_us": 120099,
+        "read_bytes": 429772,
+        "read_rows": 475,
+        "result_rows": 380,
+        "rpc_count": 1152,
+        "rpc_counts": {
+          "CommitTransaction": 96,
+          "ExecuteQuery": 1056
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 1152,
+        "server_ru": 1167,
+        "update_bytes": null,
+        "update_rows": null,
+        "update_stats_missing_rpc_count": 576,
+        "write_stats_complete": false
+      },
+      "physical_inventory": [
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "app_meta"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "sequences"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "devices"
+        },
+        {
+          "error": "asynchronous_statistics_do_not_match_fixture",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "config_snapshots"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "revisions"
+        }
+      ],
+      "projections": [
+        {
+          "baseline_additional_logical_payload_bytes": 3224100,
+          "baseline_additional_snapshot_rows": 720,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 16120500,
+          "baseline_additional_snapshot_rows": 3600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32241000,
+          "baseline_additional_snapshot_rows": 7200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 6537758,
+          "baseline_additional_snapshot_rows": 1460,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32688792,
+          "baseline_additional_snapshot_rows": 7300,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 65377583,
+          "baseline_additional_snapshot_rows": 14600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 19344600,
+          "baseline_additional_snapshot_rows": 4320,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 96723000,
+          "baseline_additional_snapshot_rows": 21600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 193446000,
+          "baseline_additional_snapshot_rows": 43200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 39226550,
+          "baseline_additional_snapshot_rows": 8760,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 196132750,
+          "baseline_additional_snapshot_rows": 43800,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 392265500,
+          "baseline_additional_snapshot_rows": 87600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        }
+      ],
+      "seconds": 2.3334,
+      "setting_A_B_A": true,
+      "snapshot_logical_payload_bytes": 429880,
+      "snapshot_rows": 96,
+      "transaction_rpc_counts": {
+        "CommitTransaction": 96
+      },
+      "variant": "baseline",
+      "write_query_rpc_count": 576,
+      "write_query_server_ru": 588
+    },
+    {
+      "configuration_transitions_preserved": true,
+      "discoveries": 96,
+      "issued_upsert_statements_by_table": {
+        "config_snapshots": 3,
+        "devices": 96,
+        "publication_changes": 96,
+        "revisions": 192,
+        "sequences": 3
+      },
+      "latest_catalogue_matches_input": true,
+      "limitations": [
+        "Local YDB native RPC statistics are not managed-service billed request units.",
+        "Physical statistics are asynchronous; unavailable or stale estimates do not become zero.",
+        "Growth explores 4 and 24 discoveries daily (scheduler default: 24), with 2 configuration transitions per season.",
+        "Logical payload projections exclude keys, indexes, replicas and compression.",
+        "Physical linear extrapolation is exploratory and excludes all other application tables.",
+        "Telemetry history is unchanged and may dominate total storage over five to ten seasons.",
+        "Issued statements count client attempts, not committed rows or write RPC billing."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 38146,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 19689,
+        "process_cpu_us": 39141,
+        "queries_with_stats": 681,
+        "queries_with_total_cpu": 681,
+        "query_cpu_components_us": 96976,
+        "query_cpu_us": 96976,
+        "read_bytes": 429028,
+        "read_rows": 382,
+        "result_rows": 287,
+        "rpc_count": 777,
+        "rpc_counts": {
+          "CommitTransaction": 96,
+          "ExecuteQuery": 681
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 777,
+        "server_ru": 791,
+        "update_bytes": null,
+        "update_rows": null,
+        "update_stats_missing_rpc_count": 390,
+        "write_stats_complete": false
+      },
+      "physical_inventory": [
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "app_meta"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "sequences"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "devices"
+        },
+        {
+          "error": "asynchronous_statistics_do_not_match_fixture",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "config_snapshots"
+        },
+        {
+          "error": "table_statistics_partially_unavailable",
+          "physical_bytes": 0,
+          "physical_rows": 0,
+          "statistics_timestamp": null,
+          "table": "revisions"
+        }
+      ],
+      "projections": [
+        {
+          "baseline_additional_logical_payload_bytes": 3224100,
+          "baseline_additional_snapshot_rows": 720,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 16120500,
+          "baseline_additional_snapshot_rows": 3600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32241000,
+          "baseline_additional_snapshot_rows": 7200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 6537758,
+          "baseline_additional_snapshot_rows": 1460,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 32688792,
+          "baseline_additional_snapshot_rows": 7300,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 65377583,
+          "baseline_additional_snapshot_rows": 14600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 4,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 19344600,
+          "baseline_additional_snapshot_rows": 4320,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 96723000,
+          "baseline_additional_snapshot_rows": 21600,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 193446000,
+          "baseline_additional_snapshot_rows": 43200,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 180,
+          "initial_seed_excluded": true,
+          "years": 10
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 39226550,
+          "baseline_additional_snapshot_rows": 8760,
+          "candidate_additional_logical_payload_bytes": 8626,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 2,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 1
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 196132750,
+          "baseline_additional_snapshot_rows": 43800,
+          "candidate_additional_logical_payload_bytes": 43130,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 10,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 5
+        },
+        {
+          "baseline_additional_logical_payload_bytes": 392265500,
+          "baseline_additional_snapshot_rows": 87600,
+          "candidate_additional_logical_payload_bytes": 86260,
+          "candidate_additional_physical_bytes_linear_estimate": null,
+          "candidate_additional_snapshot_rows": 20,
+          "configuration_transitions_per_year": 2,
+          "discoveries_per_day": 24,
+          "discovery_days_per_year": 365,
+          "initial_seed_excluded": true,
+          "years": 10
+        }
+      ],
+      "seconds": 1.73315,
+      "setting_A_B_A": true,
+      "snapshot_logical_payload_bytes": 12939,
+      "snapshot_rows": 3,
+      "transaction_rpc_counts": {
+        "CommitTransaction": 96
+      },
+      "variant": "candidate",
+      "write_query_rpc_count": 390,
+      "write_query_server_ru": 402
+    }
+  ],
+  "chart_local_benchmark": [
+    {
+      "cache_after": {
+        "key_utf8_bytes": 6864,
+        "rows": 48,
+        "v2_rows": 48,
+        "v3_rows": 0,
+        "value_utf8_bytes": 463344
+      },
+      "cache_before": {
+        "key_utf8_bytes": 0,
+        "rows": 0,
+        "v2_rows": 0,
+        "v3_rows": 0,
+        "value_utf8_bytes": 0
+      },
+      "cache_reads_per_revision": 2,
+      "canonical_report_unchanged_by_cache": true,
+      "fixture_packet_utf8_bytes": 9542,
+      "limitations": [
+        "Cache costs exclude canonical report saves and verification reads.",
+        "Deterministic synthetic packets replace telemetry reads in both variants.",
+        "Native local consumed units are not managed-service billed request units.",
+        "Logical UTF-8 bytes exclude table storage overhead, indexes, replication and compression.",
+        "Legacy rows remain present; this benchmark performs no historical cleanup."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 7348,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 2209,
+        "process_cpu_us": 5012,
+        "queries_with_stats": 144,
+        "queries_with_total_cpu": 144,
+        "query_cpu_components_us": 14569,
+        "query_cpu_us": 14569,
+        "read_bytes": 463344,
+        "read_rows": 48,
+        "result_rows": 48,
+        "rpc_count": 144,
+        "rpc_counts": {
+          "ExecuteQuery": 144
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 144,
+        "server_ru": 242,
+        "update_bytes": 470208,
+        "update_rows": 48,
+        "update_stats_missing_rpc_count": 0,
+        "write_stats_complete": true
+      },
+      "packet_build_count": 48,
+      "packet_equality_verified": true,
+      "revisions": 48,
+      "scenario": "repeated_report_revisions",
+      "seconds": 0.397793,
+      "variant": "baseline",
+      "write_query_rpc_count": 48,
+      "write_query_server_ru": 49
+    },
+    {
+      "cache_after": {
+        "key_utf8_bytes": 78,
+        "rows": 1,
+        "v2_rows": 0,
+        "v3_rows": 1,
+        "value_utf8_bytes": 9653
+      },
+      "cache_before": {
+        "key_utf8_bytes": 0,
+        "rows": 0,
+        "v2_rows": 0,
+        "v3_rows": 0,
+        "value_utf8_bytes": 0
+      },
+      "cache_reads_per_revision": 2,
+      "canonical_report_unchanged_by_cache": true,
+      "fixture_packet_utf8_bytes": 9542,
+      "limitations": [
+        "Cache costs exclude canonical report saves and verification reads.",
+        "Deterministic synthetic packets replace telemetry reads in both variants.",
+        "Native local consumed units are not managed-service billed request units.",
+        "Logical UTF-8 bytes exclude table storage overhead, indexes, replication and compression.",
+        "Legacy rows remain present; this benchmark performs no historical cleanup."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 14797,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 7890,
+        "process_cpu_us": 9824,
+        "queries_with_stats": 240,
+        "queries_with_total_cpu": 240,
+        "query_cpu_components_us": 32511,
+        "query_cpu_us": 32511,
+        "read_bytes": 946027,
+        "read_rows": 191,
+        "result_rows": 143,
+        "rpc_count": 288,
+        "rpc_counts": {
+          "CommitTransaction": 48,
+          "ExecuteQuery": 240
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 288,
+        "server_ru": 483,
+        "update_bytes": null,
+        "update_rows": null,
+        "update_stats_missing_rpc_count": 48,
+        "write_stats_complete": false
+      },
+      "packet_build_count": 48,
+      "packet_equality_verified": true,
+      "revisions": 48,
+      "scenario": "repeated_report_revisions",
+      "seconds": 0.744128,
+      "variant": "candidate",
+      "write_query_rpc_count": 48,
+      "write_query_server_ru": 49
+    },
+    {
+      "cache_after": {
+        "key_utf8_bytes": 13728,
+        "rows": 96,
+        "v2_rows": 96,
+        "v3_rows": 0,
+        "value_utf8_bytes": 926688
+      },
+      "cache_before": {
+        "key_utf8_bytes": 0,
+        "rows": 0,
+        "v2_rows": 0,
+        "v3_rows": 0,
+        "value_utf8_bytes": 0
+      },
+      "cache_reads_per_revision": 2,
+      "canonical_report_unchanged_by_cache": true,
+      "fixture_packet_utf8_bytes": 9542,
+      "limitations": [
+        "Cache costs exclude canonical report saves and verification reads.",
+        "Deterministic synthetic packets replace telemetry reads in both variants.",
+        "Native local consumed units are not managed-service billed request units.",
+        "Logical UTF-8 bytes exclude table storage overhead, indexes, replication and compression.",
+        "Legacy rows remain present; this benchmark performs no historical cleanup."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 6532,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 3813,
+        "process_cpu_us": 9291,
+        "queries_with_stats": 288,
+        "queries_with_total_cpu": 288,
+        "query_cpu_components_us": 19636,
+        "query_cpu_us": 19636,
+        "read_bytes": 926688,
+        "read_rows": 96,
+        "result_rows": 96,
+        "rpc_count": 288,
+        "rpc_counts": {
+          "ExecuteQuery": 288
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 288,
+        "server_ru": 481,
+        "update_bytes": 940416,
+        "update_rows": 96,
+        "update_stats_missing_rpc_count": 0,
+        "write_stats_complete": true
+      },
+      "packet_build_count": 96,
+      "packet_equality_verified": true,
+      "revisions": 96,
+      "scenario": "repeated_report_revisions",
+      "seconds": 0.688405,
+      "variant": "baseline",
+      "write_query_rpc_count": 96,
+      "write_query_server_ru": 96
+    },
+    {
+      "cache_after": {
+        "key_utf8_bytes": 78,
+        "rows": 1,
+        "v2_rows": 0,
+        "v3_rows": 1,
+        "value_utf8_bytes": 9653
+      },
+      "cache_before": {
+        "key_utf8_bytes": 0,
+        "rows": 0,
+        "v2_rows": 0,
+        "v3_rows": 0,
+        "value_utf8_bytes": 0
+      },
+      "cache_reads_per_revision": 2,
+      "canonical_report_unchanged_by_cache": true,
+      "fixture_packet_utf8_bytes": 9542,
+      "limitations": [
+        "Cache costs exclude canonical report saves and verification reads.",
+        "Deterministic synthetic packets replace telemetry reads in both variants.",
+        "Native local consumed units are not managed-service billed request units.",
+        "Logical UTF-8 bytes exclude table storage overhead, indexes, replication and compression.",
+        "Legacy rows remain present; this benchmark performs no historical cleanup."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 13616,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 13996,
+        "process_cpu_us": 18457,
+        "queries_with_stats": 480,
+        "queries_with_total_cpu": 480,
+        "query_cpu_components_us": 46069,
+        "query_cpu_us": 46069,
+        "read_bytes": 1901707,
+        "read_rows": 383,
+        "result_rows": 287,
+        "rpc_count": 576,
+        "rpc_counts": {
+          "CommitTransaction": 96,
+          "ExecuteQuery": 480
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 576,
+        "server_ru": 961,
+        "update_bytes": null,
+        "update_rows": null,
+        "update_stats_missing_rpc_count": 96,
+        "write_stats_complete": false
+      },
+      "packet_build_count": 96,
+      "packet_equality_verified": true,
+      "revisions": 96,
+      "scenario": "repeated_report_revisions",
+      "seconds": 1.419857,
+      "variant": "candidate",
+      "write_query_rpc_count": 96,
+      "write_query_server_ru": 96
+    },
+    {
+      "cache_after": {
+        "key_utf8_bytes": 221,
+        "rows": 2,
+        "v2_rows": 1,
+        "v3_rows": 1,
+        "value_utf8_bytes": 20037
+      },
+      "cache_before": {
+        "key_utf8_bytes": 143,
+        "rows": 1,
+        "v2_rows": 1,
+        "v3_rows": 0,
+        "value_utf8_bytes": 10384
+      },
+      "cache_reads_per_revision": 2,
+      "canonical_report_unchanged_by_cache": true,
+      "fixture_packet_utf8_bytes": 9542,
+      "limitations": [
+        "Cache costs exclude canonical report saves and verification reads.",
+        "Deterministic synthetic packets replace telemetry reads in both variants.",
+        "Native local consumed units are not managed-service billed request units.",
+        "Logical UTF-8 bytes exclude table storage overhead, indexes, replication and compression.",
+        "Legacy rows remain present; this benchmark performs no historical cleanup."
+      ],
+      "native": {
+        "all_rpc_complete": true,
+        "compile_cpu_us": 11678,
+        "delete_rows": 0,
+        "delete_stats_missing_rpc_count": 0,
+        "failed_rpc_count": 0,
+        "phase_cpu_us": 171,
+        "process_cpu_us": 236,
+        "queries_with_stats": 5,
+        "queries_with_total_cpu": 5,
+        "query_cpu_components_us": 12085,
+        "query_cpu_us": 12085,
+        "read_bytes": 20641,
+        "read_rows": 4,
+        "result_rows": 3,
+        "rpc_count": 6,
+        "rpc_counts": {
+          "CommitTransaction": 1,
+          "ExecuteQuery": 5
+        },
+        "ru_missing_rpc_count": 0,
+        "ru_present_rpc_count": 6,
+        "server_ru": 14,
+        "update_bytes": null,
+        "update_rows": null,
+        "update_stats_missing_rpc_count": 1,
+        "write_stats_complete": false
+      },
+      "packet_build_count": 0,
+      "packet_equality_verified": true,
+      "revisions": 1,
+      "scenario": "legacy_fallback",
+      "seconds": 0.028315,
+      "variant": "candidate",
+      "write_query_rpc_count": 1,
+      "write_query_server_ru": 1
+    }
+  ],
+  "limitations": [
+    "Existing production rows are retained; compaction is rehearsed on a private export.",
+    "Logical payload bytes are distinct from asynchronous physical table sizes.",
+    "Local YDB request units do not establish managed-production savings.",
+    "Raw telemetry, canonical reports, user data, AI answers and gas history are retained."
+  ],
+  "real_data_chart_acceptance": {
+    "canonical_reports": 218,
+    "matching_legacy_packets": 212,
+    "migrated_v3_packets": 212,
+    "missing_matching_packets": 6,
+    "canonical_payloads_unchanged": 218,
+    "representative_html_equal": [
+      "daily",
+      "weekly",
+      "monthly",
+      "seasonal"
+    ],
+    "telemetry_builds": 0,
+    "external_requests": 0,
+    "production_modified": false
+  },
+  "chart_benchmark_candidate": "aedd56bd924cd33e705be4d4a471164c83294d11"
+}
