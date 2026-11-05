@@ -171,6 +171,48 @@ def test_catalogue_ignores_discovery_timestamp_only_changes(ydb_database: YdbDat
 
 
 @pytest.mark.ydb
+def test_runtime_updates_keep_latest_state_without_snapshot_growth(ydb_database: YdbDatabase) -> None:
+    repo = TelemetryRepository(ydb_database)
+    device = {"id": "fixture", "raw": {"online": True, "z3k_config": {"limit": 70},
+                                       "io": {"z3k-state": {"1": {"temperature": 20}}}}}
+    repo.save_devices([device])
+    for temperature in (21, 22, 23):
+        device["raw"]["io"]["z3k-state"]["1"]["temperature"] = temperature
+        repo.save_devices([device])
+    assert repo.list_devices() == [device]
+    history = repo.configuration_history("fixture")
+    assert len(history) == 1
+    assert history[0]["configuration"]["raw"] == {"z3k_config": {"limit": 70}}
+
+
+@pytest.mark.ydb
+def test_configuration_recurrence_and_replay_preserve_history(ydb_database: YdbDatabase) -> None:
+    repo = TelemetryRepository(ydb_database)
+    for limit in (70, 60, 70, 70):
+        repo.save_devices([{"id": "fixture", "raw": {"z3k_config": {"limit": limit}}}])
+    history = repo.configuration_history("fixture")
+    assert [row["configuration"]["raw"]["z3k_config"]["limit"] for row in history] == [70, 60, 70]
+    assert len({row["id"] for row in history}) == 3
+
+
+@pytest.mark.ydb
+def test_legacy_configuration_is_read_without_rewriting(ydb_database: YdbDatabase) -> None:
+    import json
+
+    repo = TelemetryRepository(ydb_database)
+    payload = json.dumps({"id": "fixture", "discovered_at": "legacy", "raw": {
+        "online": True, "z3k_config": {"limit": 70}}})
+    ydb_database.execute(
+        "DECLARE $payload AS Utf8; UPSERT INTO config_snapshots "
+        "(device_id,content_hash,id,payload,captured_at) VALUES ('fixture','legacy',1,$payload,1);",
+        {"$payload": payload},
+    )
+    assert repo.configuration_history("fixture")[0]["configuration"] == {
+        "id": "fixture", "raw": {"z3k_config": {"limit": 70}}}
+    assert ydb_database.execute("SELECT payload FROM config_snapshots;")[0].rows[0].payload == payload
+
+
+@pytest.mark.ydb
 def test_late_event_revision_and_archive_survive_source_horizon(ydb_database: YdbDatabase) -> None:
     repo = TelemetryRepository(ydb_database)
     event = SourceEvent(id="source-event", device_id="fixture", event_type="restart", timestamp_utc=START)

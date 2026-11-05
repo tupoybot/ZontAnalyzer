@@ -79,27 +79,12 @@ def cached_chart_data(db: Database, report: Report) -> dict[str, Any] | None:
     after that report is recomputed; a retained archive keeps the observations
     it was first published with until then.
     """
-    key, digest = _cache_key(report)
-    try:
-        encoded = db.get_app_meta(key)
-        if encoded:
-            cached = json.loads(encoded)
-            if (
-                isinstance(cached, Mapping)
-                and cached.get("schema_version") == CHART_DATA_SCHEMA_VERSION
-                and cached.get("report_digest") == digest
-                and isinstance(cached.get("data"), Mapping)
-            ):
-                return dict(cached["data"])
-    except (OSError, ValueError, TypeError):
-        pass
+    data = _load_chart_cache(db, report)
+    if data is not None:
+        return data
     data = build_chart_data(db, report)
     if data is not None:
-        db.set_app_meta(key, json.dumps({
-                "schema_version": CHART_DATA_SCHEMA_VERSION,
-                "report_digest": digest,
-                "data": data,
-            }, ensure_ascii=False, separators=(",", ":")))
+        _store_chart_cache(db, report, data)
     return data
 
 
@@ -108,31 +93,75 @@ def rebind_chart_cache(db: Database, original: Report, refreshed: Report) -> boo
 
     A refresh may change the gas interpretation while leaving the observed
     telemetry evidence untouched.  In that case the packet is still valid,
-    so copy its validated cache entry to the refreshed report digest without
+    so replace its validated cache entry with the refreshed report digest without
     consulting the telemetry database.
     """
     if _report_json_without_gas_context(original) != _report_json_without_gas_context(refreshed):
         return False
 
     try:
-        source_key, original_digest = _cache_key(original)
-        target_key, refreshed_digest = _cache_key(refreshed)
-        cached = json.loads(db.get_app_meta(source_key) or "null")
-        if not (
-            isinstance(cached, Mapping)
-            and cached.get("schema_version") == CHART_DATA_SCHEMA_VERSION
-            and cached.get("report_digest") == original_digest
-            and isinstance(cached.get("data"), Mapping)
-        ):
+        target_key, target_digest = _cache_key(refreshed)
+        if _decode_chart_cache(db.get_app_meta(target_key), target_digest) is not None:
+            # Saved context refreshes carry the packet in their transaction.
+            return True
+        data = _load_chart_cache(db, original)
+        if data is None:
             return False
-        db.set_app_meta(target_key, json.dumps({
-            "schema_version": CHART_DATA_SCHEMA_VERSION,
-            "report_digest": refreshed_digest,
-            "data": dict(cached["data"]),
-        }, ensure_ascii=False, separators=(",", ":")))
-        return True
+        return _store_chart_cache(db, refreshed, data)
     except (OSError, ValueError, TypeError):
         return False
+
+
+def _load_chart_cache(db: Database, report: Report) -> dict[str, Any] | None:
+    key, digest = _cache_key(report)
+    # Legacy entries remain readable until an explicitly reviewed cleanup. A
+    # cache migration must never rebuild retained observations from telemetry.
+    for candidate in (key, _legacy_cache_key(report)):
+        try:
+            data = _decode_chart_cache(db.get_app_meta(candidate), digest)
+            if data is not None:
+                if candidate != key:
+                    _store_chart_cache(db, report, data)
+                return data
+        except (OSError, ValueError, TypeError):
+            continue
+    return None
+
+
+def _store_chart_cache(db: Database, report: Report, data: dict[str, Any]) -> bool:
+    key, digest = _cache_key(report)
+    return db.set_report_chart_cache(report, key, _encode_chart_cache(digest, data))
+
+
+def _decode_chart_cache(encoded: str | None, digest: str) -> dict[str, Any] | None:
+    try:
+        cached = json.loads(encoded or "null")
+        if (
+            isinstance(cached, Mapping)
+            and cached.get("schema_version") == CHART_DATA_SCHEMA_VERSION
+            and cached.get("report_digest") == digest
+            and isinstance(cached.get("data"), Mapping)
+        ):
+            return dict(cached["data"])
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _encode_chart_cache(digest: str, data: dict[str, Any]) -> str:
+    return json.dumps({
+        "schema_version": CHART_DATA_SCHEMA_VERSION,
+        "report_digest": digest,
+        "data": data,
+    }, ensure_ascii=False, separators=(",", ":"))
+
+
+def _rebound_chart_cache_payload(original: Report, refreshed: Report, encoded: str | None) -> str | None:
+    """Pure validation/encoding shared by transactional and pre-save refreshes."""
+    if _report_json_without_gas_context(original) != _report_json_without_gas_context(refreshed):
+        return None
+    data = _decode_chart_cache(encoded, _cache_key(original)[1])
+    return _encode_chart_cache(_cache_key(refreshed)[1], data) if data is not None else None
 
 
 def _report_json_without_gas_context(report: Report) -> str:
@@ -151,7 +180,12 @@ def _canonical_report_json(report: Report) -> str:
 def _cache_key(report: Report) -> tuple[str, str]:
     digest = sha256(_canonical_report_json(report).encode("utf-8")).hexdigest()
     report_key = sha256(report.id.encode("utf-8")).hexdigest()
-    return f"chart-data:v2:{report_key}:{digest}", digest
+    return f"chart-data:v3:{report_key}", digest
+
+
+def _legacy_cache_key(report: Report) -> str:
+    key, digest = _cache_key(report)
+    return f"chart-data:v2:{key.rsplit(':', 1)[1]}:{digest}"
 
 
 def _selected_rows(report: Report, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

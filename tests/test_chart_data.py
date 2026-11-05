@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -8,7 +9,9 @@ from tests.ydb_support import make_database, make_runtime, seed_samples
 from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.application import publication
 from zont_analyzer.domain import QualityResult, Report, TelemetryPoint
+from zont_analyzer.reports import chart_data
 from zont_analyzer.reports.chart_data import (
+    CHART_DATA_SCHEMA_VERSION,
     MAX_POINTS_PER_SERIES,
     _cache_key,
     _point_dicts,
@@ -190,6 +193,60 @@ def test_chart_data_cache_reuses_canonical_report_and_invalidates_on_change(
     assert cached_chart_data(db, report.model_copy(update={"summary": "Пересчитанный отчёт"})) is not None
     assert len(calls) == 2
     assert db.get_app_meta(_cache_key(report)[0])
+
+
+@pytest.mark.ydb
+def test_chart_cache_has_one_row_across_repeated_report_revisions(tmp_path, monkeypatch) -> None:
+    db = make_database(tmp_path)
+    monkeypatch.setattr(chart_data, "build_chart_data", lambda _db, report: {"summary": report.summary})
+    report = _report({})
+    for revision in range(20):
+        report = report.model_copy(update={"summary": f"revision {revision}"})
+        db.save_report(report, report.summary)
+        assert cached_chart_data(db, report) == {"summary": report.summary}
+    rows = db.storage.execute("SELECT key FROM app_meta WHERE key LIKE 'chart-data:%';")[0].rows
+    assert [row.key for row in rows] == [_cache_key(report)[0]]
+
+
+@pytest.mark.ydb
+def test_chart_cache_legacy_packet_is_reused_without_reading_telemetry(tmp_path, monkeypatch) -> None:
+    db = make_database(tmp_path)
+    report = _report({})
+    db.save_report(report, report.summary)
+    key, digest = _cache_key(report)
+    legacy_key = f"chart-data:v2:{key.rsplit(':', 1)[1]}:{digest}"
+    packet = {"timezone": "UTC", "series": {"retained": {"points": [1, 2]}}}
+    encoded = json.dumps({"schema_version": CHART_DATA_SCHEMA_VERSION, "report_digest": digest, "data": packet})
+    db.set_app_meta(legacy_key, encoded)
+
+    def no_build(*_args):
+        raise AssertionError("legacy migration must retain the published observations")
+
+    monkeypatch.setattr(chart_data, "build_chart_data", no_build)
+    assert cached_chart_data(db, report) == packet
+    assert json.loads(db.get_app_meta(key))["data"] == packet
+    assert db.get_app_meta(legacy_key) == encoded
+
+
+@pytest.mark.ydb
+def test_chart_cache_delayed_writer_cannot_replace_new_canonical_packet(tmp_path, monkeypatch) -> None:
+    db = make_database(tmp_path)
+    original = _report({})
+    refreshed = original.model_copy(update={"summary": "new canonical report"})
+    db.save_report(original, original.summary)
+    packet = {"series": {"current": {"points": [2]}}}
+
+    def delayed_build(*_args):
+        db.save_report(refreshed, refreshed.summary)
+        chart_data._store_chart_cache(db, refreshed, packet)
+        return {"series": {"old": {"points": [1]}}}
+
+    monkeypatch.setattr(chart_data, "build_chart_data", delayed_build)
+    cached_chart_data(db, original)
+    key, digest = _cache_key(refreshed)
+    stored = json.loads(db.get_app_meta(key))
+    assert stored["report_digest"] == digest
+    assert stored["data"] == packet
 
 
 @pytest.mark.ydb
