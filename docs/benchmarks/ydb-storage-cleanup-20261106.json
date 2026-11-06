@@ -1,0 +1,304 @@
+{
+  "version": 1,
+  "issue": 99,
+  "observed_at_utc": "2026-11-06T05:05:03.242873+00:00",
+  "utility_commit": "4bb30b8071f580fbf2ba03e3ab98b4af73ce8193",
+  "application_revision": "aedd56bd924cd33e705be4d4a471164c83294d11",
+  "backup": {
+    "provider_status": "READY",
+    "exact_namespace_verified": true,
+    "provider_restore_performed": false
+  },
+  "logical_before": {
+    "configuration_rows": 11322,
+    "configuration_payload_bytes": 225548676,
+    "app_meta_rows": 8965,
+    "app_meta_payload_bytes": 142087320,
+    "chart_v2_rows": 1782,
+    "chart_v3_rows": 2
+  },
+  "logical_after": {
+    "configuration_rows": 69,
+    "configuration_payload_bytes": 1121235,
+    "app_meta_rows": 7394,
+    "app_meta_payload_bytes": 45653322,
+    "chart_v2_rows": 0,
+    "chart_v3_rows": 213
+  },
+  "applied": {
+    "configuration": {
+      "status": "complete",
+      "committed_batches": 278,
+      "deleted_rows": 11322,
+      "upserted_rows": 69,
+      "planned_source_rows": 11322,
+      "retained_events": 69
+    },
+    "charts": {
+      "report_plans": 212,
+      "applied_reports": 212,
+      "already_complete_reports": 0,
+      "conflicted_reports": 0,
+      "deleted_rows": 1782,
+      "upserted_rows": 211
+    }
+  },
+  "physical_before": {
+    "all_table_bytes": 652988534,
+    "affected_tables": {
+      "app_meta": {
+        "bytes": 154284659,
+        "estimated_rows": 9649
+      },
+      "config_snapshots": {
+        "bytes": 227893696,
+        "estimated_rows": 11322
+      }
+    }
+  },
+  "physical_after": {
+    "all_table_bytes": 440633961,
+    "affected_tables": {
+      "app_meta": {
+        "bytes": 168627921,
+        "estimated_rows": 11530
+      },
+      "config_snapshots": {
+        "bytes": 1138380,
+        "estimated_rows": 69
+      }
+    }
+  },
+  "physical_observations": [
+    {
+      "observed_at": "2026-11-06T05:00:01.876699+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168617847,
+        "rows": 11508
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:00:22.016531+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168617847,
+        "rows": 11508
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:00:42.115900+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168617847,
+        "rows": 11508
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:01:02.192968+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168619167,
+        "rows": 11514
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:01:22.279748+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168619167,
+        "rows": 11514
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:01:42.357823+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168619167,
+        "rows": 11514
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:02:02.442972+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168619167,
+        "rows": 11514
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:02:22.525184+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168628944,
+        "rows": 11530
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:02:42.604553+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168629080,
+        "rows": 11531
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:03:02.683839+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168629080,
+        "rows": 11531
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:03:22.762832+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168629080,
+        "rows": 11531
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:03:42.843464+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168629080,
+        "rows": 11531
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:04:02.920934+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168627921,
+        "rows": 11530
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:04:23.003803+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168627921,
+        "rows": 11530
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:04:43.081911+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168627921,
+        "rows": 11530
+      }
+    },
+    {
+      "observed_at": "2026-11-06T05:05:03.161658+00:00",
+      "config_snapshots": {
+        "bytes": 1138380,
+        "rows": 69
+      },
+      "app_meta": {
+        "bytes": 168627921,
+        "rows": 11530
+      }
+    }
+  ],
+  "protected": {
+    "byte_identical_tables": {
+      "reports": true,
+      "devices": true,
+      "sequences": true
+    },
+    "canonical_report_rows": 219,
+    "metadata_missing": 0,
+    "metadata_changed": 1,
+    "changed_key": "cloud-worker-last-success",
+    "change_explained": "The running worker advanced its normal last-success timestamp.",
+    "source_write_sites": [
+      "src/zont_analyzer/cloud/runtime.py",
+      "src/zont_analyzer/cloud/scheduler.py",
+      "src/zont_analyzer/cloud/user_jobs.py"
+    ]
+  },
+  "strict_export_equality": false,
+  "configuration_timeline_and_chart_packets_equal": true,
+  "acceptance_passed_with_explained_worker_timestamp": true,
+  "local_rehearsal": {
+    "source_import_hashes_equal": true,
+    "rollback_hashes_equal": true,
+    "repeat_zero_writes": true,
+    "html_byte_identical": {
+      "daily": true,
+      "monthly": true,
+      "seasonal": true,
+      "weekly": true
+    }
+  },
+  "validation": {
+    "pure_tests": 870,
+    "ydb_tests": 519,
+    "site_shell_browser_scenarios": 30,
+    "ci_url": "https://github.com/tupoybot/ZontAnalyzer/actions/runs/42164673395",
+    "smoke_after": {
+      "phase": "after-cleanup",
+      "new_shell_http": 200,
+      "ready_http": 200,
+      "diagnostics_http": 200,
+      "revision": "aedd56bd924cd33e705be4d4a471164c83294d11",
+      "anonymous_denied": true,
+      "direct_container_denied": true
+    }
+  },
+  "limitations": [
+    "Table statistics are asynchronous estimates, distinct from exported payload bytes.",
+    "Forced compaction was rejected by the managed Serverless database; background compaction is automatic.",
+    "No managed RU savings claim; operation-specific billed RU were not measured.",
+    "The provider backup was READY; rollback was verified from exact exported rows on local YDB, not by a provider restore."
+  ],
+  "logical_payload_bytes_removed": 320861439,
+  "physical_reclaim_pending_for_app_meta": true
+}
