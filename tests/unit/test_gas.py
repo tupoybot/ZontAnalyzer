@@ -5,6 +5,7 @@ import pytest
 from zont_analyzer.analytics.gas import (
     Exposure,
     GasInterval,
+    GasModel,
     MeterReading,
     StateSample,
     build_intervals,
@@ -370,7 +371,7 @@ def test_unknown_modulation_uses_mean_but_remains_explicit() -> None:
 
 def test_stale_calibration_and_day_boundaries_widen_range_without_rewriting_validation() -> None:
     clean_rows = rich_intervals()
-    boundary_rows = rich_intervals(boundary_uncertainty=0.2)
+    boundary_rows = rich_intervals(boundary_uncertainty=4.0)
     clean_model = fit_intervals(clean_rows, has_gas_stove=False)
     boundary_model = fit_intervals(boundary_rows, has_gas_stove=False)
     exposure = Exposure(100, (25.0, 25.0, 25.0, 25.0), 0, 100, flame_minutes=100)
@@ -415,12 +416,32 @@ def test_weekly_day_precision_keeps_validation_error_and_explicit_uncertainty() 
     exposure = Exposure(1440, (100.0, 0.0, 0.0, 0.0), 0, 1440, flame_minutes=100)
     estimate = estimate_exposure(exposure, model, end=model.calibration_end)
 
-    assert model.boundary_relative_uncertainty == pytest.approx(2 / 7)
     assert model.validation_relative_error == pytest.approx(0, abs=1e-6)
     assert model.heldout_interval_count == 2
-    assert "meter_reading_day_boundary" in estimate.uncertainty_factors
+    assert model.boundary_relative_uncertainty == pytest.approx(2 / 70)
+    assert "meter_reading_day_boundary_in_calibration" in estimate.uncertainty_factors
     assert estimate.uncertainty_m3[0] < estimate.volume_m3 < estimate.uncertainty_m3[1]  # type: ignore[index,operator]
     assert "reliability_index" not in estimate.to_dict()
+
+
+def test_meter_boundary_uncertainty_is_not_added_after_it_widens_rates() -> None:
+    model = GasModel(
+        rates_m3_per_minute=(1.0,),
+        bin_edges=(0.0, 100.0),
+        mean_rate_m3_per_minute=1.0,
+        rate_lower_m3_per_minute=(0.6,),
+        rate_upper_m3_per_minute=(1.4,),
+        usable_interval_count=4,
+        boundary_relative_uncertainty=0.4,
+        has_gas_stove=False,
+    )
+    estimate = estimate_exposure(
+        Exposure(10, (10.0,), 0, 10, flame_minutes=10), model,
+    )
+
+    assert estimate.volume_m3 == 10
+    assert estimate.uncertainty_m3 == (6, 14)
+    assert estimate.uncertainty_factors == ("meter_reading_day_boundary_in_calibration",)
 
 
 def test_zero_measured_validation_volume_has_absolute_error_but_no_percentage() -> None:

@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from math import ceil, sqrt
 from typing import Any
 
-ALGORITHM_VERSION = "gas-model-v4"
+ALGORITHM_VERSION = "gas-model-v5"
 DEFAULT_BIN_EDGES = (0.0, 25.0, 50.0, 75.0, 100.0)
 MIN_CALIBRATION_COVERAGE = 0.8
 MIN_ESTIMATE_COVERAGE = 0.8
@@ -619,7 +619,21 @@ def fit_intervals(
     # A grouped fit must not make an unobserved constituent bin look learned.
     rates = tuple(mean if index in extrapolated else rate for index, rate in enumerate(rates))
     total_volume = sum(row.volume_m3 for row in usable)
-    boundary_relative = sum(max(0.0, row.boundary_uncertainty_m3) for row in usable) / max(total_volume, 1e-9)
+    # Adjacent meter differences share a reading: moving that boundary adds to
+    # one interval and subtracts from the next.  Retain a conservative envelope
+    # for each contiguous chain instead of summing the same boundary repeatedly.
+    boundary_error = 0.0
+    chain_error = 0.0
+    previous: GasInterval | None = None
+    for row in usable:
+        row_error = max(0.0, row.boundary_uncertainty_m3)
+        if previous is not None and previous.end != row.start:
+            boundary_error += chain_error
+            chain_error = 0.0
+        chain_error = max(chain_error, row_error)
+        previous = row
+    boundary_error += chain_error
+    boundary_relative = boundary_error / max(total_volume, 1e-9)
     average_coverage = sum(row.coverage for row in usable) / len(usable)
     base_relative = max(
         0.08,
@@ -845,10 +859,10 @@ def estimate_exposure(
         upper_bound += uncertainty_m3
         factors.append("caller_boundary_uncertainty")
     if model.boundary_relative_uncertainty > 0:
-        boundary_spread = volume * model.boundary_relative_uncertainty
-        lower_bound -= boundary_spread
-        upper_bound += boundary_spread
-        factors.append("meter_reading_day_boundary")
+        # This factor already widened rate_lower/rate_upper in fit_intervals().
+        # Adding volume * boundary_relative_uncertainty here counted the same
+        # uncertain meter boundaries twice.
+        factors.append("meter_reading_day_boundary_in_calibration")
     if age_days is not None and age_days > 30:
         age_spread = volume * min(0.75, (age_days - 30.0) / 365.0 * 0.35)
         lower_bound -= age_spread
