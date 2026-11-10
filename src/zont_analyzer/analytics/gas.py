@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from math import ceil, sqrt
 from typing import Any
 
-ALGORITHM_VERSION = "gas-model-v4"
+ALGORITHM_VERSION = "gas-model-v5"
 DEFAULT_BIN_EDGES = (0.0, 25.0, 50.0, 75.0, 100.0)
 MIN_CALIBRATION_COVERAGE = 0.8
 MIN_ESTIMATE_COVERAGE = 0.8
@@ -619,7 +619,23 @@ def fit_intervals(
     # A grouped fit must not make an unobserved constituent bin look learned.
     rates = tuple(mean if index in extrapolated else rate for index, rate in enumerate(rates))
     total_volume = sum(row.volume_m3 for row in usable)
-    boundary_relative = sum(max(0.0, row.boundary_uncertainty_m3) for row in usable) / max(total_volume, 1e-9)
+    # Adjacent meter differences share a reading: moving that boundary adds to
+    # one interval and subtracts from the next in the *total* volume.  Only the
+    # two independent outer readings remain in that total.  The interval field
+    # is an aggregate for both ends, so using each outer interval's aggregate is
+    # deliberately conservative when the individual end contributions are not
+    # available.
+    boundary_error = 0.0
+    chain_start = 0
+    for index in range(1, len(usable) + 1):
+        chain_ended = index == len(usable) or usable[index - 1].end != usable[index].start
+        if not chain_ended:
+            continue
+        boundary_error += max(0.0, usable[chain_start].boundary_uncertainty_m3)
+        if index - chain_start > 1:
+            boundary_error += max(0.0, usable[index - 1].boundary_uncertainty_m3)
+        chain_start = index
+    boundary_relative = boundary_error / max(total_volume, 1e-9)
     average_coverage = sum(row.coverage for row in usable) / len(usable)
     base_relative = max(
         0.08,
@@ -633,7 +649,33 @@ def fit_intervals(
     lowers: list[float] = []
     uppers: list[float] = []
     for index, rate in enumerate(rates):
-        spread = max(base_relative, 0.50 if index in extrapolated else 0.30 if index in low_support else 0.0)
+        # An internal reading cancels from the chain total, but moving it also
+        # transfers burner minutes between two calibration rows.  That can move
+        # individual modulation coefficients even when the total is unchanged.
+        # Preserve that row-level sensitivity for every coefficient supported by
+        # the row.  error / (coefficient contribution - error) covers the
+        # relative rate change when the same measured contribution is explained
+        # by the smallest admissible exposure; cap at 100% for degenerate rows.
+        coefficient_boundary_relative = max(
+            (
+                min(
+                    1.0,
+                    max(0.0, row.boundary_uncertainty_m3)
+                    / max(
+                        row.features[index] * rate - max(0.0, row.boundary_uncertainty_m3),
+                        1e-9,
+                    ),
+                )
+                for row in usable
+                if row.features[index] > 0
+            ),
+            default=0.0,
+        )
+        spread = max(
+            base_relative,
+            coefficient_boundary_relative,
+            0.50 if index in extrapolated else 0.30 if index in low_support else 0.0,
+        )
         lower_rate, upper_rate = max(0.0, rate * (1.0 - spread)), rate * (1.0 + spread)
         if low is not None:
             lower_rate = max(low, lower_rate)
@@ -845,10 +887,10 @@ def estimate_exposure(
         upper_bound += uncertainty_m3
         factors.append("caller_boundary_uncertainty")
     if model.boundary_relative_uncertainty > 0:
-        boundary_spread = volume * model.boundary_relative_uncertainty
-        lower_bound -= boundary_spread
-        upper_bound += boundary_spread
-        factors.append("meter_reading_day_boundary")
+        # This factor already widened rate_lower/rate_upper in fit_intervals().
+        # Adding volume * boundary_relative_uncertainty here counted the same
+        # uncertain meter boundaries twice.
+        factors.append("meter_reading_day_boundary_in_calibration")
     if age_days is not None and age_days > 30:
         age_spread = volume * min(0.75, (age_days - 30.0) / 365.0 * 0.35)
         lower_bound -= age_spread

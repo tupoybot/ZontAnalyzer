@@ -689,7 +689,12 @@ class GasService:
                 and candidates[-1].end.astimezone(ZoneInfo(self.timezone)).date() == local_end.date()
                 and all(a.end == b.start for a, b in zip(candidates, candidates[1:], strict=False))):
             measured = sum(i.volume_m3 for i in candidates)
-            boundary_error = sum(i.boundary_uncertainty_m3 for i in candidates)
+            # Cumulative meter differences telescope: readings inside the
+            # requested period cancel exactly, leaving only its two outer
+            # day-precision boundaries.
+            boundary_error = candidates[0].boundary_uncertainty_m3
+            if len(candidates) > 1:
+                boundary_error += candidates[-1].boundary_uncertainty_m3
             known_boundary = all(i.flame_minutes > 0 and i.coverage >= .8 for i in candidates)
             result.update(status='measured', volume_m3=measured, scope='whole_meter',
                           lower_m3=max(0, measured-boundary_error) if known_boundary else None,
