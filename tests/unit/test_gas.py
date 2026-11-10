@@ -418,10 +418,47 @@ def test_weekly_day_precision_keeps_validation_error_and_explicit_uncertainty() 
 
     assert model.validation_relative_error == pytest.approx(0, abs=1e-6)
     assert model.heldout_interval_count == 2
-    assert model.boundary_relative_uncertainty == pytest.approx(2 / 70)
+    assert model.boundary_relative_uncertainty == pytest.approx(4 / 70)
     assert "meter_reading_day_boundary_in_calibration" in estimate.uncertainty_factors
     assert estimate.uncertainty_m3[0] < estimate.volume_m3 < estimate.uncertainty_m3[1]  # type: ignore[index,operator]
     assert "reliability_index" not in estimate.to_dict()
+
+
+def test_independent_outer_boundaries_are_both_retained() -> None:
+    rows = [
+        interval(0, (100.0, 0.0, 0.0, 0.0), rates=(0.1,) * 4, boundary_uncertainty=5.0),
+        interval(1, (100.0, 0.0, 0.0, 0.0), rates=(0.1,) * 4),
+        interval(2, (100.0, 0.0, 0.0, 0.0), rates=(0.1,) * 4, boundary_uncertainty=5.0),
+    ]
+
+    model = fit_intervals(rows, has_gas_stove=False)
+
+    assert model.boundary_relative_uncertainty == pytest.approx(10 / 30)
+
+
+def test_internal_boundaries_preserve_modulation_coefficient_sensitivity() -> None:
+    rows = [
+        interval(
+            index,
+            (100.0, 0.0, 0.0, 0.0) if index % 2 == 0 else (0.0, 0.0, 100.0, 0.0),
+            rates=(0.1, 0.1, 0.2, 0.2),
+            boundary_uncertainty=2.0 if index % 2 == 0 else 4.0,
+        )
+        for index in range(20)
+    ]
+
+    model = fit_intervals(rows, max_bins=2, has_gas_stove=False)
+
+    assert (model.rates_m3_per_minute[0], model.rates_m3_per_minute[2]) == pytest.approx(
+        (0.1, 0.2), rel=1e-3,
+    )
+    # Moving a shared reading can transfer 20 minutes from the first range to
+    # the second.  The exact alternative fit (0.125, 0.175) must remain inside
+    # the deterministic sensitivity bounds even though total volume is stable.
+    assert model.rate_lower_m3_per_minute[0] <= 0.125 <= model.rate_upper_m3_per_minute[0]
+    assert model.rate_lower_m3_per_minute[2] <= 0.175 <= model.rate_upper_m3_per_minute[2]
+    assert model.rate_upper_m3_per_minute[0] == pytest.approx(0.125, rel=1e-3)
+    assert model.rate_lower_m3_per_minute[2] == pytest.approx(0.15, rel=1e-3)
 
 
 def test_meter_boundary_uncertainty_is_not_added_after_it_widens_rates() -> None:

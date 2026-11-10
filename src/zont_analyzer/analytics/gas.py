@@ -620,19 +620,21 @@ def fit_intervals(
     rates = tuple(mean if index in extrapolated else rate for index, rate in enumerate(rates))
     total_volume = sum(row.volume_m3 for row in usable)
     # Adjacent meter differences share a reading: moving that boundary adds to
-    # one interval and subtracts from the next.  Retain a conservative envelope
-    # for each contiguous chain instead of summing the same boundary repeatedly.
+    # one interval and subtracts from the next in the *total* volume.  Only the
+    # two independent outer readings remain in that total.  The interval field
+    # is an aggregate for both ends, so using each outer interval's aggregate is
+    # deliberately conservative when the individual end contributions are not
+    # available.
     boundary_error = 0.0
-    chain_error = 0.0
-    previous: GasInterval | None = None
-    for row in usable:
-        row_error = max(0.0, row.boundary_uncertainty_m3)
-        if previous is not None and previous.end != row.start:
-            boundary_error += chain_error
-            chain_error = 0.0
-        chain_error = max(chain_error, row_error)
-        previous = row
-    boundary_error += chain_error
+    chain_start = 0
+    for index in range(1, len(usable) + 1):
+        chain_ended = index == len(usable) or usable[index - 1].end != usable[index].start
+        if not chain_ended:
+            continue
+        boundary_error += max(0.0, usable[chain_start].boundary_uncertainty_m3)
+        if index - chain_start > 1:
+            boundary_error += max(0.0, usable[index - 1].boundary_uncertainty_m3)
+        chain_start = index
     boundary_relative = boundary_error / max(total_volume, 1e-9)
     average_coverage = sum(row.coverage for row in usable) / len(usable)
     base_relative = max(
@@ -647,7 +649,33 @@ def fit_intervals(
     lowers: list[float] = []
     uppers: list[float] = []
     for index, rate in enumerate(rates):
-        spread = max(base_relative, 0.50 if index in extrapolated else 0.30 if index in low_support else 0.0)
+        # An internal reading cancels from the chain total, but moving it also
+        # transfers burner minutes between two calibration rows.  That can move
+        # individual modulation coefficients even when the total is unchanged.
+        # Preserve that row-level sensitivity for every coefficient supported by
+        # the row.  error / (coefficient contribution - error) covers the
+        # relative rate change when the same measured contribution is explained
+        # by the smallest admissible exposure; cap at 100% for degenerate rows.
+        coefficient_boundary_relative = max(
+            (
+                min(
+                    1.0,
+                    max(0.0, row.boundary_uncertainty_m3)
+                    / max(
+                        row.features[index] * rate - max(0.0, row.boundary_uncertainty_m3),
+                        1e-9,
+                    ),
+                )
+                for row in usable
+                if row.features[index] > 0
+            ),
+            default=0.0,
+        )
+        spread = max(
+            base_relative,
+            coefficient_boundary_relative,
+            0.50 if index in extrapolated else 0.30 if index in low_support else 0.0,
+        )
         lower_rate, upper_rate = max(0.0, rate * (1.0 - spread)), rate * (1.0 + spread)
         if low is not None:
             lower_rate = max(low, lower_rate)
