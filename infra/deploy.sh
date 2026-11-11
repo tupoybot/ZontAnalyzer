@@ -53,8 +53,9 @@ docker run --rm --user "$(id -u):$(id -g)" \
       if [ "$M1_ACTION" = plan-foundation ]; then
         set -- -target=yandex_container_registry.project -target=yandex_lockbox_secret.probe
       fi
-      terraform plan "$@" -input=false -no-color -lock-timeout=30s \
-        -var-file=inputs.tfvars.json -out=deployment.tfplan > /private/deploy-plan.log 2>&1
+      /scripts/terraform_plan_retry.sh /private/deploy-plan.log 3 \
+        terraform plan "$@" -input=false -no-color -lock-timeout=30s \
+        -var-file=inputs.tfvars.json -out=deployment.tfplan
       terraform show -json deployment.tfplan > /private/deploy-plan.json
     else
       terraform show -json deployment.tfplan > /private/deploy-plan.json
