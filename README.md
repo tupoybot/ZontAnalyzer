@@ -63,6 +63,7 @@ ZONT выполняется отдельно командой `zont-analyzer doc
 - [текущее состояние и незавершённая работа](docs/status.md);
 - [карта документации по типам задач](docs/README.md);
 - [архитектура приложения](docs/architecture.md);
+- [облачная инфраструктура и Terraform](infra/README.md);
 - [эксплуатация и восстановление](deploy/OPERATIONS.md);
 - [процедура выпуска](docs/development/release-process.md).
 
