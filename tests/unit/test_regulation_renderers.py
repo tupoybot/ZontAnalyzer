@@ -1,5 +1,7 @@
 from copy import deepcopy
 
+import pytest
+
 from zont_analyzer.analytics.regulation import ALGORITHM_VERSION
 from zont_analyzer.reports.regulation import regulation_html, regulation_text
 
@@ -186,3 +188,34 @@ def test_written_measurable_expectation_is_not_reported_as_missing() -> None:
     assert "минимум на 0,1 °C за семь дней" in text
     assert "нужен явный измеримый критерий" not in text
     assert "сохранённый прогноз AI был сделан" not in text
+
+
+@pytest.mark.parametrize("exact_next_time", [None, "2026-09-01T18:00:00+00:00"])
+def test_superseded_limits_comparison_window_without_claiming_application_time(exact_next_time) -> None:
+    context = _context()
+    result = context["regulation_comparisons"]["results"][0]
+    result.update(stage="superseded", outcome=None, metrics={},
+                  observation_end="2026-09-01T14:00:00+00:00",
+                  after={"useful_hours": 0, "complete_cycles": 0},
+                  limitations=["subsequent_change_truncates_after_window"])
+    # The next configuration was observed after the displayed source-fact
+    # period; its uncertainty can still leave no clean after-window.
+    context["control_settings_history"] = {"versions": [{
+        "kind": "change", "observed_at": "2026-09-03T02:00:00+00:00", "version": "following",
+        "changed_fields": [], "state": {"fields": {}},
+        "boundary": {"after": "2026-09-01T14:00:00+00:00", "no_later_than": "2026-09-03T02:00:00+00:00",
+                     "exact_effective_at": exact_next_time},
+    }]}
+    original = deepcopy(context)
+    for text in ("\n".join(regulation_text(context, "daily", "UTC")), regulation_html(context, "daily", "UTC")):
+        assert "сравнение ограничено следующим изменением" in text
+        assert "граница следующего изменения ограничивает период после" in text
+        assert "достоверное окно оценки" in text
+        assert "Точный момент применения следующего изменения может быть неизвестен" in text
+        assert "наблюдение прервано" not in text
+        assert "следующее изменение ограничило" not in text
+        if exact_next_time:
+            assert "Время по записи владельца, согласованной с наблюдениями: 01.09.2026 18:00 UTC" in text
+        else:
+            assert "не позднее 03.09.2026 02:00 UTC; точное время неизвестно" in text
+    assert context == original

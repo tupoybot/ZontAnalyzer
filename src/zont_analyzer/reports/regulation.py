@@ -63,7 +63,7 @@ LABELS = {
     "improved": "улучшение", "worsened": "ухудшение", "mixed": "разнонаправленные изменения",
     "indistinguishable": "различие не установлено", "unavailable": "оценка недоступна",
     "detected": "изменение обнаружено", "available": "сравнение доступно",
-    "insufficient": "недостаточно сопоставимых данных", "superseded": "наблюдение прервано следующим изменением",
+    "insufficient": "недостаточно сопоставимых данных", "superseded": "сравнение ограничено следующим изменением",
     "transition_or_collecting": "переходный процесс или сбор данных",
     "no_heat": "нет запроса отопления", "continuous": "непрерывный запрос отопления",
     "cycles": "наблюдаются полные циклы запроса", "partial": "полные циклы не подтверждены",
@@ -90,7 +90,7 @@ LABELS = {
     "settings_version_not_applicable": "настройки не подтверждены для этого участка",
     "ineligible_regulation_fact": "участок непригоден для оценки регулирования",
     "weather_target_or_mode_unknown_or_changing": "погода, цель или режим неизвестны либо меняются",
-    "subsequent_change_truncates_after_window": "следующее изменение ограничило период после",
+    "subsequent_change_truncates_after_window": "граница следующего изменения ограничивает период после",
     "previous_change_truncates_baseline": "предыдущее изменение ограничило исходный период",
     "owner_reported_subsequent_action_truncates_after_window": "последующее действие владельца ограничило наблюдение",
     "joint_parameter_change": "несколько параметров изменены вместе; отдельный эффект каждого не установлен",
@@ -256,6 +256,9 @@ def _sections(context: Mapping[str, Any], kind: str, timezone: str) -> tuple[lis
             main.append(circuit_labels[str(result["scope"])] + ": сравнение изменения настроек.")
         main.append("Стадия: " + _reason(result.get("stage")) + ". Результат: "
                     + (_reason(result["outcome"]) if result.get("outcome") else "пока не установлен") + ".")
+        if result.get("stage") == "superseded":
+            main.append("Сокращено достоверное окно оценки после текущего изменения. "
+                        "Точный момент применения следующего изменения может быть неизвестен.")
         main.append(_boundary(event.get("boundary"), timezone))
         for key, change in _map(event.get("changed_values")).items():
             main.append(f"{FIELDS.get(key, 'Дополнительный параметр контроллера')}: "
