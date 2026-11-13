@@ -26,7 +26,7 @@ from zont_analyzer.domain.reasoning import (
 )
 from zont_analyzer.observability import observe, span
 
-PROMPT_VERSION = "analyst-v8.11"
+PROMPT_VERSION = "analyst-v8.12"
 SCHEMA_VERSION = "analysis-result-v1"
 MAX_OUTPUT_TOKENS = 18_000
 
@@ -154,6 +154,11 @@ Ventilation corroborated by same-room humidity is stronger evidence than an isol
 neither proves an opened window. Preserve alternatives and distinguish impact from observed recovery.
 An ordinary request pause is not proof the controller is disabled. Request episodes, uncertain
 minute activity and confirmed boiler starts are different measurements. Water is not floor temperature.
+For request cycles, started_at is request activation; heating_ended_at is request removal
+before the pause; ended_at is the end of the full request-plus-pause cycle or a partial fragment.
+The end_error metric is measured at heating_ended_at, not at ended_at. Partial fragments split
+by eligibility boundaries are not physical starts. The derived phase maintenance means
+temperature holding (поддержание температуры), not servicing; warmup means разогрев.
 In daily reports state facts and observation stage; do not recommend tuning based on one day's
 apparent success. Weekly conclusions require recurrence and sufficiency; monthly conclusions require
 stability; seasonal conclusions only cover observed weather and eligible days, including missing days.
@@ -1027,6 +1032,8 @@ def _regulation_metric_quantities(metrics: dict[str, Any]) -> None:
             metric["aggregation"] = "TOTAL_FOR_ELIGIBLE_REPORT_INTERVALS"
         elif name.startswith("cycle_mean_"):
             metric["aggregation"] = "MEAN_COMPLETE_ELIGIBLE_CYCLE"
+        if name in {"cycle_mean_start_error_c", "cycle_mean_end_error_c"}:
+            metric["observed_at"] = "started_at" if name == "cycle_mean_start_error_c" else "heating_ended_at"
         if metric.get("unit") == "seconds" and (name.startswith("cycle_mean_") or name in {
             "observed_request_active_seconds", "eligible_request_active_seconds",
         }):
@@ -1160,11 +1167,11 @@ def _bounded_regulation(value: Any, byte_limit: int, key: str, record_omitted: A
     }
     if collection == "circuits":
         result["source_value_contracts"] = {
-            "setpoint": "hold last observed value until change or explicit unknown; never before first observation; "
-            "a low sample count alone is not missing measurements",
-            "measurement": "use only valid observed intervals within the gap limit; never hold indefinitely; "
-            "categorical/request signals retain their explicit observation semantics",
-            "mixed_or_missing_metadata": "no single value-holding rule is established for the whole period",
+            "setpoint": "hold until change or explicit unknown; never before first observation; "
+            "low sample count alone is not missing data",
+            "measurement": "valid observed intervals within gap limit; never hold indefinitely; "
+            "request/categorical signals keep explicit semantics",
+            "mixed_or_missing_metadata": "no uniform holding rule for period",
         }
     # The comparison application emits newest first. Sorting by the actual
     # boundary also protects callers whose display order is chronological.

@@ -302,6 +302,14 @@ def test_actual_sixty_day_aggregate_keeps_one_held_setpoint_and_full_census_in_p
     assert "low sample count alone" in block["source_value_contracts"]["setpoint"]
     assert "never hold indefinitely" in block["source_value_contracts"]["measurement"]
     assert retained["incomplete"] is False
+    example = retained["cycles"][0]
+    assert example["heating_ended_at"] != example["ended_at"]
+    assert example["end_error_c"] == pytest.approx(.45)
+    assert retained["metrics"]["cycle_mean_end_error_c"]["value"] == pytest.approx(.45)
+    assert retained["metrics"]["cycle_mean_end_error_c"]["observed_at"] == "heating_ended_at"
+    assert retained["metrics"]["cycle_mean_start_error_c"]["observed_at"] == "started_at"
+    assert datetime.fromisoformat(example["heating_ended_at"]) == START + timedelta(minutes=90)
+    assert datetime.fromisoformat(example["ended_at"]) == START + timedelta(minutes=210)
     for name, metric in metrics.items():
         assert retained["metrics"][name]["value"] == metric["value"]
         assert retained["metrics"][name]["denominator"] == metric["denominator"]
