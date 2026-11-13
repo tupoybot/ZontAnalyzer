@@ -897,9 +897,9 @@ class AnalysisService:
 
         if include_comparisons:
             control_context.update(heating_context(self.db, control_context, start, end))
-            from zont_analyzer.application.regulation_reports import build_regulation_context
+            from zont_analyzer.application.regulation_comparison_reports import build_regulation_report_context
 
-            control_context.update(build_regulation_context(
+            control_context.update(build_regulation_report_context(
                 self.db, start, end, timezone=self.config.home.effective_timezone,
                 calculate_daily=kind == "daily" and period.complete,
             ))

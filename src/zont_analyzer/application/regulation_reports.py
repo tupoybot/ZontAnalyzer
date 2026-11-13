@@ -298,6 +298,7 @@ def validated_regulation_days(
                                 "missing_or_stale_facts"})
         circuits.append({"scope": scope, "device_id": device, "circuit_id": circuit, "facts": accepted,
                          "expected_days": len(windows), "missing_days": missing,
+                         "settings_history": history,
                          "settings_history_incomplete": history.get("incomplete", False)})
     return {"circuits": circuits, "built_days": built, "hit_days": hits, "unknowns": [],
             "dependency_start": dependency_start.isoformat(), "dependency_end": dependency_end.isoformat()}
@@ -305,12 +306,15 @@ def validated_regulation_days(
 
 def build_regulation_context(
     db: Database, start: datetime, end: datetime, *, timezone: str, calculate_daily: bool,
+    selected: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    selected = validated_regulation_days(db, start, end, timezone=timezone, calculate_daily=calculate_daily)
+    if selected is None:
+        selected = validated_regulation_days(db, start, end, timezone=timezone, calculate_daily=calculate_daily)
     circuits = []
     for item in selected["circuits"]:
         summary = aggregate_regulation_facts(item["facts"], start=start, end=end, expected_days=item["expected_days"])
-        summary.update({key: value for key, value in item.items() if key not in {"facts", "expected_days"}})
+        summary.update({key: value for key, value in item.items()
+                        if key not in {"facts", "expected_days", "settings_history"}})
         if item["settings_history_incomplete"]:
             summary["incomplete"] = True
         circuits.append(summary)

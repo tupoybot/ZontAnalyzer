@@ -216,3 +216,16 @@ def test_settings_lineage_accepts_equivalent_broader_history_and_rejects_real_la
     corrected = settings_timeline([*rows, late], device_id="device", circuit_id="circuit", start=START,
                                   end=START + timedelta(days=14))
     assert not reports._dependency_valid(dependency, {}, corrected, {})
+
+
+def test_validated_settings_history_is_reusable_but_not_published_in_period_facts(world: CacheWorld) -> None:
+    selected = read(world, 2)
+    internal = selected["circuits"][0]["settings_history"]
+    assert internal["device_id"] == "device" and internal["circuit_id"] == "circuit"
+    assert internal["versions"]
+    context = reports.build_regulation_context(
+        world, START + timedelta(days=2), START + timedelta(days=3), timezone="UTC",
+        calculate_daily=False, selected=selected,
+    )
+    assert "settings_history" not in context["regulation_facts"]["circuits"][0]
+    assert selected["circuits"][0]["settings_history"] is internal
