@@ -297,8 +297,10 @@ def validated_regulation_days(
 
 def build_regulation_context(
     db: Database, start: datetime, end: datetime, *, timezone: str, calculate_daily: bool,
+    selected: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    selected = validated_regulation_days(db, start, end, timezone=timezone, calculate_daily=calculate_daily)
+    if selected is None:
+        selected = validated_regulation_days(db, start, end, timezone=timezone, calculate_daily=calculate_daily)
     circuits = []
     for item in selected["circuits"]:
         summary = aggregate_regulation_facts(item["facts"], start=start, end=end, expected_days=item["expected_days"])
