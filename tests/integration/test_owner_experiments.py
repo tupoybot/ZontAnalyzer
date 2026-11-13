@@ -120,6 +120,8 @@ def test_linked_journal_action_deduplicates_legacy_without_hiding_distinct_actio
         {**payload["changes"][0], "after": "3"}]}
     runtime.db.save_owner_experiment(report.id, distinct)
     assert len(runtime.db.intervention_history()) == 2
+    assert len(runtime.db.intervention_history(limit=1)) == 1
+    assert runtime.db.intervention_history(limit=2)[0]["experiment"]["changes"][0]["after"] == "3"
 
 
 @pytest.mark.ydb
@@ -146,3 +148,74 @@ def test_firmware_rollback_feed_reverses_values_and_retains_owner_evidence(tmp_p
     assert event["event"] == "owner_reported_rollback"
     assert event["confirmation"] == "owner_reported"
     assert event["telemetry_confirmation"] == "not_verified"
+
+
+@pytest.mark.ydb
+def test_event_feed_orders_action_time_bounds_reads_and_keeps_pre_rollback_cutoff(tmp_path: Path, monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    from zont_analyzer.adapters.ydb.database import Transaction
+
+    runtime = _runtime(tmp_path)
+    runtime.db.save_devices([{"device_id": "device-1", "z3k_config": {"heating_circuits": [{"id": 1}]}}])
+    report = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
+    records = {}
+    for identifier, day in (("request-latest", 3), ("request-oldest", 1), ("request-middle", 2)):
+        records[identifier] = runtime.db.save_owner_experiment(report.id, {
+            **_payload(), "request_id": identifier, "state": "performed",
+            "performed_at": f"2026-08-0{day}T08:00:00+00:00"})
+    queries: list[str] = []
+    original = Transaction.execute
+
+    def traced(tx, query, parameters=None):
+        queries.append(query)
+        return original(tx, query, parameters)
+
+    monkeypatch.setattr(Transaction, "execute", traced)
+    events = runtime.db.owner_experiments.factual_history(limit=2)
+    assert [event["intervention_id"] for event in events] == ["request-latest", "request-middle"]
+    assert len(queries) == 1
+    assert "owner_experiment_events VIEW by_applied" in queries[0]
+    assert "ORDER BY applied_at DESC,id DESC LIMIT $limit" in queries[0]
+    oldest = records["request-oldest"]
+    updated = {**oldest["history"][0]["request"], "experiment_id": oldest["id"],
+               "expected_revision": 1, "request_id": "request-rollback", "state": "rolled_back",
+               "rollback_at": "2026-08-04T09:00:00+00:00"}
+    runtime.db.save_owner_experiment(report.id, updated)
+    history = runtime.db.owner_experiments.factual_history(limit=2, before=datetime(2026, 8, 2, tzinfo=UTC))
+    assert [event["intervention_id"] for event in history] == ["request-oldest"]
+    assert "WHERE applied_at<$before" in queries[-1]
+    latest = runtime.db.owner_experiments.factual_history(limit=1)
+    assert latest[0]["intervention_id"] == "request-oldest:rollback"
+    assert "history" not in latest[0]["experiment"]
+
+
+@pytest.mark.ydb
+def test_event_projection_is_atomic_replaces_unknown_time_and_skips_plans(tmp_path: Path, monkeypatch) -> None:
+    from zont_analyzer.adapters.ydb.feedback import FeedbackRepository
+
+    runtime = _runtime(tmp_path)
+    runtime.db.save_devices([{"device_id": "device-1", "z3k_config": {"heating_circuits": [{"id": 1}]}}])
+    report = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
+    payload = _payload()
+    plan = runtime.db.save_owner_experiment(report.id, payload)
+    assert runtime.db.owner_experiments.factual_history() == []
+    known = {**payload, "experiment_id": plan["id"], "expected_revision": 1,
+             "request_id": "request-known", "state": "performed", "performed_at": "2026-08-01T08:00:00+00:00"}
+    saved = runtime.db.save_owner_experiment(report.id, known)
+    event = runtime.db.owner_experiments.factual_history()[0]
+    unknown = {**known, "expected_revision": 2, "request_id": "request-unknown", "performed_at": None}
+    with monkeypatch.context() as patch:
+        def fail(*args):
+            raise ValueError("forced failure after journal and event writes")
+        patch.setattr(FeedbackRepository, "_queue_render", fail)
+        with pytest.raises(ValueError, match="forced failure"):
+            runtime.db.save_owner_experiment(report.id, unknown)
+    assert runtime.db.experiments_for_report(report.id)["experiments"][0] == saved
+    assert runtime.db.owner_experiments.factual_history() == [event]
+    corrected = runtime.db.save_owner_experiment(report.id, unknown)
+    assert corrected["revision"] == 3
+    assert len(corrected["history"]) == 3
+    assert runtime.db.owner_experiments.factual_history() == []
+    assert runtime.db.save_owner_experiment(report.id, known) == corrected
+    assert runtime.db.owner_experiments.factual_history() == []

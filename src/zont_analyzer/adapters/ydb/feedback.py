@@ -380,7 +380,8 @@ class FeedbackRepository:
             return []
         from .owner_experiments import OwnerExperimentsRepository
 
-        extra = OwnerExperimentsRepository(self.db).factual_history(before=before)
+        candidate_limit = min(1000, max(limit * 2, limit + 1))
+        extra = OwnerExperimentsRepository(self.db).factual_history(limit=candidate_limit, before=before)
         linked_recs = {item["recommendation_id"] for item in extra if item.get("recommendation_id")}
         def read(tx: Transaction) -> list[dict[str, Any]]:
             rows = tx.execute("SELECT id,payload FROM interventions VIEW by_applied_at "

@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
+
+import ydb  # type: ignore[import-untyped]
 
 from zont_analyzer.domain.experiments import OwnerExperiment
 
-from .feedback import FeedbackRepository, Transaction, _first, _iso, _json, _text
+from .feedback import FeedbackRepository, Transaction, _first, _iso, _json, _micros, _text
 
 
 class OwnerExperimentsRepository(FeedbackRepository):
@@ -126,36 +128,55 @@ class OwnerExperimentsRepository(FeedbackRepository):
             tx.execute("DECLARE $id AS Utf8; DECLARE $report AS Utf8; DECLARE $payload AS Utf8; "
                        "UPSERT INTO owner_experiments (id,report_id,payload) VALUES ($id,$report,$payload);",
                        {"$id": identifier, "$report": report_id, "$payload": _json(value)})
+            self._sync_events(tx, value)
             self._queue_render(tx, report_id)
             return value
         return self.db.transaction(save)
 
-    def factual_history(self, *, before: Any = None) -> list[dict[str, Any]]:
-        def read(tx: Transaction) -> list[dict[str, Any]]:
-            rows = tx.execute("SELECT payload FROM owner_experiments;")[0].rows
-            result = []
-            for row in rows:
-                value = json.loads(_text(row.payload) or "{}")
-                when = value.get("performed_at")
-                if value["state"] in {"planned", "cancelled"}:
-                    continue
-                experiment = {key: val for key, val in value.items()
-                              if key not in {"history", "request_id", "expected_revision"}}
-                events = [(value["id"], when, {**experiment, "event": "owner_reported_change",
-                                             "state": "performed", "lifecycle_state": value["state"]})] if when else []
-                if value["state"] == "rolled_back" and value.get("rollback_at"):
-                    events.append((value["id"] + ":rollback", value["rollback_at"],
-                                   {**experiment, "event": "owner_reported_rollback", "state": "rolled_back",
-                                    "category": "firmware_rollback" if value["category"].startswith("firmware_")
-                                    else value["category"],
-                                    "changes": [{**change, "before": change["after"], "after": change["before"]}
-                                                for change in value["changes"]],
-                                    "original_performed_at": when, "performed_at": value["rollback_at"]}))
-                for identifier, boundary, detail in events:
-                    if before is not None and datetime.fromisoformat(boundary) >= before.astimezone(UTC):
-                        continue
-                    result.append({"intervention_id": identifier, "recommendation_id": value["recommendation_id"],
-                                   "recorded_at": value["recorded_at"], "owner_note": value["comment"],
-                                   "experiment": detail, "temporal_boundary": boundary})
-            return result
-        return self.db.transaction(read)
+    @staticmethod
+    def _physical_events(value: dict[str, Any]) -> list[dict[str, Any]]:
+        """Project only dated owner-reported actions; journal revisions stay separate."""
+        if value["state"] in {"planned", "cancelled"}:
+            return []
+        when = value.get("performed_at")
+        experiment = {key: val for key, val in value.items()
+                      if key not in {"history", "request_id", "expected_revision"}}
+        events = [(value["id"], when, {**experiment, "event": "owner_reported_change",
+                                     "state": "performed", "lifecycle_state": value["state"]})] if when else []
+        if value["state"] == "rolled_back" and value.get("rollback_at"):
+            events.append((value["id"] + ":rollback", value["rollback_at"],
+                           {**experiment, "event": "owner_reported_rollback", "state": "rolled_back",
+                            "category": "firmware_rollback" if value["category"].startswith("firmware_")
+                            else value["category"],
+                            "changes": [{**change, "before": change["after"], "after": change["before"]}
+                                        for change in value["changes"]],
+                            "original_performed_at": when, "performed_at": value["rollback_at"]}))
+        return [{"intervention_id": identifier, "recommendation_id": value["recommendation_id"],
+                 "recorded_at": value["recorded_at"], "owner_note": value["comment"],
+                 "experiment": detail, "temporal_boundary": boundary} for identifier, boundary, detail in events]
+
+    @classmethod
+    def _sync_events(cls, tx: Transaction, value: dict[str, Any]) -> None:
+        for identifier in (value["id"], value["id"] + ":rollback"):
+            tx.execute("DECLARE $id AS Utf8; DELETE FROM owner_experiment_events WHERE id=$id;", {"$id": identifier})
+        for event in cls._physical_events(value):
+            tx.execute("DECLARE $id AS Utf8; DECLARE $at AS Int64; DECLARE $payload AS Utf8; "
+                       "UPSERT INTO owner_experiment_events (id,applied_at,payload) VALUES ($id,$at,$payload);",
+                       {"$id": event["intervention_id"],
+                        "$at": _micros(datetime.fromisoformat(event["temporal_boundary"])),
+                        "$payload": _json(event)})
+
+    def factual_history(self, limit: int = 10, *, before: datetime | None = None) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("owner event limit must be between 1 and 1000")
+        declarations = "DECLARE $limit AS Uint64; "
+        predicate = ""
+        params: dict[str, Any] = {"$limit": ydb.TypedValue(limit, ydb.PrimitiveType.Uint64)}
+        if before is not None:
+            declarations += "DECLARE $before AS Int64; "
+            predicate = "WHERE applied_at<$before "
+            params["$before"] = _micros(before)
+        query = (declarations + "SELECT payload FROM owner_experiment_events VIEW by_applied " + predicate +
+                 "ORDER BY applied_at DESC,id DESC LIMIT $limit;")
+        return self.db.transaction(lambda tx: [json.loads(_text(row.payload) or "{}")
+                                              for row in tx.execute(query, params)[0].rows])

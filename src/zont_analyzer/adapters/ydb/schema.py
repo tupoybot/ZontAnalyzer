@@ -129,5 +129,9 @@ ADDITIVE_TABLES = {
         "event_id Int64 NOT NULL, payload Utf8, PRIMARY KEY(device_id,circuit_id,observed_at,event_id)"
     ),
     "owner_experiments": "id Utf8 NOT NULL, report_id Utf8, payload Utf8, PRIMARY KEY(id)",
+    "owner_experiment_events": (
+        "id Utf8 NOT NULL, applied_at Int64, payload Utf8, "
+        "INDEX by_applied GLOBAL SYNC ON(applied_at,id), PRIMARY KEY(id)"
+    ),
 }
 ALL_TABLES = {**TABLES, **ADDITIVE_TABLES}
