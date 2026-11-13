@@ -35,7 +35,7 @@ from zont_analyzer.reports.presentation import (
 )
 from zont_analyzer.reports.wording import normalize_report_for_display
 
-VIEW_VERSION = "report-presentation-v1"
+VIEW_VERSION = "report-presentation-v2-owner-experiments"
 
 METRIC_LABELS = {
     "mean_temperature_c": "Средняя температура помещения",
