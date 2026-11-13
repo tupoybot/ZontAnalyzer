@@ -25,6 +25,9 @@ def _facts_digest(report: Report, *, include_ai_provenance: bool) -> str:
         from zont_analyzer.analytics.settings_history import semantic_history
 
         context["control_settings_history"] = semantic_history(history)
+    regulation = context.get("regulation_facts")
+    if isinstance(regulation, dict):
+        regulation.pop("cache", None)
     if not include_ai_provenance:
         context.pop("ai_provenance", None)
         for key, field in (("control_settings", "captured_at"),

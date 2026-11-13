@@ -120,6 +120,15 @@ TABLES = {
 # Additions do not alter original columns or stored values. Old application
 # images may ignore these tables; exports made by new versions include them.
 ADDITIVE_TABLES = {
+    "regulation_event_projection": (
+        "device_id Utf8 NOT NULL, generation Utf8 NOT NULL, family Utf8 NOT NULL, timestamp_us Int64 NOT NULL, "
+        "order_rank Int64 NOT NULL, id Utf8 NOT NULL, payload Utf8, "
+        "PRIMARY KEY(device_id,generation,family,timestamp_us,order_rank,id)"
+    ),
+    "regulation_day_facts": (
+        "scope Utf8 NOT NULL, day_start Int64 NOT NULL, payload Utf8, fingerprint Utf8, "
+        "PRIMARY KEY(scope,day_start)"
+    ),
     "control_setting_heads": (
         "device_id Utf8 NOT NULL, circuit_id Utf8 NOT NULL, payload Utf8, "
         "PRIMARY KEY(device_id,circuit_id)"

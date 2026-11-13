@@ -40,29 +40,32 @@ def observe(
         last_known = (baseline.get("last_confirmed_at") or baseline["observed_at"]) if baseline else at
         observed_at = max(at, last_known)
         version = fingerprint(state)
+        changed_state = bool(baseline and fingerprint(baseline["state"]) != version)
         writer_gap = bool(previous and prior and (
             prior[0].captured_at > previous["last_confirmed_at"]
             or prior[0].id > previous.get("last_seen_snapshot_id", previous.get("ordering_snapshot_id", 0))
         ))
         latest_snapshot_id = snapshot_id or (prior[0].id if prior else 0)
-        if previous and previous["version"] == version and not writer_gap:
-            event = {**previous, "last_confirmed_at": observed_at, "last_seen_snapshot_id": latest_snapshot_id}
+        if previous and fingerprint(previous["state"]) == version and not writer_gap:
+            # Re-derive an older persisted hash using the current numeric
+            # canonicalization, rather than inventing an upgrade-time change.
+            event = {**previous, "version": version, "last_confirmed_at": observed_at,
+                     "last_seen_snapshot_id": latest_snapshot_id}
         else:
             event = {"event_id": next_id(tx, "control_settings"), "observed_at": observed_at,
                      "configuration_snapshot_id": snapshot_id,
                      "ordering_snapshot_id": latest_snapshot_id, "last_seen_snapshot_id": latest_snapshot_id,
                      "last_confirmed_at": observed_at, "version": version, "state": state,
-                     "kind": "change" if baseline and baseline["state"] != state else "first_observation",
-                     "boundary": {"after": last_known if baseline and baseline["state"] != state else None,
+                     "kind": "change" if changed_state else "first_observation",
+                     "boundary": {"after": last_known if changed_state else None,
                                   "no_later_than": observed_at, "exact_effective_at": None},
                      "changed_fields": sorted(
                          key for key in state.get("fields", {}).keys() | (
                              baseline["state"].get("fields", {}).keys() if baseline else set()
-                         ) if state.get("fields", {}).get(key) != (
-                             baseline["state"].get("fields", {}).get(key) if baseline else None
-                         )
+                         ) if fingerprint(state.get("fields", {}).get(key)) != fingerprint(
+                             baseline["state"].get("fields", {}).get(key) if baseline else None)
                      )}
-            lower = last_known if writer_gap or baseline and baseline["state"] != state else at
+            lower = last_known if writer_gap or changed_state else at
             earliest = min(earliest, lower) if earliest is not None else lower
             changed_circuits.append(circuit)
         payload = encode(event)

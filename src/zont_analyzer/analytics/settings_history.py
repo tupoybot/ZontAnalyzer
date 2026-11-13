@@ -12,9 +12,22 @@ from .settings import _FIELDS
 CONTRACT = "control-history-v1"
 
 
+def _hash_numbers(value: Any) -> Any:
+    """Normalize JSON number spelling for hashing, preserving raw values and booleans."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {key: _hash_numbers(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_hash_numbers(item) for item in value]
+    return value
+
+
 def fingerprint(value: Any) -> str:
     return CONTRACT + ":" + hashlib.sha256(json.dumps(
-        value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+        _hash_numbers(value), sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
     ).encode()).hexdigest()
 
 
@@ -25,10 +38,33 @@ def semantic_history(value: dict[str, Any]) -> dict[str, Any]:
     cannot change a fixed period's evidence or downstream cache identity.
     """
     result = {key: item for key, item in value.items() if key != "fingerprint"}
-    result["versions"] = [
-        {key: item for key, item in version.items() if key not in {"last_confirmed_at", "last_observed_at"}}
-        for version in value.get("versions", [])
-    ]
+    start = value.get("period_start")
+    left = None
+    if isinstance(start, str):
+        try:
+            parsed = datetime.fromisoformat(start)
+            if parsed.tzinfo is not None:
+                left = int(parsed.timestamp() * 1_000_000)
+        except ValueError:
+            pass
+    versions = []
+    for version in value.get("versions", []):
+        item = {key: field for key, field in version.items()
+                if key not in {"last_confirmed_at", "last_observed_at"}}
+        observed, boundary = version.get("observed_at"), version.get("boundary") or {}
+        upper, lower = boundary.get("no_later_than"), boundary.get("after")
+        if (left is not None and type(observed) is int and observed <= left
+                and type(upper) is int and upper <= left and (lower is None or type(lower) is int and lower <= left)):
+            # Equal legacy snapshots are folded into their first representative.
+            # A wider input query can select an older representative without
+            # changing the state known at this period's start. Canonicalize that
+            # expired provenance only; raw observations and overlapping change
+            # boundaries remain intact in the actual history packet.
+            item.update(event_id="observed_before_period", kind="observed_before_period", observed_at=left,
+                        changed_fields=[], boundary={"after": None, "no_later_than": left,
+                                                     "exact_effective_at": None})
+        versions.append(item)
+    result["versions"] = versions
     return result
 
 
@@ -113,8 +149,9 @@ def settings_timeline(
         item["observed_at"], item["sequence"], item.get("ordering_rank", 0),
     )):
         state = row["state"]
+        state_version = fingerprint(state)
         at = row["observed_at"]
-        if versions and versions[-1]["state"] == state:
+        if versions and versions[-1]["version"] == state_version:
             # Legacy duplicates do not prove an unchanged interval. Only the
             # explicit confirmation written by new polling code is usable.
             if row.get("last_confirmed_at") is not None:
@@ -124,12 +161,13 @@ def settings_timeline(
         old = versions[-1] if versions else None
         fields = state.get("fields", {})
         old_fields = old["state"].get("fields", {}) if old else {}
-        changed = sorted(key for key in fields.keys() | old_fields.keys() if fields.get(key) != old_fields.get(key))
+        changed = sorted(key for key in fields.keys() | old_fields.keys()
+                         if fingerprint(fields.get(key)) != fingerprint(old_fields.get(key)))
         versions.append({
             "event_id": row["event_id"], "kind": "change" if old else row.get("kind", "first_observation"),
             "observed_at": at, "last_confirmed_at": row.get("last_confirmed_at"),
             "last_observed_at": at,
-            "state": state, "version": fingerprint(state),
+            "state": state, "version": state_version,
             "changed_fields": changed if old else row.get("changed_fields", changed),
             "boundary": row.get("boundary") if (row.get("boundary") or {}).get("after") is not None else {
                 "after": old["last_observed_at"] if old else None,

@@ -897,6 +897,12 @@ class AnalysisService:
 
         if include_comparisons:
             control_context.update(heating_context(self.db, control_context, start, end))
+            from zont_analyzer.application.regulation_reports import build_regulation_context
+
+            control_context.update(build_regulation_context(
+                self.db, start, end, timezone=self.config.home.effective_timezone,
+                calculate_daily=kind == "daily" and period.complete,
+            ))
         else:
             control_context.get("temporal_evidence", {}).pop("heating_source_windows", None)
         from zont_analyzer.application.settings_history import ensure_settings_history

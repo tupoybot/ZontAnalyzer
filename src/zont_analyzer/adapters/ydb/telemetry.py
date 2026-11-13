@@ -11,9 +11,12 @@ from typing import Any, Literal
 import ydb  # type: ignore[import-untyped]
 
 from zont_analyzer.adapters.zont_readonly.configuration import configuration_snapshot
+from zont_analyzer.analytics.series_semantics import is_setpoint_series
 from zont_analyzer.domain import SourceEvent, TelemetryPoint
 
 from .database import Transaction, YdbDatabase
+from .regulation_events import advance_projection
+from .regulation_markers import observe_first_inputs
 from .sample_bounds import extend
 
 CoverageState = Literal["complete", "empty", "failed", "unavailable"]
@@ -73,7 +76,7 @@ def _record_publication_change(
                 old = json.loads(previous.rows[0].payload)
             except (TypeError, ValueError):
                 old = None
-            if scope in {"telemetry-gas", "control-settings"}:
+            if scope in {"telemetry-gas", "control-settings", "regulation-facts"}:
                 try:
                     new = json.loads(payload)
                 except (TypeError, ValueError):
@@ -344,6 +347,7 @@ class TelemetryRepository:
             changed = False
             series_cache: dict[tuple[str, str, str], int] = {}
             calibration_keys: set[tuple[int, int]] = set()
+            setpoint_ids: set[int] = set()
             for point in samples:
                 key = (point.source_type, point.entity_id, point.metric_key)
                 if key not in series_cache:
@@ -351,6 +355,8 @@ class TelemetryRepository:
                 rows.append({"series_id": series_cache[key], "timestamp_utc": utc_seconds(point.timestamp_utc),
                              "value_num": point.value_num, "value_text": point.value_text,
                              "quality": point.quality, "ingested_at": checked})
+                if is_setpoint_series(point.source_type, point.metric_key):
+                    setpoint_ids.add(series_cache[key])
                 # GasService fits the meter model from boiler flags and
                 # modulation only. Temperatures and raw events do not change
                 # that fit, even when their timestamps fall inside calibration.
@@ -385,6 +391,13 @@ class TelemetryRepository:
             changed_times = {int(row["timestamp_utc"]) for row in rows}
             calibration_times = {int(row["timestamp_utc"]) for row in rows
                                  if (row["series_id"], row["timestamp_utc"]) in calibration_keys}
+            first_setpoints: dict[int, int] = {}
+            for row in rows:
+                identifier, at = int(row["series_id"]), int(row["timestamp_utc"])
+                if identifier in setpoint_ids:
+                    first_setpoints[identifier] = min(at, first_setpoints.get(identifier, at))
+            changed_events: list[SourceEvent] = []
+            previous_changed_events: list[SourceEvent] = []
             if source_events:
                 # Source IDs identify canonical events even when the source
                 # corrects their timestamp. Resolve only this bounded batch of
@@ -407,11 +420,13 @@ class TelemetryRepository:
                     if previous and SourceEvent.model_validate_json(previous[0].payload) == event:
                         continue
                     for old in previous:
+                        previous_changed_events.append(SourceEvent.model_validate_json(old.payload))
                         old_keys.append({"device_id": str(old.device_id),
                                          "timestamp_utc": int(old.timestamp_utc), "id": event_id})
                         changed_times.add(int(old.timestamp_utc))
                     new_rows.append({"device_id": device_id, "timestamp_utc": utc_seconds(event.timestamp_utc),
                                      "id": event_id, "payload": payload})
+                    changed_events.append(event)
                     changed_times.add(utc_seconds(event.timestamp_utc))
                 if new_rows:
                     changed = True
@@ -430,6 +445,7 @@ class TelemetryRepository:
                                "id:Utf8,payload:Utf8>>; "
                                "UPSERT INTO source_events SELECT * FROM AS_TABLE($rows);",
                                {"$rows": ydb.TypedValue(new_rows, ydb.ListType(row_type))})
+            observe_first_inputs(tx, first_setpoints, changed_events)
             # A failed recheck must not erase evidence of an earlier successful response.
             if len(coverage_states) == 1:
                 data_type, state = next(iter(coverage_states.items()))
@@ -507,6 +523,7 @@ class TelemetryRepository:
                 )
             if changed:
                 revision = bump_revision(tx, "telemetry:" + device_id, publish=False)
+                advance_projection(tx, device_id, revision - 1, revision, previous_changed_events, changed_events)
                 extend(tx, [int(row["timestamp_utc"]) for row in rows], device_id, revision)
                 # Keep calibration markers independent: a later temperature
                 # write in the same hour must not overwrite an unconsumed boiler
