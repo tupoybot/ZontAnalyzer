@@ -37,6 +37,10 @@ class CacheWorld:
             result[window] = self.read_fence(keys)
         return result
 
+    def event_projection_states(self, devices: tuple) -> dict:
+        return {device: {"contract": "synthetic-projection", "generation": "ready", "ready": True}
+                for device in devices}
+
     def read_fence(self, keys: list[str]) -> dict[str, int | str]:
         return {key: self.markers.get(key, "") if key.startswith("meta:") else
                 self.source_fence().get(key.removeprefix("revision:"), 0) for key in keys}
@@ -76,6 +80,8 @@ class CacheWorld:
             replace(sample, timestamp=sample.timestamp + (origin - START)) for sample in series.samples))
             for key, series in data.signals.items()},
             settings_version=reports.day_history(history, left, right)["fingerprint"])
+        data = replace(data, reliability_context={
+            "event_projection": self.event_projection_states(("device",))["device"]})
         if self.unresolved_dhw:
             data = replace(data, exclusions=(ExclusionWindow(START + timedelta(hours=23),
                                                             START + timedelta(hours=23, minutes=30), "dhw"),))

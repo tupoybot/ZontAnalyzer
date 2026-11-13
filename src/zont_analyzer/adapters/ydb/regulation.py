@@ -7,19 +7,8 @@ from typing import Any
 
 import ydb  # type: ignore[import-untyped]
 
-from zont_analyzer.analytics.reliability import (
-    BOILER_LOSS_TYPES,
-    BOILER_RESTORE_TYPES,
-    CONNECTION_LOSS_TYPES,
-    CONNECTION_RESTORE_TYPES,
-    CONTROLLER_OFF_TYPES,
-    CONTROLLER_ON_TYPES,
-    MAIN_POWER_LOSS_TYPES,
-    MAIN_POWER_RESTORE_TYPES,
-)
-from zont_analyzer.domain import SourceEvent
-
 from .database import Transaction, YdbDatabase
+from .regulation_events import EventProjectionRepository, projection_states
 from .telemetry import _record_publication_change, encode, utc_seconds
 
 
@@ -39,29 +28,11 @@ class RegulationRepository:
         return [json.loads(row.payload) for row in rows]
 
     def source_events(self, device_id: str, start: datetime, end: datetime) -> dict[str, Any]:
-        """One bounded predecessor/window read; never a lifetime event scan."""
-        result = self.db.execute(
-            "DECLARE $device AS Utf8; DECLARE $start AS Int64; DECLARE $end AS Int64; "
-            "SELECT payload FROM source_events WHERE device_id=$device AND timestamp_utc < $start "
-            "ORDER BY timestamp_utc DESC,id DESC LIMIT 129; "
-            "SELECT payload FROM source_events WHERE device_id=$device AND timestamp_utc >= $start "
-            "AND timestamp_utc < $end ORDER BY timestamp_utc,id LIMIT 257;",
-            {"$device": device_id, "$start": utc_seconds(start), "$end": utc_seconds(end)},
-        )
-        prior = [SourceEvent.model_validate_json(row.payload) for row in result[0].rows]
-        current = [SourceEvent.model_validate_json(row.payload) for row in result[1].rows]
-        selected = [*prior[:128], *current[:256]]
-        families = (BOILER_LOSS_TYPES | BOILER_RESTORE_TYPES, MAIN_POWER_LOSS_TYPES | MAIN_POWER_RESTORE_TYPES,
-                    CONTROLLER_OFF_TYPES | CONTROLLER_ON_TYPES, CONNECTION_LOSS_TYPES | CONNECTION_RESTORE_TYPES)
-        # Only the last state of each event family matters at the boundary.
-        # Older omitted closed incidents are irrelevant once all four family
-        # states are represented in the bounded predecessor page.
-        prior_state_complete = len(prior) <= 128 or all(
-            any(event.event_type in family for event in prior[:128]) for family in families)
-        return {"events": sorted(selected, key=lambda event: (event.timestamp_utc, event.id)),
-                "incomplete": not prior_state_complete or len(current) > 256,
-                "prior_state_complete": prior_state_complete, "window_truncated": len(current) > 256,
-                "anchor": min((event.timestamp_utc for event in prior[:128]), default=start)}
+        """Four family predecessor/window reads in one stable snapshot transaction."""
+        return EventProjectionRepository(self.db).source_context(device_id, start, end)
+
+    def event_projection_states(self, devices: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+        return self.db.transaction(lambda tx: projection_states(tx, devices))
 
     def save(self, facts: dict[str, Any], *, source_fingerprint: str,
              source_fence: dict[str, int | str] | None = None, publish: bool = False) -> bool:
@@ -76,6 +47,11 @@ class RegulationRepository:
         payload = encode({**facts, "source_fingerprint": source_fingerprint})
 
         def save(tx: Transaction) -> bool:
+            expected_projection = facts.get("cache_dependency", {}).get("event_projection", {})
+            if expected_projection:
+                current_projection = projection_states(tx, tuple(sorted(expected_projection)))
+                if current_projection != expected_projection:
+                    raise ValueError("reliability event projection changed during calculation")
             negative = facts.get("cache_dependency", {}).get("negative_inputs", dict(
                 facts.get("negative_input_guards", [])))
             if negative:

@@ -104,7 +104,8 @@ def test_exact_error_integrals_cross_target_without_band_bias() -> None:
     assert facts["metrics"]["room_underheat_degree_hours"]["value"] == pytest.approx(0.5 * 300 / 2 / 3600)
 
 
-@pytest.mark.parametrize("humidity", ["same", "missing", "other", "invalid", "unknown"])
+@pytest.mark.parametrize("humidity", ["same", "missing", "other", "invalid", "unknown",
+                                    "temperature_unit", "missing_unit"])
 def test_abrupt_cooling_and_data_driven_recovery(humidity: str) -> None:
     room = [20.0] * 6 + [19.75, 19.5, 19.25, 19.0] + [19.0] * 10
     room += [19.0 + 0.1 * minute for minute in range(1, 11)] + [20.0] * 31
@@ -114,13 +115,15 @@ def test_abrupt_cooling_and_data_driven_recovery(humidity: str) -> None:
         if humidity == "invalid":
             humidity_values = [150.0] * len(humidity_values)
         series = signal("humidity", humidity_values)
+        series = replace(series, metadata=replace(series.metadata,
+            unit="°C" if humidity == "temperature_unit" else "" if humidity == "missing_unit" else "%"))
         if humidity == "unknown":
             series = replace(series, unknown_at=(START + timedelta(minutes=7),))
         data.signals["humidity"] = series
         data = replace(data, humidity_room_identity="room-sensor" if humidity != "other" else "different-room")
     facts = calculate(data)
     recovery = facts["exclusion_windows"][0]
-    expected = "ventilation_corroborated" if humidity == "same" else "abrupt_room_cooling"
+    expected = "ventilation_corroborated" if humidity in {"same", "missing_unit"} else "abrupt_room_cooling"
     assert recovery["reason"] == expected
     assert recovery["recovered"] is True
     assert datetime.fromisoformat(recovery["ended_at"]) >= START + timedelta(minutes=32)

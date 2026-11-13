@@ -29,7 +29,7 @@ from .regulation_sources import (
     regulation_source_selections,
 )
 
-CACHE_CONTRACT = "regulation-day-cache-v2"
+CACHE_CONTRACT = "regulation-day-cache-v3-family-projection"
 
 
 def _hash(value: Any) -> str:
@@ -78,12 +78,13 @@ def _dependency_bounds(facts: list[dict[str, Any]], start: datetime, end: dateti
 
 
 def _empty_dependency(selection: dict[str, Any]) -> dict[str, Any]:
-    return {"markers": {}, "settings": {}, "negative_inputs": {},
+    return {"markers": {}, "settings": {}, "negative_inputs": {}, "event_projection": {},
             "selection": _hash(selection), "rules": CACHE_CONTRACT}
 
 
 def _dependency_valid(dependency: dict[str, Any], actual: dict[str, Any], history: dict[str, Any],
-                      selection: dict[str, Any], settings_cache: dict[tuple[str, str], str] | None = None) -> bool:
+                      selection: dict[str, Any], settings_cache: dict[tuple[str, str], str] | None = None,
+                      projection: dict[str, dict[str, Any]] | None = None) -> bool:
     if dependency.get("rules") != CACHE_CONTRACT or dependency.get("selection") != _hash(selection):
         return False
     if any(actual.get(key) != value for key, value in dependency.get("markers", {}).items()):
@@ -91,6 +92,9 @@ def _dependency_valid(dependency: dict[str, Any], actual: dict[str, Any], histor
     for key, cutoff in dependency.get("negative_inputs", {}).items():
         first = actual.get("meta:" + key, "")
         if first != "" and int(first) < cutoff:
+            return False
+    for device, expected in dependency.get("event_projection", {}).items():
+        if projection is None or projection.get(device) != expected:
             return False
     for left, setting in dependency.get("settings", {}).items():
         key = (left, setting["end"])
@@ -161,6 +165,9 @@ def attach_regulation_cache(
     negative = dependency.setdefault("negative_inputs", {})
     for key, cutoff in facts.get("negative_input_guards", []):
         negative[key] = max(cutoff, negative.get(key, cutoff))
+    event_projection = facts.get("source_context", {}).get("event_projection")
+    if event_projection:
+        dependency.setdefault("event_projection", {})[facts["device_id"]] = event_projection
     write_fence = dict(source_fence)
     for key, value in dependency["markers"].items():
         if key in write_fence and write_fence[key] != value:
@@ -203,6 +210,7 @@ def validated_regulation_days(
     source_windows = [(left - timedelta(hours=6), right + timedelta(seconds=SOURCE_LOOKAHEAD_SECONDS))
                       for left, right in all_windows]
     identifiers = tuple(sorted({device for device, _circuit in scopes}))
+    projection = store.repository.event_projection_states(identifiers)
     fences = store.repository.source_fences(source_windows, device_ids=identifiers)
     for fence in fences.values():
         for device in identifiers:
@@ -245,7 +253,7 @@ def validated_regulation_days(
                          and existing.get("settings_version") == settings["fingerprint"]
                          and existing.get("period_end") == right.isoformat()
                          and _dependency_valid(existing.get("cache_dependency", {}), actual, history,
-                                               selection, settings_cache)
+                                               selection, settings_cache, projection)
                          and (previous is None or existing.get("previous_boundary_fingerprint") == _hash(previous)))
             facts = existing if valid else None
             if valid:
@@ -255,7 +263,7 @@ def validated_regulation_days(
             if left == predecessor[0] and existing:
                 seed = existing.get("input_boundary")
                 if seed and not _dependency_valid(_lineage(seed, selection), actual, history,
-                                                  selection, settings_cache):
+                                                  selection, settings_cache, projection):
                     blocked = True
             if facts is None and calculate_daily and len(windows) == 1 and complete and not blocked:
                 selected, current_selection, read_fence = prepare_regulation_day(

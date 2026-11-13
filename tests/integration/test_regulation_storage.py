@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.regulation_projection_support import initialize_projection
 from tests.unit.test_regulation import START, inputs
 from tests.ydb_support import make_database
 from zont_analyzer.adapters.ydb.telemetry import bump_revision, encode
@@ -106,6 +107,7 @@ def test_source_event_window_is_bounded_and_explicit_loss_overrides_valid_room_v
                           timestamp_utc=START + timedelta(minutes=20))]
     db.telemetry.write_window(device_id="device", data_type="events", start=START,
                               end=START + timedelta(hours=1), points=[], events=events)
+    initialize_projection(db, tmp_path)
     store = RegulationFactStore(db)
     context = store.repository.source_events("device", START, START + timedelta(hours=1))
     assert not context["incomplete"] and len(context["events"]) == 2
@@ -115,7 +117,7 @@ def test_source_event_window_is_bounded_and_explicit_loss_overrides_valid_room_v
     assert facts["coverage"]["exclusion_seconds"]["recovery:reliability"] == 13 * 60
 
 
-def test_source_event_predecessor_cap_is_explicit_instead_of_scanning_lifetime(tmp_path: Path) -> None:
+def test_missing_projection_is_explicit_then_complete_index_proves_absent_families(tmp_path: Path) -> None:
     db = make_database(tmp_path)
     start = START - timedelta(days=1)
     events = [SourceEvent(id=f"prior:{index}", device_id="device", event_type="Info",
@@ -124,7 +126,10 @@ def test_source_event_predecessor_cap_is_explicit_instead_of_scanning_lifetime(t
                               points=[], events=events)
     context = RegulationFactStore(db).repository.source_events("device", START, START + timedelta(days=1))
     assert context["incomplete"]
-    assert len(context["events"]) == 128
+    assert not context["projection_ready"]
+    initialize_projection(db, tmp_path)
+    complete = RegulationFactStore(db).repository.source_events("device", START, START + timedelta(days=1))
+    assert not complete["incomplete"] and complete["events"] == []
     restores = [SourceEvent(id=f"last:{kind}", device_id="device", event_type=kind,
                             timestamp_utc=START - timedelta(minutes=5 - index))
                 for index, kind in enumerate(("ReconnectingBoiler", "MainPowerFound", "PowerOn", "connected"))]
