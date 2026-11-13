@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from zont_analyzer.analytics.regulation import ALGORITHM_VERSION as REGULATION_FACT_VERSION
 from zont_analyzer.application import regulation_comparison_reports as combined
 from zont_analyzer.application.regulation_reports import day_history
 from zont_analyzer.domain.periods import midnight
@@ -277,7 +278,8 @@ def test_real_comparison_builder_consumes_shared_validated_facts(reader: ReaderH
     ]}
     monkeypatch.setattr(reader.db, "control_settings_history", lambda *args: history, raising=False)
     reader.selection["circuits"][0]["settings_history"] = history
-    source = {**fact(START, END), "algorithm_version": "regulation-v1", "source_fingerprint": "validated-source",
+    source = {**fact(START, END), "algorithm_version": REGULATION_FACT_VERSION,
+              "source_fingerprint": "validated-source",
               "settings_version": "new", "request_semantics": "state", "runs": []}
     reader.selection["circuits"][0]["facts"] = [source]
     reader.db.undated = [manual("unknown-time", name="left", undated=True)]

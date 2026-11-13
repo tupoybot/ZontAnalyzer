@@ -7,6 +7,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+from zont_analyzer.analytics.regulation import ALGORITHM_VERSION as REGULATION_FACT_VERSION
 from zont_analyzer.analytics.regulation_comparison import (
     ALGORITHM_VERSION,
     ComparisonRules,
@@ -65,7 +66,7 @@ def build_regulation_comparison_context(
     for fact in facts:
         if fact.get("scope") != scope:
             raise ValueError("comparison facts belong to another circuit")
-        if fact.get("algorithm_version") != "regulation-v1":
+        if fact.get("algorithm_version") != REGULATION_FACT_VERSION:
             raise ValueError("comparison requires current complete regulation census")
         key = fact["period_start"]
         if key in unique and unique[key] != fact:

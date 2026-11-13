@@ -7,6 +7,9 @@ from typing import Any
 
 import pytest
 
+from zont_analyzer.analytics.evidence import NumericSample, SignalMetadata, SignalSeries
+from zont_analyzer.analytics.regulation import ALGORITHM_VERSION as REGULATION_FACT_VERSION
+from zont_analyzer.analytics.regulation import RegulationInputs, build_regulation_facts
 from zont_analyzer.analytics.regulation_comparison import compare_change, observed_changes
 from zont_analyzer.application.regulation_comparison import build_regulation_comparison_context
 
@@ -74,7 +77,8 @@ def facts(*, after_error: float = 0.1, after_flow: float = 1) -> list[dict[str, 
                      "stats": {"error": stat(error), "actual": stat(40, variation=flow),
                                "command": stat(42, variation=flow), "outdoor": stat(5)}})
     return [{"scope": "device/room", "period_start": START.isoformat(), "period_end": END.isoformat(),
-             "algorithm_version": "regulation-v1", "source_fingerprint": "revision1", "settings_version": "history1",
+             "algorithm_version": REGULATION_FACT_VERSION, "source_fingerprint": "revision1",
+             "settings_version": "history1",
              "request_semantics": "state", "runs": runs,
              # Deliberately misleading presentation samples must never be consumed.
              "cycles": [], "metrics": {"room_absolute_error_c": {"value": 999}}}]
@@ -237,6 +241,60 @@ class FakeDatabase:
 
     def intervention_history(self, limit: int = 10, *, before: datetime | None = None) -> list[dict[str, Any]]:
         return []
+
+
+def producer_facts() -> list[dict[str, Any]]:
+    # Hourly request changes provide complete cycles and independent intervals
+    # on both sides of the uncertain settings-change window (12:00–13:00).
+    signals = {
+        key: SignalSeries(
+            key, SignalMetadata(key, key, "state" if key in {"mode", "request"} else "°C",
+                                value_kind="setpoint" if key in {"target", "command", "mode"} else "measurement"),
+            tuple(NumericSample(START + timedelta(minutes=10 * index),
+                                float(index // 6 % 2) if key == "request" else value)
+                  for index in range(151)),
+        )
+        for key, value in {"room": 21.0, "target": 21.0, "actual": 40.0, "command": 42.0,
+                           "outdoor": 5.0, "request": 1.0, "mode": 1.0}.items()
+    }
+    inputs = RegulationInputs(
+        device_id="device", circuit_id="room", signals=signals, mode_kind="maintenance",
+        settings_version="history1", settings_versions=((START, "old"), (CHANGE + timedelta(hours=1), "new")),
+    )
+    return [build_regulation_facts(start=START, end=START + timedelta(days=1), inputs=inputs),
+            build_regulation_facts(start=START + timedelta(days=1), end=END, inputs=inputs)]
+
+
+def test_current_producer_facts_reach_comparison_for_an_observed_change() -> None:
+    db = FakeDatabase()
+    data = producer_facts()
+    diagnostics: dict[str, int] = {}
+    result = build_regulation_comparison_context(
+        db, device_id="device", circuit_id="room", start=START, end=END,
+        read_facts=lambda *_: data, diagnostics=diagnostics, lookback_days=1,
+    )["regulation_comparisons"]
+    assert result["total_changes_in_history"] == 1
+    assert diagnostics["fact_range_reads"] == 1
+    assert diagnostics["fact_days_read"] == 2
+    assert len(result["results"]) == 1
+    comparison = result["results"][0]
+    assert comparison["stage"] == "available", comparison["next_observation"]
+    assert comparison["metrics"]["room_absolute_error_c"]["before"] == 0
+    assert comparison["metrics"]["room_absolute_error_c"]["after"] == 0
+    assert len(comparison["source_facts"]) == 2
+    assert db.writes == 1
+
+
+@pytest.mark.parametrize("version", ["regulation-v1", "unknown", None])
+def test_comparison_rejects_old_or_unknown_producer_version_before_cache_write(version: str | None) -> None:
+    db = FakeDatabase()
+    data = producer_facts()
+    data[0]["algorithm_version"] = version
+    with pytest.raises(ValueError, match="current complete regulation census"):
+        build_regulation_comparison_context(
+            db, device_id="device", circuit_id="room", start=START, end=END, read_facts=lambda *_: data,
+        )
+    assert db.writes == 0
 
 
 def test_bounded_one_range_read_persistent_cache_and_late_data() -> None:
