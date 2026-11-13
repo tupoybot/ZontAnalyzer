@@ -2,6 +2,8 @@ import json
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from zont_analyzer.adapters.openai.provider import ANALYSIS_PACKET_MAX_BYTES, analysis_packet
 
 
@@ -32,7 +34,9 @@ def test_complete_census_survives_bounded_examples_without_mutating_source():
     assert selected["cycle_counts"] == {"full": 719, "partial": 1}
     assert selected["coverage"]["eligible_seconds"] == 60 * 86400
     assert selected["metrics"]["room_absolute_error_c"]["value"] == 0.23
-    assert selected["cycles_total"] == 8 and len(selected["cycles"]) == 2
+    assert selected["cycles_total"] == 720 and len(selected["cycles"]) == 2
+    assert selected["cycles_input_examples_count"] == 8
+    assert selected["cycles_display_examples_count"] == 2
     assert context == old
     assert len(json.dumps(result, ensure_ascii=False).encode()) <= ANALYSIS_PACKET_MAX_BYTES
 
@@ -212,3 +216,105 @@ def test_negative_weather_band_and_owner_time_are_explicit_physical_facts():
     assert "full_facts_fingerprint" in block
     assert compared == source
     assert len(json.dumps(result, ensure_ascii=False).encode()) <= ANALYSIS_PACKET_MAX_BYTES
+
+
+@pytest.mark.parametrize("humidity", ["missing", "same"])
+def test_real_cooling_recovery_prepares_75_eligible_minutes_not_45(humidity):
+    from tests.regulation_acceptance_cases import START, ventilation_inputs
+    from zont_analyzer.analytics.regulation import build_regulation_facts
+
+    facts = build_regulation_facts(start=START, end=START + timedelta(hours=2),
+                                   inputs=ventilation_inputs(humidity))
+    reason = "ventilation_corroborated" if humidity == "same" else "abrupt_room_cooling"
+    assert facts["coverage"]["eligible_seconds"] == 4500
+    assert facts["coverage"]["exclusion_seconds"] == {"recovery:" + reason: 2700}
+    context = {"regulation_facts": {"circuits": [facts], "incomplete": False}}
+    original = deepcopy(context)
+    result = packet(context)
+    retained = result["control_context"]["regulation_facts"]["circuits"][0]
+    duration = retained["duration_summary"]
+    assert duration["period_minutes"] == duration["observed_minutes"] == 120
+    assert duration["eligible_minutes"] == 75
+    assert duration["eligible_percent_of_report"] == 62.5
+    assert duration["excluded_observed_minutes"] == 45
+    assert duration["missing_fact_minutes"] == 0
+    assert duration["excluded_by_reason_minutes"] == {"recovery:" + reason: 45}
+    assert duration["reason_minutes_may_overlap_do_not_sum"]
+    assert duration["missing_or_excluded_time_does_not_establish_a_physical_disturbance"]
+    assert retained["metrics"]["observed_request_active_seconds"]["aggregation"] == "TOTAL_FOR_REPORT"
+    assert retained["metrics"]["observed_request_active_seconds"]["value_minutes"] == 120
+    assert retained["metrics"]["eligible_request_active_seconds"]["value_minutes"] == 75
+    assert retained["metrics"]["cycle_mean_heating_seconds"]["aggregation"] == "MEAN_COMPLETE_ELIGIBLE_CYCLE"
+    assert retained["metrics"]["cycle_mean_heating_seconds"]["value_minutes"] is None
+    assert retained["cycle_counts"] == facts["cycle_counts"]
+    assert retained["exclusion_windows"][0]["certainty"] == (
+        "corroborated_same_room_humidity" if humidity == "same" else "cause_uncertain")
+    assert retained["exclusion_windows"][0]["reason"] == reason
+    assert retained["exclusion_windows"][0]["recovered"] is True
+    assert retained["exclusion_windows"][0]["ended_at"] == (START + timedelta(minutes=75)).isoformat()
+    assert "runs" not in retained and "boundary" not in retained
+    assert context == original
+    assert len(json.dumps(result, ensure_ascii=False).encode()) <= ANALYSIS_PACKET_MAX_BYTES
+
+
+def test_season_examples_do_not_replace_complete_exclusion_or_cycle_counts():
+    source = circuit()
+    source["cycle_examples_total"] = 720
+    source["exclusion_windows_total"] = 60
+    original = deepcopy(source)
+    result = packet({"regulation_facts": {"circuits": [source]}})
+    retained = result["control_context"]["regulation_facts"]["circuits"][0]
+    assert retained["cycles_total"] == 720
+    assert retained["cycle_examples_total"] == 720
+    assert retained["cycles_input_examples_count"] == 8
+    assert retained["cycles_display_examples_count"] == len(retained["cycles"]) == 2
+    assert retained["exclusion_windows_total"] == 60
+    assert retained["exclusion_windows_input_examples_count"] == 12
+    assert retained["exclusion_windows_display_examples_count"] == len(retained["exclusion_windows"]) == 4
+    assert source == original
+
+
+def test_actual_sixty_day_aggregate_keeps_one_held_setpoint_and_full_census_in_packet():
+    from tests.regulation_acceptance_cases import START, daily_facts, triangle_inputs
+    from zont_analyzer.analytics.regulation import aggregate_regulation_facts
+
+    days = daily_facts(triangle_inputs(60), 60)
+    aggregate = aggregate_regulation_facts(days, start=START, end=START + timedelta(days=60), expected_days=60)
+    assert aggregate["sample_intervals"]["target"]["sample_count"] == 1
+    assert aggregate["source_semantics"]["target"] == {
+        "value_kinds": ["setpoint"], "units": ["°C"], "included_days": 60,
+        "missing_metadata_days": 0, "status": "known",
+    }
+    metrics = deepcopy(aggregate["metrics"])
+    result = packet({"regulation_facts": {"circuits": [aggregate], "incomplete": aggregate["incomplete"]}})
+    block = result["control_context"]["regulation_facts"]
+    retained = block["circuits"][0]
+    assert retained["cycles_total"] == 480
+    assert retained["cycle_counts"]["full"] == 479 and retained["cycle_counts"]["partial"] == 1
+    assert retained["cycles_input_examples_count"] == 8
+    assert retained["cycles_display_examples_count"] == len(retained["cycles"]) <= 2
+    assert retained["sample_intervals"]["target"]["sample_count"] == 1
+    assert retained["source_semantics"]["target"]["value_kinds"] == ["setpoint"]
+    assert retained["source_semantics"]["target"]["value_contract"] == "setpoint"
+    assert retained["source_semantics"]["room"]["value_kinds"] == ["measurement"]
+    assert "until change or explicit unknown" in block["source_value_contracts"]["setpoint"]
+    assert "low sample count alone" in block["source_value_contracts"]["setpoint"]
+    assert "never hold indefinitely" in block["source_value_contracts"]["measurement"]
+    assert retained["incomplete"] is False
+    for name, metric in metrics.items():
+        assert retained["metrics"][name]["value"] == metric["value"]
+        assert retained["metrics"][name]["denominator"] == metric["denominator"]
+    assert len(json.dumps(block, ensure_ascii=False, separators=(",", ":")).encode()) <= 12 * 1024
+    assert len(json.dumps(result, ensure_ascii=False).encode()) <= ANALYSIS_PACKET_MAX_BYTES
+
+
+def test_mixed_or_missing_source_metadata_never_becomes_a_packet_hold_assumption():
+    source = circuit()
+    source["source_semantics"] = {
+        "target": {"value_kinds": ["measurement", "setpoint"], "units": ["°C"], "status": "mixed"},
+        "room": {"value_kinds": [], "units": [], "status": "missing"},
+    }
+    result = packet({"regulation_facts": {"circuits": [source]}})
+    semantics = result["control_context"]["regulation_facts"]["circuits"][0]["source_semantics"]
+    assert semantics["target"]["value_contract"] == semantics["room"]["value_contract"] == "mixed_or_missing_metadata"
+    assert semantics["room"]["value_kinds"] == [] and semantics["room"]["units"] == []

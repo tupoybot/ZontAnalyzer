@@ -147,7 +147,7 @@ font-size:14px;overflow-wrap:anywhere}
 .gas-savings p{font-size:14px}
 .gas-cost-comparisons{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:26px}
 .gas-cost-comparisons p{font-size:14px;overflow-wrap:anywhere}
-.chart-section,.thermal-system,.details-area{background:var(--surface);
+.chart-section,.thermal-system,.details-area,.regulation-result{background:var(--surface);
 border:1px solid var(--border);
 border-radius:12px;
 padding:26px}

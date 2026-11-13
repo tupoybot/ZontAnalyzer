@@ -1019,6 +1019,45 @@ def _regulation_metric_quantities(metrics: dict[str, Any]) -> None:
                     } else None)
         if quantity is not None and isinstance(metric, dict):
             metric["quantity"] = quantity
+        if not isinstance(metric, dict):
+            continue
+        if name == "observed_request_active_seconds":
+            metric["aggregation"] = "TOTAL_FOR_REPORT"
+        elif name == "eligible_request_active_seconds":
+            metric["aggregation"] = "TOTAL_FOR_ELIGIBLE_REPORT_INTERVALS"
+        elif name.startswith("cycle_mean_"):
+            metric["aggregation"] = "MEAN_COMPLETE_ELIGIBLE_CYCLE"
+        if metric.get("unit") == "seconds" and (name.startswith("cycle_mean_") or name in {
+            "observed_request_active_seconds", "eligible_request_active_seconds",
+        }):
+            metric["value_minutes"] = metric["value"] / 60 if metric.get("value") is not None else None
+
+
+def _regulation_duration_summary(row: dict[str, Any]) -> None:
+    coverage = row.get("coverage", {})
+
+    def duration(name: str) -> float | None:
+        value = coverage.get(name)
+        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    expected, observed, eligible, covered = (duration(name) for name in (
+        "expected_seconds", "observed_seconds", "eligible_seconds", "fact_seconds",
+    ))
+    row["duration_summary"] = {
+        "period_minutes": expected / 60 if expected is not None else None,
+        "fact_covered_minutes": covered / 60 if covered is not None else None,
+        "observed_minutes": observed / 60 if observed is not None else None,
+        "eligible_minutes": eligible / 60 if eligible is not None else None,
+        "eligible_percent_of_report": 100 * eligible / expected if expected and eligible is not None else None,
+        "excluded_observed_minutes": max(0, observed - eligible) / 60
+        if observed is not None and eligible is not None else None,
+        "missing_fact_minutes": max(0, expected - covered) / 60
+        if expected is not None and covered is not None else None,
+        "excluded_by_reason_minutes": {reason: seconds / 60 for reason, seconds in
+                                       coverage.get("exclusion_seconds", row.get("exclusion_seconds", {})).items()},
+        "reason_minutes_may_overlap_do_not_sum": True,
+        "missing_or_excluded_time_does_not_establish_a_physical_disturbance": True,
+    }
 
 
 def _compact_regulation_comparison(row: dict[str, Any], path: str, record_omitted: Any,
@@ -1085,6 +1124,20 @@ def _regulation_change_time(row: dict[str, Any]) -> float:
         return float("-inf")
 
 
+def _regulation_fact_examples(row: dict[str, Any], path: str, record_omitted: Any, *, limit: int) -> None:
+    for name, maximum in (("cycles", limit), ("exclusion_windows", limit * 2), ("missing_days", limit * 2)):
+        items = row.get(name, [])
+        if name in {"cycles", "exclusion_windows"}:
+            row.setdefault(name + "_input_examples_count", len(items))
+        if len(items) > maximum:
+            row[name] = items[:maximum]
+            if name != "cycles":
+                row[name + "_total"] = max(row.get(name + "_total", 0), len(items))
+            record_omitted(f"{path}.{name}", items[maximum:])
+        if name in {"cycles", "exclusion_windows"}:
+            row[name + "_display_examples_count"] = len(row.get(name, []))
+
+
 def _bounded_regulation(value: Any, byte_limit: int, key: str, record_omitted: Any) -> Any:
     """Preserve conclusions and census totals before bounded examples/provenance."""
     if not isinstance(value, dict):
@@ -1105,6 +1158,14 @@ def _bounded_regulation(value: Any, byte_limit: int, key: str, record_omitted: A
         "requested_flow_temperature": "заданная температура теплоносителя в подаче",
         "room_air_temperature": "температура воздуха комнаты, не температура пола",
     }
+    if collection == "circuits":
+        result["source_value_contracts"] = {
+            "setpoint": "hold last observed value until change or explicit unknown; never before first observation; "
+            "a low sample count alone is not missing measurements",
+            "measurement": "use only valid observed intervals within the gap limit; never hold indefinitely; "
+            "categorical/request signals retain their explicit observation semantics",
+            "mixed_or_missing_metadata": "no single value-holding rule is established for the whole period",
+        }
     # The comparison application emits newest first. Sorting by the actual
     # boundary also protects callers whose display order is chronological.
     prioritized = sorted(rows, key=_regulation_change_time, reverse=True) if collection == "results" else rows
@@ -1112,19 +1173,35 @@ def _bounded_regulation(value: Any, byte_limit: int, key: str, record_omitted: A
         row = deepcopy(original)
         row.pop("runs", None)
         if collection == "circuits":
-            for name, limit in (("cycles", 2), ("exclusion_windows", 4), ("missing_days", 4)):
-                items = row.get(name, [])
-                if len(items) > limit:
-                    row[name] = items[:limit]
-                    row[name + "_total"] = len(items)
-                    record_omitted(f"control_context.{key}.{name}", items[limit:])
+            _regulation_duration_summary(row)
+            for semantics in row.get("source_semantics", {}).values():
+                # This common denominator is already explicit on the circuit;
+                # keep per-source missing-day counts and differing scopes.
+                if semantics.get("included_days") == row.get("included_days"):
+                    semantics.pop("included_days", None)
+                kinds = semantics.get("value_kinds", [])
+                semantics["value_contract"] = kinds[0] if semantics.get("status") == "known" and kinds in (
+                    ["setpoint"], ["measurement"],
+                ) else "mixed_or_missing_metadata"
+            # Incremental state is for the next cache calculation, not an
+            # explanatory observation or an extra source of duration totals.
+            boundary = row.pop("boundary", None)
+            if boundary is not None:
+                record_omitted(f"control_context.{key}.boundary", boundary)
+            counts = row.get("cycle_counts", {})
+            row["cycles_total"] = counts["full"] + counts["partial"] if all(
+                type(counts.get(name)) is int and counts[name] >= 0 for name in ("full", "partial")) else None
+            _regulation_fact_examples(row, f"control_context.{key}", record_omitted, limit=2)
             row["metrics"] = {
                 name: {field: val for field, val in metric.items()
                        if field in {"value", "unit", "coverage_pct", "numerator", "denominator",
-                                    "denominator_unit", "unavailable_reasons"}}
+                                    "denominator_unit", "unavailable_reasons"}
+                       and not (field == "unavailable_reasons" and val == [])}
                 for name, metric in row.get("metrics", {}).items()
             }
             _regulation_metric_quantities(row["metrics"])
+            if _encoded_size(result) + _encoded_size(row) > byte_limit - 256:
+                _regulation_fact_examples(row, f"control_context.{key}", record_omitted, limit=1)
         else:
             _compact_regulation_comparison(row, f"control_context.{key}", record_omitted, examples=2)
             if _encoded_size(result) + _encoded_size(row) > byte_limit - 256:

@@ -305,12 +305,14 @@ def _sections(context: Mapping[str, Any], kind: str, timezone: str) -> tuple[lis
                             f"версия расчёта {_value(fact.get('algorithm_version'))}; "
                             f"версия настроек {_value(fact.get('settings_version'))}")
     versions = _items(history.get("versions"))
+    shown_changes = {identifier for result in results
+                     if (identifier := result.get("event_id") or _map(result.get("event")).get("event_id")) is not None}
     if versions:
         main.append("Исторические наблюдения настроек: текущий снимок не распространяется на прошлые периоды.")
     previous: Mapping[str, Any] = {}
     for version in versions:
         state = _map(_map(version.get("state")).get("fields"))
-        if version.get("kind") == "change":
+        if version.get("kind") == "change" and version.get("event_id") not in shown_changes:
             main.append(_boundary(version.get("boundary"), timezone))
             for key in version.get("changed_fields", []):
                 main.append(f"{FIELDS.get(key, 'Дополнительный параметр контроллера')}: "

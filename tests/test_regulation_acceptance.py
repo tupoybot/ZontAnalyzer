@@ -19,6 +19,7 @@ from tests.regulation_acceptance_cases import (
     triangle_inputs,
     ventilation_inputs,
 )
+from zont_analyzer.adapters.openai.provider import analysis_packet
 from zont_analyzer.analytics.regulation import aggregate_regulation_facts, build_regulation_facts
 from zont_analyzer.analytics.regulation_comparison import compare_change, observed_changes
 
@@ -63,6 +64,26 @@ def test_ventilation_evidence_has_exact_impact_recovery_and_denominator(humidity
     assert facts["coverage"]["exclusion_seconds"]["recovery:" + reason] == 45 * 60
     assert facts["metrics"]["room_absolute_error_c"]["denominator"] == 75 * 60
     assert facts["metrics"]["room_absolute_error_c"]["value"] == 0
+
+
+def test_fixture_units_survive_fact_and_packet_pipeline_before_model_use():
+    data = ventilation_inputs("same")
+    expected_units = {"room": "°C", "target": "°C", "actual": "°C", "outdoor": "°C",
+                      "request": "state", "humidity": "%"}
+    assert {key: series.metadata.unit for key, series in data.signals.items()} == expected_units
+    thermal = triangle_inputs()
+    assert thermal.signals["command"].metadata.unit == "°C"
+    assert thermal.signals["mode"].metadata.unit == thermal.signals["request"].metadata.unit == "state"
+    facts = build_regulation_facts(start=START, end=START + timedelta(hours=2), inputs=data)
+    packet = analysis_packet(quality={"score": 1}, metrics=[], events=[],
+                             period={"kind": "daily", "start": START.isoformat(),
+                                     "end": (START + timedelta(hours=2)).isoformat()},
+                             context={"regulation_facts": {"circuits": [facts], "incomplete": False}})
+    conveyed = packet["control_context"]["regulation_facts"]["circuits"][0]
+    assert {key: source["unit"] for key, source in conveyed["sources"].items()} == expected_units
+    assert conveyed["exclusion_windows"][0]["reason"] == "ventilation_corroborated"
+    assert conveyed["duration_summary"]["eligible_minutes"] == 75
+    assert conveyed["duration_summary"]["excluded_observed_minutes"] == 45
 
 
 def test_zont_only_joint_change_preserves_values_uncertain_time_and_stage():
@@ -210,7 +231,7 @@ def test_late_season_peak_replaces_day_and_repeat_does_not_add_cycles():
 
 def test_minute_activity_measures_seconds_without_inventing_flame_edges():
     data = triangle_inputs()
-    request = signal("request", [(minute, 23.0) for minute in range(1, 11)])
+    request = signal("request", [(minute, 23.0) for minute in range(1, 11)], unit="s")
     data = replace(data, request_semantics="preceding_minute", signals={**data.signals, "request": request})
     facts = build_regulation_facts(start=START, end=START + timedelta(minutes=10), inputs=data)
     assert facts["metrics"]["observed_request_active_seconds"]["value"] == 230

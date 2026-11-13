@@ -115,7 +115,7 @@ class PublicationRepository:
                 )[0].rows)
         # The queue index sorts by dirty flags before age. Read one bounded
         # prefix per possible bitmask, then choose the oldest across prefixes.
-        for dirty in range(1, 8):
+        for dirty in range(1, 16):
             add(self.db.execute(
                 "DECLARE $dirty AS Int64; DECLARE $limit AS Uint64; "
                 "SELECT * FROM publication_items VIEW by_queue "

@@ -81,22 +81,29 @@ def refresh_regulation_context(db: Any, report: Report) -> Report:
     return result
 
 
+def regulation_context_scopes(context: dict[str, Any]) -> set[str]:
+    """Empty unresolved envelopes do not establish regulation dependencies."""
+    known: set[str] = set()
+    for key in REGULATION_KEYS:
+        block = context.get(key, {})
+        if not isinstance(block, dict):
+            continue
+        known.update(str(scope) for scope in block.get("scopes", []) if scope)
+        for item in [block, *block.get("circuits", []), *block.get("results", [])]:
+            if isinstance(item, dict) and item.get("scope"):
+                known.add(str(item["scope"]))
+    return known
+
+
 def report_depends_on_regulation_scope(report: Report, scope: str) -> bool:
     """Use saved report bindings; unknown legacy scope stays conservative."""
     device_id, separator, circuit_id = scope.partition("/")
     if not separator or not device_id:
         return True
-    known: set[str] = set()
+    known = regulation_context_scopes(report.context)
     history = report.context.get("control_settings_history", {})
     if history.get("device_id") and history.get("circuit_id"):
         known.add(f"{history['device_id']}/{history['circuit_id']}")
-    for key in REGULATION_KEYS:
-        block = report.context.get(key, {})
-        if not isinstance(block, dict):
-            continue
-        for item in [block, *block.get("circuits", [])]:
-            if isinstance(item, dict) and item.get("scope"):
-                known.add(str(item["scope"]))
     if known:
         return any(candidate.partition("/")[0] == device_id and (
             circuit_id == "*" or candidate == scope) for candidate in known)

@@ -166,5 +166,122 @@ def test_new_daily_facts_requeue_later_regulation_report_without_legacy_comparis
         "id": "changed-earlier-day", "period_start": changed_start,
         "period_end": changed_start + timedelta(days=1),
     })
-    assert incremental._dependents(items, changed, START) == {item["href"]}
-    assert item["dirty"] & incremental.RENDER
+    database = SimpleNamespace(report=lambda _: selected)
+    assert incremental._dependents(items, changed, START, db=database) == {item["href"]}
+    assert item["dirty"] == incremental.RENDER
+
+
+def test_unresolved_regulation_envelopes_do_not_broaden_legacy_dependencies():
+    selected = report(ai=False)
+    selected.context = {"regulation_facts": {"circuits": [], "incomplete": True,
+                                               "dependency_start": "1970-01-01T00:00:00+00:00",
+                                               "dependency_end": selected.period_end.isoformat()},
+                        "regulation_comparisons": {"scopes": [], "results": [],
+                                                   "history_start": (START - timedelta(days=28)).isoformat(),
+                                                   "history_end": selected.period_end.isoformat()}}
+    assert incremental._windows(selected) == incremental._gas_windows(selected)
+    assert not incremental._has_dependencies(selected)
+
+
+def test_regulation_baseline_telemetry_queues_render_without_gas_refresh():
+    selected = report(ai=False)
+    lo, hi = incremental._windows(selected)
+    item = {"report_id": selected.id, "href": selected.id, "lo": lo, "hi": hi, "dirty": 0}
+    incremental._telemetry({selected.id: item}, [{"identifier": "2026-01-02T00"}], START,
+                           broad_calibration=False, db=SimpleNamespace(report=lambda _: selected))
+    assert item["dirty"] == incremental.RENDER
+
+
+@pytest.mark.ydb
+def test_changed_daily_report_and_late_telemetry_refresh_regulation_only_dependents(tmp_path, monkeypatch):
+    from tests.unit.test_incremental_publication import _daily_reports, _record_change, _runtime
+    from zont_analyzer.application import publication
+    from zont_analyzer.application.gas import GasService
+
+    runtime = _runtime(tmp_path)
+    source, unrelated, dependent = _daily_reports(runtime, 3)
+    dependent.context.update(context())
+    dependent.context["regulation_facts"].update(
+        dependency_start=source.period_start.isoformat(), dependency_end=dependent.period_end.isoformat(),
+    )
+    dependent.context["regulation_comparisons"].update(
+        history_start=source.period_start.isoformat(), history_end=dependent.period_end.isoformat(),
+    )
+    runtime.db.save_report(dependent, "fixture")
+    revision = [0]
+
+    def compact_only(_db, value):
+        current = {key: deepcopy(value.context[key]) for key in refresh.REGULATION_KEYS}
+        if value.id == dependent.id:
+            current["regulation_facts"]["circuits"][0]["metrics"]["room_absolute_error_c"]["value"] = revision[0]
+        return current
+
+    monkeypatch.setattr(refresh, "_build_context", compact_only)
+    publication.publish_reports(runtime, batch_size=8)
+    saved_unrelated = runtime.db.report(unrelated.id)
+    original_refresh = GasService.refresh
+    gas_calls = []
+
+    def gas_only_own_period(service, value):
+        gas_calls.append(value.id)
+        assert value.id != dependent.id, "a regulation baseline must not trigger gas recomputation"
+        return original_refresh(service, value)
+
+    monkeypatch.setattr(GasService, "refresh", gas_only_own_period)
+    revision[0] = 1
+    changed = runtime.db.report(source.id)
+    assert changed is not None
+    changed.summary = "Updated daily source"
+    runtime.db.save_report(changed, changed.summary)
+    result = publication.publish_reports(runtime, batch_size=8)
+    assert result["rendered_reports"] == 2 and result["pending_reports"] == 0
+    assert gas_calls == [source.id]
+    assert runtime.db.report(unrelated.id) == saved_unrelated
+    assert runtime.db.report(dependent.id).context["regulation_facts"]["circuits"][0]["metrics"][
+        "room_absolute_error_c"]["value"] == 1
+    gas_calls.clear()
+    revision[0] = 2
+    hour = (source.period_start + timedelta(hours=12)).strftime("%Y-%m-%dT%H")
+    _record_change(runtime.db, "telemetry", hour, {"calibration": False})
+    result = publication.publish_reports(runtime, batch_size=8)
+    assert result["rendered_reports"] == 2 and result["pending_reports"] == 0
+    assert gas_calls == [source.id]
+    assert runtime.db.report(unrelated.id) == saved_unrelated
+    assert publication.publish_reports(runtime)["rendered_reports"] == 0
+
+
+@pytest.mark.ydb
+@pytest.mark.parametrize("additional_refresh", [None, "cost", "gas"])
+def test_settings_backlog_continues_across_batches_with_existing_flag_combinations(
+    tmp_path, monkeypatch, additional_refresh,
+):
+    from tests.unit.test_incremental_publication import _daily_reports, _record_change, _runtime
+    from zont_analyzer.application import publication
+
+    runtime = _runtime(tmp_path)
+    reports = _daily_reports(runtime, 5)
+    for value in reports:
+        value.context["control_settings_history"] = {"device_id": "fixture", "circuit_id": "1", "versions": []}
+        runtime.db.save_report(value, value.summary)
+    publication.publish_reports(runtime, batch_size=8)
+    calls = []
+
+    def history(device, circuit, start, end):
+        calls.append((device, circuit, start))
+        return {"device_id": device, "circuit_id": circuit, "versions": [], "fingerprint": "updated"}
+
+    monkeypatch.setattr(runtime.db, "control_settings_history", history)
+    if additional_refresh:
+        _record_change(runtime.db, "global", additional_refresh)
+    _record_change(runtime.db, "control-settings", "fixture", {
+        "change_start": int(reports[0].period_start.timestamp() * 1_000_000),
+        "change_end": int(reports[-1].period_end.timestamp() * 1_000_000),
+    })
+    rendered = 0
+    for pending in (3, 1, 0):
+        result = publication.publish_reports(runtime, batch_size=2)
+        rendered += result["rendered_reports"]
+        assert result["pending_reports"] == pending
+    assert rendered == 5
+    assert {start for _device, _circuit, start in calls} == {value.period_start for value in reports}
+    assert publication.publish_reports(runtime, batch_size=2)["rendered_reports"] == 0

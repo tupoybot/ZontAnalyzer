@@ -33,8 +33,12 @@ TRIANGLE_ORACLE = {
 
 
 def signal(key: str, points: list[tuple[int, float]], *, start: datetime = START,
-           setpoint: bool = False) -> SignalSeries:
-    return SignalSeries(key, SignalMetadata("synthetic-room-sensor", key, "°C",
+           setpoint: bool = False, unit: str | None = None) -> SignalSeries:
+    physical_unit = unit if unit is not None else {
+        "room": "°C", "target": "°C", "actual": "°C", "command": "°C", "outdoor": "°C",
+        "humidity": "%", "request": "state", "mode": "state",
+    }[key]
+    return SignalSeries(key, SignalMetadata("synthetic-room-sensor", key, physical_unit,
                         value_kind="setpoint" if setpoint else "measurement"),
                         tuple(NumericSample(start + timedelta(minutes=minute), value) for minute, value in points))
 
