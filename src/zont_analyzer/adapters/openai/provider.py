@@ -26,7 +26,7 @@ from zont_analyzer.domain.reasoning import (
 )
 from zont_analyzer.observability import observe, span
 
-PROMPT_VERSION = "analyst-v8.12"
+PROMPT_VERSION = "analyst-v8.13"
 SCHEMA_VERSION = "analysis-result-v1"
 MAX_OUTPUT_TOKENS = 18_000
 
@@ -143,6 +143,10 @@ there is no recommendation or owner experiment. Do not infer the author or inten
 Keep room error/overshoot, commanded flow variation and actual flow variation separate. Better
 room accuracy with worse flow variation is mixed, not unconditional success. Preserve detected,
 transition/collecting, available, insufficient and superseded stages and their stated reasons.
+When regulation facts provide room and flow metrics, explain BOTH behaviours with their
+numerical basis: room error/overshoot and measured/requested flow range or variation. A close
+room mean must not hide fluctuating flow. If a quantity is unavailable, state that limitation
+instead of inventing it. Combine related findings; do not spend every observation on the room.
 Name the physical quantity in metric claims: actual is measured FLOW temperature, command is
 requested FLOW temperature, and room is room AIR temperature, never floor temperature.
 Weather conditions contain explicit Celsius bands with an exclusive upper bound, not point temperatures.
