@@ -279,22 +279,40 @@ def build_regulation_facts(*, start: datetime, end: datetime, inputs: Regulation
         samples = sorted((sample for sample in inputs.signals["request"].samples
                           if 0 <= sample.value <= 60 and start < sample.timestamp <= end),
                          key=lambda sample: sample.timestamp)
-        overlap = any((right.timestamp - left.timestamp).total_seconds() < 60
-                      for left, right in zip(samples, samples[1:], strict=False))
-        cropped = sum(0 < sample.value < 60 and sample.timestamp - timedelta(minutes=1) < start
+        # Inspect every supplied window, including lookback and lookahead.
+        # Either member of an overlapping pair has uncertain chronological
+        # support. Connected pairs mark their whole group, while unrelated
+        # valid minutes remain available for the census.
+        request_spans = lookups["request"].spans
+        overlapping: set[int] = set()
+        for index in range(1, len(request_spans)):
+            if request_spans[index].start < request_spans[index - 1].end:
+                overlapping.update((index - 1, index))
+        affected = [span for index, span in enumerate(request_spans)
+                    if index in overlapping and span.start < end and span.end > start]
+        overlap = bool(affected)
+        overlap_seconds = 0.0
+        covered_until = start
+        for span in affected:
+            left, right = max(start, span.start), min(end, span.end)
+            overlap_seconds += max(0.0, (right - max(left, covered_until)).total_seconds())
+            covered_until = max(covered_until, right)
+        overlapping_ends = {request_spans[index].end for index in overlapping}
+        cropped = sum(sample.timestamp not in overlapping_ends and 0 < sample.value < 60
+                      and sample.timestamp - timedelta(minutes=1) < start
                       for sample in samples)
         request_totals = {"minute_observation_count": len(samples),
                           "active_seconds_in_observation_windows_sum": sum(sample.value for sample in samples),
                           "overlapping_windows": overlap, "cropped_fractional_windows": cropped,
+                          "overlap_excluded_window_count": sum(start < span.end <= end for span in affected),
+                          "overlap_excluded_seconds": overlap_seconds,
                           "sum_is_chronological_duration": not overlap and not cropped}
-        if overlap:
-            lookups["request"] = _Lookup([])
-        else:
-            # A fractional minute crossing midnight does not reveal which
-            # seconds fell on either day. Keep the aggregate observation, but
-            # only complete windows support chronological activity duration.
-            lookups["request"] = _Lookup([span for span in lookups["request"].spans
-                                          if not (0 < span.left < 1 and (span.start < start or span.end > end))])
+        # A fractional minute crossing midnight does not reveal which seconds
+        # fell on either day. Keep it as an observation, but only complete,
+        # nonoverlapping windows support chronological activity duration.
+        lookups["request"] = _Lookup([span for index, span in enumerate(request_spans)
+                                      if index not in overlapping
+                                      and not (0 < span.left < 1 and (span.start < start or span.end > end))])
     boundaries = {start, end}
     for lookup in lookups.values():
         for span in lookup.spans:
@@ -833,6 +851,10 @@ def aggregate_regulation_facts(facts: list[dict[str, Any]], *, start: datetime, 
                       "overlapping_windows": any(item.get("overlapping_windows") for item in request_observations),
                       "cropped_fractional_windows": sum(item.get("cropped_fractional_windows", 0)
                                                          for item in request_observations),
+                      "overlap_excluded_window_count": sum(item.get("overlap_excluded_window_count", 0)
+                                                           for item in request_observations),
+                      "overlap_excluded_seconds": sum(item.get("overlap_excluded_seconds", 0)
+                                                      for item in request_observations),
                       "sum_is_chronological_duration": all(item.get("sum_is_chronological_duration", True)
                                                             for item in request_observations)}
     result.update({"algorithm_version": ALGORITHM_VERSION, "period_start": _iso(start), "period_end": _iso(end),

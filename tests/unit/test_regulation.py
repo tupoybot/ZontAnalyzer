@@ -199,6 +199,70 @@ def test_overlapping_minute_aggregates_preserve_observations_without_inventing_c
     assert "overlapping_minute_request_windows_not_reconstructable" in facts["unknowns"]
 
 
+def test_isolated_overlap_excludes_its_union_and_preserves_unaffected_full_cycles() -> None:
+    data = inputs(minutes=240)
+    regular = signal("request", [60.0 if 10 <= minute % 40 < 30 else 0.0 for minute in range(241)],
+                     start=START + timedelta(minutes=1))
+    data.signals["request"] = regular
+    data = replace(data, request_semantics="preceding_minute")
+    baseline = calculate(data, minutes=240)
+    data.signals["request"] = replace(regular, samples=tuple(sorted((
+        *regular.samples, NumericSample(START + timedelta(minutes=105, seconds=30), 23.0),
+    ))))
+    facts = calculate(data, minutes=240)
+    assert baseline["cycle_counts"]["full"] == 5
+    assert facts["cycle_counts"]["full"] == 4
+    assert facts["metrics"]["observed_request_active_seconds"]["value"] == 7200 - 120
+    assert facts["metrics"]["observed_request_active_seconds"]["denominator"] == 14400 - 120
+    assert facts["coverage"]["exclusion_seconds"]["request_unknown"] == 120
+    totals = facts["request_observation_totals"]
+    assert totals["active_seconds_in_observation_windows_sum"] == 7200 + 23
+    assert totals["overlap_excluded_window_count"] == 3
+    assert totals["overlap_excluded_seconds"] == 120
+
+
+def test_overlap_across_midnight_matches_full_source_with_boundary_lookahead() -> None:
+    start = START + timedelta(hours=23)
+    midnight, end = start + timedelta(hours=1), start + timedelta(hours=2)
+    source = inputs(minutes=121)
+    source.signals["request"] = signal(
+        "request", [60.0 if 10 <= minute % 40 < 30 else 0.0 for minute in range(121)],
+        start=START + timedelta(minutes=1),
+    )
+    source = replace(source, request_semantics="preceding_minute", signals={
+        key: replace(series, samples=tuple(replace(sample, timestamp=sample.timestamp + timedelta(hours=23))
+                                           for sample in series.samples)) for key, series in source.signals.items()})
+    request = source.signals["request"]
+    source.signals["request"] = replace(request, samples=tuple(sorted((
+        *request.samples, NumericSample(midnight + timedelta(seconds=30), 23.0),
+    ))))
+    baseline = build_regulation_facts(start=start, end=end, inputs=source)
+    days = []
+    previous = None
+    for left, right in ((start, midnight), (midnight, end)):
+        # Each day has its own bounded source slice; the extra minute is
+        # necessary to discover a window overlapping the preceding midnight.
+        selected = replace(source, signals={key: replace(series, samples=tuple(
+            sample for sample in series.samples
+            if left - timedelta(hours=6) <= sample.timestamp <= right + timedelta(seconds=61)))
+            for key, series in source.signals.items()})
+        fact = build_regulation_facts(start=left, end=right, inputs=selected, previous_boundary=previous)
+        days.append(fact)
+        previous = fact["boundary"]
+    combined = aggregate_regulation_facts(days, start=start, end=end)
+    assert baseline["cycle_counts"]["full"] == 1
+    assert combined["cycle_counts"] == baseline["cycle_counts"]
+    assert baseline["metrics"]["observed_request_active_seconds"]["value"] == 3480
+    assert combined["request_observation_totals"] == baseline["request_observation_totals"]
+    assert combined["request_observation_totals"]["overlap_excluded_seconds"] == 120
+    for key, metric in baseline["metrics"].items():
+        for field in ("value", "numerator", "denominator"):
+            if metric[field] is None:
+                assert combined["metrics"][key][field] is None
+            else:
+                assert combined["metrics"][key][field] == pytest.approx(metric[field])
+
+
 def test_fractional_minute_crossing_report_edge_does_not_split_unknown_active_seconds() -> None:
     data = inputs(minutes=10)
     data.signals["request"] = signal("request", [23.0] * 10, step=60, start=START + timedelta(seconds=30))

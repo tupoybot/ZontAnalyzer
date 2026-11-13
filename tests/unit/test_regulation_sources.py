@@ -50,8 +50,8 @@ def test_circuit_sources_keep_endpoint_request_semantics_and_same_sensor_humidit
     assert inputs.signals["actual"].metadata.value_kind == "measurement"
     assert len(db.fetch_numeric_observations.call_args_list) == 7
     for call in db.fetch_numeric_observations.call_args_list:
-        assert call.args[1:3] == (START - timedelta(hours=6), END + timedelta(seconds=1))
-    assert db.fetch_text_samples.call_args.args[2] == END + timedelta(seconds=1)
+        assert call.args[1:3] == (START - timedelta(hours=6), END + timedelta(seconds=61))
+    assert db.fetch_text_samples.call_args.args[2] == END + timedelta(seconds=61)
 
 
 def test_pure_metadata_selection_is_identical_to_loaded_binding_without_observations() -> None:
@@ -115,7 +115,7 @@ def test_scoped_fence_precedes_metadata_and_fetches() -> None:
         repository.return_value.source_fence.side_effect = lambda **kw: trace.append("fence") or {"day": "v1"}
         result = load_regulation_sources(db, START, END, device_ids=("controller",))
         repository.return_value.source_fence.assert_called_once_with(
-            start=START - timedelta(hours=6), end=END + timedelta(seconds=1), device_ids=("controller",))
+            start=START - timedelta(hours=6), end=END + timedelta(seconds=61), device_ids=("controller",))
     assert trace == ["fence", "devices", "series"]
     assert result.source_fence == {"day": "v1"}
 

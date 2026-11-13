@@ -23,6 +23,7 @@ from zont_analyzer.domain.periods import midnight
 from .regulation_context import RegulationFactStore, regulation_fingerprint
 from .regulation_sources import (
     SELECTION_VERSION,
+    SOURCE_LOOKAHEAD_SECONDS,
     load_regulation_sources,
     regulation_scopes,
     regulation_source_selections,
@@ -199,7 +200,8 @@ def validated_regulation_days(
     prior_date = (windows[0][0] - timedelta(hours=1)).astimezone(ZoneInfo(timezone)).date()
     predecessor = (midnight(prior_date, timezone), windows[0][0])
     all_windows = [predecessor, *windows]
-    source_windows = [(left - timedelta(hours=6), right + timedelta(seconds=1)) for left, right in all_windows]
+    source_windows = [(left - timedelta(hours=6), right + timedelta(seconds=SOURCE_LOOKAHEAD_SECONDS))
+                      for left, right in all_windows]
     identifiers = tuple(sorted({device for device, _circuit in scopes}))
     fences = store.repository.source_fences(source_windows, device_ids=identifiers)
     for fence in fences.values():

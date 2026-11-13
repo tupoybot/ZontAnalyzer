@@ -195,7 +195,7 @@ def export_selected_period(db: Database, start: datetime, end: datetime, *, time
         prepare_regulation_day,
         validated_regulation_days,
     )
-    from zont_analyzer.application.regulation_sources import regulation_scopes
+    from zont_analyzer.application.regulation_sources import SOURCE_LOOKAHEAD_SECONDS, regulation_scopes
 
     windows = _days(start, end, timezone)
     if not windows or len(windows) > MAX_DAYS or windows[0][0] != start or windows[-1][1] != end:
@@ -205,7 +205,8 @@ def export_selected_period(db: Database, start: datetime, end: datetime, *, time
     devices, series = db.list_devices(), db.list_series()
     scopes = regulation_scopes(devices, series)
     identifiers = tuple(sorted({device for device, _circuit in scopes}))
-    source_windows = [(left - timedelta(hours=6), right + timedelta(seconds=1)) for left, right in windows]
+    source_windows = [(left - timedelta(hours=6), right + timedelta(seconds=SOURCE_LOOKAHEAD_SECONDS))
+                      for left, right in windows]
     fences = repository.source_fences(source_windows, device_ids=identifiers)
     previous_start = windows[0][0] - timedelta(hours=1)
     prior = _days(previous_start, start, timezone)[0][0]

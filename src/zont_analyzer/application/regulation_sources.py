@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from zont_analyzer.adapters.ydb.application import Database
 
 SELECTION_VERSION = "regulation-sources-v1"
+SOURCE_LOOKAHEAD_SECONDS = 61
 
 
 @dataclass(frozen=True)
@@ -94,7 +95,7 @@ def load_regulation_sources(
     extend_setpoint_fence: bool = False, _describe_only: bool = False,
     _negative_recheck: bool = False,
 ) -> RegulationSources:
-    """Read at most 31 days, with six hours of context and the end observation.
+    """Read at most 31 days, six prior hours and one minute after the endpoint.
 
     A caller without device_ids uses the conservative global fence.
     A caller providing devices/series must also provide the fence captured before
@@ -108,9 +109,10 @@ def load_regulation_sources(
     if (devices is not None or series is not None) and source_fence is None:
         raise ValueError("preloaded source metadata requires a fence captured before its read")
     lookback = start - timedelta(hours=6)
-    # YDB timestamps are integral seconds. A microsecond is truncated by its
-    # adapter and would silently discard the endpoint needed for interpolation.
-    fetch_end = end + timedelta(seconds=1)
+    # A following preceding-minute aggregate can overlap the last minute of
+    # this day. Include that observation to localize ambiguity across midnight.
+    # The final second retains the endpoint in the half-open storage query.
+    fetch_end = end + timedelta(seconds=SOURCE_LOOKAHEAD_SECONDS)
     if source_fence is None:
         assert db is not None
         repository = RegulationRepository(db.storage)
