@@ -29,7 +29,7 @@ def _manual_for_scope(records: list[dict[str, Any]], device: str, circuit: str) 
 def build_regulation_report_context(
     db: Database, start: datetime, end: datetime, *, timezone: str, calculate_daily: bool = False,
 ) -> dict[str, Any]:
-    from .regulation_reports import _days, build_regulation_context, validated_regulation_days
+    from .regulation_reports import _days, build_regulation_context, day_history, validated_regulation_days
 
     if start.tzinfo is None or end.tzinfo is None or end <= start:
         raise ValueError("regulation report requires a positive timezone-aware period")
@@ -84,6 +84,7 @@ def build_regulation_report_context(
     comparisons = [build_regulation_comparison_context(
         db, device_id=item["device_id"], circuit_id=item["circuit_id"], start=start, end=end,
         read_facts=read_facts,
+        timeline=day_history(item["settings_history"], history_start, end),
         manual_history=_manual_for_scope(manual, str(item["device_id"]), str(item["circuit_id"])),
     )["regulation_comparisons"] for item in selected["circuits"]]
     for block in comparisons:

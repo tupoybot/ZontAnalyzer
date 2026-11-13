@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from zont_analyzer.application import regulation_comparison_reports as combined
+from zont_analyzer.application.regulation_reports import day_history
 from zont_analyzer.domain.periods import midnight
 
 START = datetime(2026, 1, 10, tzinfo=UTC)
@@ -37,6 +38,7 @@ def circuit(facts: list[dict[str, Any]], *, name: str = "left",
             missing: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {"scope": f"device/{name}", "device_id": "device", "circuit_id": name,
             "facts": facts, "missing_days": missing or [], "expected_days": 29,
+            "settings_history": {"device_id": "device", "circuit_id": name, "versions": [], "incomplete": False},
             "settings_history_incomplete": False, "source_binding": f"source-{name}"}
 
 
@@ -71,6 +73,7 @@ class ReaderHarness:
         self.comparisons: list[dict[str, Any]] = []
         dependency = ModuleType("zont_analyzer.application.regulation_reports")
         monkeypatch.setattr(dependency, "_days", local_days, raising=False)
+        monkeypatch.setattr(dependency, "day_history", day_history, raising=False)
         monkeypatch.setattr(dependency, "validated_regulation_days", self.validate, raising=False)
         monkeypatch.setattr(dependency, "build_regulation_context", self.aggregate, raising=False)
         monkeypatch.setitem(sys.modules, dependency.__name__, dependency)
@@ -104,13 +107,13 @@ class ReaderHarness:
         return {"regulation_facts": {"circuits": selected["circuits"], "unknowns": selected["unknowns"]}}
 
     def compare(self, db: object, *, device_id: str, circuit_id: str, start: datetime, end: datetime,
-                read_facts: Any, manual_history: list[dict[str, Any]]) -> dict[str, Any]:
+                read_facts: Any, timeline: dict[str, Any], manual_history: list[dict[str, Any]]) -> dict[str, Any]:
         assert db is self.db
         scope = f"{device_id}/{circuit_id}"
         left = min(start, end - timedelta(days=28)).replace(hour=0, minute=0, second=0, microsecond=0)
         data = read_facts(scope, left, end)
         assert all(item["scope"] == scope for item in data)
-        self.comparisons.append({"scope": scope, "facts": data, "manual": manual_history})
+        self.comparisons.append({"scope": scope, "facts": data, "manual": manual_history, "timeline": timeline})
         return {"regulation_comparisons": {
             "algorithm_version": "regulation-comparison-v2", "scope": scope,
             "results": [{"event_id": scope, "event": {"boundary": {"no_later_than": START.isoformat()}},
@@ -265,13 +268,15 @@ def test_real_comparison_builder_consumes_shared_validated_facts(reader: ReaderH
     old = {"status": "observed", "fields": {"pid_prop_koef": {"status": "observed", "value": 1}}}
     new = {"status": "observed", "fields": {"pid_prop_koef": {"status": "observed", "value": 2}}}
     history = {"device_id": "device", "circuit_id": "left", "incomplete": False, "versions": [
-        {"event_id": "first", "kind": "first_observation", "observed_at": history_start.isoformat(),
+        {"event_id": "first", "kind": "first_observation", "observed_at": int(history_start.timestamp() * 1_000_000),
          "version": "old", "state": old},
-        {"event_id": "change", "kind": "change", "observed_at": START.isoformat(),
+        {"event_id": "change", "kind": "change", "observed_at": int(START.timestamp() * 1_000_000),
          "version": "new", "state": new, "changed_fields": ["pid_prop_koef"],
-         "boundary": {"after": (START - timedelta(hours=1)).isoformat(), "no_later_than": START.isoformat()}},
+         "boundary": {"after": int((START - timedelta(hours=1)).timestamp() * 1_000_000),
+                      "no_later_than": int(START.timestamp() * 1_000_000)}},
     ]}
     monkeypatch.setattr(reader.db, "control_settings_history", lambda *args: history, raising=False)
+    reader.selection["circuits"][0]["settings_history"] = history
     source = {**fact(START, END), "algorithm_version": "regulation-v1", "source_fingerprint": "validated-source",
               "settings_version": "new", "request_semantics": "state", "runs": []}
     reader.selection["circuits"][0]["facts"] = [source]
@@ -284,3 +289,18 @@ def test_real_comparison_builder_consumes_shared_validated_facts(reader: ReaderH
     assert result["results"][0]["stage"] == "insufficient"
     assert result["fact_days_read"] == 1
     assert len(values) == 1
+
+
+def test_comparison_reuses_already_validated_settings_history_without_another_read(
+    reader: ReaderHarness, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zont_analyzer.application.regulation_comparison import build_regulation_comparison_context
+
+    monkeypatch.setattr(combined, "build_regulation_comparison_context", build_regulation_comparison_context)
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("settings history must be reused from the validated selection")
+    monkeypatch.setattr(reader.db, "control_settings_history", forbidden, raising=False)
+    result = reader.build()["regulation_comparisons"]
+    assert len(reader.validations) == 1
+    assert result["results"] == []
+    assert result["scopes"] == ["device/left"]
