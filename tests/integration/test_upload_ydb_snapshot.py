@@ -40,6 +40,7 @@ def _artifact(path: Path, *, device_count: int = 2) -> Path:
     (path / "manifest.json").write_bytes(transfer._canonical({
         "format": 1, "schema_sha256": transfer.SCHEMA_HASH,
         "source_import_sha256": source_hash, "tables": entries,
+        "additive_tables": sorted(set(entries) & set(transfer.ADDITIVE_TABLES)),
     }))
     return path
 

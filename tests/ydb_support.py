@@ -16,7 +16,8 @@ import pytest
 
 from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.adapters.ydb.database import YdbConfig, YdbDatabase
-from zont_analyzer.adapters.ydb.schema import TABLES
+from zont_analyzer.adapters.ydb.schema import ALL_TABLES as TABLES
+from zont_analyzer.adapters.ydb.schema import TABLES as BASE_TABLES
 from zont_analyzer.adapters.ydb.telemetry import bump_revision
 from zont_analyzer.config import AppConfig, LoadedConfig, Secrets
 from zont_analyzer.domain import SourceEvent, TelemetryPoint
@@ -41,7 +42,7 @@ _runtime_databases: dict[Path, Database] = {}
 _active_test: str | None = None
 _ydb_allowed = False
 _pool_counts = {"created": 0, "reused": 0, "reset": 0, "quarantined": 0}
-_SCHEMA_HASH = hashlib.sha256(json.dumps(TABLES, sort_keys=True).encode()).hexdigest()
+_SCHEMA_HASH = hashlib.sha256(json.dumps(BASE_TABLES, sort_keys=True).encode()).hexdigest()
 _CANONICAL_METADATA = {"schema_version": "2", "schema_hash": _SCHEMA_HASH}
 _DRAIN_SECONDS = 10.0
 

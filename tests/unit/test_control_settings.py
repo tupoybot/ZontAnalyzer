@@ -103,3 +103,171 @@ def test_boiler_type_and_duplicate_curve_are_not_mistaken_for_heating_pid() -> N
     assert result["regulation"]["status"] == "not_applicable"
     assert result["regulation"]["mode"] is None
     assert result["pza_curve"] is None
+
+
+def test_control_versions_ignore_object_and_circuit_order_but_preserve_curve_order() -> None:
+    from zont_analyzer.analytics.settings_history import fingerprint, observed_controls
+
+    one = {"id": 1, "type": 3, "pza": 10, "pid_prop_koef": 2, "setting_register": 1}
+    two = {"id": 2, "type": 3, "pid_prop_koef": 9}
+    curve = {"id": 10, "x": [2930, 2830], "y": [3030, 3130]}
+    config = {"heating_circuits": [one, two], "pzas": [curve]}
+    original = observed_controls({"z3k_config": config})
+    reordered = observed_controls({"z3k_config": {
+        "pzas": [curve], "heating_circuits": [two, dict(reversed(list(one.items())))],
+    }})
+    assert fingerprint(original) == fingerprint(reordered)
+    config["pzas"][0] = {**curve, "x": list(reversed(curve["x"]))}
+    assert fingerprint(original) != fingerprint(observed_controls({"z3k_config": config}))
+
+
+def test_control_versions_distinguish_missing_invalid_and_zero_and_circuit_loss() -> None:
+    from zont_analyzer.analytics.settings_history import observed_controls
+
+    def fields(circuit):
+        return observed_controls({"z3k_config": {"heating_circuits": [{"id": 1, **circuit}]}})["1"]["fields"]
+
+    assert fields({})["pid_prop_koef"] == {"status": "missing"}
+    assert fields({"pid_prop_koef": None})["pid_prop_koef"] == {"status": "invalid"}
+    assert fields({"pid_prop_koef": 0})["pid_prop_koef"] == {"status": "observed", "value": 0}
+    assert observed_controls({}, known={"1"})["1"]["status"] == "invalid_or_missing_configuration"
+    assert observed_controls({"z3k_config": {"heating_circuits": []}}, known={"1"})["1"]["status"] == "missing"
+
+
+def test_history_boundary_is_observed_not_effective_and_never_backprojects_current_state() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from zont_analyzer.analytics.settings_history import settings_timeline
+
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    at = int(start.timestamp() * 1_000_000)
+    hour = 3_600_000_000
+    a, b = {"fields": {"p": 1, "i": 2}}, {"fields": {"p": 3, "i": 4}}
+    events = [{"event_id": 1, "observed_at": at, "state": a, "last_confirmed_at": at + hour},
+              {"event_id": 2, "observed_at": at + 3 * hour, "state": b},
+              {"event_id": 3, "observed_at": at + 4 * hour, "state": a}]
+    result = settings_timeline(events, device_id="fixture", circuit_id="1", start=start,
+                               end=start + timedelta(hours=5))
+    assert [row["kind"] for row in result["versions"]] == ["first_observation", "change", "change"]
+    assert result["versions"][1]["changed_fields"] == ["i", "p"]
+    assert result["versions"][1]["boundary"] == {
+        "after": at + hour, "no_later_than": at + 3 * hour, "exact_effective_at": None,
+    }
+    assert result["versions"][2]["boundary"]["after"] == at + 3 * hour
+    assert result["versions"][1]["last_confirmed_at"] is None
+    before = settings_timeline(events[:1], device_id="fixture", circuit_id="1",
+                               start=start - timedelta(days=2), end=start - timedelta(days=1))
+    assert before["versions"] == [] and before["unknown_before_first_observation"]
+    # A change first observed after the report is relevant when its uncertainty
+    # interval overlaps that report; neither candidate is presented as exact.
+    during = settings_timeline(events, device_id="fixture", circuit_id="1",
+                               start=start + timedelta(hours=1), end=start + timedelta(hours=2))
+    assert [row["state"] for row in during["versions"]] == [a, b]
+
+
+def test_history_refresh_preserves_paid_interpretation_and_marks_changed_facts_stale() -> None:
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from zont_analyzer.application.reasoning_context import report_facts_fingerprint
+    from zont_analyzer.application.settings_history import refresh_settings_history
+    from zont_analyzer.domain import QualityResult, Report
+
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    old = {"device_id": "fixture", "circuit_id": "1", "versions": []}
+    report = Report(id="settings-test", kind="daily", period_start=start, period_end=start + timedelta(days=1),
+                    generated_at=start, timezone="UTC", summary="Original paid interpretation", ai_used=True,
+                    quality=QualityResult(score=1, coverage_pct=100, max_gap_seconds=0,
+                                          stuck_pct=0, implausible_jumps=0, sample_count=0),
+                    context={"control_settings_history": old})
+    baseline = report_facts_fingerprint(report)
+    report.context["ai_facts_fingerprint"] = baseline
+    changed = {**old, "versions": [{"state": {"p": 2}}]}
+    db = SimpleNamespace(control_settings_history=lambda *args: changed)
+    refreshed = refresh_settings_history(db, report)
+    assert refreshed.summary == report.summary and refreshed.ai_used
+    assert refreshed.context["ai_facts_fingerprint"] == baseline
+    assert refreshed.context["control_settings_interpretation_stale"] is True
+    assert refresh_settings_history(db, refreshed) == refreshed
+    same = SimpleNamespace(control_settings_history=lambda *args: old)
+    assert refresh_settings_history(same, report) == report
+
+
+def test_late_legacy_change_between_compact_confirmations_keeps_both_observed_states() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from zont_analyzer.analytics.settings_history import settings_timeline
+
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    at = int(start.timestamp() * 1_000_000)
+    hour = 3_600_000_000
+    a, b = {"fields": {"p": 1}}, {"fields": {"p": 2}}
+    events = [{"event_id": 1, "observed_at": at, "last_confirmed_at": at + 3 * hour, "state": a},
+              {"event_id": 2, "observed_at": at + hour, "last_confirmed_at": None, "state": b}]
+    result = settings_timeline(events, device_id="fixture", circuit_id="1", start=start,
+                               end=start + timedelta(hours=4))
+    assert [v["state"] for v in result["versions"]] == [a, b, a]
+    assert result["versions"][1]["last_confirmed_at"] is None
+    assert result["versions"][1]["boundary"]["after"] == at
+    assert result["versions"][2]["boundary"]["after"] == at + hour
+
+
+def test_settings_refresh_never_invents_missing_original_ai_baseline() -> None:
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from zont_analyzer.application.settings_history import refresh_settings_history, report_depends_on_device
+    from zont_analyzer.domain import QualityResult, Report
+
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    history = {"device_id": "fixture", "circuit_id": "1", "versions": []}
+    report = Report(id="settings-unknown-ai", kind="daily", period_start=start,
+                    period_end=start + timedelta(days=1), generated_at=start, summary="Earlier interpretation",
+                    ai_used=True, context={"control_settings_history": history,
+                                          "pilot_ai_reuse": {"facts_changed": True}},
+                    quality=QualityResult(score=1, coverage_pct=100, max_gap_seconds=0, stuck_pct=0,
+                                          implausible_jumps=0, sample_count=0))
+    current = [history]
+    db = SimpleNamespace(control_settings_history=lambda *args: current[0])
+    for index in [1, 2]:
+        current[0] = {**history, "versions": [{"version": index}]}
+        report = refresh_settings_history(db, report)
+        assert "ai_facts_fingerprint" not in report.context
+        assert report.context["control_settings_interpretation_stale"]
+    assert report_depends_on_device(report, "fixture", ["1"])
+    assert not report_depends_on_device(report, "other", ["1"])
+    assert not report_depends_on_device(report, "fixture", ["2"])
+
+
+def test_later_unchanged_confirmation_preserves_historical_semantic_fingerprint_and_ai() -> None:
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from zont_analyzer.analytics.settings_history import settings_timeline
+    from zont_analyzer.application.reasoning_context import report_facts_fingerprint
+    from zont_analyzer.application.settings_history import ensure_settings_history, refresh_settings_history
+    from zont_analyzer.domain import QualityResult, Report
+
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    at = int(start.timestamp() * 1_000_000)
+    day = 86_400_000_000
+    observation = {"event_id": 1, "observed_at": at, "last_confirmed_at": at, "state": {"fields": {"p": 1}}}
+    old = settings_timeline([observation], device_id="fixture", circuit_id="1", start=start,
+                            end=start + timedelta(days=1))
+    later = settings_timeline([{**observation, "last_confirmed_at": at + 10 * day}],
+                              device_id="fixture", circuit_id="1", start=start, end=start + timedelta(days=1))
+    assert old != later
+    assert old["fingerprint"] == later["fingerprint"]
+    report = Report(id="historical-settings", kind="daily", period_start=start, period_end=start + timedelta(days=1),
+                    generated_at=start, summary="Original interpretation", ai_used=True,
+                    context={"control_settings_history": old},
+                    quality=QualityResult(score=1, coverage_pct=100, max_gap_seconds=0, stuck_pct=0,
+                                          implausible_jumps=0, sample_count=0))
+    changed_metadata = report.model_copy(deep=True)
+    changed_metadata.context["control_settings_history"] = later
+    assert report_facts_fingerprint(changed_metadata) == report_facts_fingerprint(report)
+    db = SimpleNamespace(control_settings_history=lambda *args: later)
+    assert refresh_settings_history(db, report) == report
+    # The ordinary path already attached history and must perform no second read
+    # or binding lookup when finalization also serves long-period aggregation.
+    assert ensure_settings_history(SimpleNamespace(), report.context, report.period_start, report.period_end) == {}

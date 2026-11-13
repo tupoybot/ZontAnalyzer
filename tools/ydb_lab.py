@@ -110,7 +110,7 @@ class Harness:
 
     def capture_storage(self, config):
         from zont_analyzer.adapters.ydb.database import YdbDatabase
-        from zont_analyzer.adapters.ydb.schema import TABLES
+        from zont_analyzer.adapters.ydb.schema import ALL_TABLES as TABLES
         db = YdbDatabase(config)
         initialize = db.initialize
         original_close = db.close

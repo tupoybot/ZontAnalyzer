@@ -19,11 +19,13 @@ from typing import Any, cast
 from tools.verify_sqlite_import import verify_backup
 from zont_analyzer.adapters.ydb.database import YdbConfig, YdbDatabase
 from zont_analyzer.adapters.ydb.read_indexes import SUPPLEMENTAL_INDEXES
-from zont_analyzer.adapters.ydb.schema import TABLES
+from zont_analyzer.adapters.ydb.schema import ADDITIVE_TABLES
+from zont_analyzer.adapters.ydb.schema import ALL_TABLES as TABLES
+from zont_analyzer.adapters.ydb.schema import TABLES as BASE_TABLES
 
 EXCLUDED = frozenset({"migration_records"})
 TABLE_NAMES = tuple(name for name in TABLES if name not in EXCLUDED)
-SCHEMA_HASH = hashlib.sha256(json.dumps(TABLES, sort_keys=True).encode()).hexdigest()
+SCHEMA_HASH = hashlib.sha256(json.dumps(BASE_TABLES, sort_keys=True).encode()).hexdigest()
 MARKER_PREFIX = "__snapshot_transfer__"
 
 
@@ -70,9 +72,11 @@ def _expected_indexes(table: str) -> dict[str, tuple[str, ...]]:
 
 def _check_schema(db: YdbDatabase) -> None:
     actual_names = {item.name for item in cast(Any, db.driver.scheme_client).list_directory(db.path).children}
-    if actual_names != set(TABLES):
+    if not set(BASE_TABLES) <= actual_names <= set(TABLES):
         raise ValueError("YDB table inventory differs from application schema")
     for table in TABLES:
+        if table not in actual_names:
+            continue
         expected_columns = {name: (typ, required) for name, typ, required in _columns(table)}
         description = db.driver.table_client.describe_table(f"{db.path}/{table}")
         actual_columns = {col.name: (str(col.type).rstrip("?"), not str(col.type).endswith("?"))
@@ -137,11 +141,12 @@ def _artifact_manifest(directory: Path) -> dict[str, Any]:
     raw = (directory / "manifest.json").read_bytes()
     manifest = cast(dict[str, Any], json.loads(raw))
     if (manifest.get("format") != 1 or manifest.get("schema_sha256") != SCHEMA_HASH
-            or set(manifest.get("tables", {})) != set(TABLE_NAMES)
+            or not (set(BASE_TABLES) - EXCLUDED <= set(manifest.get("tables", {})) <= set(TABLE_NAMES))
+            or set(manifest.get("additive_tables", [])) != set(manifest.get("tables", {})) & set(ADDITIVE_TABLES)
             or not re.fullmatch(r"[0-9a-f]{64}", manifest.get("source_import_sha256", ""))
             or _canonical(manifest) != raw):
         raise ValueError("unsupported or incomplete artifact manifest")
-    for table in TABLE_NAMES:
+    for table in manifest["tables"]:
         entry = manifest["tables"][table]
         if (set(entry) != {"rows", "bytes", "sha256"}
                 or type(entry["rows"]) is not int or entry["rows"] < 0
@@ -155,6 +160,8 @@ def _artifact_manifest(directory: Path) -> dict[str, Any]:
 
 
 def _file_rows(directory: Path, table: str) -> Iterator[dict[str, Any]]:
+    if table in ADDITIVE_TABLES and not (directory / f"{table}.jsonl").exists():
+        return
     last: tuple[Any, ...] | None = None
     with (directory / f"{table}.jsonl").open("rb") as source:
         for line in source:
@@ -191,11 +198,14 @@ def export_snapshot(db: YdbDatabase, directory: Path, sqlite_backup: Path, *,
         # merely to discover which part of the source comparison failed.
         raise ValueError("local SQLite import verification failed: " + json.dumps(proof, sort_keys=True))
     _check_schema(db)
+    actual_tables = {entry.name for entry in db.driver.scheme_client.list_directory(db.path).children}
     source_digest = _digest(sqlite_backup)
     directory.mkdir(mode=0o700, parents=True)
     tables = {}
     try:
         for table in TABLE_NAMES:
+            if table not in actual_tables:
+                continue
             path = directory / f"{table}.jsonl"
             digest = hashlib.sha256()
             count = size = 0
@@ -216,7 +226,8 @@ def export_snapshot(db: YdbDatabase, directory: Path, sqlite_backup: Path, *,
                     size += len(chunk)
             tables[table] = {"rows": count, "bytes": size, "sha256": digest.hexdigest()}
         manifest = {"format": 1, "schema_sha256": SCHEMA_HASH,
-                    "source_import_sha256": source_digest, "tables": tables}
+                    "source_import_sha256": source_digest, "tables": tables,
+                    "additive_tables": sorted(set(tables) & set(ADDITIVE_TABLES))}
         path = directory / "manifest.json"
         with path.open("xb") as output:
             os.chmod(path, 0o600)
@@ -244,7 +255,7 @@ def _expected_markers(directory: Path, manifest: Mapping[str, Any]) -> dict[str,
         "source_import_sha256": manifest["source_import_sha256"],
         "status": "complete",
     }}
-    for table in TABLE_NAMES:
+    for table in manifest["tables"]:
         expected[MARKER_PREFIX + "table:" + table] = {
             "manifest_sha256": digest, "rows": manifest["tables"][table]["rows"],
         }
@@ -256,6 +267,7 @@ def verify_snapshot(db: YdbDatabase, directory: Path, *,
     """Read-only full comparison, including missing, changed, and cloud-only rows."""
     manifest = _artifact_manifest(directory)
     _check_schema(db)
+    actual_tables = {entry.name for entry in db.driver.scheme_client.list_directory(db.path).children}
     # The target deliberately omits the source's row-by-row migration journal.
     # A single indexed/limited read rejects accidental journal import cheaply.
     journal_empty = True
@@ -268,7 +280,7 @@ def verify_snapshot(db: YdbDatabase, directory: Path, *,
     markers: dict[str, Any] = {}
     for table in TABLE_NAMES:
         expected = _file_rows(directory, table)
-        actual = _ordered_rows(db, table)
+        actual = _ordered_rows(db, table) if table in actual_tables else iter(())
         left = next(expected, None)
         right = next(actual, None)
         counts = {"expected_rows": 0, "actual_rows": 0, "missing": 0,
@@ -293,7 +305,7 @@ def verify_snapshot(db: YdbDatabase, directory: Path, *,
                 counts["actual_rows"] += 1
                 counts["changed"] += int(_canonical(left) != _canonical(right))
                 left, right = next(expected, None), next(actual, None)
-        if counts["expected_rows"] != manifest["tables"][table]["rows"]:
+        if counts["expected_rows"] != manifest["tables"].get(table, {}).get("rows", 0):
             raise ValueError(f"artifact count mismatch: {table}")
         total_bad += counts["missing"] + counts["extra"] + counts["changed"]
         results[table] = counts

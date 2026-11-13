@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from tools.ydb_storage_audit import PAGE_SIZE, inspect_storage
-from zont_analyzer.adapters.ydb.schema import TABLES
+from zont_analyzer.adapters.ydb.schema import ALL_TABLES as TABLES
 from zont_analyzer.adapters.ydb.telemetry import encode
 
 

@@ -531,6 +531,9 @@ class AnalysisService:
         control_context["control_settings"] = control_settings(
             selected_device.get("raw", {}), circuit_id, captured_at=selected_device.get("discovered_at"),
         )
+        control_context["control_settings_history"] = self.db.control_settings_history(
+            device_id, circuit_id, start, end,
+        )
         control_context["burner_activity_scope"] = burner_activity_scope
         control_context["sensors"] = _sensor_report_context(series, temperature_series)
         control_context["recommendation_policy"] = "p2-1.7"
@@ -896,6 +899,9 @@ class AnalysisService:
             control_context.update(heating_context(self.db, control_context, start, end))
         else:
             control_context.get("temporal_evidence", {}).pop("heating_source_windows", None)
+        from zont_analyzer.application.settings_history import ensure_settings_history
+
+        control_context.update(ensure_settings_history(self.db, control_context, start, end))
         if self.db.source_revision() != source_revision:
             raise ValueError("inputs changed while report was calculated")
         # A long-period report can explain recorded outages and the limits of

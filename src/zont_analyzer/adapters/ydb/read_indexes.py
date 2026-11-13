@@ -18,10 +18,15 @@ if TYPE_CHECKING:
 SUPPLEMENTAL_INDEXES: dict[str, dict[str, tuple[str, ...]]] = {
     'reports': {'by_kind_end': ('kind', 'period_end')},
     'coverage': {'by_end': ('device_id', 'data_type', 'ended_at')},
+    'config_snapshots': {'by_observed': ('device_id', 'captured_at', 'id')},
 }
 
 
 def ensure_read_indexes(db: YdbDatabase) -> None:
+    from .schema import ADDITIVE_TABLES
+
+    for name, definition in ADDITIVE_TABLES.items():
+        db.execute(f"CREATE TABLE IF NOT EXISTS `{name}` ({definition});")
     session = db.driver.table_client.session().create()
     try:
         for table, indexes in SUPPLEMENTAL_INDEXES.items():

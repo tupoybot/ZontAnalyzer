@@ -96,6 +96,13 @@ class Database:
                            "model": device.get("devtype") or device.get("model"), "raw": device})
         return result
 
+    def control_settings_history(
+        self, device_id: str, circuit_id: str, start: datetime, end: datetime,
+    ) -> dict[str, Any]:
+        from .control_history import period_history
+
+        return period_history(self.storage, device_id, circuit_id, start, end)
+
     def list_series(self) -> list[dict[str, Any]]:
         return self.telemetry.list_series()
 

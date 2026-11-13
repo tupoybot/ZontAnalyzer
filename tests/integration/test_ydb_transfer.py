@@ -176,3 +176,40 @@ def test_verifier_requires_complete_exact_upload_markers(
         "UPSERT INTO metadata (name,value) VALUES ('__snapshot_transfer__unknown','{}');"
     )
     assert verify_snapshot(ydb_database, artifact, require_upload_complete=True)["ok"] is False
+
+
+@pytest.mark.ydb
+def test_legacy_snapshot_without_additive_tables_restores_and_new_exports_preserve_them(
+    tmp_path: Path, ydb_database: YdbDatabase,
+) -> None:
+    from tools.transfer_ydb_snapshot import _canonical
+    from zont_analyzer.adapters.ydb.schema import ADDITIVE_TABLES
+
+    backup = tmp_path / "closed.sqlite"
+    _source(backup)
+    import_backup(backup, ydb_database)
+    artifact = tmp_path / "legacy-artifact"
+    export_snapshot(ydb_database, artifact, backup, require_complete_schema=False, require_sidecars=False)
+    manifest = _artifact_manifest(artifact)
+    assert set(manifest["additive_tables"]) == set(ADDITIVE_TABLES)
+    for name in ADDITIVE_TABLES:
+        del manifest["tables"][name]
+        (artifact / f"{name}.jsonl").unlink()
+    del manifest["additive_tables"]
+    (artifact / "manifest.json").write_bytes(_canonical(manifest))
+    target = make_ydb_database(fresh_schema=True)
+    try:
+        upload_snapshot(target, artifact, ru_per_second=1000)
+        assert verify_snapshot(target, artifact, require_upload_complete=True)["ok"]
+        target.execute("UPSERT INTO control_setting_heads (device_id,circuit_id,payload) VALUES ('fixture','1','{}');")
+        assert not verify_snapshot(target, artifact, require_upload_complete=True)["ok"]
+    finally:
+        target.close()
+    ydb_database.execute(
+        "UPSERT INTO control_setting_heads (device_id,circuit_id,payload) VALUES ('fixture','1','{}');"
+    )
+    new_artifact = tmp_path / "new-artifact"
+    result = export_snapshot(ydb_database, new_artifact, backup,
+                             require_complete_schema=False, require_sidecars=False)
+    assert result["tables"]["control_setting_heads"] == 1
+    assert verify_snapshot(ydb_database, new_artifact)["ok"]

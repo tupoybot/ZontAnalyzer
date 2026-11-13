@@ -20,6 +20,11 @@ def _facts_digest(report: Report, *, include_ai_provenance: bool) -> str:
         "kind", "period_start", "period_end", "timezone", "quality", "metrics", "events", "context",
     })
     context = payload["context"]
+    history = context.get("control_settings_history")
+    if isinstance(history, dict):
+        from zont_analyzer.analytics.settings_history import semantic_history
+
+        context["control_settings_history"] = semantic_history(history)
     if not include_ai_provenance:
         context.pop("ai_provenance", None)
         for key, field in (("control_settings", "captured_at"),
@@ -28,7 +33,8 @@ def _facts_digest(report: Report, *, include_ai_provenance: bool) -> str:
             if isinstance(value, dict):
                 value.pop(field, None)
     for key in ("input_revision", "calculation_version", "pilot_ai_reuse", "ai_interpretation_reuse",
-                "ai_facts_fingerprint", "gas_interpretation_stale", "timezone_provenance"):
+                "ai_facts_fingerprint", "gas_interpretation_stale", "timezone_provenance",
+                "control_settings_interpretation_stale"):
         context.pop(key, None)
     gas = context.get("gas")
     if isinstance(gas, dict):
@@ -77,6 +83,12 @@ def reuse_ai_interpretation(previous: Report, current: Report) -> Report:
         context["gas_interpretation_stale"] = True
     else:
         context.pop("gas_interpretation_stale", None)
+    prior_history = previous.context.get("control_settings_history", {})
+    current_history = current.context.get("control_settings_history", {})
+    if (prior_history.get("fingerprint") != current_history.get("fingerprint")
+            if prior_history.get("fingerprint") and current_history.get("fingerprint")
+            else prior_history != current_history):
+        context["control_settings_interpretation_stale"] = True
     return current.model_copy(update={
         "context": context, "summary": previous.summary, "recommendations": previous.recommendations,
         "ai_used": True, **reasoning_payload(previous),

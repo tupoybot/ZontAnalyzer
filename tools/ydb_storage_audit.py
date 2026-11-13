@@ -13,7 +13,7 @@ from typing import Any
 import ydb  # type: ignore[import-untyped]
 
 from zont_analyzer.adapters.ydb.database import YdbConfig, YdbDatabase
-from zont_analyzer.adapters.ydb.schema import TABLES
+from zont_analyzer.adapters.ydb.schema import ALL_TABLES as TABLES
 from zont_analyzer.adapters.ydb.telemetry import encode
 from zont_analyzer.adapters.zont_readonly.configuration import configuration_snapshot
 

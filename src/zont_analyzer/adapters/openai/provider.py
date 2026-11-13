@@ -707,12 +707,14 @@ def analysis_packet(
         "intervention_history", "period_comparisons", "intervention_outcomes", "house_context",
     }
     important_context.update({"counterfactual_question", "heating_analysis", "control_settings", "event_totals",
+                              "control_settings_history",
                               "gas", "gas_savings"})
     context_priority = (
         ("event_totals", 2 * 1024),
         ("counterfactual_question", 3 * 1024),
         ("gas", 5 * 1024),
         ("gas_savings", 7 * 1024),
+        ("control_settings_history", 8 * 1024),
         ("control_settings", 6 * 1024),
         ("heating_analysis", 8 * 1024),
         ("intervention_history", 1536),
@@ -734,7 +736,9 @@ def analysis_packet(
             if key in canonical_context:
                 bounded = (
                     _bounded_heating(canonical_context[key], byte_limit, record_omitted)
-                    if key == "heating_analysis" else _bounded_context_value(
+                    if key == "heating_analysis" else _bounded_settings_history(
+                        canonical_context[key], byte_limit, record_omitted,
+                    ) if key == "control_settings_history" else _bounded_context_value(
                         canonical_context[key], byte_limit, f"control_context.{key}", record_omitted
                     )
                 )
@@ -915,6 +919,21 @@ def _add_sorted_list(
         if (byte_limit is not None and _encoded_size(selected) > byte_limit) or not _fits(packet):
             selected.pop()
             record_omitted(omission_name, value)
+
+
+def _bounded_settings_history(value: Any, byte_limit: int, record_omitted: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    result = {key: item for key, item in value.items() if key != "versions"}
+    result["versions"] = []
+    versions = value.get("versions", [])
+    for row in versions:
+        if _encoded_size(result) + _encoded_size(row) < byte_limit - 128:
+            result["versions"].append(row)
+        else:
+            result["packet_history_incomplete"] = True
+            record_omitted("control_context.control_settings_history.versions", row)
+    return result
 
 
 def _bounded_context_value(value: Any, byte_limit: int, omission_name: str, record_omitted: Any) -> Any:

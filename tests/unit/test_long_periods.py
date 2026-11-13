@@ -236,3 +236,62 @@ def test_enriched_legacy_target_means_count_only_observed_days(tmp_path: Path) -
     result = aggregate_long_period(db, _period(start, start + timedelta(days=3)))
     assert result.context['period_target_mean_c'] == 20
     assert result.context['period_target_coverage_pct'] == pytest.approx(16.67)
+
+
+@pytest.mark.ydb
+def test_season_longer_than_31_days_keeps_historical_control_versions_and_uncertain_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import zont_analyzer.adapters.ydb.telemetry as telemetry
+    from tests.ydb_support import seed_samples
+    from zont_analyzer.application.analysis import AnalysisService
+    from zont_analyzer.config import AppConfig
+    from zont_analyzer.domain import TelemetryPoint
+
+    db = _db(tmp_path)
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+    end = start + timedelta(days=40)
+    clock = [start - timedelta(days=1)]
+
+    class Clock:
+        @classmethod
+        def now(cls, timezone):
+            return clock[0]
+
+    monkeypatch.setattr(telemetry, "datetime", Clock)
+    for days, coefficient in [(-1, 1), (10, 3)]:
+        clock[0] = start + timedelta(days=days)
+        db.telemetry.save_devices([{"id": "fixture", "raw": {"z3k_config": {"heating_circuits": [
+            {"id": 1, "type": 3, "setting_register": 1, "pza": 0, "pid_prop_koef": coefficient},
+            {"id": 2, "type": 3, "setting_register": 1, "pza": 0, "pid_prop_koef": 9},
+        ]}}}])
+    monkeypatch.setattr(telemetry, "datetime", datetime)
+    seed_samples(db, [TelemetryPoint(
+        device_id="fixture", source_type="z3k_heating_circuit", entity_id="circuit:1", metric_key="target_temp",
+        timestamp_utc=start + timedelta(hours=1), value_num=21,
+    )], {"circuit:1": "target_temperature"})
+    original_history = db.control_settings_history
+    reads = []
+
+    def history(device, circuit, left, right):
+        reads.append((device, circuit, left, right))
+        return original_history(device, circuit, left, right)
+
+    monkeypatch.setattr(db, "control_settings_history", history)
+    config = AppConfig()
+    config.home.timezone = "UTC"
+    report = AnalysisService(db, config).analyze_period(_period(start, end), use_ai=False)
+    assert "long_period_aggregation" in report.context
+    history = report.context["control_settings_history"]
+    assert history["device_id"] == "fixture" and history["circuit_id"] == "1"
+    versions = history["versions"]
+    assert [item["state"]["fields"]["pid_prop_koef"]["value"] for item in versions] == [1, 3]
+    assert versions[1]["boundary"] == {
+        "after": int((start - timedelta(days=1)).timestamp() * 1_000_000),
+        "no_later_than": int((start + timedelta(days=10)).timestamp() * 1_000_000),
+        "exact_effective_at": None,
+    }
+    current = {item["field"]: item["value"] for item in report.context["control_settings"]["parameters"]}
+    assert current["pid_prop_koef"] == 3
+    assert reads.count(("fixture", "1", start, end)) == 1
+    assert not report.ai_used

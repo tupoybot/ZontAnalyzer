@@ -1,4 +1,4 @@
-"""Schema v2. No source retention TTL is applied to the application's history."""
+"""Schema v2 plus additive tables. The original TABLES hash stays stable."""
 
 TABLES = {
     "migration_records": (
@@ -116,3 +116,17 @@ TABLES = {
         "id Utf8 NOT NULL, scope Utf8, started_at Int64, status Utf8, payload Utf8, PRIMARY KEY (id)"
     ),
 }
+
+# Additions do not alter original columns or stored values. Old application
+# images may ignore these tables; exports made by new versions include them.
+ADDITIVE_TABLES = {
+    "control_setting_heads": (
+        "device_id Utf8 NOT NULL, circuit_id Utf8 NOT NULL, payload Utf8, "
+        "PRIMARY KEY(device_id,circuit_id)"
+    ),
+    "control_setting_observations": (
+        "device_id Utf8 NOT NULL, circuit_id Utf8 NOT NULL, observed_at Int64 NOT NULL, "
+        "event_id Int64 NOT NULL, payload Utf8, PRIMARY KEY(device_id,circuit_id,observed_at,event_id)"
+    ),
+}
+ALL_TABLES = {**TABLES, **ADDITIVE_TABLES}
