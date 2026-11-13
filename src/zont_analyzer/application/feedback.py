@@ -257,6 +257,49 @@ def feedback_handler_type(runtime: Runtime) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(encoded)
 
+        def _experiments_request(self, *, write: bool = False) -> bool:
+            path = urlsplit(self.path).path
+            prefix, suffix = f"{api_path}/reports/", "/experiments"
+            if not path.startswith(prefix) or not path.endswith(suffix):
+                return False
+            report_id = unquote(path[len(prefix):-len(suffix)])
+            if not report_id or "/" in report_id:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Отчёт не найден."})
+                return True
+            try:
+                if write:
+                    if not self._same_origin_write():
+                        self._send_json(HTTPStatus.FORBIDDEN, {"error": "Откройте отчёт на сайте приложения."})
+                        return True
+                    if self.headers.get_content_type() != "application/json":
+                        raise ValueError("Тело запроса должно быть JSON.")
+                    size = int(self.headers.get("Content-Length", "0"))
+                    if not 1 <= size <= MAX_REQUEST_BYTES:
+                        raise ValueError("Некорректный размер запроса.")
+                    payload = json.loads(self.rfile.read(size))
+                    if not isinstance(payload, dict):
+                        raise ValueError("Ожидается JSON-объект.")
+                    report_row = runtime.db.report(report_id)
+                    if report_row is None:
+                        raise KeyError(report_id)
+                    report = report_row
+                    for field in ("performed_at", "rollback_at"):
+                        if payload.get(field):
+                            when = datetime.fromisoformat(payload[field])
+                            if when.tzinfo is None:
+                                when = when.replace(tzinfo=ZoneInfo(report.timezone))
+                            payload[field] = when.astimezone(UTC).isoformat()
+                    runtime.db.save_owner_experiment(report_id, payload)
+                value = runtime.db.experiments_for_report(report_id)
+            except KeyError:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Отчёт не найден."})
+                return True
+            except (ValueError, TypeError, UnicodeDecodeError) as exc:
+                self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                return True
+            self._send_json(HTTPStatus.OK, value)
+            return True
+
         def _recommendation_id(self) -> str | None:
             path = urlsplit(self.path).path
             suffix = "/feedback"
@@ -287,6 +330,8 @@ def feedback_handler_type(runtime: Runtime) -> type[BaseHTTPRequestHandler]:
             )
 
         def do_GET(self) -> None:  # noqa: N802
+            if self._experiments_request():
+                return
             if urlsplit(self.path).path == f"{api_path}/worker-health":
                 result = self._worker_health()
                 self._send_json(
@@ -319,6 +364,8 @@ def feedback_handler_type(runtime: Runtime) -> type[BaseHTTPRequestHandler]:
             self._send_json(HTTPStatus.OK, _public_feedback(value))
 
         def do_PUT(self) -> None:  # noqa: N802
+            if self._experiments_request(write=True):
+                return
             if self._ai_request(write=True):
                 return
             if self._owner_request(write=True):

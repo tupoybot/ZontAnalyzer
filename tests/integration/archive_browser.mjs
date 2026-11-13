@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { checkOwnerExperiments } from "./owner_experiments_browser.mjs";
 
 const require = createRequire(new URL("./browser/package.json", import.meta.url));
 const { chromium } = require("playwright");
@@ -12,6 +13,7 @@ const context = await browser.newContext({ httpCredentials: credentials, viewpor
 const page = await context.newPage();
 
 try {
+  await checkOwnerExperiments(page, baseURL);
   const anonymous = await browser.newContext();
   for (const path of ["/", "/latest.html", "/reports.json", "/daily/2026-08-05.html", "/api/health", "/za/"] ) {
     const unauthenticated = await anonymous.request.get(`${baseURL}${path}`);

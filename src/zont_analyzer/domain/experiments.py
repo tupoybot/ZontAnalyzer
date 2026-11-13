@@ -9,9 +9,10 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from .models import DomainModel
 
@@ -60,6 +61,85 @@ class Experiment(DomainModel):
 
     def storage_value(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude_none=True)
+
+
+class ParameterChange(DomainModel):
+    device_id: str = Field(min_length=1, max_length=200)
+    circuit_id: str | None = Field(default=None, max_length=200)
+    parameter: str = Field(min_length=1, max_length=200)
+    before: str = Field(max_length=500)
+    after: str = Field(max_length=500)
+
+
+class OwnerExperiment(DomainModel):
+    category: ExperimentCategory = "settings"
+    request_id: str = Field(min_length=8, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+    experiment_id: str | None = Field(default=None, max_length=100)
+    expected_revision: int = Field(default=0, ge=0)
+    recommendation_id: str | None = None
+    state: Literal["planned", "performed", "completed", "stopped", "cancelled", "rollback_planned", "rolled_back"]
+    changes: list[ParameterChange] = Field(min_length=1, max_length=20)
+    performed_at: datetime | None = None
+    goal: str = Field(min_length=1, max_length=2000)
+    expected_effect: str = Field(max_length=2000)
+    observation_window: str = Field(min_length=1, max_length=500)
+    comment: str = Field(default="", max_length=2000)
+    rollback_at: datetime | None = None
+
+    @field_validator("performed_at", "rollback_at")
+    @classmethod
+    def aware_times(cls, value: datetime | None) -> datetime | None:
+        return Experiment.performed_at_must_include_timezone(value)
+
+    @model_validator(mode="after")
+    def consistent_times(self) -> OwnerExperiment:
+        if self.state in {"planned", "cancelled"} and self.performed_at is not None:
+            raise ValueError("План и отмена не означают выполненное изменение.")
+        if self.state != "rolled_back" and self.rollback_at is not None:
+            raise ValueError("Время отката доступно только для выполненного отката.")
+        if self.performed_at and self.rollback_at and self.rollback_at < self.performed_at:
+            raise ValueError("Откат не может предшествовать изменению.")
+        return self
+
+
+def linked_action_identity(item: dict[str, Any], *, device_id: str | None = None) -> str | None:
+    """Match only fully scoped, dated actions explicitly linked to one recommendation."""
+    rec = item.get("recommendation_id")
+    experiment = item.get("experiment") or {}
+    when = experiment.get("performed_at")
+    if not rec or not when:
+        return None
+    changes = experiment.get("changes")
+    if changes is None:
+        if not device_id or not experiment.get("parameter"):
+            return None
+        changes = [{"device_id": device_id, "circuit_id": experiment.get("circuit_id"),
+                    **{key: experiment.get(key) for key in ("parameter", "before", "after")}}]
+
+    def value(raw: Any) -> tuple[str, str]:
+        if experiment.get("category") == "settings" and not isinstance(raw, bool) and raw is not None:
+            try:
+                numeric = Decimal(str(raw))
+                if numeric.is_finite():
+                    parts = numeric.as_tuple()
+                    digits = list(parts.digits)
+                    exponent = int(parts.exponent)
+                    while digits and digits[-1] == 0:
+                        digits.pop()
+                        exponent += 1
+                    return "number", repr((parts.sign, digits, exponent) if digits else (0, [], 0))
+            except InvalidOperation:
+                pass
+        return "json", json.dumps(raw, ensure_ascii=False, sort_keys=True)
+
+    normalized = []
+    for change in changes:
+        if not change.get("device_id") or not change.get("parameter"):
+            return None
+        normalized.append((str(change["device_id"]), change.get("circuit_id"),
+                           str(change["parameter"]).strip(), value(change.get("before")), value(change.get("after"))))
+    return json.dumps((rec, datetime.fromisoformat(when).astimezone(UTC).isoformat(),
+                       experiment.get("category"), sorted(normalized, key=repr)), ensure_ascii=False)
 
 
 def control_snapshot(device: dict[str, Any]) -> dict[str, Any] | None:

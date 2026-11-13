@@ -231,13 +231,15 @@ def build_comparison_context(
             interventions=times,
             timezone=report.timezone,
         ).model_dump(mode="json")
-        recommendation = db.recommendation(item["recommendation_id"])
+        recommendation = db.recommendation(item["recommendation_id"]) if item.get("recommendation_id") else None
         original = db.report(recommendation["report_id"]) if recommendation else None
         captured = db.get_app_meta(f"intervention-prediction:{item['intervention_id']}")
-        immutable = json.loads(captured) if captured else None
+        immutable = json.loads(captured) if captured else experiment.get("original")
         if immutable and _when(immutable["generated_at"]) <= when:
             outcome["previous_prediction"] = immutable["predictions"]
             outcome["original_hypothesis"] = immutable.get("hypothesis")
+            if immutable.get("goal"):
+                outcome["original_goal"] = immutable["goal"]
         elif original and original.generated_at <= when:
             outcome["previous_prediction"] = [value.model_dump(mode="json") for value in original.predictions]
             outcome["original_hypothesis"] = recommendation.get("hypothesis") if recommendation else None

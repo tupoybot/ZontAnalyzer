@@ -11,7 +11,12 @@ from typing import Any, Protocol, TypeVar
 
 import ydb  # type: ignore[import-untyped]
 
-from zont_analyzer.domain.experiments import Experiment, control_snapshot, snapshot_fingerprint
+from zont_analyzer.domain.experiments import (
+    Experiment,
+    control_snapshot,
+    linked_action_identity,
+    snapshot_fingerprint,
+)
 
 T = TypeVar("T")
 
@@ -373,6 +378,10 @@ class FeedbackRepository:
     def intervention_history(self, limit: int = 10, *, before: datetime | None = None) -> list[dict[str, Any]]:
         if limit < 1:
             return []
+        from .owner_experiments import OwnerExperimentsRepository
+
+        extra = OwnerExperimentsRepository(self.db).factual_history(before=before)
+        linked_recs = {item["recommendation_id"] for item in extra if item.get("recommendation_id")}
         def read(tx: Transaction) -> list[dict[str, Any]]:
             rows = tx.execute("SELECT id,payload FROM interventions VIEW by_applied_at "
                               "ORDER BY applied_at DESC,id DESC LIMIT 1000;")[0].rows
@@ -399,10 +408,29 @@ class FeedbackRepository:
                 history.append({"intervention_id": item["id"], "recommendation_id": item["recommendation_id"],
                                 "recorded_at": _iso(item["applied_at"]), "owner_note": item["note"],
                                 "experiment": experiment, "temporal_boundary": boundary})
-                if len(history) == limit:
+                if item["recommendation_id"] in linked_recs:
+                    rec = _first(tx.execute(_GET_REC, {"$id": item["recommendation_id"]}))
+                    report = self._report_payload(tx, str(rec.report_id)) if rec else None
+                    devices = OwnerExperimentsRepository._devices(tx, report) if report else []
+                    if len(devices) == 1:
+                        history[-1]["dedup_device_id"] = devices[0]["id"]
+                if len(history) >= limit + len(extra):
                     break
             return history
-        return self.db.transaction(read)
+        history = self.db.transaction(read)
+        seen_actions: set[str] = set()
+        merged = []
+        for item in sorted(extra, key=lambda entry: entry["experiment"]["updated_at"], reverse=True):
+            identity = linked_action_identity(item)
+            if identity is None or identity not in seen_actions:
+                merged.append(item)
+            if identity is not None:
+                seen_actions.add(identity)
+        for item in history:
+            identity = linked_action_identity(item, device_id=item.pop("dedup_device_id", None))
+            if identity is None or identity not in seen_actions:
+                merged.append(item)
+        return sorted(merged, key=lambda item: item["temporal_boundary"], reverse=True)[:limit]
 
     def mark_applied(self, recommendation_id: str, note: str) -> str:
         value = self.set_recommendation_feedback(recommendation_id, "applied", note)

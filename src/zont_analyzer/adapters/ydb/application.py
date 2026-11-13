@@ -17,6 +17,7 @@ from .database import Transaction, YdbConfig, YdbDatabase
 from .feedback import FeedbackRepository
 from .jobs import JobLeaseRepository, UsageLedger
 from .owner import OwnerRepository
+from .owner_experiments import OwnerExperimentsRepository
 from .reports import ReportRepository
 from .sample_bounds import sample_bounds
 from .telemetry import TelemetryRepository, bump_revision, encode, utc_seconds
@@ -32,6 +33,9 @@ class Database:
         self.usage = UsageLedger(self.storage)
         self.ai_usage = AiUsageRepository(self.storage)
         self.feedback = FeedbackRepository(self.storage)
+        self.owner_experiments = OwnerExperimentsRepository(self.storage)
+        self.experiments_for_report = self.owner_experiments.experiments_for_report
+        self.save_owner_experiment = self.owner_experiments.save_owner_experiment
         self.recommendations = self.feedback.recommendations
         self.recommendation = self.feedback.recommendation
         self.recommendation_views_for_report = self.feedback.recommendation_views_for_report
