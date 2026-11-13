@@ -85,6 +85,8 @@ def temperature_metrics(
     absolute_error = 0.0
     above_seconds = 0.0
     below_seconds = 0.0
+    exact_above_seconds = 0.0
+    exact_below_seconds = 0.0
     above_degree_hours = 0.0
     below_degree_hours = 0.0
     targeted_seconds = 0.0
@@ -106,6 +108,10 @@ def temperature_metrics(
             seconds = (part_end - part_start).total_seconds()
             targeted_seconds += seconds
             error = value - current_target
+            if error > 0:
+                exact_above_seconds += seconds
+            elif error < 0:
+                exact_below_seconds += seconds
             if abs(error) <= comfort_band_c:
                 in_band += seconds
             elif error > comfort_band_c:
@@ -126,18 +132,26 @@ def temperature_metrics(
         ("degree_hours_above_target", above_degree_hours, "°C·h"),
         ("degree_hours_below_target", below_degree_hours, "°C·h"),
     ]
-    if above_seconds:
+    if exact_above_seconds:
         values_to_add.append(
-            ("mean_error_while_above_target_c", above_degree_hours / (above_seconds / 3600), "°C")
+            ("mean_error_while_above_target_c", above_degree_hours / (exact_above_seconds / 3600), "°C")
         )
-    if below_seconds:
+    if exact_below_seconds:
         values_to_add.append(
-            ("mean_error_while_below_target_c", below_degree_hours / (below_seconds / 3600), "°C")
+            ("mean_error_while_below_target_c", below_degree_hours / (exact_below_seconds / 3600), "°C")
         )
     metrics.extend(
         MetricValue(
             id=_metric_id(period_id, name), name=name, value=round(value, 3), unit=unit,
-            context={"comfort_band_c": comfort_band_c} if name in {
+            context={
+                "comfort_band_c": comfort_band_c,
+                "average_deviation_basis": "exact_target",
+                "eligible_intervals": "same_sign_relative_to_exact_target",
+                "numerator": "degree_hours_on_eligible_intervals",
+                "denominator": "same_sign_hours_relative_to_exact_target",
+            } if name in {
+                "mean_error_while_above_target_c", "mean_error_while_below_target_c",
+            } else {"comfort_band_c": comfort_band_c} if name in {
                 "time_in_target_band_pct", "time_above_target_band_pct", "time_below_target_band_pct",
             } else {},
         )
