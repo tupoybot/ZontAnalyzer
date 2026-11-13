@@ -20,7 +20,7 @@ import ydb  # type: ignore[import-untyped]
 
 from tools import transfer_ydb_snapshot as snapshot
 from zont_analyzer.adapters.ydb.database import YdbConfig, YdbDatabase
-from zont_analyzer.adapters.ydb.schema import TABLES
+from zont_analyzer.adapters.ydb.schema import ALL_TABLES as TABLES
 
 STATE = snapshot.MARKER_PREFIX + "state"
 TABLE_MARKER = snapshot.MARKER_PREFIX + "table:"
@@ -44,7 +44,7 @@ def _artifact_preflight(directory: Path) -> tuple[dict[str, Any], str]:
     with (directory / "manifest.json").open("rb") as stream:
         artifact_hash = hashlib.file_digest(stream, "sha256").hexdigest()
     metadata: dict[str, str] = {}
-    for table in snapshot.TABLE_NAMES:
+    for table in manifest["tables"]:
         entry = manifest["tables"][table]
         if type(entry["rows"]) is not int or entry["rows"] < 0 or type(entry["bytes"]) is not int or entry["bytes"] < 0:
             raise ValueError(f"invalid artifact counts: {table}")
@@ -101,7 +101,7 @@ def _load_progress(db: YdbDatabase, manifest: dict[str, Any], artifact_hash: str
                 raise ValueError(f"target namespace is not empty: {table}")
         _write_marker(db, STATE, {"manifest_sha256": artifact_hash,
                                   "source_import_sha256": source, "status": "loading"})
-        return {table: 0 for table in snapshot.TABLE_NAMES}
+        return {table: 0 for table in manifest["tables"]}
     try:
         state = json.loads(state_raw)
     except ValueError:
@@ -111,7 +111,7 @@ def _load_progress(db: YdbDatabase, manifest: dict[str, Any], artifact_hash: str
             or state["status"] not in {"loading", "complete"}):
         raise ValueError("target belongs to another artifact or has invalid transfer state")
     progress: dict[str, int] = {}
-    for table in snapshot.TABLE_NAMES:
+    for table in manifest["tables"]:
         raw = _marker(db, TABLE_MARKER + table)
         if raw is None:
             progress[table] = 0
@@ -126,7 +126,7 @@ def _load_progress(db: YdbDatabase, manifest: dict[str, Any], artifact_hash: str
             raise ValueError(f"target transfer progress mismatch: {table}")
         progress[table] = item["rows"]
     if state["status"] == "complete" and any(
-        progress[table] != manifest["tables"][table]["rows"] for table in snapshot.TABLE_NAMES
+        progress[table] != manifest["tables"][table]["rows"] for table in manifest["tables"]
     ):
         raise ValueError("complete marker has incomplete table progress")
     return progress
@@ -195,7 +195,7 @@ def upload_snapshot(db: YdbDatabase, directory: Path, *, ru_per_second: int = 10
     snapshot._check_schema(db)
     completed = _load_progress(db, manifest, artifact_hash)
     pace = pacer or _Pacer(ru_per_second)
-    for table in snapshot.TABLE_NAMES:
+    for table in manifest["tables"]:
         indexed = bool(snapshot._expected_indexes(table))
         done = completed[table]
         batch: list[dict[str, Any]] = []
@@ -228,12 +228,12 @@ def upload_snapshot(db: YdbDatabase, directory: Path, *, ru_per_second: int = 10
         completed[table] = done
         if progress is not None:
             progress(table, done, manifest["tables"][table]["rows"])
-    if any(completed[table] != manifest["tables"][table]["rows"] for table in snapshot.TABLE_NAMES):
+    if any(completed[table] != manifest["tables"][table]["rows"] for table in manifest["tables"]):
         raise RuntimeError("cannot complete partial upload")
     _write_marker(db, STATE, {"manifest_sha256": artifact_hash,
                               "source_import_sha256": manifest["source_import_sha256"], "status": "complete"})
     return {"status": "uploaded_unverified", "manifest_sha256": artifact_hash,
-            "tables": {table: completed[table] for table in snapshot.TABLE_NAMES}}
+            "tables": {table: completed[table] for table in manifest["tables"]}}
 
 
 def main() -> None:

@@ -631,3 +631,19 @@ def test_settings_snapshot_time_comes_from_input_and_preserves_other_intervals()
     assert result.unknowns[2].interval == parsed.unknowns[2].interval
     assert parsed.model_dump_json() == original
     assert _validate_structured_result(parsed).unknowns == parsed.unknowns
+
+
+def test_settings_history_packet_preserves_boundaries_and_marks_bounded_omissions() -> None:
+    versions = [{"observed_at": index, "last_confirmed_at": None,
+                 "boundary": {"after": index - 1, "no_later_than": index, "exact_effective_at": None},
+                 "state": {"fields": {"p": {"status": "observed", "value": index}, "padding": "x" * 2000}}}
+                for index in range(20)]
+    history = {"contract": "control-history-v1", "device_id": "fixture", "circuit_id": "1",
+               "incomplete": False, "versions": versions}
+    packet = analysis_packet(quality={}, metrics=[], events=[], period={},
+                             context={"control_settings_history": history})
+    actual = packet["control_context"]["control_settings_history"]
+    assert 0 < len(actual["versions"]) < len(versions)
+    assert actual["versions"][0]["boundary"]["exact_effective_at"] is None
+    assert actual["packet_history_incomplete"] is True
+    assert history["versions"] == versions

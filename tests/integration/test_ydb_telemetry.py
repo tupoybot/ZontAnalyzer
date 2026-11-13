@@ -273,3 +273,161 @@ def test_coverage_pagination_keeps_same_start_intervals(ydb_database: YdbDatabas
                          after=(first[-1]["started_at"], first[-1]["ended_at"]))
     assert len(first) == 2 and len(rest) == 1
     assert rest[0]["ended_at"] == int(START.timestamp()) + 30
+
+
+@pytest.mark.ydb
+def test_control_history_groups_changes_confirms_repeats_and_preserves_recurrence(ydb_database: YdbDatabase) -> None:
+    import json
+    from copy import deepcopy
+
+    from zont_analyzer.adapters.ydb.control_history import period_history
+
+    repo = TelemetryRepository(ydb_database)
+    a = {"id": "fixture", "raw": {"z3k_config": {"heating_circuits": [
+        {"id": 1, "type": 3, "setting_register": 1, "pid_prop_koef": 2, "pid_integral_koef": 3},
+        {"id": 2, "type": 3, "setting_register": 0, "pid_prop_koef": 9},
+    ]}}}
+    repo.save_devices([a])
+    query = "SELECT payload FROM control_setting_heads WHERE device_id='fixture' AND circuit_id='1';"
+    first = ydb_database.execute(query)[0]
+    first_at = json.loads(first.rows[0].payload)["last_confirmed_at"]
+    revision = ydb_database.execute("SELECT revision FROM revisions WHERE scope='publication';")[0].rows[0].revision
+    repo.save_devices([deepcopy(a)])
+    repeat = ydb_database.execute(query)[0]
+    last_at = json.loads(repeat.rows[0].payload)["last_confirmed_at"]
+    assert last_at >= first_at
+    unchanged_revision = ydb_database.execute("SELECT revision FROM revisions WHERE scope='publication';")[0]
+    assert unchanged_revision.rows[0].revision == revision
+    b = deepcopy(a)
+    b["raw"]["z3k_config"]["heating_circuits"][0].update(pid_prop_koef=4, pid_integral_koef=5)
+    repo.save_devices([b])
+    repo.save_devices([a])
+    history = period_history(ydb_database, "fixture", "1", START, datetime.now(UTC) + timedelta(days=1))
+    versions = history["versions"]
+    assert [v["kind"] for v in versions] == ["first_observation", "change", "change"]
+    assert versions[1]["changed_fields"] == ["pid_integral_koef", "pid_prop_koef"]
+    assert versions[1]["boundary"]["after"] == last_at
+    assert versions[0]["version"] == versions[2]["version"] != versions[1]["version"]
+    end = datetime.now(UTC) + timedelta(days=1)
+    assert len(period_history(ydb_database, "fixture", "2", START, end)["versions"]) == 1
+    assert not history["incomplete"]
+    assert period_history(ydb_database, "fixture", "1", START, end, limit=1)["incomplete"]
+
+
+@pytest.mark.ydb
+def test_legacy_settings_window_uses_future_boundary_without_inventing_confirmation(ydb_database: YdbDatabase) -> None:
+    import json
+
+    from zont_analyzer.adapters.ydb.control_history import period_history
+
+    for identifier, hours, p in [(1, 0, 2), (2, 3, 4)]:
+        config = {"z3k_config": {"heating_circuits": [{"id": 1, "pid_prop_koef": p}]}}
+        ydb_database.execute(
+            "DECLARE $payload AS Utf8; DECLARE $at AS Int64; DECLARE $id AS Int64; DECLARE $hash AS Utf8; "
+            "UPSERT INTO config_snapshots (device_id,content_hash,id,payload,captured_at) "
+            "VALUES ('fixture',$hash,$id,$payload,$at);",
+            {"$payload": json.dumps(config), "$at": int((START + timedelta(hours=hours)).timestamp() * 1_000_000),
+             "$id": identifier, "$hash": f"legacy-{identifier}"},
+        )
+    report = period_history(ydb_database, "fixture", "1", START + timedelta(hours=1), START + timedelta(hours=2))
+    assert len(report["versions"]) == 2
+    assert all(row["last_confirmed_at"] is None for row in report["versions"])
+    assert report["versions"][1]["boundary"]["after"] == int(START.timestamp() * 1_000_000)
+    assert report["versions"][1]["boundary"]["exact_effective_at"] is None
+    # Upgrade polling has an honest first new confirmation. A discovered change
+    # still targets reports since the last legacy observation, not just today.
+    TelemetryRepository(ydb_database).save_devices([{
+        "id": "fixture", "raw": {"z3k_config": {"heating_circuits": [{"id": 1, "pid_prop_koef": 6}]}},
+    }])
+    changed = ydb_database.execute(
+        "SELECT payload FROM publication_changes WHERE scope='control-settings' AND identifier='fixture';"
+    )[0].rows[0]
+    assert json.loads(changed.payload)["change_start"] == int((START + timedelta(hours=3)).timestamp() * 1_000_000)
+
+
+@pytest.mark.ydb
+def test_old_writer_rollback_a_b_a_is_preserved_when_compact_polling_resumes(
+    ydb_database: YdbDatabase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    import zont_analyzer.adapters.ydb.telemetry as telemetry
+    from zont_analyzer.adapters.ydb.control_history import period_history
+
+    clock = [START]
+
+    class Clock:
+        @classmethod
+        def now(cls, timezone):
+            return clock[0]
+
+    monkeypatch.setattr(telemetry, "datetime", Clock)
+    repo = TelemetryRepository(ydb_database)
+    a = {"id": "fixture", "raw": {"z3k_config": {"heating_circuits": [{"id": 1, "pid_prop_koef": 2}]}}}
+    repo.save_devices([a])
+    for identifier, p in [(2, 4), (3, 2)]:
+        config = {"z3k_config": {"heating_circuits": [{"id": 1, "pid_prop_koef": p}]}}
+        at = int((START + timedelta(hours=identifier - 1)).timestamp() * 1_000_000)
+        ydb_database.execute(
+            "DECLARE $payload AS Utf8; DECLARE $at AS Int64; DECLARE $id AS Int64; DECLARE $hash AS Utf8; "
+            "UPSERT INTO config_snapshots (device_id,content_hash,id,payload,captured_at) "
+            "VALUES ('fixture',$hash,$id,$payload,$at);",
+            {"$payload": json.dumps(config), "$at": at, "$id": identifier, "$hash": f"old-writer-{identifier}"},
+        )
+    before = period_history(ydb_database, "fixture", "1", START, START + timedelta(hours=4))
+    assert [v["state"]["fields"]["pid_prop_koef"]["value"] for v in before["versions"]] == [2, 4, 2]
+    clock[0] = START + timedelta(hours=3)
+    repo.save_devices([a])
+    after = period_history(ydb_database, "fixture", "1", START, START + timedelta(hours=4))
+    versions = after["versions"]
+    assert [v["state"]["fields"]["pid_prop_koef"]["value"] for v in versions] == [2, 4, 2]
+    assert versions[0]["last_confirmed_at"] == int(START.timestamp() * 1_000_000)
+    assert versions[1]["last_confirmed_at"] is None
+    assert versions[2]["last_confirmed_at"] == int(clock[0].timestamp() * 1_000_000)
+    assert versions[1]["boundary"]["after"] <= versions[1]["boundary"]["no_later_than"]
+    assert versions[2]["boundary"]["after"] <= versions[2]["boundary"]["no_later_than"]
+    repo.save_devices([a])
+    assert period_history(ydb_database, "fixture", "1", START, START + timedelta(hours=4)) == after
+
+
+@pytest.mark.ydb
+def test_same_clock_tick_with_independent_snapshot_sequence_does_not_interleave_duplicates(
+    ydb_database: YdbDatabase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    import zont_analyzer.adapters.ydb.telemetry as telemetry
+    from zont_analyzer.adapters.ydb.control_history import period_history
+
+    class Clock:
+        @classmethod
+        def now(cls, timezone):
+            return START
+
+    monkeypatch.setattr(telemetry, "datetime", Clock)
+    ydb_database.execute("UPSERT INTO sequences (name,value) VALUES ('config_snapshots',100);")
+    repo = TelemetryRepository(ydb_database)
+    for p in [1, 2, 1]:
+        repo.save_devices([{"id": "fixture", "raw": {
+            "z3k_config": {"heating_circuits": [{"id": 1, "pid_prop_koef": p}]},
+        }}])
+    result = period_history(ydb_database, "fixture", "1", START, START + timedelta(hours=1))
+    assert [v["state"]["fields"]["pid_prop_koef"]["value"] for v in result["versions"]] == [1, 2, 1]
+    legacy_b = {"z3k_config": {"heating_circuits": [{"id": 1, "pid_prop_koef": 5}]}}
+    ydb_database.execute(
+        "DECLARE $payload AS Utf8; DECLARE $at AS Int64; "
+        "UPSERT INTO config_snapshots (device_id,content_hash,id,payload,captured_at) "
+        "VALUES ('fixture','legacy-same-tick',104,$payload,$at); "
+        "UPSERT INTO sequences (name,value) VALUES ('config_snapshots',104);",
+        {"$payload": json.dumps(legacy_b), "$at": int(START.timestamp() * 1_000_000)},
+    )
+    repo.save_devices([{"id": "fixture", "raw": {
+        "z3k_config": {"heating_circuits": [{"id": 1, "pid_prop_koef": 1}]},
+    }}])
+    result = period_history(ydb_database, "fixture", "1", START, START + timedelta(hours=1))
+    assert [v["state"]["fields"]["pid_prop_koef"]["value"] for v in result["versions"]] == [1, 2, 1, 5, 1]
+    repo.save_devices([{"id": "fixture", "raw": {
+        "z3k_config": {"heating_circuits": [{"id": 1, "pid_prop_koef": 6}]},
+    }}])
+    result = period_history(ydb_database, "fixture", "1", START, START + timedelta(hours=1))
+    assert [v["state"]["fields"]["pid_prop_koef"]["value"] for v in result["versions"]] == [1, 2, 1, 5, 1, 6]

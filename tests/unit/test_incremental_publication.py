@@ -576,3 +576,49 @@ def test_comparison_is_requeued_when_its_source_finishes_in_later_batch(
     assert drained["queue_metrics"]["completed"] == baseline["completed"] + 3
     assert drained["queue_metrics"]["requeued"] == baseline["requeued"] + 3
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
+
+
+@pytest.mark.ydb
+def test_settings_changes_refresh_only_dependent_history_without_ai_or_gas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zont_analyzer.application.reasoning_context import report_facts_fingerprint
+
+    runtime = _runtime(tmp_path)
+    reports = _daily_reports(runtime, 2)
+    for report in reports:
+        report.ai_used = True
+        report.summary = "Original interpretation"
+        report.context["control_settings_history"] = {
+            "device_id": "fixture", "circuit_id": "1", "versions": [],
+        }
+        report.context["ai_facts_fingerprint"] = report_facts_fingerprint(report)
+        runtime.db.save_report(report, report.summary)
+    publication.publish_reports(runtime, batch_size=8)
+    before = runtime.db.report(reports[0].id)
+    other = runtime.db.report(reports[1].id)
+    assert before is not None and other is not None
+    changed = {**before.context["control_settings_history"], "versions": [{"version": "changed"}]}
+    calls = []
+
+    def history(device, circuit, start, end):
+        calls.append((device, circuit, start, end))
+        return changed
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("settings refresh must not recalculate gas or request AI")
+
+    monkeypatch.setattr(runtime.db, "control_settings_history", history)
+    monkeypatch.setattr(GasService, "refresh", forbidden)
+    monkeypatch.setattr(GasService, "refresh_cost", forbidden)
+    at = int((before.period_start + timedelta(hours=12)).timestamp() * 1_000_000)
+    _record_change(runtime.db, "control-settings", "fixture", {"change_start": at, "change_end": at})
+    result = publication.publish_reports(runtime, batch_size=8)
+    after = runtime.db.report(before.id)
+    assert result["rendered_reports"] == 1
+    assert calls == [("fixture", "1", before.period_start, before.period_end)]
+    assert after is not None and after.summary == before.summary and after.ai_used
+    assert after.context["ai_facts_fingerprint"] == before.context["ai_facts_fingerprint"]
+    assert after.context["control_settings_interpretation_stale"] is True
+    assert runtime.db.report(other.id) == other
+    assert publication.publish_reports(runtime, batch_size=8)["rendered_reports"] == 0

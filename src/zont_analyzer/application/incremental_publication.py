@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from zont_analyzer.runtime import Runtime
 
 VERSION = "publication-v2"
-RENDER, GAS, COST = 1, 2, 4
+RENDER, GAS, COST, SETTINGS = 1, 2, 4, 8
 AUDIT_SIZE = 16
 LEASE_SECONDS = 240
 
@@ -408,6 +408,22 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                     _dependents(items, report, now)
             elif scope == "render":
                 _enqueue(items, RENDER, now, lambda item: item["report_id"] == identifier)  # noqa: B023
+            elif scope == "control-settings":
+                from .settings_history import report_depends_on_device
+
+                bounds = change.get("payload", {})
+                if isinstance(bounds, str):
+                    bounds = json.loads(bounds)
+                left = bounds.get("change_start", float("-inf")) / 1_000_000
+                right = bounds.get("change_end", float("inf")) / 1_000_000
+                dependent_ids = {
+                    item["report_id"] for item in items.values()
+                    if item["start"] <= right and item["end"] > left
+                    and (candidate := runtime.db.report(item["report_id"])) is not None
+                    and report_depends_on_device(candidate, identifier, bounds.get("circuit_ids"))
+                }
+                _enqueue(items, SETTINGS, now,
+                         lambda item: item["report_id"] in dependent_ids)  # noqa: B023
             elif scope == "global":
                 _enqueue(items, {"gas": GAS, "cost": COST}.get(identifier, RENDER), now)
             elif scope == "tariff" and identifier:
@@ -532,6 +548,17 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                 added.discard(item["href"])
                 requeued.pop(item["href"], None)
                 continue
+            if item["dirty"] & SETTINGS:
+                from .settings_history import refresh_settings_history
+
+                refreshed = refresh_settings_history(runtime.db, report)
+                if runtime.db.reports.replace_context(
+                    report, refreshed, f"settings-report-revision:{report.id}",
+                    json.dumps(report.context.get("control_settings_history"), sort_keys=True),
+                ):
+                    report = refreshed
+                else:
+                    raise RuntimeError("report changed during settings refresh; retry publication")
             if service is not None and item["dirty"] & (GAS | COST):
                 refreshed = service.refresh(report) if item["dirty"] & GAS else service.refresh_cost(report)
                 if service.persist_refresh(report, refreshed):

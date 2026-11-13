@@ -73,14 +73,15 @@ def _record_publication_change(
                 old = json.loads(previous.rows[0].payload)
             except (TypeError, ValueError):
                 old = None
-            if scope == "telemetry-gas":
+            if scope in {"telemetry-gas", "control-settings"}:
                 try:
                     new = json.loads(payload)
                 except (TypeError, ValueError):
                     new = None
 
                 def bounds(value: Any) -> tuple[int, int] | None:
-                    if not isinstance(value, dict) or value.get("calibration") is not True:
+                    if (not isinstance(value, dict)
+                            or (scope == "telemetry-gas" and value.get("calibration") is not True)):
                         return None
                     first, last = value.get("change_start"), value.get("change_end")
                     if type(first) is not int or type(last) is not int or first > last:
@@ -92,7 +93,10 @@ def _record_publication_change(
                     # Unknown unconsumed history must retain broad calibration.
                     payload = "{}"
                 else:
-                    payload = encode({"calibration": True,
+                    payload = encode({**({"calibration": True} if scope == "telemetry-gas" else {}),
+                                      **({"circuit_ids": sorted(set(old["circuit_ids"]) | set(new["circuit_ids"]))}
+                                         if scope == "control-settings" and isinstance(old.get("circuit_ids"), list)
+                                         and isinstance(new.get("circuit_ids"), list) else {}),
                                       "change_start": min(prior[0], current[0]),
                                       "change_end": max(prior[1], current[1])})
             elif not isinstance(old, dict) or old.get("calibration") is not False:
@@ -136,6 +140,18 @@ class TelemetryRepository:
                     {key: value for key, value in prior.items() if key != "discovered_at"}
                     if isinstance(prior, dict) else None
                 )
+                from .control_history import observe
+
+                configuration = configuration_snapshot(current)
+                configuration_changed = prior is None or configuration_snapshot(prior) != configuration
+                snapshot_id = next_id(tx, "config_snapshots") if configuration_changed else None
+                change = observe(tx, current, device_id, captured_at, snapshot_id=snapshot_id)
+                if change is not None:
+                    _record_publication_change(
+                        tx, "control-settings", device_id,
+                        payload=encode({"change_start": change[0], "change_end": change[1],
+                                        "circuit_ids": change[2]}),
+                    )
                 if prior_semantic == semantic:
                     return
                 tx.execute(
@@ -143,9 +159,7 @@ class TelemetryRepository:
                     "UPSERT INTO devices (id,payload) VALUES ($id,$payload);",
                     {"$id": device_id, "$payload": payload},
                 )
-                configuration = configuration_snapshot(current)
-                if prior is None or configuration_snapshot(prior) != configuration:
-                    snapshot_id = next_id(tx, "config_snapshots")
+                if configuration_changed:
                     snapshot = encode(configuration)
                     # The event identity preserves A -> B -> A, including two
                     # discoveries in the same clock tick. Transaction retries
