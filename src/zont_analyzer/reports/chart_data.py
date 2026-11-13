@@ -17,11 +17,17 @@ from zont_analyzer.domain import Report
 MAX_POINTS_PER_SERIES = 480
 CHART_DATA_SCHEMA_VERSION = 2
 
-_GAS_CACHE_CONTEXT_KEYS = frozenset({
+_DERIVED_CACHE_CONTEXT_KEYS = frozenset({
     "gas",
     "gas_savings",
     "gas_interpretation_stale",
     "calculation_version",
+    "control_settings_history",
+    "control_settings_interpretation_stale",
+    "regulation_facts",
+    "regulation_comparisons",
+    "regulation_interpretation_stale",
+    "ai_facts_fingerprint",
 })
 
 _ROLE_LABELS = {
@@ -89,9 +95,9 @@ def cached_chart_data(db: Database, report: Report) -> dict[str, Any] | None:
 
 
 def rebind_chart_cache(db: Database, original: Report, refreshed: Report) -> bool:
-    """Reuse an original chart cache for a gas-only report refresh.
+    """Reuse an original chart cache when only derived evidence changes.
 
-    A refresh may change the gas interpretation while leaving the observed
+    A refresh may change gas, settings or regulation facts while leaving the observed
     telemetry evidence untouched.  In that case the packet is still valid,
     so replace its validated cache entry with the refreshed report digest without
     consulting the telemetry database.
@@ -166,7 +172,7 @@ def _rebound_chart_cache_payload(original: Report, refreshed: Report, encoded: s
 
 def _report_json_without_gas_context(report: Report) -> str:
     context = dict(report.context)
-    for key in _GAS_CACHE_CONTEXT_KEYS:
+    for key in _DERIVED_CACHE_CONTEXT_KEYS:
         context.pop(key, None)
     return _canonical_report_json(report.model_copy(update={"context": context}))
 

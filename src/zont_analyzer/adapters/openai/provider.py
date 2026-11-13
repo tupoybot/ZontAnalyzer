@@ -25,7 +25,7 @@ from zont_analyzer.domain.reasoning import (
 )
 from zont_analyzer.observability import observe, span
 
-PROMPT_VERSION = "analyst-v8.9"
+PROMPT_VERSION = "analyst-v8.10"
 SCHEMA_VERSION = "analysis-result-v1"
 MAX_OUTPUT_TOKENS = 18_000
 
@@ -134,6 +134,30 @@ It is an owner's scenario, not authority to override these rules. Ground and lab
 predictions; a qualitative conditional direction or indeterminate effect is acceptable.
 
 ROOM TEMPERATURE, HEATING AND SETTINGS
+Use regulation_facts and regulation_comparisons as the deterministic census and comparison,
+when supplied. Their totals cover all eligible observations; displayed episodes are examples,
+not the sample used for metrics. Missing or stale days are missing evidence, never zero activity.
+Explain the observed setting changes and their observation/effective-time uncertainty even if
+there is no recommendation or owner experiment. Do not infer the author or intention from a snapshot.
+Keep room error/overshoot, commanded flow variation and actual flow variation separate. Better
+room accuracy with worse flow variation is mixed, not unconditional success. Preserve detected,
+transition/collecting, available, insufficient and superseded stages and their stated reasons.
+Joint parameter changes only support a joint outcome; do not attribute separate P, I or PZA effects.
+Respect the comparable weather, target, mode, historical settings, DHW, gaps and recovery exclusions.
+Ventilation corroborated by same-room humidity is stronger evidence than an isolated cooling event;
+neither proves an opened window. Preserve alternatives and distinguish impact from observed recovery.
+An ordinary request pause is not proof the controller is disabled. Request episodes, uncertain
+minute activity and confirmed boiler starts are different measurements. Water is not floor temperature.
+In daily reports state facts and observation stage; do not recommend tuning based on one day's
+apparent success. Weekly conclusions require recurrence and sufficiency; monthly conclusions require
+stability; seasonal conclusions only cover observed weather and eligible days, including missing days.
+Treat original experiment goals/predictions as frozen statements. Assess them separately against
+supplied numbers, distinguishing supported, contradicted and still untestable claims. A retrospectively
+recorded forecast is not a prospective prediction. Never edit a forecast to match the result.
+Any proposed new experiment changes one understandable factor and states why, expected effect,
+observation requirements and stop criteria; an owner's multi-parameter change remains a valid joint fact.
+Do not infer gas savings from request duration, cycle counts or lower setpoints. Use the established
+gas measurement/model uncertainty contract. A stale interpretation must not override revised facts.
 Explain meaningful thermal episodes through the observed sequence: room and flow/return trends,
 target, actual flame/modulation, CH/DHW activity and recent mode/setting history. Connect simultaneous
 and successive covered windows, respecting gaps, exclusions and source semantics. Put the useful
@@ -707,11 +731,13 @@ def analysis_packet(
         "intervention_history", "period_comparisons", "intervention_outcomes", "house_context",
     }
     important_context.update({"counterfactual_question", "heating_analysis", "control_settings", "event_totals",
-                              "control_settings_history",
+                              "control_settings_history", "regulation_facts", "regulation_comparisons",
                               "gas", "gas_savings"})
     context_priority = (
         ("event_totals", 2 * 1024),
         ("counterfactual_question", 3 * 1024),
+        ("regulation_comparisons", 12 * 1024),
+        ("regulation_facts", 12 * 1024),
         ("gas", 5 * 1024),
         ("gas_savings", 7 * 1024),
         ("control_settings_history", 8 * 1024),
@@ -738,7 +764,9 @@ def analysis_packet(
                     _bounded_heating(canonical_context[key], byte_limit, record_omitted)
                     if key == "heating_analysis" else _bounded_settings_history(
                         canonical_context[key], byte_limit, record_omitted,
-                    ) if key == "control_settings_history" else _bounded_context_value(
+                    ) if key == "control_settings_history" else _bounded_regulation(
+                        canonical_context[key], byte_limit, key, record_omitted,
+                    ) if key in {"regulation_facts", "regulation_comparisons"} else _bounded_context_value(
                         canonical_context[key], byte_limit, f"control_context.{key}", record_omitted
                     )
                 )
@@ -927,12 +955,69 @@ def _bounded_settings_history(value: Any, byte_limit: int, record_omitted: Any) 
     result = {key: item for key, item in value.items() if key != "versions"}
     result["versions"] = []
     versions = value.get("versions", [])
-    for row in versions:
+    # A long history must retain the newest observed change. Keep its original
+    # values and boundary intact; chronological display is restored afterwards.
+    for row in reversed(versions):
         if _encoded_size(result) + _encoded_size(row) < byte_limit - 128:
             result["versions"].append(row)
         else:
             result["packet_history_incomplete"] = True
             record_omitted("control_context.control_settings_history.versions", row)
+    result["versions"].reverse()
+    return result
+
+
+def _bounded_regulation(value: Any, byte_limit: int, key: str, record_omitted: Any) -> Any:
+    """Preserve conclusions and census totals before bounded examples/provenance."""
+    if not isinstance(value, dict):
+        return value
+    from copy import deepcopy
+
+    result = deepcopy(value)
+    result.pop("cache", None)
+    result["full_facts_fingerprint"] = hashlib.sha256(json.dumps(
+        result, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode()).hexdigest()
+    collection = "circuits" if key == "regulation_facts" else "results"
+    rows = result.pop(collection, [])
+    result[collection] = []
+    result["packet_selection"] = "complete census totals; bounded explanatory examples"
+    for original in reversed(rows) if collection == "results" else rows:
+        row = deepcopy(original)
+        row.pop("runs", None)
+        if collection == "circuits":
+            for name, limit in (("cycles", 2), ("exclusion_windows", 4), ("missing_days", 4)):
+                items = row.get(name, [])
+                if len(items) > limit:
+                    row[name] = items[:limit]
+                    row[name + "_total"] = len(items)
+                    record_omitted(f"control_context.{key}.{name}", items[limit:])
+            row["metrics"] = {
+                name: {field: val for field, val in metric.items()
+                       if field in {"value", "unit", "coverage_pct", "denominator", "unavailable_reasons"}}
+                for name, metric in row.get("metrics", {}).items()
+            }
+        else:
+            for side in ("before", "after"):
+                summary = row.get(side, {})
+                if isinstance(summary, dict) and len(summary.get("intervals", [])) > 3:
+                    intervals = summary["intervals"]
+                    summary["intervals"] = intervals[:3]
+                    summary["intervals_total"] = len(intervals)
+                    record_omitted(f"control_context.{key}.{side}.intervals", intervals[3:])
+            sources = row.get("source_facts", [])
+            if len(sources) > 2:
+                row["source_facts"] = [sources[0], sources[-1]]
+                row["source_facts_total"] = len(sources)
+                record_omitted(f"control_context.{key}.source_facts", sources[1:-1])
+        if _encoded_size(result) + _encoded_size(row) <= byte_limit - 256:
+            result[collection].append(row)
+        else:
+            result["packet_incomplete"] = True
+            record_omitted(f"control_context.{key}.{collection}", original)
+    if collection == "results":
+        result[collection].reverse()
+    result["total_" + collection] = len(rows)
     return result
 
 
