@@ -1,5 +1,6 @@
 from copy import deepcopy
 
+from zont_analyzer.analytics.regulation import ALGORITHM_VERSION
 from zont_analyzer.reports.regulation import regulation_html, regulation_text
 
 
@@ -19,7 +20,7 @@ def _context() -> dict:
                 "actual_variation_c_per_hour": {"before": 4, "after": 8, "direction": "worsened"}},
             "limitations": ["joint_parameter_change; individual_parameter_effects_not_identifiable"],
             "source_facts": [{"start": "2026-09-01T00:00:00+00:00", "end": "2026-09-02T00:00:00+00:00",
-                              "algorithm_version": "regulation-v1", "settings_version": "opaque-version"}],
+                              "algorithm_version": ALGORITHM_VERSION, "settings_version": "opaque-version"}],
         }]},
         "regulation_facts": {"circuits": [{
             "classification": "cycles", "coverage": {"eligible_seconds": 7200,

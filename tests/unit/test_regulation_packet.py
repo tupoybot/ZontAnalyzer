@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from zont_analyzer.adapters.openai.provider import ANALYSIS_PACKET_MAX_BYTES, analysis_packet
+from zont_analyzer.analytics.regulation import ALGORITHM_VERSION
 
 
 def packet(context):
@@ -125,7 +126,7 @@ def realistic_comparison(*, sparse_last_condition=False, outdoor_temperature_c=N
         for run in runs[178:192]:
             run["stats"].pop("actual")
     fact = {"period_start": start.isoformat(), "period_end": end.isoformat(),
-            "algorithm_version": "regulation-v1", "scope": "fixture/1", "runs": runs}
+            "algorithm_version": ALGORITHM_VERSION, "scope": "fixture/1", "runs": runs}
     return compare_change(event, events=[event], facts=[fact], start=start, end=end)
 
 
