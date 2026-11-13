@@ -12,9 +12,22 @@ from .settings import _FIELDS
 CONTRACT = "control-history-v1"
 
 
+def _hash_numbers(value: Any) -> Any:
+    """Normalize JSON number spelling for hashing, preserving raw values and booleans."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {key: _hash_numbers(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_hash_numbers(item) for item in value]
+    return value
+
+
 def fingerprint(value: Any) -> str:
     return CONTRACT + ":" + hashlib.sha256(json.dumps(
-        value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+        _hash_numbers(value), sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
     ).encode()).hexdigest()
 
 
@@ -136,8 +149,9 @@ def settings_timeline(
         item["observed_at"], item["sequence"], item.get("ordering_rank", 0),
     )):
         state = row["state"]
+        state_version = fingerprint(state)
         at = row["observed_at"]
-        if versions and versions[-1]["state"] == state:
+        if versions and versions[-1]["version"] == state_version:
             # Legacy duplicates do not prove an unchanged interval. Only the
             # explicit confirmation written by new polling code is usable.
             if row.get("last_confirmed_at") is not None:
@@ -147,12 +161,13 @@ def settings_timeline(
         old = versions[-1] if versions else None
         fields = state.get("fields", {})
         old_fields = old["state"].get("fields", {}) if old else {}
-        changed = sorted(key for key in fields.keys() | old_fields.keys() if fields.get(key) != old_fields.get(key))
+        changed = sorted(key for key in fields.keys() | old_fields.keys()
+                         if fingerprint(fields.get(key)) != fingerprint(old_fields.get(key)))
         versions.append({
             "event_id": row["event_id"], "kind": "change" if old else row.get("kind", "first_observation"),
             "observed_at": at, "last_confirmed_at": row.get("last_confirmed_at"),
             "last_observed_at": at,
-            "state": state, "version": fingerprint(state),
+            "state": state, "version": state_version,
             "changed_fields": changed if old else row.get("changed_fields", changed),
             "boundary": row.get("boundary") if (row.get("boundary") or {}).get("after") is not None else {
                 "after": old["last_observed_at"] if old else None,
