@@ -271,3 +271,47 @@ def test_later_unchanged_confirmation_preserves_historical_semantic_fingerprint_
     # The ordinary path already attached history and must perform no second read
     # or binding lookup when finalization also serves long-period aggregation.
     assert ensure_settings_history(SimpleNamespace(), report.context, report.period_start, report.period_end) == {}
+
+
+def test_preperiod_state_fingerprint_is_stable_across_history_query_sizes_and_reprojection() -> None:
+    from copy import deepcopy
+    from datetime import UTC, datetime, timedelta
+
+    from zont_analyzer.analytics.settings_history import semantic_history, settings_timeline
+    from zont_analyzer.application.regulation_reports import day_history
+
+    start = datetime(2025, 1, 1, tzinfo=UTC)
+    at, day = int(start.timestamp() * 1_000_000), 86_400_000_000
+    observations = [{"event_id": index, "observed_at": at + offset * day, "state": {"fields": {"p": 1}}}
+                    for index, offset in enumerate((0, 4, 8), 1)]
+    broad = settings_timeline(observations, device_id="fixture", circuit_id="1", start=start,
+                              end=start + timedelta(days=14))
+    narrow = settings_timeline(observations[1:], device_id="fixture", circuit_id="1",
+                               start=start + timedelta(days=5), end=start + timedelta(days=10))
+    left, right = start + timedelta(days=6), start + timedelta(days=7)
+    first, second = day_history(narrow, left, right), day_history(broad, left, right)
+    before = deepcopy(first)
+    assert first["versions"][0]["observed_at"] != second["versions"][0]["observed_at"]
+    assert first["versions"][0]["event_id"] != second["versions"][0]["event_id"]
+    assert first["fingerprint"] == second["fingerprint"]
+    assert semantic_history(first) == semantic_history(second)
+    assert first == before  # Canonical hashing must preserve the actual provenance.
+    assert day_history(first, left, right)["fingerprint"] == first["fingerprint"]
+
+
+def test_preperiod_anchor_normalization_preserves_overlapping_change_uncertainty() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from zont_analyzer.analytics.settings_history import semantic_history, settings_timeline
+
+    start = datetime(2025, 1, 1, tzinfo=UTC)
+    at, day = int(start.timestamp() * 1_000_000), 86_400_000_000
+    old, new = {"fields": {"p": 1}}, {"fields": {"p": 2}}
+    before = {"event_id": 1, "observed_at": at, "state": old, "last_confirmed_at": at + 4 * day}
+    change = {"event_id": 2, "observed_at": at + 8 * day, "state": new}
+    history = settings_timeline([before, change], device_id="fixture", circuit_id="1",
+                                start=start + timedelta(days=6), end=start + timedelta(days=7))
+    projected = semantic_history(history)
+    assert projected["versions"][1]["boundary"] == {
+        "after": at + 4 * day, "no_later_than": at + 8 * day, "exact_effective_at": None}
+    assert projected["versions"][1]["observed_at"] == at + 8 * day

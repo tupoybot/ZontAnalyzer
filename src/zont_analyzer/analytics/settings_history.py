@@ -25,10 +25,33 @@ def semantic_history(value: dict[str, Any]) -> dict[str, Any]:
     cannot change a fixed period's evidence or downstream cache identity.
     """
     result = {key: item for key, item in value.items() if key != "fingerprint"}
-    result["versions"] = [
-        {key: item for key, item in version.items() if key not in {"last_confirmed_at", "last_observed_at"}}
-        for version in value.get("versions", [])
-    ]
+    start = value.get("period_start")
+    left = None
+    if isinstance(start, str):
+        try:
+            parsed = datetime.fromisoformat(start)
+            if parsed.tzinfo is not None:
+                left = int(parsed.timestamp() * 1_000_000)
+        except ValueError:
+            pass
+    versions = []
+    for version in value.get("versions", []):
+        item = {key: field for key, field in version.items()
+                if key not in {"last_confirmed_at", "last_observed_at"}}
+        observed, boundary = version.get("observed_at"), version.get("boundary") or {}
+        upper, lower = boundary.get("no_later_than"), boundary.get("after")
+        if (left is not None and type(observed) is int and observed <= left
+                and type(upper) is int and upper <= left and (lower is None or type(lower) is int and lower <= left)):
+            # Equal legacy snapshots are folded into their first representative.
+            # A wider input query can select an older representative without
+            # changing the state known at this period's start. Canonicalize that
+            # expired provenance only; raw observations and overlapping change
+            # boundaries remain intact in the actual history packet.
+            item.update(event_id="observed_before_period", kind="observed_before_period", observed_at=left,
+                        changed_fields=[], boundary={"after": None, "no_later_than": left,
+                                                     "exact_effective_at": None})
+        versions.append(item)
+    result["versions"] = versions
     return result
 
 

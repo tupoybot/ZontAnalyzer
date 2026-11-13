@@ -190,3 +190,23 @@ def test_offline_export_cannot_drop_rejected_unresolved_ancestor(
     with pytest.raises(ValueError, match="earlier bounded export"):
         backfill_regulation.export_selected_period(world, START + timedelta(days=4), START + timedelta(days=5),
                                                    timezone="UTC", output=tmp_path / "private.json")
+
+
+def test_settings_lineage_accepts_equivalent_broader_history_and_rejects_real_late_change() -> None:
+    at, day = int(START.timestamp() * 1_000_000), 86_400_000_000
+    state = {"fields": {"p": 1}}
+    rows = [{"event_id": index, "observed_at": at + offset * day, "state": state}
+            for index, offset in enumerate((0, 4, 8), 1)]
+    broad = settings_timeline(rows, device_id="device", circuit_id="circuit", start=START,
+                              end=START + timedelta(days=14))
+    narrow = settings_timeline(rows[1:], device_id="device", circuit_id="circuit",
+                               start=START + timedelta(days=5), end=START + timedelta(days=10))
+    left, right = START + timedelta(days=5), START + timedelta(days=7)
+    reference = reports.day_history(narrow, left, right)
+    dependency = reports._empty_dependency({})
+    dependency["settings"][left.isoformat()] = {"end": right.isoformat(), "fingerprint": reference["fingerprint"]}
+    assert reports._dependency_valid(dependency, {}, broad, {})
+    late = {"event_id": 4, "observed_at": at + 6 * day, "state": {"fields": {"p": 2}}}
+    corrected = settings_timeline([*rows, late], device_id="device", circuit_id="circuit", start=START,
+                                  end=START + timedelta(days=14))
+    assert not reports._dependency_valid(dependency, {}, corrected, {})
