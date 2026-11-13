@@ -15,6 +15,7 @@ from zont_analyzer.analytics.series_semantics import is_setpoint_series
 from zont_analyzer.domain import SourceEvent, TelemetryPoint
 
 from .database import Transaction, YdbDatabase
+from .regulation_events import advance_projection
 from .regulation_markers import observe_first_inputs
 from .sample_bounds import extend
 
@@ -396,6 +397,7 @@ class TelemetryRepository:
                 if identifier in setpoint_ids:
                     first_setpoints[identifier] = min(at, first_setpoints.get(identifier, at))
             changed_events: list[SourceEvent] = []
+            previous_changed_events: list[SourceEvent] = []
             if source_events:
                 # Source IDs identify canonical events even when the source
                 # corrects their timestamp. Resolve only this bounded batch of
@@ -418,6 +420,7 @@ class TelemetryRepository:
                     if previous and SourceEvent.model_validate_json(previous[0].payload) == event:
                         continue
                     for old in previous:
+                        previous_changed_events.append(SourceEvent.model_validate_json(old.payload))
                         old_keys.append({"device_id": str(old.device_id),
                                          "timestamp_utc": int(old.timestamp_utc), "id": event_id})
                         changed_times.add(int(old.timestamp_utc))
@@ -520,6 +523,7 @@ class TelemetryRepository:
                 )
             if changed:
                 revision = bump_revision(tx, "telemetry:" + device_id, publish=False)
+                advance_projection(tx, device_id, revision - 1, revision, previous_changed_events, changed_events)
                 extend(tx, [int(row["timestamp_utc"]) for row in rows], device_id, revision)
                 # Keep calibration markers independent: a later temperature
                 # write in the same hour must not overwrite an unconsumed boiler

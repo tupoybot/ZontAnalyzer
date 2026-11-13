@@ -25,7 +25,7 @@ from zont_analyzer.application.regulation_reliability import apply_reliability_c
 if TYPE_CHECKING:
     from zont_analyzer.adapters.ydb.application import Database
 
-SELECTION_VERSION = "regulation-sources-v1"
+SELECTION_VERSION = "regulation-sources-v2-family-projection"
 SOURCE_LOOKAHEAD_SECONDS = 61
 
 

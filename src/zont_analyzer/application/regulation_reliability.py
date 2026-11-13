@@ -80,10 +80,13 @@ def apply_reliability_context(inputs: RegulationInputs, context: dict[str, Any],
                 exclusions.append(ExclusionWindow(max(start, left), min(end, right), "reliability", reason))
     if incomplete:
         unknowns.append("bounded_source_event_context_incomplete")
+        if context.get("projection_ready") is False:
+            unknowns.append("reliability_event_projection_requires_fenced_backfill")
         # A truncated predecessor cannot establish absence of an open loss.
         exclusions.append(ExclusionWindow(start, end, "reliability", "bounded_event_context_incomplete"))
     return replace(inputs, exclusions=tuple(exclusions), source_unknowns=tuple(sorted(set(unknowns))),
                    reliability_context={"bounded_context_incomplete": incomplete,
                                         "source_event_count": len(events),
                                         "confirmed_service_running_incidents": running,
-                                        "unknown_service_impact_incidents": unknown})
+                                        "unknown_service_impact_incidents": unknown,
+                                        "event_projection": context.get("event_projection")})

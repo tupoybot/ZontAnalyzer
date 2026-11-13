@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 from .evidence import ExclusionWindow, SignalSeries, StateSample
 
-ALGORITHM_VERSION = "regulation-v1"
+ALGORITHM_VERSION = "regulation-v2"
 
 
 @dataclass(frozen=True)
@@ -144,7 +144,13 @@ def _disturbances(inputs: RegulationInputs) -> list[dict[str, Any]]:
     unknown = set(room.unknown_at)
     samples = sorted(room.samples, key=lambda sample: sample.timestamp)
     humidity = inputs.signals.get("humidity")
-    same_room = bool(humidity and inputs.humidity_room_identity == room.metadata.identity)
+    # Values arrive normalized to relative humidity. Explicit temperature units
+    # contradict that contract; absent metadata alone does not contradict it.
+    incompatible_humidity_unit = bool(humidity and humidity.metadata.unit.strip().casefold() in {
+        "°c", "℃", "c", "celsius", "degc", "°f", "℉", "f", "fahrenheit", "degf", "k", "kelvin",
+    })
+    same_room = bool(humidity and not incompatible_humidity_unit
+                     and inputs.humidity_room_identity == room.metadata.identity)
     humidity_points = [sample for sample in humidity.samples if 0 <= sample.value <= 100] if humidity else []
     humidity_unknown = (set(humidity.unknown_at)
                         | {sample.timestamp for sample in humidity.samples
