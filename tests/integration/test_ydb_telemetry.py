@@ -315,6 +315,49 @@ def test_control_history_groups_changes_confirms_repeats_and_preserves_recurrenc
 
 
 @pytest.mark.ydb
+def test_unchanged_poll_after_numeric_hash_upgrade_confirms_without_new_observation(ydb_database: YdbDatabase) -> None:
+    import hashlib
+    import json
+    from copy import deepcopy
+
+    from zont_analyzer.analytics.settings_history import CONTRACT, fingerprint
+
+    repo = TelemetryRepository(ydb_database)
+    device = {"id": "fixture", "raw": {"z3k_config": {"heating_circuits": [
+        {"id": 1, "type": 3, "setting_register": 1, "pid_prop_koef": 2.0, "water_max_temperature": 65.0},
+    ]}}}
+    repo.save_devices([device])
+    query = "SELECT payload FROM control_setting_heads WHERE device_id='fixture' AND circuit_id='1';"
+    original = json.loads(ydb_database.execute(query)[0].rows[0].payload)
+    legacy = {**original, "version": CONTRACT + ":" + hashlib.sha256(json.dumps(
+        original["state"], sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+    ).encode()).hexdigest()}
+    assert legacy["version"] != fingerprint(original["state"])
+    ydb_database.execute(
+        "DECLARE $payload AS Utf8; DECLARE $at AS Int64; DECLARE $id AS Int64; "
+        "UPSERT INTO control_setting_heads (device_id,circuit_id,payload) VALUES ('fixture','1',$payload); "
+        "UPSERT INTO control_setting_observations (device_id,circuit_id,observed_at,event_id,payload) "
+        "VALUES ('fixture','1',$at,$id,$payload);",
+        {"$payload": json.dumps(legacy), "$at": original["observed_at"], "$id": original["event_id"]},
+    )
+    revision = ydb_database.execute("SELECT revision FROM revisions WHERE scope='publication';")[0].rows[0].revision
+    repo.save_devices([deepcopy(device)])
+    confirmed = json.loads(ydb_database.execute(query)[0].rows[0].payload)
+    count = ydb_database.execute("SELECT COUNT(*) AS count FROM control_setting_observations;")[0].rows[0].count
+    assert count == 1 and confirmed["event_id"] == original["event_id"]
+    assert confirmed["state"] == original["state"]
+    assert type(confirmed["state"]["fields"]["pid_prop_koef"]["value"]) is float
+    assert confirmed["version"] == fingerprint(confirmed["state"])
+    unchanged = ydb_database.execute("SELECT revision FROM revisions WHERE scope='publication';")[0].rows[0].revision
+    assert unchanged == revision
+    changed = deepcopy(device)
+    changed["raw"]["z3k_config"]["heating_circuits"][0]["pid_prop_koef"] = 2.25
+    repo.save_devices([changed])
+    actual = json.loads(ydb_database.execute(query)[0].rows[0].payload)
+    assert actual["kind"] == "change" and actual["changed_fields"] == ["pid_prop_koef"]
+
+
+@pytest.mark.ydb
 def test_legacy_settings_window_uses_future_boundary_without_inventing_confirmation(ydb_database: YdbDatabase) -> None:
     import json
 

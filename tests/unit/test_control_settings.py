@@ -315,3 +315,67 @@ def test_preperiod_anchor_normalization_preserves_overlapping_change_uncertainty
     assert projected["versions"][1]["boundary"] == {
         "after": at + 4 * day, "no_later_than": at + 8 * day, "exact_effective_at": None}
     assert projected["versions"][1]["observed_at"] == at + 8 * day
+
+
+def test_numeric_fingerprint_equates_only_exact_integral_floats_without_mutating_raw_values() -> None:
+    from copy import deepcopy
+
+    from zont_analyzer.analytics.settings_history import fingerprint
+
+    raw = {"fields": {"gain": {"status": "observed", "value": 2.0}, "curve": [2730.0, 2830.0],
+                      "fraction": 1.25, "enabled": True}}
+    before = deepcopy(raw)
+    integer_spelling = {"fields": {"gain": {"status": "observed", "value": 2}, "curve": [2730, 2830],
+                                   "fraction": 1.25, "enabled": True}}
+    assert fingerprint(raw) == fingerprint(integer_spelling)
+    assert raw == before and type(raw["fields"]["gain"]["value"]) is float
+    assert fingerprint({"value": True}) != fingerprint({"value": 1})
+    assert fingerprint({"value": 1.25}) != fingerprint({"value": 1.2500000001})
+
+
+def test_short_and_broad_numeric_history_keep_equal_versions_and_distinguish_real_changes() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from zont_analyzer.analytics.settings_history import settings_timeline
+    from zont_analyzer.application.regulation_reports import _dependency_valid, _empty_dependency, day_history
+
+    start = datetime(2025, 1, 1, tzinfo=UTC)
+    at, day = int(start.timestamp() * 1_000_000), 86_400_000_000
+    floating, integer = {"fields": {"p": 2.0, "limit": 65.0}}, {"fields": {"p": 2, "limit": 65}}
+    rows = [{"event_id": 1, "observed_at": at, "state": floating},
+            {"event_id": 2, "observed_at": at + 4 * day, "state": integer},
+            {"event_id": 3, "observed_at": at + 8 * day, "state": {"fields": {"p": 3, "limit": 65}}}]
+    broad = settings_timeline(rows, device_id="fixture", circuit_id="1", start=start,
+                              end=start + timedelta(days=14))
+    short = settings_timeline(rows[1:], device_id="fixture", circuit_id="1", start=start + timedelta(days=5),
+                              end=start + timedelta(days=10))
+    left, right = start + timedelta(days=5), start + timedelta(days=7)
+    old, current = day_history(short, left, right), day_history(broad, left, right)
+    assert type(old["versions"][0]["state"]["fields"]["p"]) is int
+    assert type(current["versions"][0]["state"]["fields"]["p"]) is float
+    assert old["versions"][0]["version"] == current["versions"][0]["version"]
+    assert old["fingerprint"] == current["fingerprint"]
+    dependency = _empty_dependency({})
+    dependency["settings"][left.isoformat()] = {"end": right.isoformat(), "fingerprint": old["fingerprint"]}
+    assert _dependency_valid(dependency, {}, broad, {})
+    for value in (2.0000001, True):
+        changed = settings_timeline([*rows, {"event_id": 4, "observed_at": at + 6 * day,
+                                             "state": {"fields": {"p": value, "limit": 65}}}],
+                                     device_id="fixture", circuit_id="1", start=start,
+                                     end=start + timedelta(days=14))
+        assert not _dependency_valid(dependency, {}, changed, {})
+
+
+def test_boolean_and_numeric_states_are_not_folded_as_equal_by_python_coercion() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from zont_analyzer.analytics.settings_history import settings_timeline
+
+    start = datetime(2025, 1, 1, tzinfo=UTC)
+    at = int(start.timestamp() * 1_000_000)
+    result = settings_timeline([
+        {"event_id": 1, "observed_at": at, "state": {"fields": {"flag": True}}},
+        {"event_id": 2, "observed_at": at + 1_000_000, "state": {"fields": {"flag": 1}}},
+    ], device_id="fixture", circuit_id="1", start=start, end=start + timedelta(seconds=2))
+    assert len(result["versions"]) == 2
+    assert result["versions"][1]["changed_fields"] == ["flag"]
