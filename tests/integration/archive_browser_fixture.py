@@ -124,3 +124,8 @@ season_report.context["period_comparisons"] = [{
     }],
 }]
 Path("/publish/season-comparison.html").write_text(render_html(season_report))
+
+# A standalone manual experiment must remain available with no advice cards.
+owner_experiment_report = report.model_copy(deep=True)
+owner_experiment_report.recommendations = []
+Path("/publish/owner-experiment.html").write_text(render_html(owner_experiment_report))

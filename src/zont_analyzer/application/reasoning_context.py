@@ -164,8 +164,13 @@ def reasoning_context(
             "before": experiment.get("before"),
             "after": experiment.get("after"),
             "performed_at": experiment.get("performed_at"),
+            **({"changes": experiment["changes"]} if experiment.get("changes") else {}),
+            **({"event": experiment["event"], "state": experiment.get("state"),
+                "confirmation": experiment.get("confirmation"),
+                "telemetry_confirmation": experiment.get("telemetry_confirmation")}
+               if experiment.get("event") else {}),
             "source": "owner_recorded_manual_intervention",
-            "epistemic_level": "owner_confirmed",
+            "epistemic_level": "owner_reported" if experiment.get("event") else "owner_confirmed",
         }
         for item in (intervention_history or [])
         if isinstance(item.get("experiment"), dict)

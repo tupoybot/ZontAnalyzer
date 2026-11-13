@@ -11,7 +11,11 @@ from zont_analyzer.application.ai_provenance import details as ai_provenance_det
 from zont_analyzer.application.ai_provenance import label as ai_provenance_label
 from zont_analyzer.domain import Report
 from zont_analyzer.reports.control_settings import control_settings_html, control_settings_text
-from zont_analyzer.reports.experiment_forms import experiment_form
+from zont_analyzer.reports.experiment_forms import (
+    OWNER_EXPERIMENT_SCRIPT,
+    experiment_form,
+    owner_experiment_journal,
+)
 from zont_analyzer.reports.gas_validation import validation_lines
 from zont_analyzer.reports.presentation import (
     LEGACY_DUTY_METRICS,
@@ -31,7 +35,7 @@ from zont_analyzer.reports.presentation import (
 )
 from zont_analyzer.reports.wording import normalize_report_for_display
 
-VIEW_VERSION = "report-presentation-v1"
+VIEW_VERSION = "report-presentation-v2-owner-experiments"
 
 METRIC_LABELS = {
     "mean_temperature_c": "Средняя температура помещения",
@@ -1491,6 +1495,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 {render_charts(report, chart_data, panel_ids=("climate",))}</div>
 <aside class="actions"><span class="eyebrow">СЛЕДУЮЩИЙ ШАГ</span><h2>Что делать</h2>
 {recommendations or '<p>Рекомендаций за этот период нет.</p>'}</aside>
+{owner_experiment_journal(report.id, report.timezone)}
 
 {season_comparisons}
 {gas_cost_comparisons if seasonal else ''}
@@ -1518,6 +1523,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <section class="full-width owner-settings" aria-label="Профиль и показания">{owner_forms}</section>
 </main><footer>Период: {period} · ZontAnalyzer</footer>
 <script>{SCRIPT}</script>
+<script>{OWNER_EXPERIMENT_SCRIPT}</script>
 <script>{_ARCHIVE_NAVIGATION_SCRIPT}</script>
 <script>
 (() => {{
