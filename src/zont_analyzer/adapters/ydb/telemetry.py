@@ -75,7 +75,7 @@ def _record_publication_change(
                 old = json.loads(previous.rows[0].payload)
             except (TypeError, ValueError):
                 old = None
-            if scope in {"telemetry-gas", "control-settings", "regulation-facts"}:
+            if scope in {"telemetry-gas", "control-settings", "regulation-facts", "regulation-manual"}:
                 try:
                     new = json.loads(payload)
                 except (TypeError, ValueError):

@@ -200,6 +200,7 @@ def test_event_projection_is_atomic_replaces_unknown_time_and_skips_plans(tmp_pa
     payload = _payload()
     plan = runtime.db.save_owner_experiment(report.id, payload)
     assert runtime.db.owner_experiments.factual_history() == []
+    assert runtime.db.owner_experiments.uncertain_history() == []
     known = {**payload, "experiment_id": plan["id"], "expected_revision": 1,
              "request_id": "request-known", "state": "performed", "performed_at": "2026-08-01T08:00:00+00:00"}
     saved = runtime.db.save_owner_experiment(report.id, known)
@@ -213,9 +214,117 @@ def test_event_projection_is_atomic_replaces_unknown_time_and_skips_plans(tmp_pa
             runtime.db.save_owner_experiment(report.id, unknown)
     assert runtime.db.experiments_for_report(report.id)["experiments"][0] == saved
     assert runtime.db.owner_experiments.factual_history() == [event]
+    assert runtime.db.owner_experiments.uncertain_history() == []
     corrected = runtime.db.save_owner_experiment(report.id, unknown)
     assert corrected["revision"] == 3
     assert len(corrected["history"]) == 3
     assert runtime.db.owner_experiments.factual_history() == []
+    uncertain = runtime.db.owner_experiments.uncertain_history()
+    assert len(uncertain) == 1
+    assert uncertain[0]["intervention_id"] == plan["id"] + ":undated"
+    assert uncertain[0]["temporal_boundary"] is None
+    assert uncertain[0]["temporal_boundary_source"] == "unknown_time"
+    assert uncertain[0]["experiment"]["performed_at"] is None
     assert runtime.db.save_owner_experiment(report.id, known) == corrected
     assert runtime.db.owner_experiments.factual_history() == []
+    assert runtime.db.owner_experiments.uncertain_history() == uncertain
+    restored = {**known, "request_id": "request-restored", "expected_revision": 3}
+    runtime.db.save_owner_experiment(report.id, restored)
+    assert runtime.db.owner_experiments.uncertain_history() == []
+    assert len(runtime.db.owner_experiments.factual_history()) == 1
+
+
+@pytest.mark.ydb
+def test_manual_publication_tracks_old_new_times_scopes_and_unknown_actions(tmp_path: Path) -> None:
+    import json
+    from datetime import UTC, datetime
+
+    from zont_analyzer.adapters.ydb.feedback import _micros
+
+    runtime = _runtime(tmp_path)
+    runtime.db.save_devices([{"device_id": "device-1", "z3k_config": {"heating_circuits": [{"id": 1}]}}])
+    report = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
+
+    def markers():
+        rows = runtime.db.storage.transaction(lambda tx: tx.execute(
+            "SELECT identifier,revision,payload FROM publication_changes WHERE scope='regulation-manual';"
+        )[0].rows)
+        return {str(row.identifier): (int(row.revision), json.loads(row.payload)) for row in rows}
+
+    plan = runtime.db.save_owner_experiment(report.id, _payload())
+    assert markers() == {}
+    performed = {**_payload(), "state": "performed", "request_id": "request-performed",
+                 "experiment_id": plan["id"], "expected_revision": 1,
+                 "performed_at": "2026-08-02T08:00:00+00:00"}
+    first = runtime.db.save_owner_experiment(report.id, performed)
+    at = _micros(datetime(2026, 8, 2, 8, tzinfo=UTC))
+    assert {key: value[1] for key, value in markers().items()} == {
+        "device-1/1": {"change_start": at, "change_end": at},
+        "device-1/*": {"change_start": at, "change_end": at}}
+    snapshot = markers()
+    assert runtime.db.save_owner_experiment(report.id, performed) == first
+    assert markers() == snapshot
+    corrected = {**performed, "expected_revision": 2, "request_id": "request-corrected",
+                 "performed_at": "2026-08-01T08:00:00+00:00", "changes": [_payload()["changes"][0]]}
+    runtime.db.save_owner_experiment(report.id, corrected)
+    earlier = _micros(datetime(2026, 8, 1, 8, tzinfo=UTC))
+    assert markers()["device-1/1"][1] == {"change_start": earlier, "change_end": at}
+    assert markers()["device-1/*"][1] == {"change_start": at, "change_end": at}
+    unknown = {**corrected, "expected_revision": 3, "request_id": "request-unknown", "performed_at": None,
+               "state": "rolled_back", "rollback_at": "2026-08-03T08:00:00+00:00"}
+    runtime.db.save_owner_experiment(report.id, unknown)
+    assert markers()["device-1/1"][1] == {}
+    assert len(runtime.db.owner_experiments.factual_history()) == 1
+    assert len(runtime.db.owner_experiments.uncertain_history()) == 1
+    both_unknown = {**unknown, "expected_revision": 4, "request_id": "request-no-times", "rollback_at": None}
+    runtime.db.save_owner_experiment(report.id, both_unknown)
+    assert runtime.db.owner_experiments.factual_history() == []
+    assert {event["intervention_id"] for event in runtime.db.owner_experiments.uncertain_history()} == {
+        plan["id"] + ":undated", plan["id"] + ":rollback-undated"}
+    assert len(runtime.db.owner_experiments.uncertain_history(limit=1)) == 1
+    with pytest.raises(ValueError, match="between"):
+        runtime.db.owner_experiments.uncertain_history(limit=1001)
+
+
+@pytest.mark.ydb
+def test_bounded_projection_repair_preserves_journal_and_is_idempotent(tmp_path: Path) -> None:
+    from tools.backfill_owner_experiment_events import repair_batch
+
+    runtime = _runtime(tmp_path)
+    runtime.db.save_devices([{"device_id": "device-1", "z3k_config": {"heating_circuits": [{"id": 1}]}}])
+    report = runtime.analysis(no_ai=True).analyze_daily(date(2026, 8, 1), use_ai=False)
+    plan = runtime.db.save_owner_experiment(report.id, {**_payload(), "request_id": "repair-a-plan"})
+    unknown = runtime.db.save_owner_experiment(report.id, {
+        **_payload(), "request_id": "repair-b-unknown", "state": "performed"})
+    runtime.db.save_owner_experiment(report.id, {
+        **_payload(), "request_id": "repair-c-known", "state": "performed",
+        "performed_at": "2026-08-01T08:00:00+00:00"})
+    damaged = runtime.db.save_owner_experiment(report.id, {
+        **_payload(), "request_id": "repair-d-damaged", "state": "performed",
+        "performed_at": "2026-08-02T08:00:00+00:00"})
+    before = runtime.db.experiments_for_report(report.id)
+    db = runtime.db.storage
+    db.transaction(lambda tx: tx.execute(
+        "DECLARE $id AS Utf8; DELETE FROM owner_experiment_events WHERE id=$id;",
+        {"$id": unknown["id"] + ":undated"}))
+    db.transaction(lambda tx: tx.execute(
+        "DECLARE $id AS Utf8; UPDATE owner_experiment_events SET applied_at=1 WHERE id=$id;",
+        {"$id": damaged["id"]}))
+    dry = repair_batch(db)
+    assert dry == {"scanned": 4, "mismatched": 2, "repaired": 0, "dry_run": True, "continuation_id": None}
+    assert runtime.db.owner_experiments.uncertain_history() == []
+    first = repair_batch(db, limit=1, apply=True)
+    assert first["continuation_id"] == plan["id"]
+    assert first["repaired"] == 0
+    second = repair_batch(db, limit=1, after_id=first["continuation_id"], apply=True)
+    assert second["continuation_id"] == unknown["id"]
+    assert second["repaired"] == 1
+    assert len(runtime.db.owner_experiments.uncertain_history()) == 1
+    remainder = repair_batch(db, after_id=second["continuation_id"], apply=True)
+    assert remainder["scanned"] == 2
+    assert remainder["repaired"] == 1
+    assert runtime.db.experiments_for_report(report.id) == before
+    assert repair_batch(db, apply=True)["repaired"] == 0
+    assert len(runtime.db.owner_experiments.factual_history()) == 2
+    with pytest.raises(ValueError, match="between"):
+        repair_batch(db, limit=101)

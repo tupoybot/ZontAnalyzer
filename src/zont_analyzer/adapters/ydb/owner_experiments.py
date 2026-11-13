@@ -3,13 +3,18 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 import ydb  # type: ignore[import-untyped]
 
 from zont_analyzer.domain.experiments import OwnerExperiment
 
+from .database import Transaction as YdbTransaction
 from .feedback import FeedbackRepository, Transaction, _first, _iso, _json, _micros, _text
+from .telemetry import _record_publication_change
+
+# Index routing only: this sentinel is never an action timestamp.
+_UNKNOWN_APPLIED_AT = -(2**63)
 
 
 class OwnerExperimentsRepository(FeedbackRepository):
@@ -129,6 +134,7 @@ class OwnerExperimentsRepository(FeedbackRepository):
                        "UPSERT INTO owner_experiments (id,report_id,payload) VALUES ($id,$report,$payload);",
                        {"$id": identifier, "$report": report_id, "$payload": _json(value)})
             self._sync_events(tx, value)
+            self._publish_manual_change(tx, previous, value)
             self._queue_render(tx, report_id)
             return value
         return self.db.transaction(save)
@@ -157,26 +163,87 @@ class OwnerExperimentsRepository(FeedbackRepository):
 
     @classmethod
     def _sync_events(cls, tx: Transaction, value: dict[str, Any]) -> None:
-        for identifier in (value["id"], value["id"] + ":rollback"):
+        for identifier in (value["id"], value["id"] + ":rollback", value["id"] + ":undated",
+                           value["id"] + ":rollback-undated"):
             tx.execute("DECLARE $id AS Utf8; DELETE FROM owner_experiment_events WHERE id=$id;", {"$id": identifier})
-        for event in cls._physical_events(value):
+        for event in [*cls._physical_events(value), *cls._uncertain_events(value)]:
             tx.execute("DECLARE $id AS Utf8; DECLARE $at AS Int64; DECLARE $payload AS Utf8; "
                        "UPSERT INTO owner_experiment_events (id,applied_at,payload) VALUES ($id,$at,$payload);",
                        {"$id": event["intervention_id"],
-                        "$at": _micros(datetime.fromisoformat(event["temporal_boundary"])),
+                        "$at": (_micros(datetime.fromisoformat(event["temporal_boundary"]))
+                                if event["temporal_boundary"] else _UNKNOWN_APPLIED_AT),
                         "$payload": _json(event)})
+
+    @classmethod
+    def _uncertain_events(cls, value: dict[str, Any]) -> list[dict[str, Any]]:
+        """Retain actual actions with unknown time without inventing a boundary."""
+        if value["state"] in {"planned", "cancelled"}:
+            return []
+        # Reuse the physical projection for action/rollback details, then remove
+        # the synthetic routing value before it can leave this method.
+        projected = {**value, "performed_at": value.get("performed_at") or "unknown"}
+        if value["state"] == "rolled_back":
+            projected["rollback_at"] = value.get("rollback_at") or "unknown"
+        events = []
+        for event in cls._physical_events(projected):
+            if event["temporal_boundary"] != "unknown":
+                continue
+            rollback = event["intervention_id"].endswith(":rollback")
+            detail = {**event["experiment"], "performed_at": None,
+                      "temporal_boundary_source": "unknown_time"}
+            if rollback:
+                detail["rollback_at"] = None
+                detail["original_performed_at"] = value.get("performed_at")
+            else:
+                detail["rollback_at"] = value.get("rollback_at")
+            events.append({**event, "intervention_id": value["id"] + (
+                ":rollback-undated" if rollback else ":undated"),
+                "experiment": detail, "temporal_boundary": None,
+                "temporal_boundary_source": "unknown_time"})
+        return events
+
+    @classmethod
+    def _publish_manual_change(cls, tx: Transaction, previous: dict[str, Any] | None,
+                               value: dict[str, Any]) -> None:
+        scoped: dict[str, list[int | None]] = {}
+        for record in (previous, value):
+            if record is None:
+                continue
+            for event in [*cls._physical_events(record), *cls._uncertain_events(record)]:
+                boundary = event["temporal_boundary"]
+                at = _micros(datetime.fromisoformat(boundary)) if boundary else None
+                for change in event["experiment"]["changes"]:
+                    identifier = f"{change['device_id']}/{change.get('circuit_id') or '*'}"
+                    scoped.setdefault(identifier, []).append(at)
+        for identifier, times in scoped.items():
+            known = [at for at in times if at is not None]
+            payload = (_json({"change_start": min(known), "change_end": max(known)})
+                       if len(known) == len(times) else "{}")
+            _record_publication_change(cast(YdbTransaction, tx), "regulation-manual", identifier, payload=payload)
 
     def factual_history(self, limit: int = 10, *, before: datetime | None = None) -> list[dict[str, Any]]:
         if not 1 <= limit <= 1000:
             raise ValueError("owner event limit must be between 1 and 1000")
-        declarations = "DECLARE $limit AS Uint64; "
-        predicate = ""
-        params: dict[str, Any] = {"$limit": ydb.TypedValue(limit, ydb.PrimitiveType.Uint64)}
+        declarations = "DECLARE $limit AS Uint64; DECLARE $unknown AS Int64; "
+        predicate = "WHERE applied_at>$unknown "
+        params: dict[str, Any] = {"$limit": ydb.TypedValue(limit, ydb.PrimitiveType.Uint64),
+                                  "$unknown": _UNKNOWN_APPLIED_AT}
         if before is not None:
             declarations += "DECLARE $before AS Int64; "
-            predicate = "WHERE applied_at<$before "
+            predicate = "WHERE applied_at<$before AND applied_at>$unknown "
             params["$before"] = _micros(before)
         query = (declarations + "SELECT payload FROM owner_experiment_events VIEW by_applied " + predicate +
                  "ORDER BY applied_at DESC,id DESC LIMIT $limit;")
+        return self.db.transaction(lambda tx: [json.loads(_text(row.payload) or "{}")
+                                              for row in tx.execute(query, params)[0].rows])
+
+    def uncertain_history(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Read bounded undated actual actions; recorded_at is journal time only."""
+        if not 1 <= limit <= 1000:
+            raise ValueError("owner event limit must be between 1 and 1000")
+        query = ("DECLARE $limit AS Uint64; DECLARE $unknown AS Int64; "
+                 "SELECT payload FROM owner_experiment_events VIEW by_applied "
+                 "WHERE applied_at=$unknown ORDER BY applied_at DESC,id DESC LIMIT $limit;")
+        params = {"$limit": ydb.TypedValue(limit, ydb.PrimitiveType.Uint64), "$unknown": _UNKNOWN_APPLIED_AT}
         return self.db.transaction(lambda tx: [json.loads(_text(row.payload) or "{}")
                                               for row in tx.execute(query, params)[0].rows])
