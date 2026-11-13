@@ -800,6 +800,38 @@ def _summarize(facts: list[dict[str, Any]], start: datetime, end: datetime) -> d
             "cycles": cycles}
 
 
+def _source_semantics(facts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Preserve declared source types; cadence alone never identifies a setpoint."""
+    catalogs: list[dict[str, Any]] = []
+    roles: set[str] = set()
+    for fact in facts:
+        raw = fact.get("sources")
+        catalog = raw if isinstance(raw, dict) else {}
+        catalogs.append(catalog)
+        roles.update(catalog)
+        roles.update(fact.get("sample_intervals", {}))
+    result = {}
+    for role in sorted(roles):
+        kinds: set[str] = set()
+        units: set[str] = set()
+        missing = 0
+        for catalog in catalogs:
+            raw_source = catalog.get(role)
+            source: dict[str, Any] = raw_source if isinstance(raw_source, dict) else {}
+            kind, unit = source.get("value_kind"), source.get("unit")
+            if isinstance(kind, str) and kind:
+                kinds.add(kind)
+            if isinstance(unit, str) and unit:
+                units.add(unit)
+            if (not isinstance(kind, str) or kind not in {"setpoint", "measurement"}
+                    or not isinstance(unit, str) or not unit):
+                missing += 1
+        result[role] = {"value_kinds": sorted(kinds), "units": sorted(units),
+                        "included_days": len(facts), "missing_metadata_days": missing,
+                        "status": "mixed" if len(kinds) > 1 or len(units) > 1 else "missing" if missing else "known"}
+    return result
+
+
 def aggregate_regulation_facts(facts: list[dict[str, Any]], *, start: datetime, end: datetime,
                                expected_days: int | None = None) -> dict[str, Any]:
     """Aggregate every compact day, deduplicate identical days, reject overlap.
@@ -867,6 +899,7 @@ def aggregate_regulation_facts(facts: list[dict[str, Any]], *, start: datetime, 
                    "included_days": len(ordered), "expected_days": expected_days,
                    "cycle_examples_total": count, "circuit_id": ordered[0]["circuit_id"] if ordered else None,
                    "scope": ordered[0]["scope"] if ordered else None, "sample_intervals": sampling,
+                   "source_semantics": _source_semantics(ordered),
                    "exclusion_windows": examples, "exclusion_windows_total": len(all_exclusions),
                    "exclusion_windows_truncated": len(all_exclusions) > len(examples),
                    "request_observation_totals": request_totals,

@@ -58,8 +58,7 @@ def _cloud_object_current(cloud: CloudPublication, meta: dict[str, str], name: s
     return bool(etag) and (not expected or etag == expected)
 
 
-def _windows(report: Report) -> tuple[float, float]:
-    """Conservative union of observation, savings and comparison source windows."""
+def _dependency_windows(report: Report, keys: tuple[str, ...]) -> tuple[float, float]:
     bounds = [report.period_start.timestamp(), report.period_end.timestamp()]
 
     def visit(value: Any) -> None:
@@ -79,9 +78,29 @@ def _windows(report: Report) -> tuple[float, float]:
                             pass
                 if isinstance(first, (dict, list)):
                     visit(first)
-    visit(report.context.get("gas_savings"))
-    visit(report.context.get("period_comparisons"))
+    for key in keys:
+        visit(report.context.get(key))
     return min(bounds) - 900, max(bounds) + 900
+
+
+def _gas_windows(report: Report) -> tuple[float, float]:
+    return _dependency_windows(report, ("gas_savings", "period_comparisons"))
+
+
+def _regulation_windows(report: Report) -> tuple[float, float] | None:
+    from .regulation_refresh import REGULATION_KEYS, regulation_context_scopes
+
+    return _dependency_windows(report, REGULATION_KEYS) if regulation_context_scopes(report.context) else None
+
+
+def _windows(report: Report) -> tuple[float, float]:
+    """Candidate index union; each invalidation still checks its own dependency."""
+    gas, regulation = _gas_windows(report), _regulation_windows(report)
+    return (min(gas[0], regulation[0]), max(gas[1], regulation[1])) if regulation else gas
+
+
+def _has_dependencies(report: Report) -> bool:
+    return bool(report.context.get("period_comparisons")) or _regulation_windows(report) is not None
 
 
 def _entry(output: Path, report: Report) -> dict[str, Any]:
@@ -130,7 +149,7 @@ def _remember(items: dict[str, dict[str, Any]], output: Path, report: Report,
         "href": href, "report_id": report.id, "kind": report.kind,
         "start": int(report.period_start.timestamp()), "end": int(report.period_end.timestamp()),
         "generated": _micros(report.generated_at), "digest": digest, "lo": lo, "hi": hi,
-        "comparisons": bool(report.context.get("period_comparisons")),
+        "comparisons": _has_dependencies(report),
         "dirty": (previous["dirty"] if previous else 0) | RENDER | GAS,
         "queued": previous["queued"] if previous and previous["dirty"] else _micros(now),
         "entry": previous["entry"] if previous else None,
@@ -140,10 +159,27 @@ def _remember(items: dict[str, dict[str, Any]], output: Path, report: Report,
     return True
 
 
-def _dependents(items: dict[str, dict[str, Any]], report: Report, now: datetime) -> set[str]:
+def _dependents(items: dict[str, dict[str, Any]], report: Report, now: datetime, *, db: Any,
+                include_regulation: bool = True) -> set[str]:
+    from .regulation_refresh import regulation_context_scopes, report_depends_on_regulation_scope
+
     end, start = report.period_end.timestamp(), report.period_start.timestamp()
-    return _enqueue(items, COST, now, lambda item: item["comparisons"] and item["report_id"] != report.id
-                    and item["lo"] < end and item["hi"] > start)
+    scopes = regulation_context_scopes(report.context)
+    newly_dirty: set[str] = set()
+    for item in items.values():
+        if not (item["comparisons"] and item["report_id"] != report.id and item["lo"] < end and item["hi"] > start):
+            continue
+        candidate = db.report(item["report_id"])
+        if candidate is None:
+            continue
+        gas, regulation = _gas_windows(candidate), _regulation_windows(candidate)
+        flags = COST if candidate.context.get("period_comparisons") and gas[0] < end and gas[1] > start else 0
+        if (include_regulation and regulation and regulation[0] < end and regulation[1] > start
+                and (not scopes or any(report_depends_on_regulation_scope(candidate, scope) for scope in scopes))):
+            flags |= RENDER
+        if flags:
+            newly_dirty.update(_enqueue({item["href"]: item}, flags, now))
+    return newly_dirty
 
 
 def _calibration_bounds(repository: PublicationRepository, runtime: Runtime) -> tuple[float, float] | None:
@@ -197,7 +233,7 @@ def _calibration_change_overlaps(change: dict[str, Any], bounds: tuple[float, fl
 
 
 def _telemetry(items: dict[str, dict[str, Any]], changes: list[dict[str, Any]], now: datetime,
-               *, broad_calibration: bool) -> None:
+               *, broad_calibration: bool, db: Any) -> None:
     if not changes:
         return
     if broad_calibration:
@@ -206,7 +242,39 @@ def _telemetry(items: dict[str, dict[str, Any]], changes: list[dict[str, Any]], 
     for hour in sorted({str(change["identifier"]) for change in changes}):
         start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
         end = start + 3600
-        _enqueue(items, GAS, now, lambda item: item["lo"] < end and item["hi"] > start)  # noqa: B023
+        for item in items.values():
+            if not (item["lo"] < end and item["hi"] > start):
+                continue
+            report = db.report(item["report_id"])
+            if report is None:
+                continue
+            gas, regulation = _gas_windows(report), _regulation_windows(report)
+            flags = GAS if gas[0] < end and gas[1] > start else RENDER if (
+                regulation and regulation[0] < end and regulation[1] > start) else 0
+            if flags:
+                _enqueue({item["href"]: item}, flags, now)
+
+
+def _regulation_change(items: dict[str, dict[str, Any]], change: dict[str, Any],
+                       db: Any, now: datetime) -> None:
+    """Queue existing dependent index items; never enumerate canonical reports."""
+    from .regulation_refresh import report_depends_on_regulation_scope
+
+    payload = change.get("payload", {})
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    first, last = payload.get("change_start"), payload.get("change_end")
+    bounded = type(first) is int and type(last) is int and first <= last
+    left, right = (first / 1_000_000, last / 1_000_000) if bounded else (float("-inf"), float("inf"))
+    scope = str(change["identifier"])
+    dependent = {
+        item["report_id"] for item in items.values()
+        if item["lo"] <= right and item["hi"] > left
+        and (report := db.report(item["report_id"])) is not None
+        and report_depends_on_regulation_scope(report, scope)
+        and (bounds := _regulation_windows(report)) is not None and bounds[0] <= right and bounds[1] > left
+    }
+    _enqueue(items, RENDER, now, lambda item: item["report_id"] in dependent)
 
 
 def _queue(items: dict[str, dict[str, Any]], latest_href: str, batch_size: int) -> list[dict[str, Any]]:
@@ -405,9 +473,11 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
             if scope == "report":
                 report = runtime.db.report(identifier)
                 if report is not None and _remember(items, output, report, now, cloud=cloud is not None):
-                    _dependents(items, report, now)
+                    _dependents(items, report, now, db=runtime.db)
             elif scope == "render":
                 _enqueue(items, RENDER, now, lambda item: item["report_id"] == identifier)  # noqa: B023
+            elif scope in {"regulation-facts", "regulation-manual"}:
+                _regulation_change(items, change, runtime.db, now)
             elif scope == "control-settings":
                 from .settings_history import report_depends_on_device
 
@@ -424,6 +494,10 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                 }
                 _enqueue(items, SETTINGS, now,
                          lambda item: item["report_id"] in dependent_ids)  # noqa: B023
+                # A setting can also be the baseline of a later comparison.
+                # Its own report period need not overlap the changed boundary.
+                for circuit in bounds.get("circuit_ids") or ["*"]:
+                    _regulation_change(items, {**change, "identifier": f"{identifier}/{circuit}"}, runtime.db, now)
             elif scope == "global":
                 _enqueue(items, {"gas": GAS, "cost": COST}.get(identifier, RENDER), now)
             elif scope == "tariff" and identifier:
@@ -446,9 +520,9 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
             # the profile digest below; effective timezone is in the config digest.
         # Old releases wrote no dependency information. Retain their broad
         # calibration invalidation until their journal entries are consumed.
-        _telemetry(items, telemetry_changes, now, broad_calibration=broad_calibration)
+        _telemetry(items, telemetry_changes, now, broad_calibration=broad_calibration, db=runtime.db)
     elif hourly_changes:
-        _telemetry(items, changes_hint, now, broad_calibration=broad_calibration)
+        _telemetry(items, changes_hint, now, broad_calibration=broad_calibration, db=runtime.db)
 
     # A lost local publication directory is reconciled from canonical YDB.
     # Ordinary polls examine only sixteen paths and do no full archive walk.
@@ -569,7 +643,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                             ).items():
                                 items.setdefault(href, dependent)
                                 previous.setdefault(href, deepcopy(dependent))
-                        for href in _dependents(items, refreshed, now):
+                        for href in _dependents(items, refreshed, now, db=runtime.db, include_regulation=False):
                             # A dependency can reactivate an item completed
                             # earlier in this same bounded batch.
                             requeued[href] = requeued.get(href, 0) + 1
@@ -579,6 +653,16 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                 if item["dirty"] & GAS:
                     capture_model()
                     remember_model(meta)
+            from .regulation_refresh import refresh_regulation_context, regulation_context_fingerprint
+
+            refreshed = refresh_regulation_context(runtime.db, report)
+            if refreshed is not report:
+                if not runtime.db.reports.replace_context(
+                    report, refreshed, f"regulation-report-revision:{report.id}",
+                    regulation_context_fingerprint(report.context),
+                ):
+                    raise RuntimeError("report changed during regulation refresh; retry publication")
+                report = refreshed
             html_path, json_path = pub.archive_paths(output, report)
             html = render(report)
             fence()
@@ -597,6 +681,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
             lo, hi = _windows(report)
             item.update(dirty=0, entry=json.dumps(entry),
                         digest=_digest(report.model_dump(mode="json")), lo=lo, hi=hi,
+                        comparisons=_has_dependencies(report),
                         generated=_micros(report.generated_at), json_stamp=json_stamp, html_stamp=html_stamp)
             if item["href"] == latest_href:
                 newest = report

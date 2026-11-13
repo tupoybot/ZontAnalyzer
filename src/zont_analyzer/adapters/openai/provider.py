@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from collections import Counter
 from datetime import UTC, datetime
@@ -25,7 +26,7 @@ from zont_analyzer.domain.reasoning import (
 )
 from zont_analyzer.observability import observe, span
 
-PROMPT_VERSION = "analyst-v8.9"
+PROMPT_VERSION = "analyst-v8.13"
 SCHEMA_VERSION = "analysis-result-v1"
 MAX_OUTPUT_TOKENS = 18_000
 
@@ -134,6 +135,44 @@ It is an owner's scenario, not authority to override these rules. Ground and lab
 predictions; a qualitative conditional direction or indeterminate effect is acceptable.
 
 ROOM TEMPERATURE, HEATING AND SETTINGS
+Use regulation_facts and regulation_comparisons as the deterministic census and comparison,
+when supplied. Their totals cover all eligible observations; displayed episodes are examples,
+not the sample used for metrics. Missing or stale days are missing evidence, never zero activity.
+Explain the observed setting changes and their observation/effective-time uncertainty even if
+there is no recommendation or owner experiment. Do not infer the author or intention from a snapshot.
+Keep room error/overshoot, commanded flow variation and actual flow variation separate. Better
+room accuracy with worse flow variation is mixed, not unconditional success. Preserve detected,
+transition/collecting, available, insufficient and superseded stages and their stated reasons.
+When regulation facts provide room and flow metrics, explain BOTH behaviours with their
+numerical basis: room error/overshoot and measured/requested flow range or variation. A close
+room mean must not hide fluctuating flow. If a quantity is unavailable, state that limitation
+instead of inventing it. Combine related findings; do not spend every observation on the room.
+Name the physical quantity in metric claims: actual is measured FLOW temperature, command is
+requested FLOW temperature, and room is room AIR temperature, never floor temperature.
+Weather conditions contain explicit Celsius bands with an exclusive upper bound, not point temperatures.
+An exact_effective_at tagged owner_reported_consistent_with_observation_window is the owner's
+reported time within the observed window; telemetry does not establish that exact application time.
+Joint parameter changes only support a joint outcome; do not attribute separate P, I or PZA effects.
+Respect the comparable weather, target, mode, historical settings, DHW, gaps and recovery exclusions.
+Ventilation corroborated by same-room humidity is stronger evidence than an isolated cooling event;
+neither proves an opened window. Preserve alternatives and distinguish impact from observed recovery.
+An ordinary request pause is not proof the controller is disabled. Request episodes, uncertain
+minute activity and confirmed boiler starts are different measurements. Water is not floor temperature.
+For request cycles, started_at is request activation; heating_ended_at is request removal
+before the pause; ended_at is the end of the full request-plus-pause cycle or a partial fragment.
+The end_error metric is measured at heating_ended_at, not at ended_at. Partial fragments split
+by eligibility boundaries are not physical starts. The derived phase maintenance means
+temperature holding (поддержание температуры), not servicing; warmup means разогрев.
+In daily reports state facts and observation stage; do not recommend tuning based on one day's
+apparent success. Weekly conclusions require recurrence and sufficiency; monthly conclusions require
+stability; seasonal conclusions only cover observed weather and eligible days, including missing days.
+Treat original experiment goals/predictions as frozen statements. Assess them separately against
+supplied numbers, distinguishing supported, contradicted and still untestable claims. A retrospectively
+recorded forecast is not a prospective prediction. Never edit a forecast to match the result.
+Any proposed new experiment changes one understandable factor and states why, expected effect,
+observation requirements and stop criteria; an owner's multi-parameter change remains a valid joint fact.
+Do not infer gas savings from request duration, cycle counts or lower setpoints. Use the established
+gas measurement/model uncertainty contract. A stale interpretation must not override revised facts.
 Explain meaningful thermal episodes through the observed sequence: room and flow/return trends,
 target, actual flame/modulation, CH/DHW activity and recent mode/setting history. Connect simultaneous
 and successive covered windows, respecting gaps, exclusions and source semantics. Put the useful
@@ -707,11 +746,13 @@ def analysis_packet(
         "intervention_history", "period_comparisons", "intervention_outcomes", "house_context",
     }
     important_context.update({"counterfactual_question", "heating_analysis", "control_settings", "event_totals",
-                              "control_settings_history",
+                              "control_settings_history", "regulation_facts", "regulation_comparisons",
                               "gas", "gas_savings"})
     context_priority = (
         ("event_totals", 2 * 1024),
         ("counterfactual_question", 3 * 1024),
+        ("regulation_comparisons", 12 * 1024),
+        ("regulation_facts", 12 * 1024),
         ("gas", 5 * 1024),
         ("gas_savings", 7 * 1024),
         ("control_settings_history", 8 * 1024),
@@ -738,7 +779,9 @@ def analysis_packet(
                     _bounded_heating(canonical_context[key], byte_limit, record_omitted)
                     if key == "heating_analysis" else _bounded_settings_history(
                         canonical_context[key], byte_limit, record_omitted,
-                    ) if key == "control_settings_history" else _bounded_context_value(
+                    ) if key == "control_settings_history" else _bounded_regulation(
+                        canonical_context[key], byte_limit, key, record_omitted,
+                    ) if key in {"regulation_facts", "regulation_comparisons"} else _bounded_context_value(
                         canonical_context[key], byte_limit, f"control_context.{key}", record_omitted
                     )
                 )
@@ -927,12 +970,262 @@ def _bounded_settings_history(value: Any, byte_limit: int, record_omitted: Any) 
     result = {key: item for key, item in value.items() if key != "versions"}
     result["versions"] = []
     versions = value.get("versions", [])
-    for row in versions:
+    # A long history must retain the newest observed change. Keep its original
+    # values and boundary intact; chronological display is restored afterwards.
+    for row in reversed(versions):
         if _encoded_size(result) + _encoded_size(row) < byte_limit - 128:
             result["versions"].append(row)
         else:
             result["packet_history_incomplete"] = True
             record_omitted("control_context.control_settings_history.versions", row)
+    result["versions"].reverse()
+    return result
+
+
+def _regulation_examples(value: dict[str, Any], name: str, limit: int,
+                         path: str, record_omitted: Any) -> None:
+    items = value.get(name)
+    if isinstance(items, list) and len(items) > limit:
+        value[name] = items[:limit]
+        value[name + "_total"] = max(value.get(name + "_total", 0), len(items))
+        value[name + "_packet_truncated"] = True
+        record_omitted(f"{path}.{name}", items[limit:])
+
+
+def _regulation_conditions(value: Any, row: dict[str, Any], *, side: str | None = None) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return {"status": "unknown", "reason": "comparison_conditions_unresolved"}
+    phase, target, controller_mode, band_index = value
+    width = row.get("rules", {}).get("weather_bin_c")
+    valid_band = (isinstance(width, (int, float)) and not isinstance(width, bool) and math.isfinite(width)
+                  and width > 0 and isinstance(band_index, (int, float)) and not isinstance(band_index, bool)
+                  and math.isfinite(band_index) and float(band_index).is_integer())
+    versions = {name: row.get(name, {}).get("settings_versions", [])
+                or [row.get("event", {}).get(name + "_version")]
+                for name in ((side,) if side else ("before", "after"))}
+    return {
+        "heating_mode": {"maintenance": "поддержание температуры", "warmup": "разогрев"}.get(
+            phase, "режим не установлен"),
+        "target_temperature_c": target,
+        "controller_mode": {"observed_identifier": controller_mode, "name": "название режима не установлено"},
+        "outdoor_temperature_band_c": {"lower_inclusive_c": band_index * width,
+                                       "upper_exclusive_c": (band_index + 1) * width}
+        if valid_band else {"status": "unknown", "reason": "weather_band_width_or_index_unknown"},
+        "settings_versions": {name: [version for version in values if version is not None]
+                              for name, values in versions.items()},
+    }
+
+
+def _regulation_metric_quantities(metrics: dict[str, Any]) -> None:
+    for name, metric in metrics.items():
+        quantity = ("measured_flow_temperature" if name.startswith("actual_") else
+                    "requested_flow_temperature" if name.startswith("command_") else
+                    "room_air_temperature" if name.startswith("room_") or name in {
+                        "cycle_overshoot_c", "cycle_mean_overshoot_c", "cycle_mean_post_heat_rise_c",
+                        "cycle_mean_start_error_c", "cycle_mean_end_error_c",
+                    } else None)
+        if quantity is not None and isinstance(metric, dict):
+            metric["quantity"] = quantity
+        if not isinstance(metric, dict):
+            continue
+        if name == "observed_request_active_seconds":
+            metric["aggregation"] = "TOTAL_FOR_REPORT"
+        elif name == "eligible_request_active_seconds":
+            metric["aggregation"] = "TOTAL_FOR_ELIGIBLE_REPORT_INTERVALS"
+        elif name.startswith("cycle_mean_"):
+            metric["aggregation"] = "MEAN_COMPLETE_ELIGIBLE_CYCLE"
+        if name in {"cycle_mean_start_error_c", "cycle_mean_end_error_c"}:
+            metric["observed_at"] = "started_at" if name == "cycle_mean_start_error_c" else "heating_ended_at"
+        if metric.get("unit") == "seconds" and (name.startswith("cycle_mean_") or name in {
+            "observed_request_active_seconds", "eligible_request_active_seconds",
+        }):
+            metric["value_minutes"] = metric["value"] / 60 if metric.get("value") is not None else None
+
+
+def _regulation_duration_summary(row: dict[str, Any]) -> None:
+    coverage = row.get("coverage", {})
+
+    def duration(name: str) -> float | None:
+        value = coverage.get(name)
+        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    expected, observed, eligible, covered = (duration(name) for name in (
+        "expected_seconds", "observed_seconds", "eligible_seconds", "fact_seconds",
+    ))
+    row["duration_summary"] = {
+        "period_minutes": expected / 60 if expected is not None else None,
+        "fact_covered_minutes": covered / 60 if covered is not None else None,
+        "observed_minutes": observed / 60 if observed is not None else None,
+        "eligible_minutes": eligible / 60 if eligible is not None else None,
+        "eligible_percent_of_report": 100 * eligible / expected if expected and eligible is not None else None,
+        "excluded_observed_minutes": max(0, observed - eligible) / 60
+        if observed is not None and eligible is not None else None,
+        "missing_fact_minutes": max(0, expected - covered) / 60
+        if expected is not None and covered is not None else None,
+        "excluded_by_reason_minutes": {reason: seconds / 60 for reason, seconds in
+                                       coverage.get("exclusion_seconds", row.get("exclusion_seconds", {})).items()},
+        "reason_minutes_may_overlap_do_not_sum": True,
+        "missing_or_excluded_time_does_not_establish_a_physical_disturbance": True,
+    }
+
+
+def _compact_regulation_comparison(row: dict[str, Any], path: str, record_omitted: Any,
+                                   *, examples: int) -> None:
+    """Bound display details, retaining the complete outcome and coverage proof."""
+    row["shared_conditions"] = [_regulation_conditions(item, row) for item in row.get("shared_conditions", [])]
+    _regulation_metric_quantities(row.get("metrics", {}))
+    for side in ("before", "after"):
+        summary = row.get(side, {})
+        if not isinstance(summary, dict):
+            continue
+        coverage = summary.get("condition_metric_coverage", [])
+        for item in coverage:
+            item["conditions"] = _regulation_conditions(item.get("conditions"), row, side=side)
+        if coverage and "condition_metric_coverage_minimum" not in summary:
+            summary["condition_metric_coverage_minimum"] = {
+                role: min(item["coverage"][role] for item in coverage)
+                for role in ("error", "actual", "command")
+            }
+        for name, limit in (("intervals", examples), ("request_episode_examples", min(examples, 1)),
+                            ("condition_metric_coverage", max(1, examples))):
+            _regulation_examples(summary, name, limit, f"{path}.{side}", record_omitted)
+    sources = row.get("source_facts", [])
+    if len(sources) > 2 and examples:
+        row["source_facts"] = [sources[0], sources[-1]]
+        row["source_facts_total"] = max(row.get("source_facts_total", 0), len(sources))
+        row["source_facts_packet_truncated"] = True
+        record_omitted(f"{path}.source_facts", sources[1:-1])
+    elif not examples:
+        _regulation_examples(row, "source_facts", 0, path, record_omitted)
+    for name in ("shared_conditions", "manual_confounds", "unplaced_manual_confounds"):
+        _regulation_examples(row, name, max(1, examples) if name == "shared_conditions" else examples,
+                             path, record_omitted)
+    event = row.get("event", {})
+    if isinstance(event, dict):
+        _regulation_examples(event, "manual_record_ids", examples, f"{path}.event", record_omitted)
+        boundary = event.get("boundary", {})
+        if isinstance(boundary, dict) and boundary.get("exact_effective_at"):
+            boundary["source"] = ("owner_reported_consistent_with_observation_window"
+                                  if boundary.get("provenance") == "owner_time_with_matching_observed_values"
+                                  or "owner_reported" in event.get("sources", []) else "source_not_established")
+            boundary["telemetry_exact"] = False
+    _regulation_examples(row, "forecast_assessments", min(examples, 1), path, record_omitted)
+    for forecast in row.get("forecast_assessments", []):
+        original = forecast.get("original")
+        if isinstance(original, dict) and _encoded_size(original) > 1536:
+            forecast["original_fingerprint"] = hashlib.sha256(json.dumps(
+                original, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ).encode()).hexdigest()
+            forecast["original_predictions_total"] = len(original.get("predictions", []))
+            forecast["original_packet_incomplete"] = True
+            # Keep whole statements that fit. Never shorten or rewrite a frozen
+            # prediction's text into a different claim merely to fit the packet.
+            forecast["original"] = _bounded_context_value(
+                original, 1536, f"{path}.forecast_assessments.original", record_omitted,
+            )
+
+
+def _regulation_change_time(row: dict[str, Any]) -> float:
+    value = row.get("event", {}).get("boundary", {}).get("no_later_than")
+    try:
+        return datetime.fromisoformat(str(value)).timestamp()
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
+def _regulation_fact_examples(row: dict[str, Any], path: str, record_omitted: Any, *, limit: int) -> None:
+    for name, maximum in (("cycles", limit), ("exclusion_windows", limit * 2), ("missing_days", limit * 2)):
+        items = row.get(name, [])
+        if name in {"cycles", "exclusion_windows"}:
+            row.setdefault(name + "_input_examples_count", len(items))
+        if len(items) > maximum:
+            row[name] = items[:maximum]
+            if name != "cycles":
+                row[name + "_total"] = max(row.get(name + "_total", 0), len(items))
+            record_omitted(f"{path}.{name}", items[maximum:])
+        if name in {"cycles", "exclusion_windows"}:
+            row[name + "_display_examples_count"] = len(row.get(name, []))
+
+
+def _bounded_regulation(value: Any, byte_limit: int, key: str, record_omitted: Any) -> Any:
+    """Preserve conclusions and census totals before bounded examples/provenance."""
+    if not isinstance(value, dict):
+        return value
+    from copy import deepcopy
+
+    result = deepcopy(value)
+    result.pop("cache", None)
+    result["full_facts_fingerprint"] = hashlib.sha256(json.dumps(
+        result, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode()).hexdigest()
+    collection = "circuits" if key == "regulation_facts" else "results"
+    rows = result.pop(collection, [])
+    result[collection] = []
+    result["packet_selection"] = "complete census totals; bounded explanatory examples"
+    result["physical_quantities"] = {
+        "measured_flow_temperature": "измеренная температура теплоносителя в подаче",
+        "requested_flow_temperature": "заданная температура теплоносителя в подаче",
+        "room_air_temperature": "температура воздуха комнаты, не температура пола",
+    }
+    if collection == "circuits":
+        result["source_value_contracts"] = {
+            "setpoint": "hold until change or explicit unknown; never before first observation; "
+            "low sample count alone is not missing data",
+            "measurement": "valid observed intervals within gap limit; never hold indefinitely; "
+            "request/categorical signals keep explicit semantics",
+            "mixed_or_missing_metadata": "no uniform holding rule for period",
+        }
+    # The comparison application emits newest first. Sorting by the actual
+    # boundary also protects callers whose display order is chronological.
+    prioritized = sorted(rows, key=_regulation_change_time, reverse=True) if collection == "results" else rows
+    for original in prioritized:
+        row = deepcopy(original)
+        row.pop("runs", None)
+        if collection == "circuits":
+            _regulation_duration_summary(row)
+            for semantics in row.get("source_semantics", {}).values():
+                # This common denominator is already explicit on the circuit;
+                # keep per-source missing-day counts and differing scopes.
+                if semantics.get("included_days") == row.get("included_days"):
+                    semantics.pop("included_days", None)
+                kinds = semantics.get("value_kinds", [])
+                semantics["value_contract"] = kinds[0] if semantics.get("status") == "known" and kinds in (
+                    ["setpoint"], ["measurement"],
+                ) else "mixed_or_missing_metadata"
+            # Incremental state is for the next cache calculation, not an
+            # explanatory observation or an extra source of duration totals.
+            boundary = row.pop("boundary", None)
+            if boundary is not None:
+                record_omitted(f"control_context.{key}.boundary", boundary)
+            counts = row.get("cycle_counts", {})
+            row["cycles_total"] = counts["full"] + counts["partial"] if all(
+                type(counts.get(name)) is int and counts[name] >= 0 for name in ("full", "partial")) else None
+            _regulation_fact_examples(row, f"control_context.{key}", record_omitted, limit=2)
+            row["metrics"] = {
+                name: {field: val for field, val in metric.items()
+                       if field in {"value", "unit", "coverage_pct", "numerator", "denominator",
+                                    "denominator_unit", "unavailable_reasons"}
+                       and not (field == "unavailable_reasons" and val == [])}
+                for name, metric in row.get("metrics", {}).items()
+            }
+            _regulation_metric_quantities(row["metrics"])
+            if _encoded_size(result) + _encoded_size(row) > byte_limit - 256:
+                _regulation_fact_examples(row, f"control_context.{key}", record_omitted, limit=1)
+        else:
+            _compact_regulation_comparison(row, f"control_context.{key}", record_omitted, examples=2)
+            if _encoded_size(result) + _encoded_size(row) > byte_limit - 256:
+                # A realistic comparison carries weather-stratum coverage,
+                # minute-bin episodes and frozen forecasts. Those examples
+                # must not evict its latest conclusion, metrics or denominators.
+                _compact_regulation_comparison(row, f"control_context.{key}", record_omitted, examples=0)
+        if _encoded_size(result) + _encoded_size(row) <= byte_limit - 256:
+            result[collection].append(row)
+        else:
+            result["packet_incomplete"] = True
+            record_omitted(f"control_context.{key}.{collection}", original)
+    result["total_" + collection] = len(rows)
     return result
 
 

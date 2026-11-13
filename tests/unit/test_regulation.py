@@ -412,3 +412,33 @@ def test_sixty_day_census_matches_full_source_without_midnight_loss_or_duplicate
     assert "missing_facts_require_local_backfill" in missing["unknowns"]
     with pytest.raises(ValueError, match="different circuits"):
         aggregate_regulation_facts([daily[0], {**daily[1], "scope": "other/circuit"}], start=START, end=end)
+
+
+def test_aggregate_preserves_mixed_and_missing_source_metadata_without_guessing() -> None:
+    source = inputs(minutes=120)
+    source.signals["target"] = signal("target", [20.0] * 121, setpoint=True)
+    middle, end = START + timedelta(hours=1), START + timedelta(hours=2)
+    first = build_regulation_facts(start=START, end=middle, inputs=source)
+    target = source.signals["target"]
+    changed = replace(source, signals={**source.signals, "target": replace(
+        target, metadata=replace(target.metadata, value_kind="measurement"),
+    )})
+    second = build_regulation_facts(start=middle, end=end, inputs=changed, previous_boundary=first["boundary"])
+    first["sources"]["room"].pop("unit")
+    second["sources"]["room"].pop("value_kind")
+    second["sources"].pop("command")
+    combined = aggregate_regulation_facts([first, second], start=START, end=end)
+    target_semantics = combined["source_semantics"]["target"]
+    assert target_semantics == {"value_kinds": ["measurement", "setpoint"], "units": ["°C"],
+                                "included_days": 2, "missing_metadata_days": 0, "status": "mixed"}
+    assert combined["source_semantics"]["room"]["status"] == "missing"
+    assert combined["source_semantics"]["room"]["missing_metadata_days"] == 2
+    assert combined["source_semantics"]["command"]["missing_metadata_days"] == 1
+    assert combined["metrics"]["room_absolute_error_c"]["value"] == 0
+    assert combined["metrics"]["room_absolute_error_c"]["denominator"] == 7200
+    first["sources"] = None
+    second["sources"] = {}
+    missing = aggregate_regulation_facts([first, second], start=START, end=end)
+    assert missing["source_semantics"]["target"] == {
+        "value_kinds": [], "units": [], "included_days": 2, "missing_metadata_days": 2, "status": "missing",
+    }

@@ -33,9 +33,10 @@ from zont_analyzer.reports.presentation import (
     timezone_note,
     zont_connection_label,
 )
+from zont_analyzer.reports.regulation import regulation_html, regulation_text
 from zont_analyzer.reports.wording import normalize_report_for_display
 
-VIEW_VERSION = "report-presentation-v2-owner-experiments"
+VIEW_VERSION = "report-presentation-v3-regulation"
 
 METRIC_LABELS = {
     "mean_temperature_c": "Средняя температура помещения",
@@ -912,6 +913,7 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
         ai_provenance_label(report),
     ]
     lines.extend(ai_provenance_details(report))
+    lines.extend(regulation_text(report.context, report.kind, report.timezone))
     if note := target_band_note(report, current_comfort_band_c):
         lines.append(note)
     for metric in report.metrics:
@@ -1493,6 +1495,7 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="overview">{ui.hero(report)}{ui.kpis(report)}
 {band_note_html}
 {render_charts(report, chart_data, panel_ids=("climate",))}</div>
+{regulation_html(report.context, report.kind, report.timezone)}
 <aside class="actions"><span class="eyebrow">СЛЕДУЮЩИЙ ШАГ</span><h2>Что делать</h2>
 {recommendations or '<p>Рекомендаций за этот период нет.</p>'}</aside>
 {owner_experiment_journal(report.id, report.timezone)}

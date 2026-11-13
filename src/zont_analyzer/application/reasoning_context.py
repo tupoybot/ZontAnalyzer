@@ -25,9 +25,12 @@ def _facts_digest(report: Report, *, include_ai_provenance: bool) -> str:
         from zont_analyzer.analytics.settings_history import semantic_history
 
         context["control_settings_history"] = semantic_history(history)
-    regulation = context.get("regulation_facts")
-    if isinstance(regulation, dict):
-        regulation.pop("cache", None)
+    from .regulation_refresh import REGULATION_KEYS, semantic_regulation_context
+
+    regulation = semantic_regulation_context(context)
+    for key in REGULATION_KEYS:
+        if key in regulation:
+            context[key] = regulation[key]
     if not include_ai_provenance:
         context.pop("ai_provenance", None)
         for key, field in (("control_settings", "captured_at"),
@@ -37,7 +40,7 @@ def _facts_digest(report: Report, *, include_ai_provenance: bool) -> str:
                 value.pop(field, None)
     for key in ("input_revision", "calculation_version", "pilot_ai_reuse", "ai_interpretation_reuse",
                 "ai_facts_fingerprint", "gas_interpretation_stale", "timezone_provenance",
-                "control_settings_interpretation_stale"):
+                "control_settings_interpretation_stale", "regulation_interpretation_stale"):
         context.pop(key, None)
     gas = context.get("gas")
     if isinstance(gas, dict):
@@ -54,7 +57,9 @@ def reuse_ai_interpretation(previous: Report, current: Report) -> Report:
     baseline = previous.context.get("ai_facts_fingerprint")
     prior_reuse = previous.context.get("pilot_ai_reuse") or previous.context.get("ai_interpretation_reuse")
     prior_gas = previous.context.get("gas", {})
-    if not baseline and not prior_reuse and not prior_gas.get("ai_stale"):
+    if (not baseline and not prior_reuse and not prior_gas.get("ai_stale")
+            and not previous.context.get("regulation_interpretation_stale")
+            and not previous.context.get("control_settings_interpretation_stale")):
         baseline = report_facts_fingerprint(previous)
     fingerprint = report_facts_fingerprint(current)
     changed = fingerprint != baseline if baseline else None
@@ -92,6 +97,11 @@ def reuse_ai_interpretation(previous: Report, current: Report) -> Report:
             if prior_history.get("fingerprint") and current_history.get("fingerprint")
             else prior_history != current_history):
         context["control_settings_interpretation_stale"] = True
+    from .regulation_refresh import regulation_context_fingerprint
+
+    if (regulation_context_fingerprint(previous.context) != regulation_context_fingerprint(current.context)
+            or previous.context.get("regulation_interpretation_stale")):
+        context["regulation_interpretation_stale"] = True
     return current.model_copy(update={
         "context": context, "summary": previous.summary, "recommendations": previous.recommendations,
         "ai_used": True, **reasoning_payload(previous),

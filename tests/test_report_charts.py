@@ -189,7 +189,8 @@ def test_rebind_legacy_chart_packet_after_saved_gas_refresh(tmp_path, monkeypatc
 
 @pytest.mark.ydb
 @pytest.mark.parametrize("source", ["v3", "legacy"])
-def test_overlapping_saved_gas_refreshes_carry_packet_atomically(tmp_path, monkeypatch, source) -> None:
+@pytest.mark.parametrize("kind", ["gas", "regulation"])
+def test_overlapping_saved_context_refreshes_carry_packet_atomically(tmp_path, monkeypatch, source, kind) -> None:
     db = make_database(tmp_path)
     original = _report()
     db.save_report(original, original.summary)
@@ -206,8 +207,17 @@ def test_overlapping_saved_gas_refreshes_carry_packet_atomically(tmp_path, monke
         raise AssertionError("overlapping gas refreshes must retain the original telemetry packet")
 
     monkeypatch.setattr(chart_data, "build_chart_data", no_build)
-    middle = original.model_copy(update={"context": {"gas": {"revision": 1}}})
-    latest = original.model_copy(update={"context": {"gas": {"revision": 2}}})
+    def context(revision):
+        if kind == "gas":
+            return {"gas": {"revision": revision}}
+        return {"regulation_facts": {"revision": revision},
+                "regulation_comparisons": {"revision": revision},
+                "control_settings_history": {"revision": revision},
+                "control_settings_interpretation_stale": True,
+                "regulation_interpretation_stale": True, "ai_facts_fingerprint": "original"}
+
+    middle = original.model_copy(update={"context": context(1)})
+    latest = original.model_copy(update={"context": context(2)})
     assert db.reports.replace_context(original, middle, "gas-test:original", "original")
     assert db.reports.replace_context(middle, latest, "gas-test:middle", "middle")
     # Both canonical commits finish before either worker's post-save callback.
