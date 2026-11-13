@@ -195,7 +195,9 @@ def upload_snapshot(db: YdbDatabase, directory: Path, *, ru_per_second: int = 10
     snapshot._check_schema(db)
     completed = _load_progress(db, manifest, artifact_hash)
     pace = pacer or _Pacer(ru_per_second)
-    for table in manifest["tables"]:
+    # Keep the schema's stable transfer order. JSON key sorting must not
+    # reorder writes, and older artifacts may omit additive tables.
+    for table in (name for name in snapshot.TABLE_NAMES if name in manifest["tables"]):
         indexed = bool(snapshot._expected_indexes(table))
         done = completed[table]
         batch: list[dict[str, Any]] = []
