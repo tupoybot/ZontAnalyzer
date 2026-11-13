@@ -20,12 +20,23 @@ METRICS = {
     "command_range_c": "Размах заданной температуры подачи",
     "actual_variation_c_per_hour": "Изменчивость измеренной температуры подачи",
     "command_variation_c_per_hour": "Изменчивость заданной температуры подачи",
+    "command_total_variation_c": "Сумма изменений заданной температуры подачи",
+    "actual_total_variation_c": "Сумма изменений измеренной температуры подачи",
+    "room_total_variation_c": "Сумма изменений температуры комнаты",
+    "room_variation_c_per_hour": "Изменчивость температуры комнаты",
+    "command_max_rate_c_per_hour": "Наибольшая наблюдавшаяся скорость изменения команды подачи",
+    "actual_max_rate_c_per_hour": "Наибольшая наблюдавшаяся скорость изменения измеренной подачи",
+    "room_max_rate_c_per_hour": "Наибольшая наблюдавшаяся скорость изменения температуры комнаты",
     "cycle_overshoot_c": "Выбег температуры комнаты в полном цикле запроса",
     "cycle_mean_overshoot_c": "Средний выбег температуры комнаты в полном цикле запроса",
     "cycle_mean_post_heat_rise_c": "Рост температуры комнаты после снятия запроса",
     "cycle_mean_peak_delay_seconds": "Задержка пика температуры комнаты после снятия запроса",
     "cycle_mean_heating_seconds": "Длительность запроса отопления в полном цикле",
     "cycle_mean_pause_seconds": "Пауза запроса отопления в полном цикле",
+    "cycle_mean_start_error_c": "Среднее отклонение комнаты от цели при начале запроса",
+    "cycle_mean_end_error_c": "Среднее отклонение комнаты от цели при снятии запроса",
+    "cycle_mean_room_reaction_after_seconds": "Средняя задержка реакции комнаты после начала запроса",
+    "cycle_mean_target_reached_after_seconds": "Среднее время достижения цели после начала запроса",
     "confirmed_heating_burner_starts": "Подтверждённые запуски горелки на отопление",
     "eligible_confirmed_heating_burner_starts": "Запуски горелки на пригодных участках",
     "observed_request_active_seconds": "Наблюдаемое время активного запроса отопления",
@@ -95,8 +106,9 @@ LABELS = {
     "missing_facts_require_local_backfill": "не все дни рассчитаны; требуется отдельный пересчёт фактов",
     "heating_scope_unresolved": "контур отопления не определён",
     "awaiting_comparison": "проверка прогноза ожидает достаточного сравнения",
-    "requires_explicit_measurable_prediction": "для проверки прогноза нужен явный измеримый критерий",
-    "transition": "переход после изменения настроек, цели или режима",
+    "requires_explicit_measurable_prediction":
+        "автоматическая проверка не выполнена; сохранённый критерий и срок нужно сопоставить с наблюдениями",
+    "transition": "неопределённое время изменения настроек либо переход после смены цели или режима",
     "reliability": "потеря надёжной связи или питания",
     "missing_or_stale_facts": "суточные факты отсутствуют либо устарели после новых данных",
     "stale_boundary_ancestor_requires_local_backfill":
@@ -131,7 +143,7 @@ def _items(value: Any) -> list[Mapping[str, Any]]:
 def _number(value: Any) -> str:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         return "нет данных"
-    return f"{value:.3g}".replace(".", ",")
+    return (f"{value:.0f}" if abs(value) >= 1000 else f"{value:.3g}").replace(".", ",")
 
 
 def _time(value: Any, timezone: str) -> str:
@@ -203,10 +215,13 @@ def _metric(name: str, item: Mapping[str, Any], *, comparison: bool = False) -> 
                 + _reason(item.get("direction", "unavailable")))
     unit = {"seconds": "с", "count": "", "°C/h": "°C/ч", "°C·h": "°C·ч"}.get(
         str(item.get("unit")), str(item.get("unit") or ""))
+    value = item.get("value")
+    if item.get("unit") == "seconds" and isinstance(value, (int, float)) and value >= 60:
+        value, unit = (value / 3600, "ч") if value >= 3600 else (value / 60, "мин")
     suffix = ""
     if item.get("value") is None:
         suffix = "; " + "; ".join(_reason(reason) for reason in item.get("unavailable_reasons", []))
-    return f"{label}: {_number(item.get('value'))} {unit}; покрытие {_number(item.get('coverage_pct'))}%{suffix}"
+    return f"{label}: {_number(value)} {unit}; покрытие {_number(item.get('coverage_pct'))}%{suffix}"
 
 
 def _sections(context: Mapping[str, Any], kind: str, timezone: str) -> tuple[list[str], list[str]]:
@@ -230,10 +245,15 @@ def _sections(context: Mapping[str, Any], kind: str, timezone: str) -> tuple[lis
                      "отсутствующие диапазоны не проверены."),
     }.get(kind, "Вывод ограничен наблюдавшимися условиями и достаточностью данных."))
     results = _items(comparisons.get("results"))
+    circuit_labels = {str(circuit.get("scope")): f"Контур {index}"
+                      for index, circuit in enumerate(_items(facts.get("circuits")), 1)
+                      if circuit.get("scope")}
     if not results:
         main.append("Сравнение до и после изменения пока не сформировано. Причинный эффект настройки не установлен.")
     for result in results:
         event = _map(result.get("event"))
+        if str(result.get("scope")) in circuit_labels:
+            main.append(circuit_labels[str(result["scope"])] + ": сравнение изменения настроек.")
         main.append("Стадия: " + _reason(result.get("stage")) + ". Результат: "
                     + (_reason(result["outcome"]) if result.get("outcome") else "пока не установлен") + ".")
         main.append(_boundary(event.get("boundary"), timezone))
@@ -264,8 +284,9 @@ def _sections(context: Mapping[str, Any], kind: str, timezone: str) -> tuple[lis
         main.append("Это наблюдаемая связь, а не доказательство причины. "
                     "Эффект отдельных параметров и экономия газа здесь не установлены.")
         for assessment in _items(result.get("forecast_assessments")):
-            main.append("Исходный прогноз: " + _reason(assessment.get("assessment")))
             original = _map(assessment.get("original"))
+            main.append(("Исходный прогноз: " if original.get("predictions") else "Исходное ожидание: ")
+                        + _reason(assessment.get("assessment")))
             for key, label in (("goal", "Исходная цель"), ("expected_effect", "Исходное ожидание"),
                                ("observation_window", "Срок наблюдения")):
                 if original.get(key):
@@ -276,7 +297,7 @@ def _sections(context: Mapping[str, Any], kind: str, timezone: str) -> tuple[lis
             if assessment.get("owner_expectation_timing") == "retrospective_or_unknown":
                 evidence.append("Ожидание владельца записано после изменения либо время неизвестно; "
                                 "оно не считается прогнозом, зафиксированным заранее.")
-            if assessment.get("prediction_timing") == "unknown_or_not_before_change":
+            if original.get("predictions") and assessment.get("prediction_timing") == "unknown_or_not_before_change":
                 evidence.append("Не подтверждено, что сохранённый прогноз AI был сделан до изменения.")
         for fact in _items(result.get("source_facts")):
             evidence.append(f"Основание сравнения: {_time(fact.get('start'), timezone)} — "

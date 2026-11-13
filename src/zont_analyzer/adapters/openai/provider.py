@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from collections import Counter
 from datetime import UTC, datetime
@@ -25,7 +26,7 @@ from zont_analyzer.domain.reasoning import (
 )
 from zont_analyzer.observability import observe, span
 
-PROMPT_VERSION = "analyst-v8.10"
+PROMPT_VERSION = "analyst-v8.11"
 SCHEMA_VERSION = "analysis-result-v1"
 MAX_OUTPUT_TOKENS = 18_000
 
@@ -142,6 +143,11 @@ there is no recommendation or owner experiment. Do not infer the author or inten
 Keep room error/overshoot, commanded flow variation and actual flow variation separate. Better
 room accuracy with worse flow variation is mixed, not unconditional success. Preserve detected,
 transition/collecting, available, insufficient and superseded stages and their stated reasons.
+Name the physical quantity in metric claims: actual is measured FLOW temperature, command is
+requested FLOW temperature, and room is room AIR temperature, never floor temperature.
+Weather conditions contain explicit Celsius bands with an exclusive upper bound, not point temperatures.
+An exact_effective_at tagged owner_reported_consistent_with_observation_window is the owner's
+reported time within the observed window; telemetry does not establish that exact application time.
 Joint parameter changes only support a joint outcome; do not attribute separate P, I or PZA effects.
 Respect the comparable weather, target, mode, historical settings, DHW, gaps and recovery exclusions.
 Ventilation corroborated by same-room humidity is stronger evidence than an isolated cooling event;
@@ -967,6 +973,118 @@ def _bounded_settings_history(value: Any, byte_limit: int, record_omitted: Any) 
     return result
 
 
+def _regulation_examples(value: dict[str, Any], name: str, limit: int,
+                         path: str, record_omitted: Any) -> None:
+    items = value.get(name)
+    if isinstance(items, list) and len(items) > limit:
+        value[name] = items[:limit]
+        value[name + "_total"] = max(value.get(name + "_total", 0), len(items))
+        value[name + "_packet_truncated"] = True
+        record_omitted(f"{path}.{name}", items[limit:])
+
+
+def _regulation_conditions(value: Any, row: dict[str, Any], *, side: str | None = None) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return {"status": "unknown", "reason": "comparison_conditions_unresolved"}
+    phase, target, controller_mode, band_index = value
+    width = row.get("rules", {}).get("weather_bin_c")
+    valid_band = (isinstance(width, (int, float)) and not isinstance(width, bool) and math.isfinite(width)
+                  and width > 0 and isinstance(band_index, (int, float)) and not isinstance(band_index, bool)
+                  and math.isfinite(band_index) and float(band_index).is_integer())
+    versions = {name: row.get(name, {}).get("settings_versions", [])
+                or [row.get("event", {}).get(name + "_version")]
+                for name in ((side,) if side else ("before", "after"))}
+    return {
+        "heating_mode": {"maintenance": "поддержание температуры", "warmup": "разогрев"}.get(
+            phase, "режим не установлен"),
+        "target_temperature_c": target,
+        "controller_mode": {"observed_identifier": controller_mode, "name": "название режима не установлено"},
+        "outdoor_temperature_band_c": {"lower_inclusive_c": band_index * width,
+                                       "upper_exclusive_c": (band_index + 1) * width}
+        if valid_band else {"status": "unknown", "reason": "weather_band_width_or_index_unknown"},
+        "settings_versions": {name: [version for version in values if version is not None]
+                              for name, values in versions.items()},
+    }
+
+
+def _regulation_metric_quantities(metrics: dict[str, Any]) -> None:
+    for name, metric in metrics.items():
+        quantity = ("measured_flow_temperature" if name.startswith("actual_") else
+                    "requested_flow_temperature" if name.startswith("command_") else
+                    "room_air_temperature" if name.startswith("room_") or name in {
+                        "cycle_overshoot_c", "cycle_mean_overshoot_c", "cycle_mean_post_heat_rise_c",
+                        "cycle_mean_start_error_c", "cycle_mean_end_error_c",
+                    } else None)
+        if quantity is not None and isinstance(metric, dict):
+            metric["quantity"] = quantity
+
+
+def _compact_regulation_comparison(row: dict[str, Any], path: str, record_omitted: Any,
+                                   *, examples: int) -> None:
+    """Bound display details, retaining the complete outcome and coverage proof."""
+    row["shared_conditions"] = [_regulation_conditions(item, row) for item in row.get("shared_conditions", [])]
+    _regulation_metric_quantities(row.get("metrics", {}))
+    for side in ("before", "after"):
+        summary = row.get(side, {})
+        if not isinstance(summary, dict):
+            continue
+        coverage = summary.get("condition_metric_coverage", [])
+        for item in coverage:
+            item["conditions"] = _regulation_conditions(item.get("conditions"), row, side=side)
+        if coverage and "condition_metric_coverage_minimum" not in summary:
+            summary["condition_metric_coverage_minimum"] = {
+                role: min(item["coverage"][role] for item in coverage)
+                for role in ("error", "actual", "command")
+            }
+        for name, limit in (("intervals", examples), ("request_episode_examples", min(examples, 1)),
+                            ("condition_metric_coverage", max(1, examples))):
+            _regulation_examples(summary, name, limit, f"{path}.{side}", record_omitted)
+    sources = row.get("source_facts", [])
+    if len(sources) > 2 and examples:
+        row["source_facts"] = [sources[0], sources[-1]]
+        row["source_facts_total"] = max(row.get("source_facts_total", 0), len(sources))
+        row["source_facts_packet_truncated"] = True
+        record_omitted(f"{path}.source_facts", sources[1:-1])
+    elif not examples:
+        _regulation_examples(row, "source_facts", 0, path, record_omitted)
+    for name in ("shared_conditions", "manual_confounds", "unplaced_manual_confounds"):
+        _regulation_examples(row, name, max(1, examples) if name == "shared_conditions" else examples,
+                             path, record_omitted)
+    event = row.get("event", {})
+    if isinstance(event, dict):
+        _regulation_examples(event, "manual_record_ids", examples, f"{path}.event", record_omitted)
+        boundary = event.get("boundary", {})
+        if isinstance(boundary, dict) and boundary.get("exact_effective_at"):
+            boundary["source"] = ("owner_reported_consistent_with_observation_window"
+                                  if boundary.get("provenance") == "owner_time_with_matching_observed_values"
+                                  or "owner_reported" in event.get("sources", []) else "source_not_established")
+            boundary["telemetry_exact"] = False
+    _regulation_examples(row, "forecast_assessments", min(examples, 1), path, record_omitted)
+    for forecast in row.get("forecast_assessments", []):
+        original = forecast.get("original")
+        if isinstance(original, dict) and _encoded_size(original) > 1536:
+            forecast["original_fingerprint"] = hashlib.sha256(json.dumps(
+                original, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ).encode()).hexdigest()
+            forecast["original_predictions_total"] = len(original.get("predictions", []))
+            forecast["original_packet_incomplete"] = True
+            # Keep whole statements that fit. Never shorten or rewrite a frozen
+            # prediction's text into a different claim merely to fit the packet.
+            forecast["original"] = _bounded_context_value(
+                original, 1536, f"{path}.forecast_assessments.original", record_omitted,
+            )
+
+
+def _regulation_change_time(row: dict[str, Any]) -> float:
+    value = row.get("event", {}).get("boundary", {}).get("no_later_than")
+    try:
+        return datetime.fromisoformat(str(value)).timestamp()
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
 def _bounded_regulation(value: Any, byte_limit: int, key: str, record_omitted: Any) -> Any:
     """Preserve conclusions and census totals before bounded examples/provenance."""
     if not isinstance(value, dict):
@@ -982,7 +1100,15 @@ def _bounded_regulation(value: Any, byte_limit: int, key: str, record_omitted: A
     rows = result.pop(collection, [])
     result[collection] = []
     result["packet_selection"] = "complete census totals; bounded explanatory examples"
-    for original in reversed(rows) if collection == "results" else rows:
+    result["physical_quantities"] = {
+        "measured_flow_temperature": "измеренная температура теплоносителя в подаче",
+        "requested_flow_temperature": "заданная температура теплоносителя в подаче",
+        "room_air_temperature": "температура воздуха комнаты, не температура пола",
+    }
+    # The comparison application emits newest first. Sorting by the actual
+    # boundary also protects callers whose display order is chronological.
+    prioritized = sorted(rows, key=_regulation_change_time, reverse=True) if collection == "results" else rows
+    for original in prioritized:
         row = deepcopy(original)
         row.pop("runs", None)
         if collection == "circuits":
@@ -994,29 +1120,23 @@ def _bounded_regulation(value: Any, byte_limit: int, key: str, record_omitted: A
                     record_omitted(f"control_context.{key}.{name}", items[limit:])
             row["metrics"] = {
                 name: {field: val for field, val in metric.items()
-                       if field in {"value", "unit", "coverage_pct", "denominator", "unavailable_reasons"}}
+                       if field in {"value", "unit", "coverage_pct", "numerator", "denominator",
+                                    "denominator_unit", "unavailable_reasons"}}
                 for name, metric in row.get("metrics", {}).items()
             }
+            _regulation_metric_quantities(row["metrics"])
         else:
-            for side in ("before", "after"):
-                summary = row.get(side, {})
-                if isinstance(summary, dict) and len(summary.get("intervals", [])) > 3:
-                    intervals = summary["intervals"]
-                    summary["intervals"] = intervals[:3]
-                    summary["intervals_total"] = len(intervals)
-                    record_omitted(f"control_context.{key}.{side}.intervals", intervals[3:])
-            sources = row.get("source_facts", [])
-            if len(sources) > 2:
-                row["source_facts"] = [sources[0], sources[-1]]
-                row["source_facts_total"] = len(sources)
-                record_omitted(f"control_context.{key}.source_facts", sources[1:-1])
+            _compact_regulation_comparison(row, f"control_context.{key}", record_omitted, examples=2)
+            if _encoded_size(result) + _encoded_size(row) > byte_limit - 256:
+                # A realistic comparison carries weather-stratum coverage,
+                # minute-bin episodes and frozen forecasts. Those examples
+                # must not evict its latest conclusion, metrics or denominators.
+                _compact_regulation_comparison(row, f"control_context.{key}", record_omitted, examples=0)
         if _encoded_size(result) + _encoded_size(row) <= byte_limit - 256:
             result[collection].append(row)
         else:
             result["packet_incomplete"] = True
             record_omitted(f"control_context.{key}.{collection}", original)
-    if collection == "results":
-        result[collection].reverse()
     result["total_" + collection] = len(rows)
     return result
 

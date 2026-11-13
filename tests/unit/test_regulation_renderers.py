@@ -76,6 +76,33 @@ def test_no_regulation_context_does_not_change_old_report() -> None:
     assert regulation_text({}, "daily", "UTC") == []
 
 
+def test_comparison_is_associated_with_its_own_circuit() -> None:
+    context = _context()
+    first = context["regulation_facts"]["circuits"][0]
+    first["scope"] = "fixture/first"
+    context["regulation_facts"]["circuits"].append({**first, "scope": "fixture/second"})
+    context["regulation_comparisons"]["results"][0]["scope"] = "fixture/second"
+    text = "\n".join(regulation_text(context, "weekly", "UTC"))
+    assert "Контур 2: сравнение изменения настроек." in text
+    assert "Контур 1: сравнение изменения настроек." not in text
+
+
+def test_calculated_metrics_have_specific_labels_and_readable_durations() -> None:
+    context = _context()
+    context["regulation_facts"]["circuits"][0]["metrics"] = {
+        "cycle_mean_heating_seconds": {"value": 3600, "unit": "seconds", "coverage_pct": 100},
+        "cycle_mean_peak_delay_seconds": {"value": 1200, "unit": "seconds", "coverage_pct": 100},
+        "command_total_variation_c": {"value": 320, "unit": "°C", "coverage_pct": 100},
+        "cycle_mean_end_error_c": {"value": 0.45, "unit": "°C", "coverage_pct": 100},
+    }
+    text = "\n".join(regulation_text(context, "weekly", "UTC"))
+    assert "Длительность запроса отопления в полном цикле: 1 ч" in text
+    assert "Задержка пика температуры комнаты после снятия запроса: 20 мин" in text
+    assert "Сумма изменений заданной температуры подачи: 320 °C" in text
+    assert "Среднее отклонение комнаты от цели при снятии запроса: 0,45 °C" in text
+    assert "Дополнительный рассчитанный показатель" not in text
+
+
 def test_history_return_of_previous_values_and_unknown_old_value() -> None:
     def version(at: int, value: int, kind: str) -> dict:
         return {"kind": kind, "observed_at": at, "version": str(value),
@@ -142,3 +169,19 @@ def test_frozen_forecast_and_retrospective_expectation_are_separate_from_outcome
     assert "Сохранённый прогноз: Ошибка меньше 0,3 °C" in text
     assert "не считается прогнозом, зафиксированным заранее" in text
     assert "01.07.2026" in text and "последними 28 днями" not in text
+
+
+def test_written_measurable_expectation_is_not_reported_as_missing() -> None:
+    context = _context()
+    context["regulation_comparisons"]["results"][0]["forecast_assessments"] = [{
+        "original": {"expected_effect": "Отклонение уменьшится минимум на 0,1 °C за семь дней",
+                     "predictions": []},
+        "assessment": "requires_explicit_measurable_prediction",
+        "owner_expectation_timing": "retrospective_or_unknown",
+        "prediction_timing": "unknown_or_not_before_change",
+    }]
+    text = "\n".join(regulation_text(context, "daily", "UTC"))
+    assert "автоматическая проверка не выполнена" in text
+    assert "минимум на 0,1 °C за семь дней" in text
+    assert "нужен явный измеримый критерий" not in text
+    assert "сохранённый прогноз AI был сделан" not in text
