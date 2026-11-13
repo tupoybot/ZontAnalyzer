@@ -17,7 +17,6 @@ from zont_analyzer.reports.experiment_forms import (
     owner_experiment_journal,
 )
 from zont_analyzer.reports.gas_validation import validation_lines
-from zont_analyzer.reports.regulation import regulation_html, regulation_text
 from zont_analyzer.reports.presentation import (
     LEGACY_DUTY_METRICS,
     _gas_value,
@@ -34,6 +33,7 @@ from zont_analyzer.reports.presentation import (
     timezone_note,
     zont_connection_label,
 )
+from zont_analyzer.reports.regulation import regulation_html, regulation_text
 from zont_analyzer.reports.wording import normalize_report_for_display
 
 VIEW_VERSION = "report-presentation-v3-regulation"
