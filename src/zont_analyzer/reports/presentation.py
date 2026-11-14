@@ -55,7 +55,16 @@ def regulation_interpretation_stale(report: Report) -> bool:
 def regulation_interpretation_legacy(report: Report) -> bool:
     """Old prompts did not apply the current selection policy; facts may be unchanged."""
     provenance = report.context.get("ai_provenance")
-    if not report.ai_used or not report.context.get("regulation_facts"):
+    facts = report.context.get("regulation_facts")
+    comparisons = report.context.get("regulation_comparisons")
+    history = report.context.get("control_settings_history")
+    relevant = (
+        isinstance(facts, dict) and bool(facts.get("circuits"))
+        or isinstance(comparisons, dict) and bool(comparisons.get("results"))
+        or isinstance(history, dict) and any(isinstance(version, dict) and version.get("kind") == "change"
+                                            for version in history.get("versions", []))
+    )
+    if not report.ai_used or not relevant:
         return False
     version = str(provenance.get("prompt_version", "")) if isinstance(provenance, dict) else ""
     parts = version.removeprefix("analyst-v").split(".")

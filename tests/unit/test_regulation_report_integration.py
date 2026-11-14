@@ -229,3 +229,15 @@ def test_unknown_prompt_provenance_does_not_hide_current_facts() -> None:
     text = render_text(report)
     assert "I 2 → 3" in text
     assert "Расход газа также пересчитан" in text
+
+
+def test_empty_regulation_envelopes_do_not_archive_a_fresh_explanation() -> None:
+    report = _report(ai_used=True, context={
+        "regulation_facts": {"circuits": [], "incomplete": True},
+        "regulation_comparisons": {"results": []},
+        "control_settings_history": {"versions": []},
+    })
+    report.context.pop("ai_provenance")
+    rendered = render_html(report)
+    assert 'class="previous-ai-summary"' not in rendered
+    assert 'class="lead">' + report.summary in rendered

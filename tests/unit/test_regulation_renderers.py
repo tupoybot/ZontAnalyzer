@@ -109,3 +109,26 @@ def test_available_metrics_do_not_hide_missing_days() -> None:
         "metrics": {"room_absolute_error_c": {"value": .2, "coverage_pct": 80}},
     }]}})
     assert "0,2 °C" in text and "Не все сутки рассчитаны" in text
+
+
+def test_rare_seasonal_peak_is_not_hidden_by_rounded_cycle_mean() -> None:
+    text = _text({"regulation_facts": {"circuits": [{"classification": "cycles",
+        "cycle_counts": {"eligible": 479}, "metrics": {
+            "cycle_mean_overshoot_c": {"value": .801, "coverage_pct": 100},
+            "cycle_overshoot_c": {"value": 1.4, "coverage_pct": 100},
+        },
+    }]}})
+    assert "479 полных циклов" in text
+    assert "0,8 °C" in text and "максимальное превышение цели 1,4 °C" in text
+
+
+def test_short_fact_coverage_refers_to_its_interval_not_the_whole_report() -> None:
+    report = _report({"regulation_facts": {"incomplete": True, "circuits": [{
+        "period_start": "2026-09-03T10:00:00+00:00", "period_end": "2026-09-03T12:00:00+00:00",
+        "metrics": {"room_absolute_error_c": {"value": .2, "coverage_pct": 100}},
+    }]}})
+    observation = regulation_observations(report)[0]
+    assert observation.interval is not None
+    assert (observation.interval.ended_at - observation.interval.started_at).total_seconds() == 7200
+    assert observation.interval.started_at > report.period_start
+    assert "100% указанного интервала" in observation.statement

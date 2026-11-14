@@ -167,10 +167,10 @@ def _comparison_sentence(result: Mapping[str, Any]) -> str:
                 clauses.append(f"{label} {before} → {after} {unit}")
         if clauses:
             outcome_code = result.get("outcome")
-            outcome = {"mixed": "разнонаправленный", "improved": "улучшение",
-                       "worsened": "ухудшение", "indistinguishable": "отличие не установлено"}.get(
-                           outcome_code if isinstance(outcome_code, str) else "", "наблюдаемый")
-            return f"В сопоставимых условиях результат {outcome}: {'; '.join(clauses)}. " \
+            outcome = {"mixed": "показатели изменились разнонаправленно", "improved": "наблюдается улучшение",
+                       "worsened": "наблюдается ухудшение", "indistinguishable": "различие не установлено"}.get(
+                           outcome_code if isinstance(outcome_code, str) else "", "получены следующие показатели")
+            return f"В сопоставимых условиях {outcome}: {'; '.join(clauses)}. " \
                    "Связь не доказывает причину или эффект отдельного параметра."
     reason = _reason(result.get("next_observation")) or _reason(result.get("limitations"))
     if stage == "superseded":
@@ -234,6 +234,7 @@ def regulation_observations(report: Report, *, topics: frozenset[str] | None = N
                           timezone=report.timezone)
     observations: list[ObservedPattern] = []
     for index, circuit in enumerate(circuits, 1):
+        circuit_period = _interval(circuit.get("period_start"), circuit.get("period_end"), report.timezone) or period
         prefix = f"Контур {index}: " if len(circuits) > 1 else ""
         scope = str(circuit.get("scope") or "")
         history_scope = (f"{history.get('device_id')}/{history.get('circuit_id')}"
@@ -255,7 +256,7 @@ def regulation_observations(report: Report, *, topics: frozenset[str] | None = N
             coverage = [_number(_map(metrics.get(name)).get("coverage_pct"))
                         for name, _, _ in chosen if _number(_map(metrics.get(name)).get("value")) is not None]
             if len(coverage) == len(quantities) and len(set(coverage)) == 1 and coverage[0] is not None:
-                suffix = f" Эти показатели рассчитаны по {coverage[0]}% периода."
+                suffix = f" Эти показатели рассчитаны по {coverage[0]}% указанного интервала."
             else:
                 suffix = ""
                 quantities = [value for name, label, unit in chosen
@@ -264,7 +265,7 @@ def regulation_observations(report: Report, *, topics: frozenset[str] | None = N
                 suffix += " Не все сутки рассчитаны; вывод относится к доступным участкам."
             observations.append(_pattern(f"regulation:{index}:room-flow", prefix + "На пригодных участках "
                                          + "; ".join(quantities)
-                                         + "." + suffix, period, f"regulation_facts.circuits[{index - 1}]"))
+                                         + "." + suffix, circuit_period, f"regulation_facts.circuits[{index - 1}]"))
         classification = circuit.get("classification")
         eligible = _map(circuit.get("cycle_counts")).get("eligible")
         overshoot = _metric(metrics, "cycle_mean_overshoot_c", "среднее наибольшее превышение "
@@ -281,16 +282,20 @@ def regulation_observations(report: Report, *, topics: frozenset[str] | None = N
             if overshoot:
                 window = "эпизоде и следующей паузе" if minute else "полном цикле"
                 statement += f"; {overshoot} в {window}"
+            peak = _number(_map(metrics.get("cycle_overshoot_c")).get("value"))
+            mean_peak = _number(_map(metrics.get("cycle_mean_overshoot_c")).get("value"))
+            if peak is not None and peak != mean_peak:
+                statement += f"; максимальное превышение цели {peak} °C"
             if minute:
                 statement += "; границы минутных эпизодов приблизительны, пламя горелки не подтверждено"
-            observations.append(_pattern(f"regulation:{index}:cycles", prefix + statement + ".", period,
+            observations.append(_pattern(f"regulation:{index}:cycles", prefix + statement + ".", circuit_period,
                                          f"regulation_facts.circuits[{index - 1}]"))
         elif ("cycles" in selected and classification == "continuous"
               and _map(circuit.get("coverage")).get("eligible_seconds")):
             has_request_observation = True
             observations.append(_pattern(f"regulation:{index}:continuous",
                                          prefix + "На пригодном участке запрос отопления оставался непрерывным; "
-                                         "выбег полного цикла оценить нельзя.", period,
+                                         "выбег полного цикла оценить нельзя.", circuit_period,
                                          f"regulation_facts.circuits[{index - 1}]"))
         latest = _latest_change(circuit_history, results, scope) if "settings" in selected else None
         if latest:
@@ -330,13 +335,13 @@ def regulation_observations(report: Report, *, topics: frozenset[str] | None = N
                 statement += " Восстановление наблюдалось в показанных эпизодах."
             if pending:
                 statement += " Для части эпизодов восстановление ещё не подтверждено."
-            observations.append(_pattern(f"regulation:{index}:exclusions", statement, period,
+            observations.append(_pattern(f"regulation:{index}:exclusions", statement, circuit_period,
                                          f"regulation_facts.circuits[{index - 1}]"))
         if "limitations" in selected and not quantities and not has_request_observation and not latest and not windows:
             reason = _reason(circuit.get("unknowns")) or (
                 "Часть периода не покрыта рассчитанными фактами." if circuit.get("incomplete") else
                 "Пока нет пригодных измерений для вывода о регулировании.")
-            observations.append(_pattern(f"regulation:{index}:limited", prefix + reason, period,
+            observations.append(_pattern(f"regulation:{index}:limited", prefix + reason, circuit_period,
                                          f"regulation_facts.circuits[{index - 1}]"))
     if not circuits:
         latest = _latest_change(history, results, "") if "settings" in selected else None
