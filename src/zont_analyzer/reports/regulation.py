@@ -282,10 +282,6 @@ def regulation_observations(report: Report, *, topics: frozenset[str] | None = N
             if overshoot:
                 window = "эпизоде и следующей паузе" if minute else "полном цикле"
                 statement += f"; {overshoot} в {window}"
-            peak = _number(_map(metrics.get("cycle_overshoot_c")).get("value"))
-            mean_peak = _number(_map(metrics.get("cycle_mean_overshoot_c")).get("value"))
-            if peak is not None and peak != mean_peak:
-                statement += f"; максимальное превышение цели {peak} °C"
             if minute:
                 statement += "; границы минутных эпизодов приблизительны, пламя горелки не подтверждено"
             observations.append(_pattern(f"regulation:{index}:cycles", prefix + statement + ".", circuit_period,
