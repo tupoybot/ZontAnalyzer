@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
@@ -10,6 +11,7 @@ from zoneinfo import ZoneInfo
 from zont_analyzer.application.ai_provenance import details as ai_provenance_details
 from zont_analyzer.application.ai_provenance import label as ai_provenance_label
 from zont_analyzer.domain import Report
+from zont_analyzer.domain.reasoning import ObservedPattern
 from zont_analyzer.reports.control_settings import control_settings_html, control_settings_text
 from zont_analyzer.reports.experiment_forms import (
     OWNER_EXPERIMENT_SCRIPT,
@@ -29,14 +31,15 @@ from zont_analyzer.reports.presentation import (
     gas_savings_text,
     number,
     period_target,
+    regulation_interpretation_stale,
     target_band_note,
     timezone_note,
     zont_connection_label,
 )
-from zont_analyzer.reports.regulation import regulation_html, regulation_text
+from zont_analyzer.reports.regulation import regulation_observations
 from zont_analyzer.reports.wording import normalize_report_for_display
 
-VIEW_VERSION = "report-presentation-v3-regulation"
+VIEW_VERSION = "report-presentation-v4-observations"
 
 METRIC_LABELS = {
     "mean_temperature_c": "Средняя температура помещения",
@@ -718,9 +721,10 @@ def _known_evidence_ids(report: Report) -> set[str]:
 
     def collect(value: Any) -> None:
         if isinstance(value, dict):
-            identifier = value.get("id")
-            if isinstance(identifier, str):
-                known.add(identifier)
+            for key in ("id", "event_id"):
+                identifier = value.get(key)
+                if isinstance(identifier, str):
+                    known.add(identifier)
             for nested in value.values():
                 collect(nested)
         elif isinstance(value, list):
@@ -732,6 +736,13 @@ def _known_evidence_ids(report: Report) -> set[str]:
     collect(report.context.get("control_settings"))
     collect(report.context.get("gas"))
     collect(report.context.get("gas_savings"))
+    for key in ("regulation_facts", "regulation_comparisons", "control_settings_history"):
+        collect(report.context.get(key))
+    for key, collection in (("regulation_facts", "circuits"), ("regulation_comparisons", "results"),
+                            ("control_settings_history", "versions")):
+        block = report.context.get(key)
+        if isinstance(block, dict) and isinstance(block.get(collection), list):
+            known.update(f"{key}.{collection}[{index}]" for index, _ in enumerate(block[collection]))
     dhw_profiles = report.context.get("dhw_profiles")
     if isinstance(dhw_profiles, dict):
         current = dhw_profiles.get("current")
@@ -903,8 +914,57 @@ def _historical_evidence_html(context: Mapping[str, Any]) -> str:
     )
 
 
+def _settings_observation_present(statement: str, prose: str) -> bool:
+    """Require the observed values and boundary, not a generic tuning caveat."""
+    if not re.search(r"настро\w*|коэффициент\w*|\bpid\b|\bпид\b|\bпза\b", prose):
+        return False
+    times = re.findall(r"\b\d{2}:\d{2}\b", statement)
+    if not times or not all(value in prose for value in times):
+        return False
+    for name, before, after in re.findall(r"\b(P|I) (-?\d+(?:,\d+)?) → (-?\d+(?:,\d+)?)", statement):
+        label = r"(?:\bp\b|пропорциональн\w*)" if name == "P" else r"(?:\bi\b|интегральн\w*)"
+        values = rf"{re.escape(before)}(?!\d)[^.;]{{0,30}}{re.escape(after)}(?!\d)"
+        if not re.search(rf"{label}[^.;]{{0,30}}{values}", prose.replace(".", ",")):
+            return False
+    return True
+
+
+def _display_observations(report: Report) -> list[ObservedPattern]:
+    """Use the interpretation once; derive current observations when it is unavailable."""
+    if report.ai_used and report.observed_patterns and not regulation_interpretation_stale(report):
+        # The model can omit a supplied quantity. Supplement only that topic,
+        # not the room/cycle/exclusion narrative it has already selected.
+        prose = " ".join([report.summary, *(item.statement for item in report.observed_patterns)]).lower()
+        flow = r"(?:подач\w*|теплоносител\w*)"
+        missing = set()
+        for topic, qualifiers in (
+            ("actual_flow", r"(?:измеренн\w*|фактическ\w*|реальн\w*)"),
+            ("command_flow", r"(?:задан\w*|задани\w*|расч[её]тн\w*|уставк\w*|команд\w*|целев\w*)"),
+        ):
+            if not re.search(rf"{qualifiers}[^.;]{{0,70}}{flow}|{flow}[^.;]{{0,70}}{qualifiers}", prose):
+                missing.add(topic)
+        missing.add("settings")
+        additions = regulation_observations(report, topics=frozenset(missing))
+        return [*report.observed_patterns, *(item for item in additions
+                if not item.id.endswith(":settings") or not _settings_observation_present(item.statement, prose))]
+    current = regulation_observations(report)
+    if report.ai_used:
+        return current
+    # Legacy/local observations may cover other topics. Never mutate the saved report.
+    seen_ids = {item.id for item in current}
+    seen_statements = {item.statement for item in current}
+    return [*current, *(item for item in report.observed_patterns
+                       if item.id not in seen_ids and item.statement not in seen_statements)]
+
+
 def render_text(report: Report, *, current_comfort_band_c: float | None = None) -> str:
     report = normalize_report_for_display(report)
+    stale = regulation_interpretation_stale(report)
+    report = report.model_copy(update={
+        "observed_patterns": _display_observations(report),
+        **({"hypotheses": [], "predictions": [], "unknowns": [], "recommended_experiment": None,
+            "recommendations": []} if stale else {}),
+    })
     lines = [
         f"ZontAnalyzer — {report.kind}",
         f"ID отчёта: {report.id}",
@@ -913,7 +973,8 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
         ai_provenance_label(report),
     ]
     lines.extend(ai_provenance_details(report))
-    lines.extend(regulation_text(report.context, report.kind, report.timezone))
+    if notice := ai_freshness_notice(report):
+        lines.append(notice)
     if note := target_band_note(report, current_comfort_band_c):
         lines.append(note)
     for metric in report.metrics:
@@ -923,7 +984,7 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
     lines.extend(
         [
             f"Качество данных: {report.quality.score:.0%} (покрытие {report.quality.coverage_pct:.1f}%)",
-            report.summary,
+            *([report.summary] if not stale else []),
         ]
     )
     gas = report.context.get("gas")
@@ -948,8 +1009,6 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
                      f"{_gas_value(gas.get('upper_m3'), 'м³')}; покрытие {_gas_value(gas.get('coverage_pct'), '%')}")
         lines.append(f"Версия расчёта: {gas.get('model_version', 'неизвестна')}")
         lines.append(str(gas.get('source', '')))
-        if notice := ai_freshness_notice(report):
-            lines.append(notice)
         lines.extend(gas_cost_lines(gas.get("cost")))
         intervals = gas.get("measured_intervals")
         if isinstance(intervals, list):
@@ -1070,7 +1129,7 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
         lines.append(f"MTTR котельного сервиса: нет достоверных данных. {mttr_reason}")
     known_evidence = _known_evidence_ids(report)
     if report.observed_patterns:
-        lines.append("Наблюдаемые паттерны:")
+        lines.append("Наблюдения:")
         for pattern in report.observed_patterns:
             lines.extend([
                 f"- [{_epistemic_label(pattern.epistemic_level)}] {pattern.statement}",
@@ -1278,9 +1337,6 @@ def render_html(
     question_html = (
         "<p><strong>Вопрос владельца:</strong> " + html.escape(str(question)) + "</p>" if question else ""
     )
-    if notice := ai_freshness_notice(report):
-        question_html = f'<p class="gas-period-stale" role="status">{html.escape(notice)}</p>' + question_html
-
     def html_list(values: list[str], empty: str) -> str:
         return "<ul>" + "".join(f"<li>{html.escape(value)}</li>" for value in values) + "</ul>" if values else empty
 
@@ -1289,17 +1345,22 @@ def render_html(
     def evidence_html(references: Any) -> str:
         return html.escape(_evidence_text(references, known_evidence))
 
-    reasoning_parts: list[str] = []
-    if report.observed_patterns:
+    def observations_html(patterns: list[ObservedPattern]) -> str:
+        if not patterns:
+            return ""
         cards = "".join(
             '<article class="reasoning-item observed">'
             f"<h3>{html.escape(item.statement)}</h3>"
             f"<p><strong>Статус:</strong> {html.escape(_epistemic_label(item.epistemic_level))}; "
             f"<strong>Интервал:</strong> {html.escape(_interval_text(item.interval, report.timezone))}</p>"
             f"<p class=\"debug-only\"><strong>Свидетельства:</strong> {evidence_html(item.evidence)}</p></article>"
-            for item in report.observed_patterns
+            for item in patterns
         )
-        reasoning_parts.append(f"<section><h2>Наблюдаемые паттерны</h2>{cards}</section>")
+        return f"<section><h2>Наблюдения</h2>{cards}</section>"
+
+    stale = regulation_interpretation_stale(report)
+    reasoning_parts: list[str] = [observations_html(
+        report.observed_patterns if stale else _display_observations(report))]
     if report.hypotheses:
         cards = "".join(
             '<article class="reasoning-item hypothesis">'
@@ -1362,6 +1423,11 @@ def render_html(
             "</article></section>"
         )
     reasoning = "".join(reasoning_parts)
+    if stale:
+        previous = (('<details class="previous-ai-reasoning"><summary>'
+                     'Прежнее объяснение ИИ</summary>' + reasoning + '</details>')
+                    if reasoning else "")
+        reasoning = observations_html(_display_observations(report)) + previous
 
     feedback_by_id = recommendation_feedback or {}
     status_labels = {
@@ -1423,6 +1489,11 @@ def render_html(
         )
     recommendations = "".join(recommendation_cards[:1])
     other_recommendations = "".join(recommendation_cards[1:])
+    if stale and recommendation_cards:
+        recommendations = ('<details class="previous-ai-recommendations"><summary>'
+                           'Прежние рекомендации ИИ — требуют проверки</summary>'
+                           + "".join(recommendation_cards) + '</details>')
+        other_recommendations = ""
     by_name = {m.name: m.value for m in report.metrics}
     pauses = by_name.get("dhw_confirmed_heating_pause_count")
     pause_minutes = by_name.get("dhw_mean_confirmed_heating_pause_minutes")
@@ -1495,7 +1566,6 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="overview">{ui.hero(report)}{ui.kpis(report)}
 {band_note_html}
 {render_charts(report, chart_data, panel_ids=("climate",))}</div>
-{regulation_html(report.context, report.kind, report.timezone)}
 <aside class="actions"><span class="eyebrow">СЛЕДУЮЩИЙ ШАГ</span><h2>Что делать</h2>
 {recommendations or '<p>Рекомендаций за этот период нет.</p>'}</aside>
 {owner_experiment_journal(report.id, report.timezone)}

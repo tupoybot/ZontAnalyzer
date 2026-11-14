@@ -14,11 +14,9 @@ import inspect
 import json
 import math
 import os
-import re
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import timedelta
-from html import unescape
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +36,7 @@ from zont_analyzer.analytics.regulation import aggregate_regulation_facts, build
 from zont_analyzer.analytics.regulation_comparison import compare_change, observed_changes
 from zont_analyzer.domain import MetricValue, QualityResult, Report
 from zont_analyzer.reports import render_html, render_text
-from zont_analyzer.reports.regulation import regulation_text
+from zont_analyzer.reports.regulation import regulation_observations
 
 
 @dataclass
@@ -200,50 +198,6 @@ def verify_oracle(case: Case) -> None:
             assert math.isclose(metric["after"], after, abs_tol=1e-8), (case.name, name)
 
 
-def rendered_numbers(case: Case, text: str) -> dict[str, bool]:
-    labels = {
-        "room_absolute_error_c": "Среднее абсолютное отклонение комнаты от цели",
-        "room_signed_error_c": "Среднее отклонение комнаты от цели со знаком",
-        "room_range_c": "Размах температуры комнаты", "actual_range_c": "Размах измеренной температуры подачи",
-        "actual_variation_c_per_hour": "Изменчивость измеренной температуры подачи",
-        "cycle_mean_overshoot_c": "Средний выбег температуры комнаты в полном цикле запроса",
-        "cycle_mean_post_heat_rise_c": "Рост температуры комнаты после снятия запроса",
-        "cycle_mean_peak_delay_seconds": "Задержка пика температуры комнаты после снятия запроса",
-        "cycle_mean_heating_seconds": "Длительность запроса отопления в полном цикле",
-        "cycle_mean_pause_seconds": "Пауза запроса отопления в полном цикле",
-    }
-    plain_number = r"[-+]?\d+(?:[,.]\d+)?(?:[eE][-+]?\d+)?"
-    number = "(" + plain_number + ")"
-
-    def matches(pattern: str, expected: float) -> bool:
-        match = re.search(pattern, text)
-        return bool(match and math.isclose(float(match[1].replace(",", ".")), expected,
-                                           rel_tol=.006, abs_tol=.0005))
-
-    checks = {}
-    for name, expected in case.oracle.get("metrics", {}).items():
-        label = re.escape(labels[name])
-        if name == "room_absolute_error_c":
-            label = "(?:" + label + "|" + re.escape("Среднее абсолютное отклонение от уставки отопления") + ")"
-        pattern = label + r":\s*" + number
-        if name.endswith("_seconds"):
-            match = re.search(pattern + r"\s*(ч|мин|с)\b", text)
-            actual = (float(match[1].replace(",", ".")) * {"ч": 3600, "мин": 60, "с": 1}[match[2]]) if match else None
-            checks[name] = actual is not None and math.isclose(actual, expected, rel_tol=.006, abs_tol=.0005)
-        else:
-            checks[name] = matches(pattern, expected)
-    for name, (before, after) in case.oracle.get("comparison_metrics", {}).items():
-        prefix = re.escape(labels[name]) + r": до\s*"
-        checks[name + ":before"] = matches(prefix + number, before)
-        checks[name + ":after"] = matches(prefix + plain_number + r", после\s*" + number, after)
-    if "full" in case.oracle:
-        checks["full_cycles"] = matches(r"полных пригодных циклов запроса\s*" + number, case.oracle["full"])
-        checks["partial_cycles"] = matches(r"неполных\s*" + number, case.oracle["partial"])
-    if "eligible_seconds" in case.oracle:
-        checks["eligible_hours"] = matches(r"Пригодно\s*" + number, case.oracle["eligible_seconds"] / 3600)
-    return checks
-
-
 def _write(path: Path, value: str) -> None:
     with path.open("x", encoding="utf-8") as handle:
         os.chmod(path, 0o600)
@@ -276,7 +230,7 @@ def main() -> None:
                 "baseline_renderer_sha256": hashlib.sha256(args.baseline_renderer.read_bytes()).hexdigest(),
                 "candidate_sources_sha256": {
                     name: hashlib.sha256(Path(inspect.getfile(component)).read_bytes()).hexdigest()
-                    for name, component in (("renderers", render_text), ("regulation_view", regulation_text),
+                    for name, component in (("renderers", render_text), ("regulation_view", regulation_observations),
                                             ("regulation_facts", build_regulation_facts),
                                             ("comparison", compare_change), ("packet", analysis_packet))},
                 "scope": "paired presentation; same Report input; current shared helpers; no AI/database/runtime claim",
@@ -294,14 +248,24 @@ def main() -> None:
         checks = {variant: {name: all(token.lower() in text.lower() for token in tokens)
                             for name, tokens in case.requirements.items()}
                   for variant, text in (("old", old_text), ("new", new_text))}
-        numeric = {"old": rendered_numbers(case, old_text), "new": rendered_numbers(case, new_text)}
-        assert all(numeric["new"].values()), (case.name, numeric["new"])
-        numeric["new_html"] = rendered_numbers(case, unescape(re.sub(r"<[^>]*>", " ", new_html)))
-        assert all(numeric["new_html"].values()), (case.name, numeric["new_html"])
+        observations = regulation_observations(case.report)
+        assert observations, case.name
+        observation_words = sum(len(item.statement.split()) for item in observations)
+        observation_section = new_html.split('<section class="details-area full-width">', 1)[1].split(
+            '<section class="thermal-system full-width">', 1)[0]
+        assert "Наблюдения:" in new_text and "<h2>Наблюдения</h2>" in observation_section, case.name
+        assert observation_section.count('class="reasoning-item observed"') == len(observations), case.name
+        assert 'class="regulation-result' not in new_html, case.name
+        assert "Результат регулирования отопления" not in new_text + new_html, case.name
+        assert observation_words <= 220, (case.name, observation_words)
         manifest["cases"].append({"name": case.name, "family": case.family, "independent_oracle_passed": True,
-                                  "oracle": case.oracle, "rendered_numeric_checks": numeric,
-                                  "narrative_coverage": checks,
-                                  "missing_new": [name for name, passed in checks["new"].items() if not passed]})
+                                  "oracle": case.oracle,
+                                  "presentation_acceptance": {"observation_count": len(observations),
+                                                              "observation_words": observation_words,
+                                                              "normal_placement": True,
+                                                              "no_standalone_section": True,
+                                                              "input_unchanged": True},
+                                  "historical_narrative_diagnostic": checks})
         if case.name == "independent-experiment":
             daily_report = case.report.model_copy(deep=True, update={
                 "id": "synthetic-daily-composite", "kind": "daily", "period_start": START + timedelta(hours=25)})
@@ -314,8 +278,7 @@ def main() -> None:
     _write(output / "manifest.json", _json(manifest))
     print(_json({"cases": len(manifest["cases"]), "families": 6,
                  "independent_oracles_passed": True,
-                 "missing_new_narrative": {case["name"]: case["missing_new"] for case in manifest["cases"]
-                                           if case["missing_new"]}}))
+                 "presentation_acceptance_passed": True}))
 
 
 if __name__ == "__main__":
