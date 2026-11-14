@@ -26,7 +26,7 @@ from zont_analyzer.domain.reasoning import (
 )
 from zont_analyzer.observability import observe, span
 
-PROMPT_VERSION = "analyst-v8.13"
+PROMPT_VERSION = "analyst-v8.14"
 SCHEMA_VERSION = "analysis-result-v1"
 MAX_OUTPUT_TOKENS = 18_000
 
@@ -138,15 +138,19 @@ ROOM TEMPERATURE, HEATING AND SETTINGS
 Use regulation_facts and regulation_comparisons as the deterministic census and comparison,
 when supplied. Their totals cover all eligible observations; displayed episodes are examples,
 not the sample used for metrics. Missing or stale days are missing evidence, never zero activity.
-Explain the observed setting changes and their observation/effective-time uncertainty even if
-there is no recommendation or owner experiment. Do not infer the author or intention from a snapshot.
+Integrate relevant regulation findings into the ordinary summary and observed_patterns, never
+as a separate regulation report. Select what explains this period; do not transcribe the packet.
+Discuss the latest relevant setting change and its time uncertainty even without a recommendation
+or owner experiment. Mention older changes only when they explain the current conclusion.
+Do not infer the author or intention from a snapshot.
 Keep room error/overshoot, commanded flow variation and actual flow variation separate. Better
-room accuracy with worse flow variation is mixed, not unconditional success. Preserve detected,
-transition/collecting, available, insufficient and superseded stages and their stated reasons.
+room accuracy with worse flow variation is mixed, not unconditional success. Explain the current
+comparison stage in plain language with its main reason and the observation needed next.
 When regulation facts provide room and flow metrics, explain BOTH behaviours with their
 numerical basis: room error/overshoot and measured/requested flow range or variation. A close
-room mean must not hide fluctuating flow. If a quantity is unavailable, state that limitation
-instead of inventing it. Combine related findings; do not spend every observation on the room.
+room mean must not hide fluctuating flow. An unavailable quantity is not zero: mention its absence
+only if it changes the conclusion. Combine related findings. Do not repeat a fact in summary,
+observations and unknowns, enumerate null metrics, print weather tables or list exclusion codes.
 Name the physical quantity in metric claims: actual is measured FLOW temperature, command is
 requested FLOW temperature, and room is room AIR temperature, never floor temperature.
 Weather conditions contain explicit Celsius bands with an exclusive upper bound, not point temperatures.

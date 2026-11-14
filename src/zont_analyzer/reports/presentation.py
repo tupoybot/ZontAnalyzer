@@ -46,8 +46,41 @@ def target_band_note(report: Report, current_comfort_band_c: float | None = None
     )
 
 
+def regulation_interpretation_stale(report: Report) -> bool:
+    return report.ai_used and (regulation_interpretation_legacy(report) or any(report.context.get(key) for key in (
+        "regulation_interpretation_stale", "control_settings_interpretation_stale",
+    )))
+
+
+def regulation_interpretation_legacy(report: Report) -> bool:
+    """Old prompts did not apply the current selection policy; facts may be unchanged."""
+    provenance = report.context.get("ai_provenance")
+    if not report.ai_used or not report.context.get("regulation_facts"):
+        return False
+    version = str(provenance.get("prompt_version", "")) if isinstance(provenance, dict) else ""
+    parts = version.removeprefix("analyst-v").split(".")
+    if not version.startswith("analyst-v") or len(parts) != 2 or not all(part.isdigit() for part in parts):
+        return True
+    return (int(parts[0]), int(parts[1])) < (8, 14)
+
+
 def ai_freshness_notice(report: Report) -> str:
     """Explain automatic reuse separately from a changed gas calculation."""
+    if regulation_interpretation_stale(report):
+        gas = report.context.get("gas")
+        gas_note = (" Расход газа также пересчитан." if report.context.get("gas_interpretation_stale")
+                    or isinstance(gas, dict) and gas.get("ai_stale") else "")
+        if regulation_interpretation_legacy(report) and not any(report.context.get(key) for key in (
+            "regulation_interpretation_stale", "control_settings_interpretation_stale",
+        )):
+            provenance = report.context.get("ai_provenance")
+            origin = ("Объяснение ИИ сохранено из предыдущей версии анализа. "
+                      if isinstance(provenance, dict) and provenance.get("prompt_version") else
+                      "Версия сохранённого объяснения ИИ неизвестна. ")
+            return (origin +
+                    "Текущие расчётные факты приведены в наблюдениях; новый запрос ИИ не выполнялся." + gas_note)
+        return ("AI-интерпретация устарела после обновления данных отопления. "
+                "Актуальные расчётные факты приведены в наблюдениях; прежнее объяснение сохранено отдельно." + gas_note)
     gas = report.context.get("gas")
     pilot_reuse = report.context.get("pilot_ai_reuse")
     baseline = report.context.get("ai_facts_fingerprint")
@@ -117,7 +150,8 @@ def hero(report: Report) -> str:
     report = normalize_report_for_display(report)
     insufficient = report.quality.score < 0.6 or not report.quality.sample_count
     alerts = [e for e in report.events if e.severity in {"warning", "critical"}]
-    urgent = [r for r in report.recommendations if r.priority in {"high", "critical"}]
+    stale = regulation_interpretation_stale(report)
+    urgent = [r for r in report.recommendations if r.priority in {"high", "critical"}] if not stale else []
     if urgent:
         title, state = urgent[0].title, "warning"
     elif insufficient:
@@ -138,16 +172,22 @@ def hero(report: Report) -> str:
             "критических проблем нет",
             "аномалий не выявлено",
         )
-        if any(phrase in report.summary.lower() for phrase in normal):
+        if not stale and any(phrase in report.summary.lower() for phrase in normal):
             title, state = "Система работает штатно", "success"
     summary = report.summary
     correction = (
         '<p class="chart-note">Расчёты уставок обновлены. Текст AI сохранён из предыдущей версии отчёта.</p>'
         if report.ai_used and report.context.get("setpoint_recalculation") else ""
     )
+    notice = ai_freshness_notice(report)
+    freshness = f'<p class="gas-period-stale" role="status">{esc(notice)}</p>' if notice else ""
+    summary_html = (
+        '<details class="previous-ai-summary"><summary>Прежняя сводка ИИ</summary>'
+        f'<p>{esc(summary)}</p></details>' if stale else f'<p class="lead">{esc(summary)}</p>'
+    )
     return (
         f'<section class="hero {state}"><span class="eyebrow">СОСТОЯНИЕ СИСТЕМЫ</span>'
-        f'<h1>{esc(title)}</h1><p class="lead">{esc(summary)}</p>{correction}</section>'
+        f'<h1>{esc(title)}</h1>{freshness}{summary_html}{correction}</section>'
     )
 
 
