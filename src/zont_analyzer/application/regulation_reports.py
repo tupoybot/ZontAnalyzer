@@ -60,14 +60,36 @@ def _markers(fence: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in fence.items() if key.startswith("meta:")}
 
 
+def _marker_bounds(key: str) -> tuple[datetime, datetime] | None:
+    if key.startswith("meta:telemetry-day:"):
+        left = datetime.fromisoformat(key.removeprefix("meta:telemetry-day:")).replace(tzinfo=UTC)
+        return left, left + timedelta(days=1)
+    if key.startswith("meta:telemetry-hours:"):
+        first, last = key.removeprefix("meta:telemetry-hours:").split("/")
+        return (datetime.strptime(first, "%Y-%m-%dT%H").replace(tzinfo=UTC),
+                datetime.strptime(last, "%Y-%m-%dT%H").replace(tzinfo=UTC))
+    return None
+
+
+def _markers_cover_window(markers: dict[str, Any], start: datetime, end: datetime) -> bool:
+    """A stored format is valid only if it still fences the whole source window."""
+    covered = start
+    for left, right in sorted(bounds for key in markers if (bounds := _marker_bounds(key)) is not None):
+        if left > covered:
+            break
+        covered = max(covered, right)
+        if covered >= end:
+            return True
+    return False
+
+
 def _dependency_bounds(facts: list[dict[str, Any]], start: datetime, end: datetime) -> tuple[datetime, datetime]:
     lower, upper = start, end
     for fact in facts:
         dependency = fact.get("cache_dependency", {})
         for key in dependency.get("markers", {}):
-            if key.startswith("meta:telemetry-day:"):
-                timestamp = datetime.fromisoformat(key.removeprefix("meta:telemetry-day:")).replace(tzinfo=UTC)
-                lower, upper = min(lower, timestamp), max(upper, timestamp + timedelta(days=1))
+            if (bounds := _marker_bounds(key)) is not None:
+                lower, upper = min(lower, bounds[0]), max(upper, bounds[1])
         for left, setting in dependency.get("settings", {}).items():
             lower, upper = min(lower, datetime.fromisoformat(left)), max(upper, datetime.fromisoformat(setting["end"]))
         if dependency.get("negative_inputs"):
@@ -228,6 +250,7 @@ def validated_regulation_days(
         dependency_start, dependency_end = min(dependency_start, bounds[0]), max(dependency_end, bounds[1])
         dependency_keys = {key for fact in stored.values()
                            for key in fact.get("cache_dependency", {}).get("markers", {})}
+        dependency_keys.update(key for fact in stored.values() for key in _markers(fact.get("source_fence", {})))
         dependency_keys.update("meta:" + key for fact in stored.values()
                                for key in fact.get("cache_dependency", {}).get("negative_inputs", {}))
         lineage_starts = [datetime.fromisoformat(left) for fact in stored.values()
@@ -245,10 +268,11 @@ def validated_regulation_days(
             settings = day_history(history, left, right)
             enriched_settings = day_history(history, left - timedelta(hours=6), right)
             existing = stored.get(left.isoformat())
+            recorded_markers = _markers(existing.get("source_fence", {})) if existing else {}
             valid = bool(existing and existing.get("algorithm_version") == ALGORITHM_VERSION
                          and existing.get("cache_contract") == CACHE_CONTRACT
-                         and all(existing.get("source_fence", {}).get(key) == value
-                                 for key, value in _markers(fence).items())
+                         and _markers_cover_window(recorded_markers, *source_window)
+                         and all(actual.get(key) == value for key, value in recorded_markers.items())
                          and existing.get("source_selection") == selection
                          and existing.get("settings_version") == settings["fingerprint"]
                          and existing.get("period_end") == right.isoformat()

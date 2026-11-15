@@ -150,7 +150,7 @@ def test_late_day_queues_existing_dependent_scope_without_gas_or_archive_scan(sc
         },
     }, SimpleNamespace(report=read), START)
     assert reads == [selected.id, foreign.id]
-    assert items[selected.id]["dirty"] == incremental.RENDER
+    assert items[selected.id]["dirty"] == incremental.RENDER | incremental.REGULATION
     assert items[foreign.id]["dirty"] == items[nearby.id]["dirty"] == 0
     assert refresh.report_depends_on_regulation_scope(selected, "device/*")
 
@@ -168,7 +168,7 @@ def test_new_daily_facts_requeue_later_regulation_report_without_legacy_comparis
     })
     database = SimpleNamespace(report=lambda _: selected)
     assert incremental._dependents(items, changed, START, db=database) == {item["href"]}
-    assert item["dirty"] == incremental.RENDER
+    assert item["dirty"] == incremental.RENDER | incremental.REGULATION
 
 
 def test_unresolved_regulation_envelopes_do_not_broaden_legacy_dependencies():
@@ -189,7 +189,99 @@ def test_regulation_baseline_telemetry_queues_render_without_gas_refresh():
     item = {"report_id": selected.id, "href": selected.id, "lo": lo, "hi": hi, "dirty": 0}
     incremental._telemetry({selected.id: item}, [{"identifier": "2026-01-02T00"}], START,
                            broad_calibration=False, db=SimpleNamespace(report=lambda _: selected))
-    assert item["dirty"] == incremental.RENDER
+    assert item["dirty"] == incremental.RENDER | incremental.REGULATION
+
+
+@pytest.mark.parametrize("broad_calibration", [False, True])
+def test_telemetry_regulation_refresh_stays_within_changed_dependency(broad_calibration):
+    selected = report(ai=False)
+    unrelated = selected.model_copy(deep=True)
+    unrelated.id = "outside-dependency"
+    unrelated.period_start += timedelta(days=100)
+    unrelated.period_end += timedelta(days=100)
+    unrelated.context = {}
+    reports = {value.id: value for value in (selected, unrelated)}
+    items = {}
+    for value in reports.values():
+        lo, hi = incremental._windows(value)
+        items[value.id] = {"report_id": value.id, "href": value.id, "lo": lo, "hi": hi, "dirty": 0}
+    incremental._telemetry(items, [{"identifier": "2026-01-02T00"}], START,
+                           broad_calibration=broad_calibration,
+                           db=SimpleNamespace(report=reports.get))
+    assert items[selected.id]["dirty"] & incremental.REGULATION
+    assert not items[unrelated.id]["dirty"] & incremental.REGULATION
+    assert bool(items[unrelated.id]["dirty"] & incremental.GAS) is broad_calibration
+
+
+@pytest.mark.ydb
+@pytest.mark.parametrize("scope", ["regulation-facts", "regulation-manual"])
+def test_regulation_source_change_reads_only_affected_report(tmp_path, monkeypatch, scope):
+    from tests.unit.test_incremental_publication import _daily_reports, _record_change, _runtime
+    from zont_analyzer.application import publication
+    from zont_analyzer.application.gas import GasService
+
+    runtime = _runtime(tmp_path)
+    selected, unrelated = _daily_reports(runtime, 2)
+    selected.context.update(context())
+    runtime.db.save_report(selected, selected.summary)
+    calls = []
+
+    def compact_only(_db, value):
+        calls.append(value.id)
+        return {key: deepcopy(value.context[key]) for key in refresh.REGULATION_KEYS
+                if key in value.context} or context(missing=True)
+
+    monkeypatch.setattr(refresh, "_build_context", compact_only)
+    publication.publish_reports(runtime, batch_size=8)
+    # The unrelated report remains bound to a different circuit.
+    unrelated = runtime.db.report(unrelated.id)
+    unrelated.context["regulation_facts"]["circuits"] = [{"scope": "other/1"}]
+    unrelated.context["regulation_comparisons"]["scope"] = "other/1"
+    unrelated.context["regulation_comparisons"]["scopes"] = ["other/1"]
+    unrelated.context["regulation_comparisons"]["results"] = []
+    runtime.db.save_report(unrelated, unrelated.summary)
+    publication.publish_reports(runtime, batch_size=8)
+    calls.clear()
+    monkeypatch.setattr(GasService, "refresh", lambda *args: pytest.fail("regulation change refreshed gas"))
+    _record_change(runtime.db, scope, "device/1", {
+        "change_start": int(selected.period_start.timestamp() * 1_000_000),
+        "change_end": int(selected.period_end.timestamp() * 1_000_000),
+    })
+    result = publication.publish_reports(runtime, batch_size=8)
+    assert result["rendered_reports"] == 1 and result["pending_reports"] == 0
+    assert calls == [selected.id]
+
+
+@pytest.mark.ydb
+def test_dirty_semantics_migration_refreshes_only_legacy_pending_work(tmp_path, monkeypatch):
+    from tests.unit.test_incremental_publication import _daily_reports, _runtime
+    from zont_analyzer.adapters.ydb.publication import PublicationRepository
+    from zont_analyzer.application import publication
+    from zont_analyzer.reports import renderers
+
+    runtime = _runtime(tmp_path)
+    reports = _daily_reports(runtime, 3)
+    publication.publish_reports(runtime, batch_size=8)
+    items, _meta = PublicationRepository(runtime.db.storage).load()
+    legacy = next(item for item in items.values() if item["report_id"] == reports[0].id)
+    runtime.db.storage.execute(
+        "DECLARE $href AS Utf8; UPDATE publication_items SET dirty=1 WHERE href=$href;",
+        {"$href": legacy["href"]},
+    )
+    runtime.db.storage.execute("DELETE FROM metadata WHERE name='publication:dirty_semantics';")
+    monkeypatch.setattr(renderers, "VIEW_VERSION", "migration-view-update")
+    calls = []
+
+    def compact_only(_db, value):
+        calls.append(value.id)
+        return {key: deepcopy(value.context[key]) for key in refresh.REGULATION_KEYS}
+
+    monkeypatch.setattr(refresh, "_build_context", compact_only)
+    results = [publication.publish_reports(runtime, batch_size=1) for _ in reports]
+    assert [result["pending_reports"] for result in results] == [2, 1, 0]
+    assert calls == [reports[0].id]
+    assert PublicationRepository(runtime.db.storage).load_meta()["dirty_semantics"] == incremental.DIRTY_SEMANTICS
+    assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
 @pytest.mark.ydb
@@ -209,8 +301,10 @@ def test_changed_daily_report_and_late_telemetry_refresh_regulation_only_depende
     )
     runtime.db.save_report(dependent, "fixture")
     revision = [0]
+    regulation_calls = []
 
     def compact_only(_db, value):
+        regulation_calls.append(value.id)
         current = {key: deepcopy(value.context[key]) for key in refresh.REGULATION_KEYS}
         if value.id == dependent.id:
             current["regulation_facts"]["circuits"][0]["metrics"]["room_absolute_error_c"]["value"] = revision[0]
@@ -218,6 +312,7 @@ def test_changed_daily_report_and_late_telemetry_refresh_regulation_only_depende
 
     monkeypatch.setattr(refresh, "_build_context", compact_only)
     publication.publish_reports(runtime, batch_size=8)
+    regulation_calls.clear()
     saved_unrelated = runtime.db.report(unrelated.id)
     original_refresh = GasService.refresh
     gas_calls = []
@@ -235,16 +330,19 @@ def test_changed_daily_report_and_late_telemetry_refresh_regulation_only_depende
     runtime.db.save_report(changed, changed.summary)
     result = publication.publish_reports(runtime, batch_size=8)
     assert result["rendered_reports"] == 2 and result["pending_reports"] == 0
+    assert sorted(regulation_calls) == sorted([source.id, dependent.id])
     assert gas_calls == [source.id]
     assert runtime.db.report(unrelated.id) == saved_unrelated
     assert runtime.db.report(dependent.id).context["regulation_facts"]["circuits"][0]["metrics"][
         "room_absolute_error_c"]["value"] == 1
     gas_calls.clear()
+    regulation_calls.clear()
     revision[0] = 2
     hour = (source.period_start + timedelta(hours=12)).strftime("%Y-%m-%dT%H")
     _record_change(runtime.db, "telemetry", hour, {"calibration": False})
     result = publication.publish_reports(runtime, batch_size=8)
     assert result["rendered_reports"] == 2 and result["pending_reports"] == 0
+    assert regulation_calls == [dependent.id]
     assert gas_calls == [source.id]
     assert runtime.db.report(unrelated.id) == saved_unrelated
     assert publication.publish_reports(runtime)["rendered_reports"] == 0

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -54,9 +55,11 @@ def test_compact_upload_is_fenced_and_idempotent(tmp_path: Path) -> None:
     fence = store.repository.source_fence(start=START, end=START + timedelta(days=1), device_ids=("device",))
     assert store.save(first, "source", source_fence=fence)
     assert not store.save(first, "source", source_fence=fence)
-    db.storage.execute("UPSERT INTO app_meta (key,value) VALUES ('telemetry-day:2025-01-03','new-data');")
+    db.storage.execute("UPSERT INTO publication_changes(scope,identifier,revision) "
+                       "VALUES ('telemetry','2025-01-03T00',1);")
     assert not store.save(first, "source", source_fence=fence)
-    db.storage.execute("UPSERT INTO app_meta (key,value) VALUES ('telemetry-day:2025-01-01','late-data');")
+    db.storage.execute("UPSERT INTO publication_changes(scope,identifier,revision) "
+                       "VALUES ('telemetry','2025-01-01T00',2);")
     with pytest.raises(ValueError, match="source changed"):
         store.save(first, "changed", source_fence=fence)
     assert store.cached(first["scope"], START, "source", "unknown") is not None
@@ -64,6 +67,112 @@ def test_compact_upload_is_fenced_and_idempotent(tmp_path: Path) -> None:
     db.storage.transaction(lambda tx: bump_revision(tx, "series:device", publish=False))
     with pytest.raises(ValueError, match="source changed"):
         store.save(first, "changed", source_fence=revised_fence)
+
+
+def test_hour_fence_ignores_following_ingestion_but_detects_late_and_endpoint_inputs(tmp_path: Path) -> None:
+    db = make_database(tmp_path)
+    repository = RegulationFactStore(db).repository
+
+    def write(at: datetime, value: float = 20) -> None:
+        db.telemetry.write_window(
+            device_id="device", data_type="history", start=at, end=at + timedelta(hours=1),
+            points=[TelemetryPoint(device_id="device", source_type="z3k_heating_circuit", entity_id="circuit",
+                                   metric_key="target_temp", timestamp_utc=at, value_num=value)], events=[],
+        )
+
+    # Local UTC+4 day: six-hour predecessor and 61-second endpoint lookahead.
+    left = START + timedelta(hours=14)
+    right = START + timedelta(days=1, hours=20, seconds=61)
+    write(START + timedelta(hours=1))  # Establish the series before taking fences.
+    fence = repository.source_fence(start=left, end=right, device_ids=("device",))
+    hour_key, = [key for key in fence if key.startswith("meta:telemetry-hours:")]
+    assert hour_key.endswith("2025-01-01T14/2025-01-02T21")
+    assert fence[hour_key] == 0
+    write(START + timedelta(days=1, hours=21))
+    assert repository.read_fence(list(fence)) == fence
+    write(left + timedelta(hours=2))
+    inside = repository.read_fence(list(fence))
+    assert inside[hour_key] > fence[hour_key]
+    write(left)  # First late arrival in an earlier, previously absent hour.
+    late = repository.read_fence(list(fence))
+    assert late[hour_key] > inside[hour_key]
+    write(right - timedelta(seconds=30))
+    endpoint = repository.read_fence(list(fence))
+    assert endpoint[hour_key] > late[hour_key]
+    write(left, 21)  # An old hour's newer global revision must become the max.
+    assert repository.read_fence(list(fence))[hour_key] > endpoint[hour_key]
+
+
+def test_many_hour_fences_share_one_bounded_range_read_and_preserve_legacy_markers(tmp_path, monkeypatch):
+    db = make_database(tmp_path)
+    repository = RegulationFactStore(db).repository
+    db.storage.execute(
+        "UPSERT INTO publication_changes(scope,identifier,revision) VALUES "
+        "('telemetry','2025-01-01T00',7),('telemetry','2025-01-01T01',19),"
+        "('telemetry','2025-01-01T02',11);"
+        "UPSERT INTO app_meta(key,value) VALUES ('telemetry-day:2025-01-01','legacy');",
+    )
+    windows = [(START, START + timedelta(hours=2)),
+               (START + timedelta(hours=2), START + timedelta(hours=3)),
+               (START + timedelta(hours=3), START + timedelta(hours=4))]
+    execute = db.storage.execute
+    queries = []
+
+    def capture(query, parameters=None, **kwargs):
+        queries.append(query)
+        return execute(query, parameters, **kwargs)
+
+    monkeypatch.setattr(db.storage, "execute", capture)
+    fences = repository.source_fences(windows)
+    assert [next(iter(fence.values())) for fence in fences.values()] == [19, 11, 0]
+    assert len(queries) == 1 and queries[0].count("FROM publication_changes") == 1
+    legacy = {"meta:telemetry-day:2025-01-01": "legacy"}
+    assert repository.read_fence(list(legacy)) == legacy
+    with pytest.raises(ValueError, match="10000 hours"):
+        repository.read_fence(["meta:telemetry-hours:2020-01-01T00/2025-01-01T00"])
+
+
+def test_saved_legacy_days_remain_valid_without_rewrite_after_hour_fence_upgrade(tmp_path, monkeypatch):
+    from tests.unit.test_regulation_report_cache import CacheWorld
+    from zont_analyzer.adapters.ydb.regulation import RegulationRepository
+    from zont_analyzer.application import regulation_reports as reports
+
+    db = make_database(tmp_path)
+    world = CacheWorld()
+    selected = SimpleNamespace(storage=db.storage, list_devices=world.list_devices, list_series=world.list_series,
+                               control_settings_history=world.control_settings_history)
+    original_keys = RegulationRepository._fence_keys
+
+    def legacy_keys(start, end, *, device_ids):
+        keys = [key for key in original_keys(start, end, device_ids=device_ids)
+                if not key.startswith("meta:telemetry-hours:")]
+        day = start.astimezone(UTC).date()
+        while day <= (end - timedelta(microseconds=1)).astimezone(UTC).date():
+            keys.append("meta:telemetry-day:" + day.isoformat())
+            day += timedelta(days=1)
+        return keys
+
+    def prepare(*args, **kwargs):
+        data, selection, fence = world.prepare(*args, **kwargs)
+        return replace(data, reliability_context={}), selection, fence
+
+    monkeypatch.setattr(reports, "regulation_scopes", lambda *_: [("device", "circuit")])
+    monkeypatch.setattr(reports, "regulation_source_selections", lambda *_: {
+        "device/circuit": {"version": "synthetic-selection"}})
+    monkeypatch.setattr(reports, "prepare_regulation_day", prepare)
+    monkeypatch.setattr(RegulationRepository, "_fence_keys", staticmethod(legacy_keys))
+    left, right = START + timedelta(days=2), START + timedelta(days=3)
+    first = reports.validated_regulation_days(selected, left, right, timezone="UTC", calculate_daily=True)
+    assert first["built_days"] == 2
+    store = RegulationFactStore(selected)
+    saved = store.read("device/circuit", left - timedelta(days=1), right)
+    monkeypatch.setattr(RegulationRepository, "_fence_keys", staticmethod(original_keys))
+    repeated = reports.validated_regulation_days(selected, left, right, timezone="UTC")
+    assert repeated["hit_days"] == 2 and repeated["built_days"] == 0
+    assert store.read("device/circuit", left - timedelta(days=1), right) == saved
+    assert len(world.raw_reads) == 2
+    db.storage.execute("UPSERT INTO app_meta(key,value) VALUES ('telemetry-day:2025-01-03','late');")
+    assert reports.validated_regulation_days(selected, left, right, timezone="UTC")["circuits"][0]["facts"] == []
 
 
 def test_sixty_day_repeat_uses_one_compact_range_query_without_telemetry_replay(
