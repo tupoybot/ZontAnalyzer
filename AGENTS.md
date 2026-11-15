@@ -156,6 +156,23 @@ For substantial implementation tasks:
   protected live integration), complete everything that can be validated in the cloud,
   report the remaining validation explicitly, and do not fail merely because Docker is absent.
 
+## YDB daily consumption gate
+
+- Functional changes must preserve or reduce daily YDB request-unit (RU)
+  consumption for comparable work. A significant daily increase above 20%
+  requires the owner's explicit prior approval; general implementation,
+  deployment, autonomy, or result acceptance does not grant that approval.
+- Establish a stable pre-change daily baseline and compare complete daily
+  provider consumption windows. Record both windows, actual total RU, workload
+  factors, and completeness. Do not use an incident/backlog spike as the baseline
+  or normalize away a regression. Local query counts or estimated RU do not
+  substitute for provider consumption; unverified consumption is not a passed gate.
+- Plan and bound rollout, backfill, and publication catch-up separately from
+  steady-state daily work. Report their actual one-time consumption separately;
+  do not silently repeat expensive archive refreshes. Follow the measurement
+  contract in `docs/development/ydb-cost-acceptance.md` and the release gate in
+  `docs/development/release-process.md`.
+
 ## Production host: keep load minimal
 
 - Never build images, packages, or application artifacts on the production host.
@@ -237,8 +254,10 @@ Do not use a stronger model merely because it is available.
 - Before asking for owner acceptance, complete implementation and technical checks,
   commit and push the task's changes, deploy the locally tested immutable image,
   and verify the running server with bounded smoke checks. Present the deployed result
-  and evidence to the owner. These steps do not wait for owner acceptance; ONLY the
-  merge waits. For documentation-only changes, commit/push and document checks suffice.
+  and evidence to the owner. These steps do not wait for owner acceptance, subject
+  to the explicit prior-approval requirement for a daily YDB RU increase above
+  20%; the merge still waits for result acceptance. For documentation-only changes,
+  commit/push and document checks suffice.
   Merge the issue branch
   into `main` ONLY AFTER THE OWNER EXPLICITLY ACCEPTS THAT RESULT. Passing tests, CI,
   isolated acceptance, deployment, smoke checks, or an agent's review does not constitute

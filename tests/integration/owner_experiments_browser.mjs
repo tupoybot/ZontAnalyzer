@@ -9,6 +9,37 @@ export async function checkOwnerExperiments(page, baseURL) {
     await journal.locator('[data-change="device_id"] option').first().waitFor({state:'attached'});
   };
   await open();
+  const checkPlacement = async width => {
+    await page.setViewportSize({width, height:900});
+    const actions = await page.locator('.action-column > .actions').boundingBox();
+    const experiment = await journal.boundingBox();
+    const overview = await page.locator('.overview').boundingBox();
+    assert(actions && experiment && overview, 'action column and overview are visible');
+    assert(Math.abs(experiment.x - actions.x) <= 1, 'experiment aligns with next step');
+    assert(Math.abs(experiment.width - actions.width) <= 1, 'experiment fills action column');
+    assert(experiment.y >= actions.y + actions.height, 'experiment follows next step');
+    assert(experiment.y - actions.y - actions.height <= 25, 'experiment sits immediately below next step');
+    if (width === 1440) {
+      assert(actions.x >= overview.x + overview.width, 'actions occupy the right desktop column');
+      assert(Math.abs(actions.y - overview.y) <= 1, 'right column starts beside the overview');
+    } else {
+      assert(actions.y >= overview.y + overview.height, 'mobile actions follow the overview');
+    }
+    const fits = await journal.evaluate(root => {
+      const bounds = root.getBoundingClientRect();
+      return [root, ...root.querySelectorAll('input,select,textarea,fieldset,button,pre')]
+        .filter(element => element.getClientRects().length)
+        .every(element => {
+          const box = element.getBoundingClientRect();
+          return box.left >= bounds.left && box.right <= bounds.right + 1 &&
+            element.scrollWidth <= element.clientWidth + 1;
+        });
+    });
+    assert(fits, `expanded experiment form fits its column at ${width}px`);
+  };
+  await checkPlacement(1440);
+  await checkPlacement(390);
+  await page.setViewportSize({width:1440, height:900});
   await journal.locator('[name="state"]').selectOption('performed');
   await journal.locator('[name="goal"]').fill('Сохранить комфорт без лишних запусков');
   await journal.locator('[name="expected_effect"]').fill('Ровнее температура');
@@ -55,4 +86,6 @@ export async function checkOwnerExperiments(page, baseURL) {
   await card.locator('details > summary').click();
   assert.match(await card.locator('pre').textContent(), /Исходная цель: Сохранить комфорт без лишних запусков/);
   assert.match(await card.textContent(), /подтверждение телеметрией отсутствует/);
+  await checkPlacement(1440);
+  await checkPlacement(390);
 }

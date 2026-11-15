@@ -2,7 +2,7 @@
 
 `#for-human`
 
-Обновлено 14 ноября 2026 года. [Project](https://github.com/users/tupoybot/projects/1) ·
+Обновлено 15 ноября 2026 года. [Project](https://github.com/users/tupoybot/projects/1) ·
 [План](./implementation_plan.md) · [Карта документов](./README.md).
 
 ## Рабочая версия
@@ -16,6 +16,12 @@
 полное планирование Terraform остаётся в [#96](https://github.com/tupoybot/ZontAnalyzer/issues/96).
 
 ## Исправление представления отчёта
+
+[#120](https://github.com/tupoybot/ZontAnalyzer/issues/120) исправляет массовое
+скрытие анализа, лишние чтения истории при публикации и размещение формы
+эксперимента. Проверка нового выпуска продолжается. Условия расхода YDB
+дополнены обязательным сохранением прежнего суточного уровня RU и явным
+согласованием роста более 20%. Веха 12 открыта до повторной проверки.
 
 В [#118](https://github.com/tupoybot/ZontAnalyzer/issues/118) исправлено
 представление [вехи 12](https://github.com/tupoybot/ZontAnalyzer/milestone/12):

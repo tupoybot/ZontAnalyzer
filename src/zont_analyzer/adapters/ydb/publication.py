@@ -113,15 +113,24 @@ class PublicationRepository:
                     "ORDER BY period_start DESC LIMIT $limit;",
                     {"$kind": kind, "$limit": _limit(limit)},
                 )[0].rows)
-        # The queue index sorts by dirty flags before age. Read one bounded
-        # prefix per possible bitmask, then choose the oldest across prefixes.
-        for dirty in range(1, 16):
-            add(self.db.execute(
-                "DECLARE $dirty AS Int64; DECLARE $limit AS Uint64; "
+        # The index sorts by flags before age. Visit only present masks, taking
+        # at least limit oldest candidates from each. A page can contain a
+        # partial next mask: advance past its first mask, then reread that next
+        # prefix in full so its older work cannot be starved by lower masks.
+        after = 0
+        while True:
+            rows = self.db.execute(
+                "DECLARE $after AS Int64; DECLARE $limit AS Uint64; "
                 "SELECT * FROM publication_items VIEW by_queue "
-                "WHERE dirty=$dirty ORDER BY dirty,queued_at,href LIMIT $limit;",
-                {"$dirty": dirty, "$limit": _limit(limit)},
-            )[0].rows)
+                "WHERE dirty>$after ORDER BY dirty,queued_at,href LIMIT $limit;",
+                {"$after": after, "$limit": _limit(limit)},
+            )[0].rows
+            if any(not after < int(row["dirty"]) <= 31 for row in rows):
+                raise ValueError("invalid publication dirty flags")
+            add(rows)
+            if len(rows) < limit:
+                break
+            after = min(int(row["dirty"]) for row in rows)
         return items
 
     def dependent_items(self, start: float, end: float, report_id: str) -> dict[str, dict[str, Any]]:

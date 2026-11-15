@@ -25,6 +25,7 @@ class CacheWorld:
         self.unresolved_dhw = False
         self.held_target = False
         self.negative_input: str | None = None
+        self.legacy_fences = False
         self.storage = object()
 
     def source_fence(self) -> dict[str, int]:
@@ -34,6 +35,12 @@ class CacheWorld:
         result = {}
         for window in windows:
             keys = RegulationRepository._fence_keys(*window, device_ids=device_ids)
+            if self.legacy_fences:
+                keys = [key for key in keys if not key.startswith("meta:telemetry-hours:")]
+                day = window[0].date()
+                while day <= (window[1] - timedelta(microseconds=1)).date():
+                    keys.append("meta:telemetry-day:" + day.isoformat())
+                    day += timedelta(days=1)
             result[window] = self.read_fence(keys)
         return result
 
@@ -42,8 +49,20 @@ class CacheWorld:
                 for device in devices}
 
     def read_fence(self, keys: list[str]) -> dict[str, int | str]:
-        return {key: self.markers.get(key, "") if key.startswith("meta:") else
-                self.source_fence().get(key.removeprefix("revision:"), 0) for key in keys}
+        result = {}
+        for key in keys:
+            if key.startswith("meta:telemetry-hours:"):
+                left, right = key.removeprefix("meta:telemetry-hours:").split("/")
+                # Synthetic changes identify a day; the real repository tests
+                # below exercise the finer hour boundaries against native YDB.
+                result[key] = max((value for marker, value in self.markers.items()
+                                   if marker.startswith("meta:telemetry-day:")
+                                   and left[:10] <= marker.removeprefix("meta:telemetry-day:") <= right[:10]),
+                                  default="")
+            else:
+                result[key] = self.markers.get(key, "") if key.startswith("meta:") else self.source_fence().get(
+                    key.removeprefix("revision:"), 0)
+        return result
 
     def list_devices(self) -> list:
         return [{"id": "device"}]
@@ -115,6 +134,27 @@ def read(world: CacheWorld, day: int, *, calculate: bool = True) -> dict:
     start = START + timedelta(days=day)
     return reports.validated_regulation_days(world, start, start + timedelta(days=1), timezone="UTC",
                                              calculate_daily=calculate)
+
+
+def test_legacy_day_fences_remain_cache_hits_after_hour_fence_format_transition(world: CacheWorld) -> None:
+    world.legacy_fences = True
+    assert read(world, 2)["built_days"] == 2
+    before = len(world.raw_reads)
+    world.legacy_fences = False
+    unchanged = read(world, 2, calculate=False)
+    assert unchanged["hit_days"] == 2 and unchanged["built_days"] == 0
+    assert len(world.raw_reads) == before
+    world.markers["meta:telemetry-day:2025-01-02"] = "late-legacy-input"
+    assert read(world, 2, calculate=False)["circuits"][0]["facts"] == []
+
+
+def test_legacy_format_transition_does_not_accept_missing_source_day_marker(world: CacheWorld) -> None:
+    world.legacy_fences = True
+    read(world, 2)
+    for fact in world.facts.values():
+        fact["source_fence"].pop("meta:telemetry-day:2025-01-03", None)
+    world.legacy_fences = False
+    assert read(world, 2, calculate=False)["circuits"][0]["facts"] == []
 
 
 def test_repeat_uses_compact_facts_and_future_configuration_change_does_not_replay_history(world: CacheWorld) -> None:

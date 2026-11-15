@@ -58,7 +58,7 @@ def experiment_form(value: Any, disabled: str = "", timezone: str = "UTC") -> st
 
 def owner_experiment_journal(report_id: str, timezone: str) -> str:
     return (
-        f'<section class="full-width" data-experiment-journal data-report-id="{html.escape(report_id, quote=True)}">'
+        f'<section class="owner-experiment-journal" data-experiment-journal data-report-id="{html.escape(report_id, quote=True)}">'
         '<details><summary>Начать эксперимент / Зафиксировать изменение</summary>'
         '<p>Это журнал ручных действий. Приложение не меняет настройки ZONT. '
         'Время сохранения не подтверждает время действия; пустое время означает «неизвестно».</p>'

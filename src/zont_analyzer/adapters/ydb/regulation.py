@@ -87,7 +87,7 @@ class RegulationRepository:
 
     def source_fence(self, *, start: datetime | None = None, end: datetime | None = None,
                      device_ids: tuple[str, ...] = ()) -> dict[str, int | str]:
-        """Fence only exported UTC days plus relevant device/series metadata.
+        """Fence only exported UTC hours plus relevant device/series metadata.
 
         New ingestion outside this history does not block compact upload. The
         caller includes lookback and end-point observations in these bounds.
@@ -123,12 +123,11 @@ class RegulationRepository:
     def _fence_keys(start: datetime, end: datetime, *, device_ids: tuple[str, ...]) -> list[str]:
         if end <= start or (end - start).days > 33:
             raise ValueError("scoped regulation source fence requires at most 33 days")
-        day = start.astimezone(UTC).date()
-        last = (end - timedelta(microseconds=1)).astimezone(UTC).date()
-        keys = []
-        while day <= last:
-            keys.append("meta:telemetry-day:" + day.isoformat())
-            day += timedelta(days=1)
+        first = start.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+        last = end.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+        if last < end:
+            last += timedelta(hours=1)
+        keys = [f"meta:telemetry-hours:{first:%Y-%m-%dT%H}/{last:%Y-%m-%dT%H}"]
         keys.extend(prefix + device for device in sorted(set(device_ids))
                     for prefix in ("revision:device:", "revision:series:"))
         return keys
@@ -145,17 +144,52 @@ class RegulationRepository:
 
     @staticmethod
     def _read_fence(database: Transaction | YdbDatabase, keys: list[str]) -> dict[str, int | str]:
-        metadata = [key.removeprefix("meta:") for key in keys if key.startswith("meta:")]
+        hours = {}
+        for key in keys:
+            if key.startswith("meta:telemetry-hours:"):
+                left, separator, right = key.removeprefix("meta:telemetry-hours:").partition("/")
+                try:
+                    start = datetime.strptime(left, "%Y-%m-%dT%H").replace(tzinfo=UTC)
+                    end = datetime.strptime(right, "%Y-%m-%dT%H").replace(tzinfo=UTC)
+                except ValueError as exc:
+                    raise ValueError("invalid regulation telemetry hour range") from exc
+                if (not separator or start >= end or left != start.strftime("%Y-%m-%dT%H")
+                        or right != end.strftime("%Y-%m-%dT%H")):
+                    raise ValueError("invalid regulation telemetry hour range")
+                hours[key] = (left, right, start, end)
+        metadata = [key.removeprefix("meta:") for key in keys
+                    if key.startswith("meta:") and key not in hours]
         revisions = [key.removeprefix("revision:") for key in keys if key.startswith("revision:")]
-        result = database.execute(
-            "DECLARE $metadata AS List<Utf8>; DECLARE $revisions AS List<Utf8>; "
+        query = "DECLARE $metadata AS List<Utf8>; DECLARE $revisions AS List<Utf8>; "
+        parameters: dict[str, Any] = {
+            "$metadata": ydb.TypedValue(metadata, ydb.ListType(ydb.PrimitiveType.Utf8)),
+            "$revisions": ydb.TypedValue(revisions, ydb.ListType(ydb.PrimitiveType.Utf8)),
+        }
+        if hours:
+            first, last = min(value[2] for value in hours.values()), max(value[3] for value in hours.values())
+            if last - first > timedelta(hours=10000):
+                raise ValueError("regulation telemetry hour range exceeds 10000 hours")
+            query += "DECLARE $first AS Utf8; DECLARE $last AS Utf8; "
+            parameters.update({"$first": first.strftime("%Y-%m-%dT%H"),
+                               "$last": last.strftime("%Y-%m-%dT%H")})
+        query += (
             "SELECT key,value FROM app_meta WHERE key IN $metadata; "
-            "SELECT scope,revision FROM revisions WHERE scope IN $revisions;",
-            {"$metadata": ydb.TypedValue(metadata, ydb.ListType(ydb.PrimitiveType.Utf8)),
-             "$revisions": ydb.TypedValue(revisions, ydb.ListType(ydb.PrimitiveType.Utf8))},
+            "SELECT scope,revision FROM revisions WHERE scope IN $revisions;"
         )
+        if hours:
+            query += (
+                " SELECT identifier,revision FROM publication_changes WHERE scope='telemetry' "
+                "AND identifier >= $first AND identifier < $last ORDER BY identifier LIMIT 10001;"
+            )
+        result = database.execute(query, parameters)
         actual: dict[str, int | str] = {"meta:" + key: "" for key in metadata}
         actual.update({"revision:" + key: 0 for key in revisions})
         actual.update({"meta:" + row.key: row.value for row in result[0].rows})
         actual.update({"revision:" + row.scope: int(row.revision) for row in result[1].rows})
+        if hours:
+            rows = result[2].rows
+            if len(rows) > 10000:
+                raise ValueError("regulation telemetry hour selection is truncated")
+            for key, (left, right, _start, _end) in hours.items():
+                actual[key] = max((int(row.revision) for row in rows if left <= row.identifier < right), default=0)
         return actual

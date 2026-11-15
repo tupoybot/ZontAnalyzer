@@ -55,13 +55,13 @@ def _build_context(db: Any, report: Report) -> dict[str, Any]:
 
 def refresh_regulation_context(db: Any, report: Report) -> Report:
     """Replace both evidence blocks, including explicit missing/stale results."""
-    from .reasoning_context import report_facts_fingerprint
+    from .reasoning_context import reconcile_ai_evidence, report_facts_fingerprint
 
     current = _build_context(db, report)
     if any(key not in current for key in REGULATION_KEYS):
         raise ValueError("regulation refresh must return facts and comparisons, including missing evidence")
     if regulation_context_fingerprint(current) == regulation_context_fingerprint(report.context):
-        return report
+        return reconcile_ai_evidence(report)
     result = report.model_copy(deep=True)
     for key in REGULATION_KEYS:
         result.context[key] = current[key]
@@ -78,7 +78,7 @@ def refresh_regulation_context(db: Any, report: Report) -> Report:
         # Unknown historical evidence must remain unknown across repeated refreshes.
         if not baseline or report_facts_fingerprint(result) != baseline:
             result.context["regulation_interpretation_stale"] = True
-    return result
+    return reconcile_ai_evidence(result)
 
 
 def regulation_context_scopes(context: dict[str, Any]) -> set[str]:
