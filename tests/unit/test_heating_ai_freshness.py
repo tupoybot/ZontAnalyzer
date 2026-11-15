@@ -6,6 +6,7 @@ import pytest
 
 from zont_analyzer.application import regulation_refresh
 from zont_analyzer.application.reasoning_context import (
+    _facts_digest,
     reconcile_ai_evidence,
     report_facts_fingerprint,
     reuse_ai_interpretation,
@@ -94,3 +95,130 @@ def test_matching_evidence_can_repair_a_sticky_flag_without_another_refresh() ->
     repaired = reconcile_ai_evidence(report)
     assert "regulation_interpretation_stale" not in repaired.context
     assert report.context["regulation_interpretation_stale"] is True
+
+
+def _bounded_report(*, legacy: bool = False) -> Report:
+    report = _report()
+    report.context["regulation_facts"].update(
+        dependency_start="2025-12-31T00:00:00+00:00", dependency_end="2026-01-03T00:00:00+00:00",
+    )
+    report.context["ai_facts_fingerprint"] = (
+        _facts_digest(report, include_ai_provenance=True) if legacy else report_facts_fingerprint(report)
+    )
+    return report
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_dependency_bounds_migrate_only_after_exact_original_evidence_proof(monkeypatch, legacy: bool) -> None:
+    original = _bounded_report(legacy=legacy)
+    original.context["regulation_interpretation_stale"] = True
+    saved = original.model_dump_json()
+    current = deepcopy(original.context)
+    current["regulation_facts"].update(
+        dependency_start="2025-12-31T18:00:00+00:00", dependency_end="2026-01-02T21:00:00+00:00",
+    )
+    saved_current = deepcopy(current)
+    monkeypatch.setattr(regulation_refresh, "_build_context", lambda *_: current)
+    repaired = regulation_refresh.refresh_regulation_context(object(), original)
+    assert repaired.context["ai_facts_fingerprint"] == report_facts_fingerprint(repaired)
+    assert repaired.context["ai_facts_fingerprint"] != original.context["ai_facts_fingerprint"]
+    assert "regulation_interpretation_stale" not in repaired.context
+    assert repaired.context["regulation_facts"] == current["regulation_facts"]
+    assert repaired.summary == original.summary and repaired.recommendations == original.recommendations
+    assert original.model_dump_json() == saved and current == saved_current
+    assert regulation_refresh.refresh_regulation_context(object(), repaired) is repaired
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_original_metric_recovery_can_migrate_changed_dependency_bounds(monkeypatch, legacy: bool) -> None:
+    original = _bounded_report(legacy=legacy)
+    changed = deepcopy(original.context)
+    changed["regulation_facts"]["circuits"][0]["metrics"]["room_absolute_error_c"]["value"] = 0.8
+    current = [changed]
+    monkeypatch.setattr(regulation_refresh, "_build_context", lambda *_: current[0])
+    stale = regulation_refresh.refresh_regulation_context(object(), original)
+    assert stale.context["regulation_interpretation_stale"]
+    assert stale.context["ai_facts_fingerprint"] == original.context["ai_facts_fingerprint"]
+    current[0] = deepcopy(original.context)
+    current[0]["regulation_facts"]["dependency_end"] = "2026-01-02T21:00:00+00:00"
+    repaired = regulation_refresh.refresh_regulation_context(object(), stale)
+    assert "regulation_interpretation_stale" not in repaired.context
+    assert repaired.context["ai_facts_fingerprint"] == report_facts_fingerprint(repaired)
+
+
+@pytest.mark.parametrize("changed_field", ["metric", "nested_dependency_end", "history_end"])
+def test_bounds_migration_cannot_hide_other_evidence_changes(monkeypatch, changed_field: str) -> None:
+    original = _bounded_report()
+    current = deepcopy(original.context)
+    current["regulation_facts"]["dependency_end"] = "2026-01-02T21:00:00+00:00"
+    circuit = current["regulation_facts"]["circuits"][0]
+    if changed_field == "metric":
+        circuit["metrics"]["room_absolute_error_c"]["value"] = 0.8
+    elif changed_field == "nested_dependency_end":
+        circuit["dependency_end"] = "2026-01-02T21:00:00+00:00"
+    else:
+        current["regulation_comparisons"]["history_end"] = "2026-01-02T21:00:00+00:00"
+    monkeypatch.setattr(regulation_refresh, "_build_context", lambda *_: current)
+    stale = regulation_refresh.refresh_regulation_context(object(), original)
+    assert stale.context["regulation_interpretation_stale"]
+    assert stale.context["ai_facts_fingerprint"] == original.context["ai_facts_fingerprint"]
+
+
+@pytest.mark.parametrize("baseline", [None, "unknown-old-digest", "facts-v2:unmatched"])
+def test_dependency_bounds_cannot_rebase_an_unknown_original_baseline(monkeypatch, baseline) -> None:
+    original = _bounded_report()
+    original.context["regulation_interpretation_stale"] = True
+    if baseline is None:
+        original.context.pop("ai_facts_fingerprint")
+    else:
+        original.context["ai_facts_fingerprint"] = baseline
+    current = deepcopy(original.context)
+    current["regulation_facts"]["dependency_end"] = "2026-01-02T21:00:00+00:00"
+    monkeypatch.setattr(regulation_refresh, "_build_context", lambda *_: current)
+    stale = regulation_refresh.refresh_regulation_context(object(), original)
+    assert stale.context["regulation_interpretation_stale"]
+    assert stale.context.get("ai_facts_fingerprint") == baseline
+
+
+def test_first_bounds_only_refresh_can_prove_previous_ai_report_without_saved_fingerprint(monkeypatch) -> None:
+    original = _bounded_report()
+    original.context.pop("ai_facts_fingerprint")
+    saved = original.model_dump_json()
+    current = deepcopy(original.context)
+    current["regulation_facts"]["dependency_end"] = "2026-01-02T21:00:00+00:00"
+    monkeypatch.setattr(regulation_refresh, "_build_context", lambda *_: current)
+    repaired = regulation_refresh.refresh_regulation_context(object(), original)
+    assert "regulation_interpretation_stale" not in repaired.context
+    assert repaired.context["ai_facts_fingerprint"] == report_facts_fingerprint(repaired)
+    assert original.model_dump_json() == saved
+
+
+@pytest.mark.parametrize("guard", ["regulation_interpretation_stale", "control_settings_interpretation_stale",
+                                   "gas_interpretation_stale", "pilot_ai_reuse", "ai_interpretation_reuse"])
+def test_bounds_only_refresh_cannot_establish_unknown_ai_baseline_after_reuse_or_staleness(
+    monkeypatch, guard: str,
+) -> None:
+    original = _bounded_report()
+    original.context.pop("ai_facts_fingerprint")
+    original.context[guard] = {"facts_changed": None} if guard.endswith("reuse") else True
+    current = deepcopy(original.context)
+    current["regulation_facts"]["dependency_end"] = "2026-01-02T21:00:00+00:00"
+    monkeypatch.setattr(regulation_refresh, "_build_context", lambda *_: current)
+    stale = regulation_refresh.refresh_regulation_context(object(), original)
+    assert stale.context["regulation_interpretation_stale"]
+    assert "ai_facts_fingerprint" not in stale.context
+
+
+def test_lost_original_bounds_are_not_guessed_during_later_metric_recovery(monkeypatch) -> None:
+    original = _bounded_report()
+    changed = deepcopy(original.context)
+    changed["regulation_facts"]["dependency_end"] = "2026-01-02T21:00:00+00:00"
+    changed["regulation_facts"]["circuits"][0]["metrics"]["room_absolute_error_c"]["value"] = 0.8
+    current = [changed]
+    monkeypatch.setattr(regulation_refresh, "_build_context", lambda *_: current[0])
+    stale = regulation_refresh.refresh_regulation_context(object(), original)
+    current[0] = deepcopy(changed)
+    current[0]["regulation_facts"]["circuits"][0]["metrics"]["room_absolute_error_c"]["value"] = 0.2
+    unchanged_baseline = regulation_refresh.refresh_regulation_context(object(), stale)
+    assert unchanged_baseline.context["regulation_interpretation_stale"]
+    assert unchanged_baseline.context["ai_facts_fingerprint"] == original.context["ai_facts_fingerprint"]

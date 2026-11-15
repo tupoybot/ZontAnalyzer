@@ -15,19 +15,42 @@ def report_facts_fingerprint(report: Report) -> str:
     return "facts-v2:" + _facts_digest(report, include_ai_provenance=False)
 
 
-def reconcile_ai_evidence(report: Report) -> Report:
+def _matches_ai_baseline(report: Report, baseline: str) -> bool:
+    return (report_facts_fingerprint(report) == baseline if baseline.startswith("facts-v2:") else
+            _facts_digest(report, include_ai_provenance=True) == baseline)
+
+
+def reconcile_ai_evidence(report: Report, *, previous: Report | None = None) -> Report:
     """Clear invalidation only when the original AI evidence matches exactly.
 
     A missing or incompatible historical digest never becomes today's baseline.
     Returning to the original facts can repair an earlier invalidation without
     another model request, including after a temporary compact-cache miss.
+    A refresh may migrate root dependency bounds only if restoring the previous
+    bounds proves an exact match with the saved original AI baseline.
     """
     baseline = report.context.get("ai_facts_fingerprint")
     if not report.ai_used or not isinstance(baseline, str):
         return report
     fingerprint = report_facts_fingerprint(report)
-    matched = (fingerprint == baseline if baseline.startswith("facts-v2:") else
-               _facts_digest(report, include_ai_provenance=True) == baseline)
+    matched = _matches_ai_baseline(report, baseline)
+    if (not matched and previous is not None and previous.ai_used
+            and (previous.context.get("ai_facts_fingerprint") == baseline or (
+                previous.context.get("ai_facts_fingerprint") is None and _matches_ai_baseline(previous, baseline)
+            ))):
+        old = previous.context.get("regulation_facts")
+        current = report.context.get("regulation_facts")
+        bounds = ("dependency_start", "dependency_end")
+        if (isinstance(old, dict) and isinstance(current, dict)
+                and any(old.get(key) != current.get(key) or (key in old) != (key in current) for key in bounds)
+                and all(isinstance(block[key], str) for block in (old, current) for key in bounds if key in block)):
+            proof = report.model_copy(deep=True)
+            for key in bounds:
+                if key in old:
+                    proof.context["regulation_facts"][key] = old[key]
+                else:
+                    proof.context["regulation_facts"].pop(key, None)
+            matched = _matches_ai_baseline(proof, baseline)
     if not matched:
         return report
     context = dict(report.context)

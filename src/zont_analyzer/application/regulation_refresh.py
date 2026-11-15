@@ -78,7 +78,7 @@ def refresh_regulation_context(db: Any, report: Report) -> Report:
         # Unknown historical evidence must remain unknown across repeated refreshes.
         if not baseline or report_facts_fingerprint(result) != baseline:
             result.context["regulation_interpretation_stale"] = True
-    return reconcile_ai_evidence(result)
+    return reconcile_ai_evidence(result, previous=report)
 
 
 def regulation_context_scopes(context: dict[str, Any]) -> set[str]:
