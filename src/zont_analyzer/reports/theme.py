@@ -74,6 +74,7 @@ grid-template-columns:minmax(0,1fr) minmax(300px,360px);
 gap:24px}
 .overview,.actions,.action-column{min-width:0}
 .action-column{display:flex;flex-direction:column;gap:24px;align-self:start}
+.action-column>.actions{width:100%}
 .full-width{grid-column:1/-1}
 .hero{padding:30px;
 background:var(--surface);
