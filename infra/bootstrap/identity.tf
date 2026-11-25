@@ -28,7 +28,6 @@ resource "yandex_resourcemanager_folder_iam_member" "deployment" {
     "lockbox.admin",
     "ydb.admin",
     "storage.admin",
-    "logging.admin",
     "api-gateway.admin",
     "certificate-manager.admin",
     "resource-manager.viewer",
@@ -67,7 +66,7 @@ resource "yandex_iam_service_account_iam_binding" "deployment_timer" {
 resource "yandex_resourcemanager_folder_iam_member" "runtime_logs" {
   for_each  = yandex_iam_service_account.runtime
   folder_id = yandex_resourcemanager_folder.project.id
-  role      = "logging.writer"
+  role      = "monium.logs.writer"
   member    = "serviceAccount:${each.value.id}"
 }
 

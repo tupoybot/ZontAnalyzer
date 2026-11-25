@@ -77,6 +77,7 @@ jobs:
         env:
           SCOPE: ${{ secrets.M1_SCOPE_JSON }}
           CONFIG: ${{ secrets.M1_CONFIG_JSON }}
+          PROBE_IMAGE: ${{ secrets.M1_PROBE_IMAGE }}
           BACKEND: ${{ secrets.M1_BACKEND_JSON }}
           STATE_ACCESS_KEY: ${{ secrets.M1_STATE_ACCESS_KEY }}
           STATE_SECRET_KEY: ${{ secrets.M1_STATE_SECRET_KEY }}
@@ -94,7 +95,8 @@ jobs:
           mkdir -p "$private/cloud-work"
           printf '%s' "$SCOPE" > "$private/scope.json"
           printf '%s' "$BACKEND" > "$private/cloud.tfbackend.json"
-          printf '%s' "$CONFIG" | jq 'del(.application_image, .application_revision)' \
+          printf '%s' "$CONFIG" | jq 'del(.application_image, .application_revision, .cloud_logging_enabled)
+              | if env.PROBE_IMAGE != "" then .probe_image = env.PROBE_IMAGE else . end' \
             > "$private/cloud-work/inputs.tfvars.json"
           printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' \
             "$STATE_ACCESS_KEY" "$STATE_SECRET_KEY" > "$private/state.env"

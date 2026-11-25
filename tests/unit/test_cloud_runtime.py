@@ -339,6 +339,7 @@ def test_bounded_failure_log_has_operation_and_only_safe_original_class(
     message: str, expected_original_type: str | None,
 ) -> None:
     instance, credentials = server
+    instance.monium = Mock()
 
     def fail(*_args: Any) -> None:
         raise JobFailureError(message)
@@ -352,6 +353,8 @@ def test_bounded_failure_log_has_operation_and_only_safe_original_class(
     assert body["error_type"] == "JobFailureError"
     entry = next(json.loads(record.message) for record in caplog.records
                  if '"event":"cloud_job"' in record.message)
+    instance.monium.send.assert_called_once_with(entry)
+    assert entry["job_id"] == body["job_id"]
     assert entry["operation"] == "reports"
     assert entry["status"] == "failed"
     assert entry["error_type"] == "JobFailureError"
@@ -369,6 +372,41 @@ def test_unready_xray_blocks_jobs_but_not_diagnostics(server: Any) -> None:
     status, body = _request(instance, credentials, "GET", "/diagnostics")
     assert status == 200
     assert body["xray_ready"] is False
+
+
+def test_monium_diagnostic_acceptance_requires_auth_opt_in_and_valid_export(
+    server: Any, caplog: pytest.LogCaptureFixture,
+) -> None:
+    instance, credentials = server
+    sent: list[dict[str, str]] = []
+
+    class Exporter:
+        def send(self, event: dict[str, str]) -> bool:
+            sent.append(event)
+            if len(sent) > 1:
+                raise RuntimeError("private token details")
+            return True
+
+    instance.monium = Exporter()
+    authorization = "Basic " + base64.b64encode(credentials.encode()).decode()
+    for headers, expected_status, accepted in (
+        ({"X-Zont-Monium-Smoke": "1"}, 401, False),
+        ({"Authorization": authorization}, 200, False),
+        ({"Authorization": authorization, "X-Zont-Monium-Smoke": "1"}, 200, True),
+        ({"Authorization": authorization, "X-Zont-Monium-Smoke": "1"}, 200, False),
+    ):
+        connection = http.client.HTTPConnection("127.0.0.1", instance.server_address[1], timeout=5)
+        try:
+            connection.request("GET", "/diagnostics", headers=headers)
+            response = connection.getresponse()
+            assert response.status == expected_status
+            assert response.getheader("X-Zont-Monium-Accepted") == (sent[-1]["smoke_id"] if accepted else None)
+            response.read()
+        finally:
+            connection.close()
+    assert len(sent) == 2
+    assert all(event["event"] == "cloud_logging_smoke" for event in sent)
+    assert "private token details" not in caplog.text
 
 
 def test_reports_route_uses_separate_bounded_budget_and_authorization(

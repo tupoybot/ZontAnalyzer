@@ -5,5 +5,7 @@ COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY probe.py telemetry.py /app/
+ARG REVISION=unknown
+ENV PROBE_REVISION=$REVISION
 USER 65532:65532
 ENTRYPOINT ["python", "/app/probe.py"]

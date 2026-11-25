@@ -95,12 +95,6 @@ variable "application_writes_enabled" {
   default     = true
 }
 
-variable "cloud_logging_enabled" {
-  description = "Send probe, application and gateway logs to the configured runtime log group."
-  type        = bool
-  default     = true
-}
-
 variable "application_config_secret_enabled" {
   description = "Load the application configuration JSON from the selected Lockbox secret version."
   type        = bool

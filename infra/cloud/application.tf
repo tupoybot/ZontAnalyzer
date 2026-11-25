@@ -31,6 +31,7 @@ resource "yandex_serverless_container" "application" {
       CLOUD_PUBLICATION_BUCKET      = yandex_storage_bucket.publication.bucket
       CLOUD_PUBLICATION_PREFIX      = var.application_publication_prefix
       CLOUD_PUBLIC_ORIGIN           = var.attach_domain ? "https://${var.test_domain}" : ""
+      MONIUM_PROJECT                = local.monium_project
       YDB_ENDPOINT                  = "grpcs://${local.application_database.ydb_api_endpoint}"
       YDB_DATABASE                  = local.application_database.database_path
       YDB_NAMESPACE                 = var.application_ydb_namespace
@@ -98,9 +99,7 @@ resource "yandex_serverless_container" "application" {
   }
 
   log_options {
-    disabled     = !var.cloud_logging_enabled
-    log_group_id = var.cloud_logging_enabled ? yandex_logging_group.runtime.id : null
-    min_level    = var.cloud_logging_enabled ? "INFO" : null
+    disabled = true
   }
 
   depends_on = [

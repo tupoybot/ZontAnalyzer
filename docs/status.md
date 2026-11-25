@@ -2,7 +2,7 @@
 
 `#for-human`
 
-Обновлено 15 ноября 2026 года. [Project](https://github.com/users/tupoybot/projects/1) ·
+Обновлено 25 ноября 2026 года. [Project](https://github.com/users/tupoybot/projects/1) ·
 [План](./implementation_plan.md) · [Карта документов](./README.md).
 
 ## Рабочая версия
@@ -12,8 +12,9 @@
 [Выпуск](https://github.com/tupoybot/ZontAnalyzer/actions/runs/43687917010)
 из [PR #121](https://github.com/tupoybot/ZontAnalyzer/pull/121).
 Активная версия проверена через API; готовность и диагностика вернули 200,
-границы авторизации сохранены. Cloud Logging отключён в приватной конфигурации;
-полное планирование Terraform остаётся в [#96](https://github.com/tupoybot/ZontAnalyzer/issues/96).
+границы авторизации сохранены. Для [#122](https://github.com/tupoybot/ZontAnalyzer/issues/122) подготовлена прямая поставка журналов в Monium.
+Полный план Terraform прочитал рабочее состояние и сохраняет прежнюю лог-группу.
+Проверка доставки из новых рабочих ревизий ещё предстоит. [Порядок проверки](../infra/README.md#журналы-в-monium).
 
 ## Исправления отчётов и расход YDB
 

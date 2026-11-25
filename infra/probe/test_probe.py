@@ -60,6 +60,23 @@ class PolicyTests(unittest.TestCase):
         self.connection.request.assert_called_once()
         self.response.read1.assert_not_called()
 
+    def test_monium_route_permits_only_direct_logs_post_with_http_200(self):
+        host = "ingest.monium.yandex.cloud"
+        url = f"https://{host}/otlp/v1/logs"
+        client = PolicyClient({"proxy.example"}, {host})
+        for target, method in ((url, "GET"), (url + "?v=1", "POST"), (url + "/elsewhere", "POST")):
+            with self.subTest(url=target, method=method), self.assertRaises(ValueError):
+                client.request(target, method)
+        with self.assertRaises(ValueError):
+            PolicyClient({host}).request(url, "POST")
+        self.constructor.assert_not_called()
+
+        self.response.status = 204
+        with self.assertRaises(RuntimeError):
+            client.request(url, "POST")
+        self.constructor.assert_called_once()
+        self.connection.set_tunnel.assert_not_called()
+
     def test_request_and_response_share_byte_budget(self):
         self.response.read1.side_effect = [b"abc", b"d"]
         with self.assertRaises(ValueError):
@@ -122,7 +139,7 @@ class SmokeTests(unittest.TestCase):
         with (patch("probe.identity_token", return_value="test-token"),
               patch("probe.Path.read_bytes", return_value=b"m1-private-object\n"),
               redirect_stdout(io.StringIO())):
-            smoke(server)
+            self.assertEqual(smoke(server, []), "test-token")
         server.client.request.assert_called_once_with(server.smoke_url)
 
 
@@ -138,14 +155,36 @@ class HandlerTelemetryTests(unittest.TestCase):
         self.reply = MagicMock()
         self.handler.reply = self.reply  # type: ignore[method-assign]
         self.server: Any = self.handler.server
-        self.server.last_phase = "egress"
+        self.server.monium = None
 
     def test_success_requires_metric_delivery(self):
         with patch("probe.smoke") as check:
             self.handler.handle_request()
-        check.assert_called_once_with(self.server)
+        check.assert_called_once_with(self.server, [])
         self.assertTrue(self.server.telemetry.send.call_args.args[1])
-        self.reply.assert_called_once_with(200)
+        self.reply.assert_called_once_with(200, None, accepted=None)
+
+    def test_smoke_acceptance_correlates_with_terminal_log(self):
+        self.server.monium = MagicMock()
+        with patch("probe.smoke", return_value="metadata-token"):
+            self.handler.handle_request()
+
+        sent = self.server.monium.send.call_args.args
+        self.assertEqual(sent[0:2], (self.server.client, "metadata-token"))
+        self.assertEqual(sent[2], [{
+            "event": "probe_smoke", "phase": "complete", "level": "INFO", "status": "ok",
+            "smoke_id": self.reply.call_args.kwargs["accepted"],
+        }])
+        self.assertEqual(self.reply.call_args.args[0], 200)
+
+    def test_log_delivery_failure_preserves_probe_result_and_redacts_details(self):
+        self.server.monium = MagicMock()
+        self.server.monium.send.side_effect = ValueError("private token")
+        output = io.StringIO()
+        with patch("probe.smoke", return_value="metadata-token"), redirect_stdout(output):
+            self.handler.handle_request()
+        self.reply.assert_called_once_with(200, None, accepted=None)
+        self.assertNotIn("private token", output.getvalue())
 
     def test_failed_check_exports_zero_without_leaking_error(self):
         with patch("probe.smoke", side_effect=ValueError("private upstream credential")):

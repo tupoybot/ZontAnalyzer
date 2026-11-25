@@ -18,11 +18,14 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import urlsplit
 
 from zont_analyzer.cloud import auth
 from zont_analyzer.cloud.limits import DEFAULT_LONG_JOB_SECONDS, MAX_LONG_JOB_SECONDS
+
+if TYPE_CHECKING:
+    from zont_analyzer.cloud.monium import MoniumLogs
 
 MAX_BODY_BYTES = 65_536
 MAX_RESULT_BYTES = 1_048_576
@@ -352,12 +355,13 @@ class CloudServer(ThreadingHTTPServer):
 
     def __init__(
         self, address: tuple[str, int], config: RuntimeConfig, tunnel: Any, telemetry: Any = None,
-        runtime_factory: Callable[[], Any] | None = None,
+        runtime_factory: Callable[[], Any] | None = None, *, monium: MoniumLogs | None = None,
     ) -> None:
         super().__init__(address, CloudHandler)
         self.config = config
         self.tunnel = tunnel
         self.telemetry = telemetry
+        self.monium = monium
         self.boot_id = str(uuid.uuid4())
         self.counters = Counters()
         self.active_job = threading.BoundedSemaphore(1)
@@ -462,6 +466,14 @@ class CloudHandler(BaseHTTPRequestHandler):
             return
         if self.command == "GET" and self.path == "/diagnostics":
             self._finish_input()
+            headers = {}
+            if self.server.monium is not None and self.headers.get_all("X-Zont-Monium-Smoke") == ["1"]:
+                smoke_id = str(uuid.uuid4())
+                if self._emit_monium_event({
+                    "level": "INFO", "message": "cloud logging smoke", "event": "cloud_logging_smoke",
+                    "smoke_id": smoke_id, "status": "ok",
+                }):
+                    headers["X-Zont-Monium-Accepted"] = smoke_id
             self._reply(200, {
                 "environment": self.server.config.environment,
                 "revision": self.server.config.revision,
@@ -469,7 +481,7 @@ class CloudHandler(BaseHTTPRequestHandler):
                 "xray_ready": self.server.tunnel.ready(),
                 "writes_enabled": self.server.config.writes_enabled,
                 "counters": self.server.counters.snapshot(),
-            })
+            }, extra_headers=headers)
             return
         if path.startswith(("/api/", "/za/api/")):
             if self.command != "GET" and not self.server.config.writes_enabled:
@@ -734,10 +746,11 @@ class CloudHandler(BaseHTTPRequestHandler):
         self._finish_input()
         return value
 
-    def _reply(self, status: int, payload: dict[str, Any], *, basic_challenge: bool = False) -> None:
+    def _reply(self, status: int, payload: dict[str, Any], *, basic_challenge: bool = False,
+               extra_headers: dict[str, str] | None = None) -> None:
         encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         self._reply_bytes(status, encoded, "application/json; charset=utf-8",
-                          basic_challenge=basic_challenge)
+                          basic_challenge=basic_challenge, extra_headers=extra_headers)
 
     def _reply_bytes(self, status: int, encoded: bytes, content_type: str, *,
                      basic_challenge: bool = False, extra_headers: dict[str, str] | None = None) -> None:
@@ -771,7 +784,19 @@ class CloudHandler(BaseHTTPRequestHandler):
             payload["error_type"] = error_type
         if original_error_type is not None:
             payload["original_error_type"] = original_error_type
+        self._emit_monium_event(payload)
+
+    def _emit_monium_event(self, payload: dict[str, str]) -> bool:
         logger.info(json.dumps(payload, separators=(",", ":")))
+        if self.server.monium is None:
+            return False
+        try:
+            if self.server.monium.send(payload):
+                return True
+        except Exception:  # noqa: BLE001 - export must not change the application response
+            pass
+        logger.warning("Monium log export failed")
+        return False
 
     def _send_telemetry(self, success: bool, duration: float) -> None:
         if self.server.telemetry is None:
@@ -813,7 +838,13 @@ def main() -> None:
             from zont_analyzer.cloud.telemetry import Telemetry
 
             telemetry = Telemetry(telemetry_raw, config.environment)
-        server = CloudServer(("0.0.0.0", config.port), config, tunnel, telemetry)
+        monium_project = os.environ.get("MONIUM_PROJECT", "")
+        monium = None
+        if monium_project:
+            from zont_analyzer.cloud.monium import MoniumLogs
+
+            monium = MoniumLogs(monium_project, config.environment, config.revision)
+        server = CloudServer(("0.0.0.0", config.port), config, tunnel, telemetry, monium=monium)
         def stop_server(*_args: Any) -> None:
             server.stopping.set()
             threading.Thread(target=server.shutdown, daemon=True).start()
