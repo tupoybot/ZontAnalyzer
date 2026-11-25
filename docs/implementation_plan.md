@@ -160,7 +160,7 @@ docs/implementation_plan.md остаётся действующим докуме
 | [#78](https://github.com/tupoybot/ZontAnalyzer/issues/78) | Проверить комментарии и готовность публикации | Сначала воспроизведение текущего поведения; очередь только при подтверждённой необходимости |
 | [#79](https://github.com/tupoybot/ZontAnalyzer/issues/79) | Проверить восстановление свежей копии YDB | Самостоятельная изолированная проверка; не требует новых продуктовых функций |
 | [#80](https://github.com/tupoybot/ZontAnalyzer/issues/80) | Инвентаризировать временные облачные ресурсы | Сначала приватный перечень и dry-run; удаления сейчас нет |
-| [#96](https://github.com/tupoybot/ZontAnalyzer/issues/96) | Восстановить полный Terraform plan | Разобрать ошибку чтения Cloud Logging и сверить фактические настройки; группа и прежние журналы сохраняются |
+| [#96](https://github.com/tupoybot/ZontAnalyzer/issues/96) | Восстановить полный Terraform plan | Проверен после перехода на Monium в [#122](https://github.com/tupoybot/ZontAnalyzer/issues/122). Прежняя группа сохранена |
 
 ### Основной приоритет — экономное использование YDB
 
