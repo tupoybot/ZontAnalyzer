@@ -210,8 +210,6 @@ def run_period_schedule(
             previous.context["schedule_signature"] = signature
         if _already_current(previous, period, signature):
             continue
-        if daily_inputs_pending(analysis, period, first):
-            continue
         path = _lock_path(runtime, identifier)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as lock:

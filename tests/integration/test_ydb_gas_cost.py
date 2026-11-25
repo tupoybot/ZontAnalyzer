@@ -332,5 +332,8 @@ def test_restart_reuses_complete_gas_inputs_and_window_without_day_reads(
         return rows
 
     monkeypatch.setattr(OwnerContextStore, 'gas_readings_for_analysis', concurrent_owner_edit)
-    with pytest.raises(ValueError, match='snapshot was loaded'):
-        GasService(runtime.db, runtime.config)
+    service = GasService(runtime.db, runtime.config)
+    assert not injected
+    with pytest.raises(ValueError, match='inputs changed while gas was calculated'):
+        service.context(*window)
+    assert injected

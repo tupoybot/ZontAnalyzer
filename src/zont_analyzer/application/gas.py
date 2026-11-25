@@ -175,6 +175,7 @@ class GasService:
             tuple[datetime, datetime, str],
             tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]],
         ] = {}
+
     @cached_property
     def series(self) -> list[dict[str, Any]]:
         return self.db.list_series()
@@ -185,15 +186,19 @@ class GasService:
         return states[0] if len(states) == 1 else None
 
     @cached_property
+    def _device_ids(self) -> list[str]:
+        return [str(device['id']) for device in self.db.list_devices()]
+
+    @cached_property
     def device_id(self) -> str | None:
-        devices = self.db.list_devices()
         return str(self.state['device_id']) if self.state else (
-            str(devices[0]['id']) if len(devices) == 1 else None
+            self._device_ids[0] if len(self._device_ids) == 1 else None
         )
 
     @cached_property
     def fields(self) -> dict[str, Any]:
-        profile = OwnerContextStore(self.db).profile(self.device_id) if self.device_id is not None else {}
+        device_id = self.device_id
+        profile = OwnerContextStore(self.db).profile(device_id) if device_id and device_id in self._device_ids else {}
         return {key: value for key, value in profile.get('fields', {}).items()
                 if key in {'gas_min_m3h', 'gas_max_m3h', 'has_gas_stove', 'boiler_model',
                            'nominal_power_kw', 'installation_notes'}}
