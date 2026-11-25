@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
 import re
 import sys
 import threading
@@ -67,11 +68,19 @@ class MoniumLogs:
         self.revision = revision
         self._slot = threading.BoundedSemaphore(1)
 
+    @classmethod
+    def from_environment(cls) -> MoniumLogs | None:
+        project = os.environ.get("MONIUM_PROJECT", "")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,256}", project):
+            return None
+        return cls(project, os.environ.get("CLOUD_ENVIRONMENT", ""), os.environ.get("CLOUD_REVISION", ""))
+
     def payload(self, event: Mapping[str, str]) -> bytes:
         request = ExportLogsServiceRequest()
         resource = request.resource_logs.add()
         resource.resource.attributes.add(key="service.name").value.string_value = _SERVICE
-        resource.resource.attributes.add(key="deployment.environment.name").value.string_value = self.environment
+        if self.environment in ("dev", "pilot"):
+            resource.resource.attributes.add(key="deployment.environment.name").value.string_value = self.environment
         if re.fullmatch(r"[0-9a-f]{40}", self.revision):
             resource.resource.attributes.add(key="service.version").value.string_value = self.revision
         scope = resource.scope_logs.add()

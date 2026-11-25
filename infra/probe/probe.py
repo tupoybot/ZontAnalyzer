@@ -202,6 +202,17 @@ def identity_token() -> str:
         conn.close()
 
 
+def export_monium_logs(
+    monium: MoniumLogs, client: PolicyClient, events: list[dict[str, str]], token: str | None = None,
+) -> bool:
+    try:
+        monium.send(client, token or identity_token(), events)
+    except Exception:  # noqa: BLE001 - telemetry errors may include request details
+        print("Monium log export failed", flush=True)
+        return False
+    return True
+
+
 def smoke(server, phases: list[dict[str, str]]) -> str:
     def phase(name, operation):
         event = {"level": "INFO", "message": "m1-smoke", "phase": name, "status": "ok"}
@@ -307,19 +318,18 @@ class Handler(BaseHTTPRequestHandler):
         if self.server.monium is None:
             return None
         smoke_id = str(uuid.uuid4())
-        summary = {"level": "ERROR" if error_type else "INFO", "phase": error_phase or "complete",
-                   "status": "failed" if error_type else "ok"}
+        summary = {
+            "level": "ERROR" if error_type else "INFO",
+            "message": "m1-smoke",
+            "phase": error_phase or "complete",
+            "status": "failed" if error_type else "ok",
+        }
         if error_type:
             summary["error_type"] = error_type
         phases.append(summary)
         for event in phases:
             event.update(event="probe_smoke", smoke_id=smoke_id)
-        try:
-            self.server.monium.send(self.server.client, token or identity_token(), phases)
-        except Exception:  # noqa: BLE001 - export must not change the smoke response
-            print("Monium log export failed", flush=True)
-            return None
-        return smoke_id
+        return smoke_id if export_monium_logs(self.server.monium, self.server.client, phases, token) else None
 
     def reply(self, status, body=None, *, accepted=None):
         if body is None:
@@ -343,7 +353,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def main():
+def serve(monium: MoniumLogs | None) -> None:
     if os.environ.get("ZONT_PROBE_ONLY") != "true":
         raise RuntimeError("probe mode required")
     smoke_url = os.environ["PROBE_SMOKE_URL"]
@@ -361,11 +371,8 @@ def main():
         direct_hosts = set()
         if server.telemetry is not None:
             direct_hosts.add(server.telemetry.host)
-        monium_project = os.environ.get("MONIUM_PROJECT", "")
-        if monium_project:
-            server.monium = MoniumLogs(
-                monium_project, os.environ.get("ZONT_ENVIRONMENT", ""), os.environ.get("PROBE_REVISION", ""),
-            )
+        server.monium = monium
+        if monium is not None:
             direct_hosts.add(MONIUM_HOST)
         server.client = PolicyClient({smoke_host}, direct_hosts, port)
         credentials = os.environ.pop("PROBE_WEB_CREDENTIALS")
@@ -380,10 +387,20 @@ def main():
         tunnel.close()
 
 
-if __name__ == "__main__":
+def main() -> None:
+    monium = None
     try:
-        main()
+        monium = MoniumLogs.from_environment()
+        serve(monium)
     except Exception:  # noqa: BLE001 - startup diagnostics must not expose secrets
-        # Configuration errors can contain private hostnames or credentials.
-        print("M1 probe startup failed", flush=True)
+        message = "M1 probe startup failed"
+        print(message, flush=True)
+        if monium is not None:
+            export_monium_logs(monium, PolicyClient((), {MONIUM_HOST}), [{
+                "level": "ERROR", "message": message, "event": "probe_startup", "status": "failed",
+            }])
         raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()

@@ -65,7 +65,7 @@ class MoniumLogsTest(unittest.TestCase):
         client.request.return_value = b""
         MoniumLogs("fixture-project", "dev", "a" * 40).send(client, "fixture-token", [{
             "event": "probe_smoke", "phase": "complete", "level": "INFO", "status": "ok",
-            "smoke_id": "fixture-id", "unlisted": "private details",
+            "message": "m1-smoke", "smoke_id": "fixture-id", "unlisted": "private details",
         }])
         url, method, payload, headers = client.request.call_args.args
         self.assertEqual((url, method), ("https://ingest.monium.yandex.cloud/otlp/v1/logs", "POST"))

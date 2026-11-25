@@ -302,6 +302,7 @@ def test_telemetry_failure_does_not_replace_completed_result(server: Any, caplog
 
     instance, credentials = server
     instance.telemetry = FailingTelemetry()
+    instance.monium = Mock()
     with caplog.at_level("INFO"):
         status, body = _request(instance, credentials, "POST", "/jobs/analytics", _payload())
 
@@ -324,6 +325,7 @@ def test_telemetry_failure_does_not_replace_completed_result(server: Any, caplog
         "status": "failed",
         "error_type": "RuntimeError",
     } in entries
+    assert [call.args[0] for call in instance.monium.send.call_args_list] == entries
 
 
 @pytest.mark.parametrize(
@@ -641,6 +643,7 @@ def test_http_failure_exposes_only_error_type(
         raise RuntimeError(private_message)
 
     instance.runtime_factory = broken_runtime
+    instance.monium = Mock()
     with caplog.at_level("ERROR", logger="zont_analyzer.cloud.runtime"):
         status, body = _request(instance, credentials, "GET", path)
 
@@ -649,8 +652,24 @@ def test_http_failure_exposes_only_error_type(
     assert entries == [{
         "level": "ERROR", "message": message, "event": event, "error_type": "RuntimeError",
     }]
+    instance.monium.send.assert_called_once_with(entries[0])
     assert private_message not in caplog.text
     assert private_message not in json.dumps(body)
+
+
+def test_startup_failure_exports_only_fixed_event(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    exporter = Mock()
+    monkeypatch.setattr(runtime_module.MoniumLogs, "from_environment", lambda: exporter)
+    monkeypatch.setenv("CLOUD_ENVIRONMENT", "private config detail")
+    with pytest.raises(SystemExit) as stopped:
+        runtime_module.main()
+
+    assert stopped.value.code == 1
+    event = {"level": "ERROR", "message": "cloud runtime startup failed", "event": "cloud_runtime_startup"}
+    assert [json.loads(record.message) for record in caplog.records] == [event]
+    exporter.send.assert_called_once_with(event)
 
 
 def _web_runtime_harness(monkeypatch: pytest.MonkeyPatch) -> Any:

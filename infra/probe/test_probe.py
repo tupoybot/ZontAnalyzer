@@ -5,7 +5,7 @@ from contextlib import redirect_stdout
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from probe import Handler, PolicyClient, Tunnel, smoke, validate_config
+from probe import Handler, PolicyClient, Tunnel, main, smoke, validate_config
 
 
 class PolicyTests(unittest.TestCase):
@@ -172,7 +172,7 @@ class HandlerTelemetryTests(unittest.TestCase):
         sent = self.server.monium.send.call_args.args
         self.assertEqual(sent[0:2], (self.server.client, "metadata-token"))
         self.assertEqual(sent[2], [{
-            "event": "probe_smoke", "phase": "complete", "level": "INFO", "status": "ok",
+            "event": "probe_smoke", "phase": "complete", "level": "INFO", "status": "ok", "message": "m1-smoke",
             "smoke_id": self.reply.call_args.kwargs["accepted"],
         }])
         self.assertEqual(self.reply.call_args.args[0], 200)
@@ -201,6 +201,26 @@ class HandlerTelemetryTests(unittest.TestCase):
         self.assertEqual(self.reply.call_args.args[0], 502)
         self.assertIn(b"grafana", self.reply.call_args.args[1])
         self.assertNotIn(b"token", self.reply.call_args.args[1])
+
+
+class StartupTests(unittest.TestCase):
+    def test_startup_failure_only_exports_sanitized_event(self):
+        monium = MagicMock()
+        output = io.StringIO()
+        with (patch("probe.MoniumLogs.from_environment", return_value=monium),
+              patch("probe.serve", side_effect=ValueError("private tunnel configuration")),
+              patch("probe.identity_token", return_value="metadata-token"),
+              redirect_stdout(output), self.assertRaises(SystemExit) as stopped):
+            main()
+
+        self.assertEqual(stopped.exception.code, 1)
+        self.assertEqual(output.getvalue(), "M1 probe startup failed\n")
+        client, token, events = monium.send.call_args.args
+        self.assertEqual(client.direct_hosts, {"ingest.monium.yandex.cloud"})
+        self.assertEqual(token, "metadata-token")
+        self.assertEqual(events, [{
+            "level": "ERROR", "message": "M1 probe startup failed", "event": "probe_startup", "status": "failed",
+        }])
 
 
 if __name__ == "__main__":

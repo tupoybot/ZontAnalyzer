@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from bound_revision import identifier, request
-from runtime_smoke import target
+from runtime_smoke import require_monium_receipt, target
 
 SAMPLE = {
     "period_start": "2026-01-01T00:00:00Z", "period_end": "2026-01-01T00:20:00Z", "target_c": 22,
@@ -17,10 +17,12 @@ SAMPLE = {
 }
 
 
-def invoke(host, path, authorization=None, body=None):
+def invoke(host, path, authorization=None, body=None, *, monium_smoke=False):
     conn = http.client.HTTPSConnection(host, timeout=30)
     try:
         headers = {"Content-Type": "application/json"}
+        if monium_smoke:
+            headers["X-Zont-Monium-Smoke"] = "1"
         if authorization:
             headers["Authorization"] = authorization
         conn.request("GET" if body is None else "POST", path,
@@ -29,7 +31,7 @@ def invoke(host, path, authorization=None, body=None):
         data = response.read(1024 * 1024 + 1)
         if len(data) > 1024 * 1024:
             raise ValueError("smoke response too large")
-        return response.status, data
+        return response.status, data, response.getheader("X-Zont-Monium-Accepted")
     finally:
         conn.close()
 
@@ -54,9 +56,10 @@ def run(private):
     host, authorization, inputs, outputs = context(private)
     assert invoke(host, "/ready")[0] == 401
     assert invoke(host, "/ready", authorization)[0] == 200
-    before = invoke(host, "/diagnostics", authorization)
+    before = invoke(host, "/diagnostics", authorization, monium_smoke=True)
     assert before[0] == 200
     assert json.loads(before[1])["revision"] == inputs["application_revision"]
+    receipt = require_monium_receipt(before[2])
     writes_enabled = inputs.get("application_writes_enabled", True)
     assert json.loads(before[1])["writes_enabled"] is writes_enabled
     assert invoke(host, "/jobs/analytics", body=SAMPLE)[0] == 401
@@ -85,7 +88,7 @@ def run(private):
     result = {"revision": inputs["application_revision"], "image": inputs["application_image"],
               "ready_http": 200, "anonymous_gateway_http": 401, "anonymous_container_http": 403,
               "writes_enabled": writes_enabled, **checks,
-              "external_api_requests": 0}
+              "external_api_requests": 0, "monium_smoke_id": receipt}
     (private / "application-smoke.json").write_text(json.dumps(result))
     print("Cloud smoke passed: auth, readiness, configured write gate and private ingress")
 

@@ -7,9 +7,11 @@ from unittest.mock import patch
 
 import application_smoke
 
+SMOKE_ID = "61d3cc5d-e956-4811-a28e-2005338ae2d3"
+
 
 class ApplicationSmokeTest(unittest.TestCase):
-    def check_mode(self, writes_enabled, identity=None, diagnostics_enabled=None):
+    def check_mode(self, writes_enabled, identity=None, diagnostics_enabled=None, receipt=SMOKE_ID):
         inputs = {"application_revision": "test-revision", "application_image": "test-image"}
         if writes_enabled is not None:
             inputs["application_writes_enabled"] = writes_enabled
@@ -19,7 +21,7 @@ class ApplicationSmokeTest(unittest.TestCase):
         calls = []
         sequence = iter(["first", "second"])
 
-        def invoke(host, path, authorization=None, body=None):
+        def invoke(host, path, authorization=None, body=None, *, monium_smoke=False):
             calls.append((path, authorization, body))
             if host == "direct.example":
                 return 403, b"{}"
@@ -28,8 +30,10 @@ class ApplicationSmokeTest(unittest.TestCase):
             if path == "/ready":
                 return 200, b"{}"
             if path == "/diagnostics":
-                return 200, json.dumps({"revision": "test-revision", "writes_enabled":
-                                       enabled if diagnostics_enabled is None else diagnostics_enabled}).encode()
+                self.assertTrue(monium_smoke)
+                diagnostic = {"revision": "test-revision", "writes_enabled":
+                              enabled if diagnostics_enabled is None else diagnostics_enabled}
+                return 200, json.dumps(diagnostic).encode(), receipt
             if path.startswith("/api/") and identity:
                 return 401, b"{}"
             if not enabled:
@@ -67,6 +71,13 @@ class ApplicationSmokeTest(unittest.TestCase):
     def test_identity_maintenance_preserves_api_auth(self):
         result, _calls = self.check_mode(False, identity={"mode": "spa"})
         self.assertEqual(result["api_probe_http"], 401)
+
+    def test_logging_receipt_required_even_in_maintenance(self):
+        for invalid in (None, "", "accepted", SMOKE_ID + ", " + SMOKE_ID):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "Monium"):
+                self.check_mode(False, receipt=invalid)
+        result, _ = self.check_mode(False)
+        self.assertEqual(result["monium_smoke_id"], SMOKE_ID)
 
     def test_wrong_deployed_gate_fails_before_job(self):
         with self.assertRaises(AssertionError):

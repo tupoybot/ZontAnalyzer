@@ -1,6 +1,7 @@
 """Small OTLP metric export without a resident collector or background thread."""
 import base64
 import json
+import os
 import re
 import time
 from urllib.parse import urlsplit
@@ -74,7 +75,14 @@ class MoniumLogs:
         self.environment = environment
         self.revision = revision
 
-    def send(self, client, token, phases):
+    @classmethod
+    def from_environment(cls) -> "MoniumLogs | None":
+        project = os.environ.get("MONIUM_PROJECT", "")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,256}", project):
+            return None
+        return cls(project, os.environ.get("ZONT_ENVIRONMENT", ""), os.environ.get("PROBE_REVISION", ""))
+
+    def send(self, client, token, events):
         request = ExportLogsServiceRequest()
         resource = request.resource_logs.add()
         resource.resource.attributes.add(key="service.name").value.string_value = PROBE_SERVICE
@@ -84,11 +92,11 @@ class MoniumLogs:
             resource.resource.attributes.add(key="service.version").value.string_value = self.revision
         scope = resource.scope_logs.add()
         scope.scope.name = "zont-m1-probe"
-        for event in phases:
+        for event in events:
             level = event["level"]
             record = scope.log_records.add(time_unix_nano=time.time_ns(), severity_text=level,
                                            severity_number=9 if level == "INFO" else 17)
-            record.body.string_value = "m1-smoke"
+            record.body.string_value = event["message"]
             for key in ("event", "smoke_id", "phase", "status", "error_type"):
                 if key in event:
                     record.attributes.add(key=key).value.string_value = event[key]

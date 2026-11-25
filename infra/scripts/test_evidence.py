@@ -1,13 +1,31 @@
+import json
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import runtime_smoke
 from archive_evidence import archive
 from runtime_smoke import target
 
 
 class EvidenceTest(unittest.TestCase):
+    def test_healthy_probe_without_monium_receipt_fails_deployment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cloud-outputs.json").write_text(json.dumps({
+                "probe_url": {"value": "https://probe.containers.yandexcloud.net"},
+            }))
+            (root / "deploy-token").write_text("fixture")
+            responses = [(200, b"ok\n", None), (403, b"", None)]
+            with (
+                patch.object(runtime_smoke, "check", side_effect=responses),
+                self.assertRaisesRegex(ValueError, "Monium"),
+            ):
+                runtime_smoke.run(root)
+            self.assertTrue(json.loads((root / "runtime-smoke.json").read_text())["smoke_body_ok"])
+
     def test_archive_excludes_credentials_and_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
