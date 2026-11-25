@@ -29,6 +29,7 @@ from zont_analyzer.reports.presentation import (
     gas_cost_lines,
     gas_purpose_text,
     gas_savings_text,
+    gas_scope_totals,
     number,
     period_target,
     target_band_note,
@@ -987,7 +988,7 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
     if isinstance(gas, dict):
         status = str(gas.get("status") or "unknown")
         labels = {"unknown": "нет данных", "measured": "измерено", "estimated": "оценено",
-                  "extrapolated": "экстраполировано"}
+                  "extrapolated": "экстраполировано", "partial": "сумма известных дней"}
         lines.append(
             f"Расход газа за период: "
             f"{_volume_and_cost(gas.get('volume_m3'), gas.get('cost')) if status != 'unknown' else 'Нет данных'} "
@@ -1001,9 +1002,11 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
                 lines.append(f"{label}: {_volume_and_cost(gas[key], gas.get(cost_key), unit)}")
         lines.extend(f"{label}: {value}" for label, value in burner_usage_rows(report))
         lines.extend(validation_lines(gas))
+        lines.extend(gas_scope_totals(gas))
         lines.append(f"Диапазон: {_gas_value(gas.get('lower_m3'), 'м³')} — "
                      f"{_gas_value(gas.get('upper_m3'), 'м³')}; покрытие {_gas_value(gas.get('coverage_pct'), '%')}")
-        lines.append(f"Версия расчёта: {gas.get('model_version', 'неизвестна')}")
+        if gas.get("model_version"):
+            lines.append(f"Версия расчёта: {gas['model_version']}")
         lines.append(str(gas.get('source', '')))
         lines.extend(gas_cost_lines(gas.get("cost")))
         intervals = gas.get("measured_intervals")

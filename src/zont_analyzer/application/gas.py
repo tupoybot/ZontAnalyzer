@@ -10,10 +10,11 @@ import ast
 import json
 from bisect import bisect_right
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import asdict
 from dataclasses import fields as dataclass_fields
 from datetime import UTC, date, datetime, time, timedelta
-from functools import wraps
+from functools import cached_property, wraps
 from hashlib import sha256
 from typing import Any, Concatenate, ParamSpec, TypeVar, cast
 from zoneinfo import ZoneInfo
@@ -32,6 +33,8 @@ from zont_analyzer.analytics.gas import (
     integrate_exposure,
 )
 from zont_analyzer.analytics.series_semantics import is_setpoint_series
+from zont_analyzer.application.gas_aggregation import CALENDAR_GAS_KINDS, reprice_aggregate
+from zont_analyzer.application.gas_aggregation import VERSION as AGGREGATION_VERSION
 from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import Report
@@ -152,26 +155,13 @@ def _utc(day: date, timezone: str, hour: int = 0) -> datetime:
 
 class GasService:
     def __init__(self, db: Database, config: AppConfig):
-        input_revision = db.gas_input_revision()
+        self._input_revision = db.gas_input_revision()
         self.db, self.config = db, config
         from zont_analyzer.application.timezone import apply_device_timezone
 
         apply_device_timezone(db, config)
         self.timezone = config.home.effective_timezone
         self.timezone_provenance = config.home.timezone_provenance
-        self.series = db.list_series()
-        states = [s for s in self.series if s['source_type'] == 'z3k_boiler_adapter' and s['metric_key'] == 's']
-        self.state = states[0] if len(states) == 1 else None
-        devices = db.list_devices()
-        self.device_id = str(self.state['device_id']) if self.state else (
-            str(devices[0]['id']) if len(devices) == 1 else None
-        )
-        profile = (OwnerContextStore(db).profile(self.device_id)
-                   if self.device_id in {str(d['id']) for d in devices} else {})
-        self.fields = {key: value for key, value in profile.get('fields', {}).items()
-                       if key in {'gas_min_m3h', 'gas_max_m3h', 'has_gas_stove', 'boiler_model',
-                                  'nominal_power_kw', 'installation_notes'}}
-        self.readings = [_model_reading(row) for row in OwnerContextStore(db).gas_readings_for_analysis()]
         self._windows: dict[tuple[datetime, datetime], dict[str, Any]] = {}
         self._slices: dict[tuple[datetime, datetime], dict[str, Any]] = {}
         self._models: dict[str, Any] = {}
@@ -185,12 +175,38 @@ class GasService:
             tuple[datetime, datetime, str],
             tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]],
         ] = {}
+    @cached_property
+    def series(self) -> list[dict[str, Any]]:
+        return self.db.list_series()
+
+    @cached_property
+    def state(self) -> dict[str, Any] | None:
+        states = [s for s in self.series if s['source_type'] == 'z3k_boiler_adapter' and s['metric_key'] == 's']
+        return states[0] if len(states) == 1 else None
+
+    @cached_property
+    def device_id(self) -> str | None:
+        devices = self.db.list_devices()
+        return str(self.state['device_id']) if self.state else (
+            str(devices[0]['id']) if len(devices) == 1 else None
+        )
+
+    @cached_property
+    def fields(self) -> dict[str, Any]:
+        profile = OwnerContextStore(self.db).profile(self.device_id) if self.device_id is not None else {}
+        return {key: value for key, value in profile.get('fields', {}).items()
+                if key in {'gas_min_m3h', 'gas_max_m3h', 'has_gas_stove', 'boiler_model',
+                           'nominal_power_kw', 'installation_notes'}}
+
+    @cached_property
+    def readings(self) -> list[dict[str, Any]]:
+        return [_model_reading(row) for row in OwnerContextStore(self.db).gas_readings_for_analysis()]
+
+    @cached_property
+    def tariffs(self) -> list[dict[str, Any]]:
         from zont_analyzer.application.gas_tariffs import GasTariffStore
 
-        self.tariffs = GasTariffStore(db, self.timezone).history(scope='installation')
-        self._input_revision = db.gas_input_revision()
-        if self._input_revision != input_revision:
-            raise ValueError('inputs changed while gas snapshot was loaded')
+        return GasTariffStore(self.db, self.timezone).history(scope='installation')
 
     def _unique(self, role: str) -> dict[str, Any] | None:
         rows = [s for s in self.series if s['role'] == role and
@@ -401,8 +417,7 @@ class GasService:
         self._slice_revisions.update(self.db.telemetry_day_revisions(sorted(bounds)))
 
     def _assert_input_revision(self) -> None:
-        # Series selection, profile, readings and tariffs were captured at
-        # construction. A changed input needs a new service snapshot.
+        # All lazy input reads belong to the revision captured at construction.
         if self.db.gas_input_revision() != self._input_revision:
             raise ValueError('inputs changed while gas was calculated')
 
@@ -780,29 +795,22 @@ class GasService:
             cursor = after
         return result
 
-    @staticmethod
-    def _model_from_context(gas: dict[str, Any]) -> GasModel | None:
-        payload = gas.get('model')
-        if not isinstance(payload, dict):
-            return None
-        values = dict(payload)
-        calibration_end = values.get('calibration_end')
-        if isinstance(calibration_end, str):
-            values['calibration_end'] = datetime.fromisoformat(calibration_end)
-        try:
-            return GasModel(**values)
-        except (TypeError, ValueError):
-            return None
+    def _price_saved_volume(
+        self, start: datetime, end: datetime, volume: Any, old_cost: Any,
+    ) -> dict[str, Any]:
+        from zont_analyzer.application.gas_cost import calculate_gas_cost
+
+        slices = old_cost.get('slices') if isinstance(old_cost, dict) else None
+        return calculate_gas_cost(
+            start, end, volume, self.tariffs if volume is not None else [],
+            timezone=self.timezone, volume_slices=slices or None,
+        )
 
     def _refresh_gas_costs(self, gas: dict[str, Any], start: datetime, end: datetime) -> None:
-        model = self._model_from_context(gas)
-        can_allocate = not (
-            gas.get('scope') == 'whole_meter'
-            and self.fields.get('has_gas_stove', {}).get('value') is not False
-        )
-        gas['cost'] = self._cost_for_volume(
-            start, end, gas.get('volume_m3'), model, can_allocate=can_allocate,
-        )
+        if gas.get('algorithm_version') == AGGREGATION_VERSION:
+            reprice_aggregate(gas, self.tariffs, timezone=self.timezone)
+            return
+        gas['cost'] = self._price_saved_volume(start, end, gas.get('volume_m3'), gas.get('cost'))
         days = (end - start).total_seconds() / 86400
         from zont_analyzer.application.gas_cost import scale_cost
 
@@ -816,16 +824,16 @@ class GasService:
         if isinstance(purpose, dict):
             components = purpose.get('components')
             if isinstance(components, dict):
-                for name, component in components.items():
+                for component in components.values():
                     if isinstance(component, dict):
-                        component['cost'] = self._cost_for_volume(
-                            start, end, component.get('volume_m3'), model, purpose=name,
+                        component['cost'] = self._price_saved_volume(
+                            start, end, component.get('volume_m3'), component.get('cost'),
                         )
-            purpose['cost'] = self._cost_for_volume(
-                start, end, purpose.get('total_modelled_m3'), model, purpose='total_modelled',
+            purpose['cost'] = self._price_saved_volume(
+                start, end, purpose.get('total_modelled_m3'), purpose.get('cost'),
             )
-            purpose['unallocated_cost'] = self._cost_for_volume(
-                start, end, purpose.get('unallocated_m3'), model, purpose='unallocated',
+            purpose['unallocated_cost'] = self._price_saved_volume(
+                start, end, purpose.get('unallocated_m3'), purpose.get('unallocated_cost'),
             )
         measured = gas.get('measured_intervals')
         if isinstance(measured, list):
@@ -837,16 +845,9 @@ class GasService:
                     right = datetime.fromisoformat(str(interval['end']))
                 except (KeyError, ValueError):
                     continue
-                interval['cost'] = self._cost_for_volume(
-                    left, right, interval.get('volume_m3'), model, can_allocate=can_allocate,
+                interval['cost'] = self._price_saved_volume(
+                    left, right, interval.get('volume_m3'), interval.get('cost'),
                 )
-
-    def _stored_gas(self, start: datetime, end: datetime) -> dict[str, Any] | None:
-        report = self.db.report_for_period(start, end)
-        if report is None:
-            return None
-        gas = report.context.get('gas')
-        return dict(gas) if isinstance(gas, dict) else None
 
     @staticmethod
     def _period_bounds(value: Any) -> tuple[datetime, datetime] | None:
@@ -860,24 +861,38 @@ class GasService:
         return start, end
 
     def _period_gas(
-        self, start: datetime, end: datetime, *, current: Report,
+        self, start: datetime, end: datetime, *, current: Report, reprice: bool,
     ) -> dict[str, Any] | None:
-        if not self.tariffs:
+        if start == current.period_start and end == current.period_end:
+            gas = current.context.get('gas')
+            return gas if isinstance(gas, dict) else None
+        zone = ZoneInfo(current.timezone)
+        day = start.astimezone(zone).date()
+        is_day = start == _utc(day, current.timezone) and end == _utc(day + timedelta(days=1), current.timezone)
+        current_gas = current.context.get('gas')
+        from_days = isinstance(current_gas, dict) and current_gas.get('algorithm_version') == AGGREGATION_VERSION
+        if from_days and is_day:
+            assert isinstance(current_gas, dict)
+            known_day = next((
+                item for item in current_gas.get('daily', ())
+                if item.get('day') == day.isoformat()
+            ), None)
+            if isinstance(known_day, dict):
+                return known_day
+            report = next(self.db.daily_reports(start, end, timezone=current.timezone), None)
+        else:
+            report = self.db.report_for_period(start, end)
+        if report is None or report.period_start != start or report.period_end != end:
             return None
-        gas = current.context.get('gas') if start == current.period_start and end == current.period_end else None
+        gas = report.context.get('gas')
         if not isinstance(gas, dict):
-            gas = self._stored_gas(start, end)
-        return gas if isinstance(gas, dict) else None
-
-    def _period_cost(
-        self, start: datetime, end: datetime, *, current: Report,
-    ) -> dict[str, Any]:
-        gas = self._period_gas(start, end, current=current)
-        if not isinstance(gas, dict):
-            return self._cost_for_volume(start, end, None, None)
-        self._refresh_gas_costs(gas, start, end)
-        cost = gas.get('cost')
-        return cost if isinstance(cost, dict) else self._cost_for_volume(start, end, None, None)
+            return None
+        if from_days and not is_day and gas.get('algorithm_version') != AGGREGATION_VERSION:
+            return None
+        if reprice:
+            gas = deepcopy(gas)
+            self._refresh_gas_costs(gas, start, end)
+        return gas
 
     def _cost_comparison(
         self,
@@ -888,17 +903,24 @@ class GasService:
         *,
         current: Report,
         comparable: bool,
+        reprice: bool,
     ) -> dict[str, Any]:
         from zont_analyzer.application.gas_cost import subtract_costs, value_volume_by_period_tariffs
 
-        before_gas = self._period_gas(before_start, before_end, current=current)
-        after_gas = self._period_gas(after_start, after_end, current=current)
-        before = self._period_cost(before_start, before_end, current=current)
-        after = self._period_cost(after_start, after_end, current=current)
+        before_gas = self._period_gas(before_start, before_end, current=current, reprice=reprice)
+        after_gas = self._period_gas(after_start, after_end, current=current, reprice=reprice)
+        before = before_gas.get('cost') if before_gas else None
+        after = after_gas.get('cost') if after_gas else None
+        if not isinstance(before, dict):
+            before = self._price_saved_volume(before_start, before_end, None, None)
+        if not isinstance(after, dict):
+            after = self._price_saved_volume(after_start, after_end, None, None)
         change = subtract_costs(after, before)
         effect = self._cost_for_volume(after_start, after_end, None, None)
+        scopes_match = bool(before_gas and after_gas and before_gas.get('scope') == after_gas.get('scope'))
         if (
             comparable
+            and scopes_match
             and change.get('status') == 'available'
             and isinstance(before_gas, dict)
             and isinstance(after_gas, dict)
@@ -914,6 +936,8 @@ class GasService:
                 )
         if not comparable:
             effect['limitations'] = ['periods_not_comparable']
+        elif not scopes_match:
+            effect['limitations'] = ['gas_scopes_not_comparable']
         return {
             'before': before,
             'after': after,
@@ -921,7 +945,7 @@ class GasService:
             'volume_effect_cost': effect,
         }
 
-    def _refresh_period_comparison_costs(self, report: Report) -> None:
+    def add_saved_comparison_costs(self, report: Report, *, reprice: bool = False) -> None:
         comparisons = report.context.get('period_comparisons')
         if not isinstance(comparisons, list):
             return
@@ -932,7 +956,7 @@ class GasService:
             current = self._period_bounds(item.get('current_period'))
             if baseline and current:
                 item['gas_cost_comparison'] = self._cost_comparison(
-                    *baseline, *current, current=report, comparable=False,
+                    *baseline, *current, current=report, comparable=False, reprice=reprice,
                 )
             matched = item.get('matched_windows')
             if not isinstance(matched, list):
@@ -948,6 +972,7 @@ class GasService:
                         datetime.fromisoformat(str(pair['after_end'])),
                         current=report,
                         comparable=pair.get('status') == 'comparable',
+                        reprice=reprice,
                     )
                 except (KeyError, ValueError):
                     continue
@@ -1013,14 +1038,15 @@ class GasService:
         if isinstance(gas, dict):
             self._refresh_gas_costs(gas, result.period_start, result.period_end)
         self._refresh_savings_costs(result.context.get('gas_savings'))
-        self._refresh_period_comparison_costs(result)
+        self.add_saved_comparison_costs(result, reprice=True)
         return result
 
     @_validated
     def refresh(self, report: Report) -> Report:
+        if report.kind in CALENDAR_GAS_KINDS:
+            return self.refresh_cost(report)
         gas = self.context(report.period_start, report.period_end,
-                           complete=report.context.get('period', {}).get('complete', True),
-                           include_daily=report.kind in {'weekly', 'monthly'})
+                           complete=report.context.get('period', {}).get('complete', True))
         old = report.context.get('gas')
         pilot_reuse = report.context.get('pilot_ai_reuse')
         reused = bool(report.context.get('ai_interpretation_reuse') or (

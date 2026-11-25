@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -175,7 +176,7 @@ def test_view_update_republishes_in_batches_without_calibration(
 
 
 @pytest.mark.ydb
-def test_changed_stored_summary_refreshes_one_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_changed_stored_report_renders_saved_gas(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = _runtime(tmp_path)
     report = _daily_reports(runtime, 2)
     publication.publish_reports(runtime)
@@ -184,17 +185,11 @@ def test_changed_stored_summary_refreshes_one_report(tmp_path: Path, monkeypatch
     })
     runtime.db.save_report(changed, "changed")
 
-    refreshed: list[str] = []
-    original_refresh = GasService.refresh
-
-    def record_refresh(self: GasService, value):
-        refreshed.append(value.id)
-        return original_refresh(self, value)
-
-    monkeypatch.setattr(GasService, "refresh", record_refresh)
+    monkeypatch.setattr(GasService, "__init__", lambda *args: pytest.fail("publication recalculated gas"))
     result = publication.publish_reports(runtime)
-    assert refreshed == [report[0].id]
     assert result["rendered_reports"] == 1
+    _, export = publication.archive_paths(Path(result["manifest"]).parent, changed)
+    assert json.loads(export.read_text())["context"]["gas"] == changed.context["gas"]
 
 
 @pytest.mark.ydb
@@ -248,7 +243,7 @@ def test_new_week_is_published_before_old_archive_maintenance(tmp_path: Path) ->
     runtime = _runtime(tmp_path)
     daily = _daily_reports(runtime, 12, start=date(2026, 9, 9))
     publication.publish_reports(runtime, batch_size=100)
-    _record_change(runtime.db, "global", "gas")
+    _record_change(runtime.db, "global", "render")
     # Leave an older backlog before the newly completed week enters the queue.
     publication.publish_reports(runtime, batch_size=1)
     weekly = runtime.analysis(no_ai=True).analyze_week(2026, 38, use_ai=False)
@@ -263,32 +258,69 @@ def test_new_week_is_published_before_old_archive_maintenance(tmp_path: Path) ->
 
 
 @pytest.mark.ydb
-def test_global_gas_change_is_bounded_and_latest_is_first(tmp_path: Path) -> None:
+def test_meter_change_renders_only_affected_days_and_latest(tmp_path: Path, monkeypatch) -> None:
     from zont_analyzer.application.owner_context import OwnerContextStore
     from zont_analyzer.application.pilot import reports_directory
 
     runtime = _runtime(tmp_path)
     reports = _daily_reports(runtime, 4)
     publication.publish_reports(runtime)
-    OwnerContextStore(runtime.db).update_gas(reports[-1].id, {"value_m3": "123"})
-    result = publication.publish_reports(runtime, batch_size=2)
-    assert result["rendered_reports"] == 2
-    assert result["pending_reports"] == 2
-    assert "Текущее показание: 123 м³" in (reports_directory(runtime) / "latest.html").read_text()
-    assert publication.publish_reports(runtime, batch_size=2)["pending_reports"] == 0
+    before = {report.id: runtime.db.report(report.id).context["gas"] for report in reports}
+    store = OwnerContextStore(runtime.db)
+    checkpoint = runtime.db.source_revision()
+    first_day = reports[0].period_start.astimezone(ZoneInfo(reports[0].timezone)).date().isoformat()
+    second_day = reports[1].period_start.astimezone(ZoneInfo(reports[1].timezone)).date().isoformat()
+    reading = store.update_gas(reports[-1].id, {"day": first_day, "value_m3": "123"})["reading"]
+    assert runtime.db.source_revision() > checkpoint
+
+    monkeypatch.setattr(GasService, "__init__", lambda *args: pytest.fail("meter change recalculated gas"))
+    monkeypatch.setattr(PublicationRepository, "load", lambda *args: pytest.fail("full archive index load"))
+    out = reports_directory(runtime)
+    first = publication.publish_reports(runtime, batch_size=1)
+    assert first["rendered_reports"] == 1
+    assert first["pending_reports"] == 1
+    assert '"value_m3":"123"' in (out / "latest.html").read_text()
+    assert "Текущее показание: 123 м³" not in publication.archive_paths(out, reports[0])[0].read_text()
+    second = publication.publish_reports(runtime, batch_size=1)
+    assert second["rendered_reports"] == 1
+    assert second["pending_reports"] == 0
+    assert "Текущее показание: 123 м³" in publication.archive_paths(out, reports[0])[0].read_text()
+
+    store.update_gas(reports[-1].id, {"day": second_day, "reading_id": reading["id"], "value_m3": "124"})
+    moved = publication.publish_reports(runtime)
+    assert moved["rendered_reports"] == 3
+    assert moved["pending_reports"] == 0
+    assert "Показание не задано" in publication.archive_paths(out, reports[0])[0].read_text()
+    assert "Текущее показание: 124 м³" in publication.archive_paths(out, reports[1])[0].read_text()
+    assert {report.id: runtime.db.report(report.id).context["gas"] for report in reports} == before
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
 @pytest.mark.ydb
-def test_tariff_change_recalculates_cost_without_gas_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("drain_before_rebuild", [False, True])
+def test_tariff_repricing_survives_rebuild_and_preserves_saved_volumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drain_before_rebuild: bool,
+) -> None:
     from zont_analyzer.application.gas_tariffs import GasTariffStore
 
     runtime = _runtime(tmp_path)
-    _daily_reports(runtime, 2)
+    reports = _daily_reports(runtime, 2)
+    for report in reports:
+        report.context["gas"] = {"volume_m3": 2.0, "model_version": "saved"}
+        runtime.db.save_report(report, report.summary)
     publication.publish_reports(runtime)
-    GasTariffStore(runtime.db).save({"price": "8.01", "currency": "RUB", "effective_month": "2026-08"})
+    GasTariffStore(runtime.db, runtime.config.home.effective_timezone).save({
+        "price": "8.01", "currency": "RUB", "effective_month": "2026-08",
+    })
     monkeypatch.setattr(GasService, "refresh", lambda *args: pytest.fail("gas model recalculated for tariff"))
-    assert publication.publish_reports(runtime)["rendered_reports"] == 2
+    monkeypatch.setattr(GasService, "model", lambda *args: pytest.fail("repricing read the gas model"))
+    if drain_before_rebuild:
+        assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 1
+    assert publication.publish_reports(runtime, rebuild=True)["rendered_reports"] == 2
+    for report in reports:
+        gas = runtime.db.report(report.id).context["gas"]
+        assert gas["volume_m3"] == 2.0 and gas["model_version"] == "saved"
+        assert gas["cost"]["amounts"][0]["amount"] == "16.02"
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
@@ -316,162 +348,25 @@ def test_telemetry_outside_archive_is_idle_and_late_hour_is_targeted(tmp_path: P
 
 
 @pytest.mark.ydb
-def test_calibration_telemetry_invalidates_reports_outside_sample_window(tmp_path: Path) -> None:
-    from zont_analyzer.application.owner_context import OwnerContextStore
-
+def test_old_calibration_events_and_queue_items_keep_saved_gas(tmp_path: Path, monkeypatch) -> None:
     runtime = _runtime(tmp_path)
-    reports = _daily_reports(runtime, 4)
-    store = OwnerContextStore(runtime.db)
-    store.update_gas(reports[0].id, {"value_m3": "100"})
-    store.update_gas(reports[1].id, {"value_m3": "102"})
+    first, second = _daily_reports(runtime, 2)
     publication.publish_reports(runtime)
-    _record_change(runtime.db, "telemetry", "2026-08-01T12")
-    result = publication.publish_reports(runtime, batch_size=1)
-    assert result["rendered_reports"] == 1
-    assert result["pending_reports"] == 3
+    before = {report.id: runtime.db.report(report.id).context["gas"] for report in (first, second)}
+    repository = PublicationRepository(runtime.db.storage)
+    monkeypatch.setattr(GasService, "__init__", lambda *args: pytest.fail("old gas work recalculated gas"))
+    monkeypatch.setattr(PublicationRepository, "load", lambda *args: pytest.fail("full archive index load"))
 
+    _record_change(runtime.db, "telemetry-gas", "2026-08-01T12")
+    _record_change(runtime.db, "global", "gas")
+    assert publication.publish_reports(runtime)["rendered_reports"] == 0
+    assert int(repository.load_meta()["checkpoint"]) == runtime.db.source_revision()
 
-@pytest.mark.ydb
-def test_post_midnight_calibration_change_targets_only_adjacent_reports(tmp_path: Path) -> None:
-    from zont_analyzer.application.owner_context import OwnerContextStore
-
-    runtime = _runtime(tmp_path)
-    reports = _daily_reports(runtime, 4)
-    store = OwnerContextStore(runtime.db)
-    store.update_gas(reports[0].id, {"value_m3": "100"})
-    store.update_gas(reports[1].id, {"value_m3": "102"})
-    publication.publish_reports(runtime)
-
-    # The last reading is Aug 2 in UTC+4. Its final boundary window ends at
-    # Aug 3 00:00 local (Aug 2 20:00 UTC); the old hour marker overlapped the
-    # 15-minute post-window cache fingerprint and invalidated the whole archive.
-    changed = int(datetime(2026, 8, 2, 20, 30, tzinfo=UTC).timestamp())
-    _record_change(runtime.db, "telemetry-gas", "2026-08-02T20",
-                   {"calibration": True, "change_start": changed, "change_end": changed})
-    result = publication.publish_reports(runtime, batch_size=1)
-    assert result["rendered_reports"] == 1
-    assert result["pending_reports"] == 1  # Report windows include a 15-minute edge.
+    # Old scheduled items contain a render flag together with the gas bit.
+    runtime.db.storage.execute("UPDATE publication_items SET dirty=3, queued_at=1 WHERE href>'';")
+    assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 1
     assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 0
-
-    # An exact marker inside calibration does not change the effective model
-    # when its underlying telemetry is unchanged.
-    inside = int(datetime(2026, 8, 2, 19, 30, tzinfo=UTC).timestamp())
-    _record_change(runtime.db, "telemetry-gas", "2026-08-02T19",
-                   {"calibration": True, "change_start": inside, "change_end": inside})
-    result = publication.publish_reports(runtime, batch_size=1)
-    assert result["rendered_reports"] == 1
-    assert result["pending_reports"] == 1
-
-
-@pytest.mark.ydb
-def test_unchanged_calibration_model_uses_partial_index_and_one_service(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from zont_analyzer.application.owner_context import OwnerContextStore
-
-    runtime = _runtime(tmp_path)
-    reports = _daily_reports(runtime, 4)
-    owner = OwnerContextStore(runtime.db)
-    owner.update_gas(reports[0].id, {"value_m3": "100"})
-    owner.update_gas(reports[1].id, {"value_m3": "102"})
-    publication.publish_reports(runtime)
-    previous = PublicationRepository(runtime.db.storage).load_meta()["gas_model_version"]
-    at = reports[0].period_start + timedelta(hours=12)
-    changed = int(at.timestamp())
-    _record_change(runtime.db, "telemetry-gas", at.strftime("%Y-%m-%dT%H"),
-                   {"calibration": True, "change_start": changed, "change_end": changed})
-    original = GasService.__init__
-    services = []
-
-    def init(self, *args, **kwargs):
-        services.append(self)
-        original(self, *args, **kwargs)
-
-    monkeypatch.setattr(GasService, "__init__", init)
-    monkeypatch.setattr(PublicationRepository, "load", lambda *args: pytest.fail("full archive load"))
-    result = publication.publish_reports(runtime, batch_size=1)
-    assert result["rendered_reports"] == 1
-    assert result["pending_reports"] == 0
-    assert len(services) == 1
-    assert PublicationRepository(runtime.db.storage).load_meta()["gas_model_version"] == previous
-    monkeypatch.setattr(GasService, "model", lambda *args: pytest.fail("model on idle poll"))
-    assert publication.publish_reports(runtime)["rendered_reports"] == 0
-
-
-@pytest.mark.ydb
-def test_missing_model_checkpoint_stays_broad_and_does_not_swallow_newer_marker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from zont_analyzer.application.owner_context import OwnerContextStore
-
-    runtime = _runtime(tmp_path)
-    reports = _daily_reports(runtime, 4)
-    owner = OwnerContextStore(runtime.db)
-    owner.update_gas(reports[0].id, {"value_m3": "100"})
-    owner.update_gas(reports[1].id, {"value_m3": "102"})
-    publication.publish_reports(runtime)
-    runtime.db.storage.execute("DELETE FROM metadata WHERE name='publication:gas_model_version';")
-    at = reports[0].period_start + timedelta(hours=12)
-
-    def marker(moment):
-        changed = int(moment.timestamp())
-        _record_change(runtime.db, "telemetry-gas", moment.strftime("%Y-%m-%dT%H"),
-                       {"calibration": True, "change_start": changed, "change_end": changed})
-
-    marker(at)
-    upper = runtime.db.source_revision()
-    original = GasService.model
-    injected = False
-
-    def model(self, *args, **kwargs):
-        nonlocal injected
-        result = original(self, *args, **kwargs)
-        if not injected:
-            injected = True
-            marker(at + timedelta(hours=1))
-        return result
-
-    monkeypatch.setattr(GasService, "model", model)
-    result = publication.publish_reports(runtime, batch_size=1)
-    assert result["pending_reports"] == 3
-    meta = PublicationRepository(runtime.db.storage).load_meta()
-    assert meta.get("gas_model_version", "") == ""
-    assert meta["gas_model_previous_version"] == ""
-    assert meta["gas_model_refresh_reason"] == "calibration_model_checkpoint_missing"
-    assert int(meta["checkpoint"]) == upper < runtime.db.source_revision()
-    assert publication.publish_reports(runtime, batch_size=8)["rendered_reports"] == 4
-    assert PublicationRepository(runtime.db.storage).load_meta()["gas_model_version"]
-    assert publication.publish_reports(runtime)["rendered_reports"] == 0
-
-
-def test_exact_calibration_range_and_legacy_hour_with_fractional_timezone() -> None:
-    from zont_analyzer.application.incremental_publication import (
-        _calibration_bounds,
-        _calibration_change_overlaps,
-    )
-
-    class Readings:
-        def reading_span(self) -> tuple[str, str]:
-            return "2026-08-01", "2026-08-02"
-
-    config = AppConfig()
-    config.home.timezone = "Asia/Kolkata"
-    runtime = type("RuntimeStub", (), {"config": config})()
-    bounds = _calibration_bounds(Readings(), runtime)
-    assert bounds is not None
-    assert bounds[1] == datetime(2026, 8, 2, 18, 30, tzinfo=UTC).timestamp()
-    hour = "2026-08-02T18"
-    outside = int(datetime(2026, 8, 2, 18, 45, tzinfo=UTC).timestamp())
-    inside = int(datetime(2026, 8, 2, 18, 15, tzinfo=UTC).timestamp())
-    change = {"scope": "telemetry-gas", "identifier": hour,
-              "payload": json.dumps({"calibration": True, "change_start": outside, "change_end": outside})}
-    assert not _calibration_change_overlaps(change, bounds)
-    change["payload"] = json.dumps({"calibration": True, "change_start": inside, "change_end": inside})
-    assert _calibration_change_overlaps(change, bounds)
-    change["payload"] = "{}"  # Pre-upgrade hourly markers stay conservative.
-    assert _calibration_change_overlaps(change, bounds)
-    change["payload"] = json.dumps({"change_start": outside, "change_end": outside})
-    assert _calibration_change_overlaps(change, bounds)  # Unknown schema is also conservative.
+    assert {report.id: runtime.db.report(report.id).context["gas"] for report in (first, second)} == before
 
 
 @pytest.mark.ydb
@@ -500,13 +395,15 @@ def test_change_during_publication_remains_pending(tmp_path: Path, monkeypatch: 
 
 @pytest.mark.parametrize("damage", ["missing_manifest", "missing_html", "corrupt_json", "missing_latest", "rebuild"])
 @pytest.mark.ydb
-def test_durable_index_and_artifact_recovery(tmp_path: Path, damage: str) -> None:
+def test_durable_index_and_artifact_recovery(tmp_path: Path, damage: str, monkeypatch) -> None:
     from zont_analyzer.application.pilot import reports_directory
 
     runtime = _runtime(tmp_path)
     report = _daily_reports(runtime, 1)[0]
     publication.publish_reports(runtime)
     output = reports_directory(runtime)
+    saved_gas = runtime.db.report(report.id).context["gas"]
+    monkeypatch.setattr(GasService, "__init__", lambda *args: pytest.fail("recovery recalculated gas"))
     if damage == "missing_manifest":
         (output / "reports.json").unlink()
     elif damage == "missing_html":
@@ -518,6 +415,7 @@ def test_durable_index_and_artifact_recovery(tmp_path: Path, damage: str) -> Non
     result = publication.publish_reports(runtime, rebuild=damage == "rebuild")
     assert result["rendered_reports"] == (0 if damage == "missing_manifest" else 1)
     assert report.id in (output / "latest.html").read_text()
+    assert json.loads(publication.archive_paths(output, report)[1].read_text())["context"]["gas"] == saved_gas
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
@@ -538,46 +436,6 @@ def test_local_artifact_loss_recovers_from_canonical_ydb(tmp_path: Path) -> None
     assert result["reports"] == 1
     assert report.id in (output / "latest.html").read_text()
     assert (output / "daily/2026-08-01.json").is_file()
-    assert publication.publish_reports(runtime)["rendered_reports"] == 0
-
-
-@pytest.mark.ydb
-@pytest.mark.parametrize("batch_size", [1, 2])
-def test_comparison_is_requeued_when_its_source_finishes_in_later_batch(
-    tmp_path: Path, monkeypatch, batch_size,
-) -> None:
-
-    runtime = _runtime(tmp_path)
-    older, latest = _daily_reports(runtime, 2)
-    latest.context["period_comparisons"] = [{
-        "baseline_period": {"start": older.period_start.isoformat(), "end": older.period_end.isoformat()},
-        "current_period": {"start": latest.period_start.isoformat(), "end": latest.period_end.isoformat()},
-    }]
-    runtime.db.save_report(latest, "comparison")
-    for _ in range(5):
-        if not publication.publish_reports(runtime)["pending_reports"]:
-            break
-    baseline = publication.publish_reports(runtime)["queue_metrics"]
-    original_refresh = GasService.refresh
-
-    def revised_volume(self, report):
-        result = original_refresh(self, report)
-        if report.id == older.id:
-            result.context["gas"]["volume_m3"] = 42
-        return result
-
-    monkeypatch.setattr(GasService, "refresh", revised_volume)
-    _record_change(runtime.db, "global", "gas")
-    # Latest is rendered first. Its older source changes only in the next batch.
-    first = publication.publish_reports(runtime, batch_size=batch_size)
-    assert first["pending_reports"] == 1
-    assert first["queue_metrics"]["completed"] == baseline["completed"] + batch_size
-    if batch_size == 1:
-        assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 1
-    drained = publication.publish_reports(runtime, batch_size=1)
-    assert drained["pending_reports"] == 0
-    assert drained["queue_metrics"]["completed"] == baseline["completed"] + 3
-    assert drained["queue_metrics"]["requeued"] == baseline["requeued"] + 3
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 

@@ -315,7 +315,7 @@ OWNER_SCRIPT = r"""
       applyGas(saved);
       form.querySelector('#gas-editor')?.removeAttribute('open');
       form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'false');
-      message(gasMessage, 'Показание сохранено. Отчёты обновятся при ближайшем фоновом обновлении.');
+      message(gasMessage, 'Показание сохранено. Новые расчёты учтут изменение. Газ в архивных отчётах сохранён.');
     } catch (error) { message(gasMessage, error.message, true); }
     finally { setGasLoading(false); }
   });
@@ -332,7 +332,7 @@ OWNER_SCRIPT = r"""
       }));
       form.querySelector('#gas-editor')?.removeAttribute('open');
       form.querySelector('[data-gas-edit]')?.setAttribute('aria-expanded', 'false');
-      message(gasMessage, 'Показание удалено. Отчёты обновятся при ближайшем фоновом обновлении.');
+      message(gasMessage, 'Показание удалено. Новые расчёты учтут изменение. Газ в архивных отчётах сохранён.');
     } catch (error) { message(gasMessage, error.message, true); }
     finally { setGasLoading(false); }
   });

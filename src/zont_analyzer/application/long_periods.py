@@ -4,18 +4,17 @@ from __future__ import annotations
 
 from collections import defaultdict
 from copy import deepcopy
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from statistics import median
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from zont_analyzer.adapters.ydb.application import Database
 from zont_analyzer.analytics.evidence import EvidenceMetric
+from zont_analyzer.application.gas_aggregation import DailyGasAggregation, expected_days
 from zont_analyzer.domain import DetectedEvent, MetricValue, QualityResult, Report
-from zont_analyzer.domain.periods import Period, midnight
+from zont_analyzer.domain.periods import Period
 
 ALGORITHM_VERSION = "long-period-v1"
-MAX_DAYS = 400
 MAX_WINDOWS = 12
 MAX_EVENT_KINDS = 64
 
@@ -29,23 +28,6 @@ _DAILY_STATISTICS = {
     "delta_t_c",
 }
 _LATEST_CONTEXT = ("sensors", "dhw_interaction", "reliability")
-
-
-def _expected_days(period: Period) -> list[tuple[date, datetime, datetime]]:
-    timezone = ZoneInfo(period.timezone)
-    day = period.start.astimezone(timezone).date()
-    result: list[tuple[date, datetime, datetime]] = []
-    while True:
-        start = midnight(day, period.timezone)
-        end = midnight(day + timedelta(days=1), period.timezone)
-        if start >= period.start and end <= period.observed_end:
-            result.append((day, start, end))
-        if end >= period.observed_end:
-            break
-        day += timedelta(days=1)
-        if len(result) > MAX_DAYS:
-            raise ValueError(f"Long-period aggregation is limited to {MAX_DAYS} complete local days")
-    return result
 
 
 def _daily_evidence(report: Report) -> list[EvidenceMetric]:
@@ -101,7 +83,8 @@ def aggregate_long_period(db: Database, period: Period) -> Report:
     """
     if period.kind not in {"monthly", "seasonal"}:
         raise ValueError("Long-period aggregation supports monthly and seasonal periods")
-    expected = _expected_days(period)
+    expected = expected_days(period)
+    gas_aggregation = DailyGasAggregation(period)
     expected_by_start = {int(start.timestamp()): (day, end) for day, start, end in expected}
     expected_seconds = sum((end - start).total_seconds() for _day, start, end in expected)
 
@@ -122,7 +105,7 @@ def aggregate_long_period(db: Database, period: Period) -> Report:
     latest_end: datetime | None = None
     target_means: list[tuple[float, float]] = []
 
-    for report in db.daily_reports(period.start, period.observed_end):
+    for report in db.daily_reports(period.start, period.observed_end, timezone=period.timezone):
         start_key = int(report.period_start.timestamp())
         expected_day = expected_by_start.get(start_key)
         if expected_day is None or start_key in seen_starts:
@@ -130,6 +113,7 @@ def aggregate_long_period(db: Database, period: Period) -> Report:
         day, expected_end = expected_day
         if report.period_end != expected_end or report.generated_at < report.period_end:
             continue
+        gas_aggregation.include(report)
         seen_starts.add(start_key)
         duration = (report.period_end - report.period_start).total_seconds()
         included_seconds += duration
@@ -327,8 +311,11 @@ def aggregate_long_period(db: Database, period: Period) -> Report:
         }
         for name, values in sorted(daily_statistics.items())
     }
+    gas, gas_savings = gas_aggregation.contexts()
     context: dict[str, Any] = {
         "period": period.model_dump(mode="json"),
+        "gas": gas,
+        "gas_savings": gas_savings,
         "long_period_aggregation": {
             "algorithm_version": ALGORITHM_VERSION,
             "source": "completed canonical daily reports; no raw telemetry or daily AI text",

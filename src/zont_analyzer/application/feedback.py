@@ -216,12 +216,8 @@ def feedback_handler_type(runtime: Runtime) -> type[BaseHTTPRequestHandler]:
                                 self._publish_tariffs(value["affected_start"], value["affected_end"])
                         elif kind == "profile":
                             self._publish_profile()
-                        # Gas writes are already durable. The regular worker
-                        # publication reads current readings and refreshes the
-                        # archive, including calibrated/comparison contexts.
-                        # Never make this response wait for the publication lock
-                        # or another full archive pass; restart/retry is covered
-                        # by the next successful worker cycle.
+                        # Meter writes return the current form data immediately.
+                        # The publication journal schedules the saved form views.
                     except (OSError, ValueError):
                         value["publish_warning"] = "Сохранено; HTML обновится в следующем цикле."
                 elif kind == "profiles":

@@ -11,6 +11,8 @@ import pytest
 from tests.ydb_support import make_database
 from zont_analyzer.adapters.ydb.publication import PublicationRepository
 from zont_analyzer.application import publication
+from zont_analyzer.application.gas import GasService
+from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.cloud.object_storage import ObjectStorage, StorageError, StoredObject
 from zont_analyzer.cloud.publication import SITE_INDEX_KEY, CloudPublication
 from zont_analyzer.config import AppConfig, LoadedConfig, Secrets
@@ -105,6 +107,38 @@ def test_cloud_archive_latest_and_idle_pass(tmp_path: Path, monkeypatch: pytest.
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
     assert storage.objects.keys() == keys
     assert PublicationRepository(runtime.db.storage).load_meta()["manifest_key"] == meta["manifest_key"]
+
+
+@pytest.mark.ydb
+def test_cloud_meter_form_retry_keeps_published_gas_and_other_reports(tmp_path: Path, monkeypatch) -> None:
+    runtime = _runtime(tmp_path)
+    analysis = runtime.analysis(no_ai=True)
+    original_day, latest_day = date(2026, 8, 1), date(2026, 8, 2)
+    selected = analysis.analyze_daily(original_day, use_ai=False)
+    latest = analysis.analyze_daily(latest_day, use_ai=False)
+    analysis.analyze_week(2026, 31, use_ai=False)
+    storage = MemoryStorage()
+    _activate(monkeypatch, storage)
+    publication.publish_reports(runtime)
+    meta, manifest, _ = _active(runtime, storage)
+    weekly = next(item for item in manifest["reports"] if item["kind"] == "weekly")
+    previous_weekly = storage.objects[weekly["json_key"]]
+    before = {item.id: runtime.db.report(item.id).context["gas"] for item in (selected, latest)}
+
+    monkeypatch.setattr(GasService, "__init__", lambda *args: pytest.fail("cloud rerender recalculated gas"))
+    OwnerContextStore(runtime.db).update_gas(latest.id, {"day": original_day.isoformat(), "value_m3": "123"})
+    storage.fail_category = "latest"
+    with pytest.raises(OSError, match="interrupted upload"):
+        publication.publish_reports(runtime)
+    assert PublicationRepository(runtime.db.storage).load_meta()["checkpoint"] == meta["checkpoint"]
+
+    assert publication.publish_reports(runtime)["pending_reports"] == 0
+    _, _, latest_html = _active(runtime, storage)
+    assert '"value_m3":"123"' in latest_html
+    assert "Текущее показание: 123 м³" in storage.objects[f"daily/{original_day}.html"].body.decode()
+    for item, day in ((selected, original_day), (latest, latest_day)):
+        assert json.loads(storage.objects[f"daily/{day}.json"].body)["context"]["gas"] == before[item.id]
+    assert storage.objects[weekly["json_key"]] == previous_weekly
 
 
 @pytest.mark.ydb

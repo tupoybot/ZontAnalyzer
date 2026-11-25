@@ -110,13 +110,6 @@ def fixture_reports(start, years):
             for kind, left, right in periods]
 
 
-def stable_payload(report):
-    value = report.model_dump(mode='json')
-    for key in ('gas', 'gas_savings', 'gas_interpretation_stale'):
-        value['context'].pop(key, None)
-    return value
-
-
 def run_case(args):
     # Prevent a caller's cloud settings from redirecting local publication.
     if os.environ.get('CLOUD_PUBLICATION_BUCKET'):
@@ -154,7 +147,11 @@ def run_case(args):
                                              'value_m3': value, 'reading_id': None})
             service = GasService(db, config)
             for report in reports:
-                refreshed = service.refresh(report)
+                # Seed the gas payload recorded by earlier versions, including closed periods.
+                report.context['gas'] = service.context(
+                    report.period_start, report.period_end, include_daily=report.kind in {'weekly', 'monthly'},
+                )
+                refreshed = service.refresh_cost(report)
                 refreshed.ai_used = True
                 db.save_report(refreshed, refreshed.summary)
 
@@ -217,24 +214,16 @@ def run_case(args):
             after_model = measured(storage, years, 'model_recalibration',
                                    lambda: GasService(db, config).model()[0], args.output)
             assert after_model != before_model
-            updated = measured(storage, years, 'changed_full_publication', drain, args.output)
-            changed = 0
-            volume_changes = 0
+            # Updating the meter may refresh its form, but cannot recalculate a saved report.
+            with patch.object(GasService, 'refresh', side_effect=AssertionError('archived gas recalculation')):
+                updated = measured(storage, years, 'meter_update_publication', drain, args.output)
             for report in reports:
-                old = original[report.id]
                 current = db.report(report.id)
-                assert stable_payload(current) == stable_payload(old)
-                assert current.context['gas']['ai_stale'] is True
-                if current.context['gas'] != old.context['gas']:
-                    changed += 1
-                if current.context['gas']['volume_m3'] != old.context['gas']['volume_m3']:
-                    volume_changes += 1
+                assert current.model_dump() == original[report.id].model_dump()
                 _, published_path = archive_paths(root / 'published', current)
                 assert json.loads(published_path.read_text()) == current.model_dump(mode='json')
-                assert db.get_app_meta('gas-model:' + old.context['gas']['model_version'])
+            assert updated['rendered_reports'] <= 1
             current_anchor = db.report(anchor.id)
-            assert current_anchor.context['gas']['volume_m3'] > original[anchor.id].context['gas']['volume_m3']
-            assert changed == len(reports) and updated['rendered_reports'] == len(reports)
             revision = db.source_revision()
             replay = measured(storage, years, 'exact_owner_replay',
                               lambda: store.update_gas(anchor.id, payload), args.output)
@@ -245,7 +234,7 @@ def run_case(args):
             emit({'years': years, 'operation': 'acceptance', 'passed': True,
                   'history_days': (end - start).days,
                   'report_cadence': {'monthly': years * 12, 'daily': 1, 'weekly': 1, 'seasonal': 1},
-                  'completed_changed_reports': changed, 'volume_changed_reports': volume_changes,
+                  'completed_changed_reports': 0, 'volume_changed_reports': 0,
                   'completed_changed_publications': updated['rendered_reports'],
                   'seed_points': {'dense_10_minute_32_days': dense_points,
                                   'sparse_three_points_per_day_rest': sparse_points},

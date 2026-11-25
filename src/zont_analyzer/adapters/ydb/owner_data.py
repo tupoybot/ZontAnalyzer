@@ -9,7 +9,7 @@ from uuid import uuid4
 import ydb  # type: ignore[import-untyped]
 
 from .database import Transaction, YdbDatabase
-from .telemetry import bump_revision, encode, next_id
+from .telemetry import _record_publication_change, bump_revision, encode, next_id
 
 
 class OwnerDataMixin:
@@ -593,7 +593,10 @@ def _application_gas_update(
             "VALUES ($id,$device,$day,$at,$payload);",
             {"$id": audit_id, "$device": device_id, "$day": day, "$at": audit["created_at"], "$payload": encode(audit)},
         )
-        bump_revision(tx, "owner-gas:" + device_id)
+        scope = "owner-gas:" + device_id
+        bump_revision(tx, scope, identifier=day)
+        if before and before["day"] != day:
+            _record_publication_change(tx, scope, before["day"])
 
     self.db.transaction(write)
 

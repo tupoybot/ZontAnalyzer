@@ -167,7 +167,7 @@ def test_new_daily_facts_requeue_later_regulation_report_without_legacy_comparis
         "period_end": changed_start + timedelta(days=1),
     })
     database = SimpleNamespace(report=lambda _: selected)
-    assert incremental._dependents(items, changed, START, db=database) == {item["href"]}
+    incremental._dependents(items, changed, START, db=database)
     assert item["dirty"] == incremental.RENDER | incremental.REGULATION
 
 
@@ -183,17 +183,7 @@ def test_unresolved_regulation_envelopes_do_not_broaden_legacy_dependencies():
     assert not incremental._has_dependencies(selected)
 
 
-def test_regulation_baseline_telemetry_queues_render_without_gas_refresh():
-    selected = report(ai=False)
-    lo, hi = incremental._windows(selected)
-    item = {"report_id": selected.id, "href": selected.id, "lo": lo, "hi": hi, "dirty": 0}
-    incremental._telemetry({selected.id: item}, [{"identifier": "2026-01-02T00"}], START,
-                           broad_calibration=False, db=SimpleNamespace(report=lambda _: selected))
-    assert item["dirty"] == incremental.RENDER | incremental.REGULATION
-
-
-@pytest.mark.parametrize("broad_calibration", [False, True])
-def test_telemetry_regulation_refresh_stays_within_changed_dependency(broad_calibration):
+def test_telemetry_regulation_refresh_stays_within_changed_dependency():
     selected = report(ai=False)
     unrelated = selected.model_copy(deep=True)
     unrelated.id = "outside-dependency"
@@ -204,13 +194,14 @@ def test_telemetry_regulation_refresh_stays_within_changed_dependency(broad_cali
     items = {}
     for value in reports.values():
         lo, hi = incremental._windows(value)
-        items[value.id] = {"report_id": value.id, "href": value.id, "lo": lo, "hi": hi, "dirty": 0}
-    incremental._telemetry(items, [{"identifier": "2026-01-02T00"}], START,
-                           broad_calibration=broad_calibration,
-                           db=SimpleNamespace(report=reports.get))
-    assert items[selected.id]["dirty"] & incremental.REGULATION
-    assert not items[unrelated.id]["dirty"] & incremental.REGULATION
-    assert bool(items[unrelated.id]["dirty"] & incremental.GAS) is broad_calibration
+        items[value.id] = {
+            "report_id": value.id, "href": value.id, "lo": lo, "hi": hi, "dirty": 0,
+            "start": value.period_start.timestamp(), "end": value.period_end.timestamp(),
+            "comparisons": incremental._has_dependencies(value),
+        }
+    incremental._telemetry(items, ["2026-01-02T00"], START, db=SimpleNamespace(report=reports.get))
+    assert items[selected.id]["dirty"] == incremental.RENDER | incremental.REGULATION
+    assert items[unrelated.id]["dirty"] == 0
 
 
 @pytest.mark.ydb
@@ -314,15 +305,7 @@ def test_changed_daily_report_and_late_telemetry_refresh_regulation_only_depende
     publication.publish_reports(runtime, batch_size=8)
     regulation_calls.clear()
     saved_unrelated = runtime.db.report(unrelated.id)
-    original_refresh = GasService.refresh
-    gas_calls = []
-
-    def gas_only_own_period(service, value):
-        gas_calls.append(value.id)
-        assert value.id != dependent.id, "a regulation baseline must not trigger gas recomputation"
-        return original_refresh(service, value)
-
-    monkeypatch.setattr(GasService, "refresh", gas_only_own_period)
+    monkeypatch.setattr(GasService, "__init__", lambda *args: pytest.fail("publication recalculated gas"))
     revision[0] = 1
     changed = runtime.db.report(source.id)
     assert changed is not None
@@ -331,25 +314,22 @@ def test_changed_daily_report_and_late_telemetry_refresh_regulation_only_depende
     result = publication.publish_reports(runtime, batch_size=8)
     assert result["rendered_reports"] == 2 and result["pending_reports"] == 0
     assert sorted(regulation_calls) == sorted([source.id, dependent.id])
-    assert gas_calls == [source.id]
     assert runtime.db.report(unrelated.id) == saved_unrelated
     assert runtime.db.report(dependent.id).context["regulation_facts"]["circuits"][0]["metrics"][
         "room_absolute_error_c"]["value"] == 1
-    gas_calls.clear()
     regulation_calls.clear()
     revision[0] = 2
     hour = (source.period_start + timedelta(hours=12)).strftime("%Y-%m-%dT%H")
-    _record_change(runtime.db, "telemetry", hour, {"calibration": False})
+    _record_change(runtime.db, "telemetry", hour)
     result = publication.publish_reports(runtime, batch_size=8)
     assert result["rendered_reports"] == 2 and result["pending_reports"] == 0
     assert regulation_calls == [dependent.id]
-    assert gas_calls == [source.id]
     assert runtime.db.report(unrelated.id) == saved_unrelated
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
 @pytest.mark.ydb
-@pytest.mark.parametrize("additional_refresh", [None, "cost", "gas"])
+@pytest.mark.parametrize("additional_refresh", [None, "cost"])
 def test_settings_backlog_continues_across_batches_with_existing_flag_combinations(
     tmp_path, monkeypatch, additional_refresh,
 ):

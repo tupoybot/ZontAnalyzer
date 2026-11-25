@@ -258,3 +258,24 @@ def test_validation_without_relative_error_can_show_absolute_error() -> None:
     }})
     assert "ошибка проверки 1,2 м³ за интервал · интервалов: 2" in lines[0]
     assert any("Относительная ошибка проверки не определена" in line for line in lines)
+
+
+def test_saved_daily_totals_explain_missing_days_and_separate_scopes() -> None:
+    from zont_analyzer.reports.renderers import render_text
+
+    report = _report({
+        "volume_m3": None, "status": "partial", "scope": "mixed",
+        "aggregation": {
+            "expected_days": 7, "available_days": 6,
+            "model_versions": [{"version": "a", "days": 4}, {"version": "b", "days": 2}],
+            "scope_totals": [
+                {"scope": "boiler", "days": 4, "volume_m3": 4.5},
+                {"scope": "whole_meter", "days": 2, "volume_m3": 8.5},
+            ],
+        },
+    }, "weekly")
+    for output in [render_html(report), render_text(report)]:
+        assert "дней с оценкой: 6 из 7" in output
+        assert "Котёл · дней: 4 · 4,50 м³" in output
+        assert "Весь счётчик · дней: 2 · 8,50 м³" in output
+        assert "13,00 м³" not in output

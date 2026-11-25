@@ -1261,6 +1261,24 @@ def _bounded_context_value(value: Any, byte_limit: int, omission_name: str, reco
 def _compact_gas(value: dict[str, Any], kind: str) -> dict[str, Any]:
     """Preserve gas amounts/provenance before large calibration or forecast histories."""
     if kind == "gas":
+        aggregation = value.get("aggregation")
+        if isinstance(aggregation, dict):
+            result = {key: item for key, item in value.items() if key != "daily"}
+            result["aggregation"] = compact_gas_aggregation(aggregation)
+            cost = value.get("cost")
+            if isinstance(cost, dict):
+                result["cost"] = {key: item for key, item in cost.items() if key != "slices"}
+            split = value.get("purpose_split")
+            if isinstance(split, dict):
+                result["purpose_split"] = {
+                    key: item for key, item in split.items() if key not in {"cost", "unallocated_cost", "components"}
+                }
+                components = split.get("components", {})
+                result["purpose_split"]["components"] = {
+                    name: {key: item for key, item in component.items() if key != "cost"}
+                    for name, component in components.items()
+                }
+            return result
         result = {key: item for key, item in value.items() if key not in {"model", "measured_intervals"}}
         model = value.get("model", {})
         result["model"] = {key: model[key] for key in (
@@ -1281,6 +1299,24 @@ def _compact_gas(value: dict[str, Any], kind: str) -> dict[str, Any]:
     result["comparisons"] = [{key: item for key, item in row.items()
                               if key not in {"original_prediction", "frozen_weather_model"}} for row in rows[:2]]
     result["comparison_selection"] = {"included": min(2, len(rows)), "available": len(rows)}
+    return result
+
+
+def compact_gas_aggregation(aggregation: dict[str, Any]) -> dict[str, Any]:
+    result = {key: value for key, value in aggregation.items() if key not in {
+        "missing_days", "missing_report_days", "unavailable_days", "scope_totals", "model_versions",
+    }}
+    for key in ("missing_days", "missing_report_days", "unavailable_days"):
+        dates = aggregation.get(key, [])
+        result[key] = dates[:7]
+        result[f"{key}_count"] = len(dates)
+    models = aggregation.get("model_versions", [])
+    result["model_versions"] = models[:7]
+    result["model_version_count"] = len(models)
+    result["scope_totals"] = [
+        {**row, "cost": {key: value for key, value in row["cost"].items() if key != "slices"}}
+        for row in aggregation.get("scope_totals", [])
+    ]
     return result
 
 

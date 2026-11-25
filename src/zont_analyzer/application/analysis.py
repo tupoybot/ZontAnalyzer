@@ -46,6 +46,7 @@ from zont_analyzer.analytics.evidence import (
     build_evidence,
 )
 from zont_analyzer.analytics.series_semantics import is_setpoint_series
+from zont_analyzer.application.gas_aggregation import CALENDAR_GAS_KINDS, DailyGasAggregation
 from zont_analyzer.application.ingestion import _object_names, heating_circuit_sensor_links
 from zont_analyzer.application.reasoning_context import (
     original_ai_generated_at,
@@ -216,7 +217,6 @@ class AnalysisService:
         self.db = db
         self.config = config
         self.analyst = analyst
-        self._gas_service: Any = None
 
     def local_day_window(self, selected: date) -> tuple[datetime, datetime]:
         timezone = ZoneInfo(self.config.home.effective_timezone)
@@ -849,13 +849,17 @@ class AnalysisService:
         control_context["period"] = period.model_dump(mode="json")
         from zont_analyzer.application.gas import GasService
 
-        if include_comparisons or self._gas_service is None:
-            self._gas_service = GasService(self.db, self.config)
-        control_context["gas"] = self._gas_service.context(
-            start, end, complete=period.complete, include_daily=kind in {"weekly", "monthly"},
-        )
-        if include_comparisons:
-            control_context["gas_savings"] = self._gas_service.savings(end)
+        gas_service = GasService(self.db, self.config) if include_comparisons else None
+        if gas_service is not None:
+            if kind in CALENDAR_GAS_KINDS:
+                if "gas" not in control_context:
+                    aggregation = DailyGasAggregation(period)
+                    for day_report in self.db.daily_reports(start, end, timezone=period.timezone):
+                        aggregation.include(day_report)
+                    control_context["gas"], control_context["gas_savings"] = aggregation.contexts()
+            else:
+                control_context["gas"] = gas_service.context(start, end, complete=period.complete)
+                control_context["gas_savings"] = gas_service.savings(end)
         control_context["season_boundaries"] = self.season_boundaries()[0].model_dump()
         control_context["calculation_version"] = CALCULATION_VERSION
         control_context["timezone_provenance"] = self.config.home.timezone_provenance
@@ -1006,8 +1010,8 @@ class AnalysisService:
             ai_used=ai_used,
             **reasoning,
         )
-        priced_report: Report = self._gas_service.refresh_cost(report)
-        report = priced_report
+        if gas_service is not None:
+            gas_service.add_saved_comparison_costs(report)
         if ai_used and not control_context.get("ai_interpretation_reuse"):
             report.context["ai_facts_fingerprint"] = report_facts_fingerprint(report)
         elif ai_used and previous_report and previous_report.context.get("ai_facts_fingerprint"):
