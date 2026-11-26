@@ -347,6 +347,12 @@ def gas_purpose_text(report: Report) -> list[str]:
         return _volume_and_cost(value, cost) if valid(value) else "Нет данных"
 
     total = split.get("total_modelled_m3")
+    gap = split.get("unallocated_m3")
+    partial_aggregate = split.get("status") == "partial" and isinstance(gas.get("aggregation"), dict)
+    if partial_aggregate and valid(total):
+        allocated = split.get("allocated_observed_m3")
+        if not (valid(allocated) and valid(gap) and math.isclose(allocated + gap, total, rel_tol=1e-6)):
+            total = None
     lines = ["Распределение газа по назначению — оценка по работе горелки."]
     if gas.get("status") == "measured":
         lines.append("Показание общего счётчика и оценка распределения рассчитаны отдельно; их итоги могут отличаться.")
@@ -355,7 +361,12 @@ def gas_purpose_text(report: Report) -> list[str]:
     if split.get("status") == "unknown":
         lines.append("Для распределения недостаточно данных.")
         return lines
-    lines.append("Расход по модели за период: " + volume(total, split.get("cost")))
+    total_label = (
+        "Расход по модели за дни с распределением"
+        if partial_aggregate
+        else "Расход по модели за период"
+    )
+    lines.append(f"{total_label}: " + volume(total, split.get("cost")))
     if not valid(total):
         lines.append("Известна только наблюдаемая часть; доли от всего периода не определены.")
     components = split.get("components")
@@ -369,7 +380,6 @@ def gas_purpose_text(report: Report) -> list[str]:
                  if valid(value) and valid(total) and total > 0 else "")
         cost = item.get("cost") if isinstance(item, dict) else None
         lines.append(f"{label}: {volume(value, cost)}{share}")
-    gap = split.get("unallocated_m3")
     if valid(gap) and gap > 0:
         lines.append("Не распределено из-за пропусков телеметрии: " + volume(gap, split.get("unallocated_cost")))
     if valid(total) and total > 0:

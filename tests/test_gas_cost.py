@@ -154,6 +154,7 @@ def test_timezone_boundary_uses_utc_instant_of_local_month() -> None:
     )
 
     assert before["status"] == "unknown"
+    assert before["limitations"] == ["tariff_unavailable"]
     assert after["amounts"] == [{"currency": "RUB", "amount": "8.01"}]
 
 
@@ -264,14 +265,20 @@ def test_refresh_cost_preserves_gas_and_ai_and_does_not_scan_without_tariffs(tmp
 
 
 @pytest.mark.ydb
-def test_currency_change_suppresses_comparable_window_money_effect(tmp_path) -> None:
+@pytest.mark.parametrize(("currency", "before_scope", "after_scope", "limitation"), [
+    ("USD", "boiler", "boiler", "currencies_not_comparable"),
+    ("RUB", "boiler", "whole_meter", "gas_scopes_not_comparable"),
+])
+def test_cost_comparison_keeps_amounts_for_incompatible_windows(
+    tmp_path, currency, before_scope, after_scope, limitation,
+) -> None:
     from zont_analyzer.application.gas import GasService
     from zont_analyzer.application.gas_tariffs import GasTariffStore
 
     runtime = make_runtime(tmp_path)
     tariffs = GasTariffStore(runtime.db, "UTC")
     tariffs.save({"price": "8", "currency": "RUB", "effective_month": "2026-01"})
-    tariffs.save({"price": "2", "currency": "USD", "effective_month": "2026-02"})
+    tariffs.save({"price": "2", "currency": currency, "effective_month": "2026-02"})
     quality = QualityResult(
         score=1, coverage_pct=100, max_gap_seconds=0, stuck_pct=0, implausible_jumps=0, sample_count=1,
     )
@@ -283,7 +290,7 @@ def test_currency_change_suppresses_comparable_window_money_effect(tmp_path) -> 
         generated_at=FEBRUARY,
         quality=quality,
         summary="January",
-        context={"gas": {"status": "estimated", "volume_m3": 10}},
+        context={"gas": {"status": "estimated", "volume_m3": 10, "scope": before_scope}},
     )
     runtime.db.save_report(january, january.summary)
     march = Report(
@@ -295,7 +302,7 @@ def test_currency_change_suppresses_comparable_window_money_effect(tmp_path) -> 
         quality=quality,
         summary="February",
         context={
-            "gas": {"status": "estimated", "volume_m3": 8},
+            "gas": {"status": "estimated", "volume_m3": 8, "scope": after_scope},
             "period_comparisons": [{
                 "matched_windows": [{
                     "status": "comparable",
@@ -312,6 +319,59 @@ def test_currency_change_suppresses_comparable_window_money_effect(tmp_path) -> 
     comparison = refreshed.context["period_comparisons"][0]["matched_windows"][0]["gas_cost_comparison"]
 
     assert comparison["before"]["amounts"] == [{"currency": "RUB", "amount": "80"}]
-    assert comparison["after"]["amounts"] == [{"currency": "USD", "amount": "16"}]
-    assert comparison["actual_change"]["limitations"] == ["currencies_not_comparable"]
+    assert comparison["after"]["amounts"] == [{"currency": currency, "amount": "16"}]
+    assert comparison["actual_change"]["limitations"] == [limitation]
     assert comparison["volume_effect_cost"]["status"] == "unknown"
+
+
+@pytest.mark.ydb
+@pytest.mark.parametrize("initially_priced", [True, False])
+def test_refresh_cost_recovers_legacy_month_weights_once(tmp_path, monkeypatch, initially_priced) -> None:
+    from zont_analyzer.analytics.gas import Exposure, GasModel
+    from zont_analyzer.application.gas import EDGES, GasService
+    from zont_analyzer.application.gas_tariffs import GasTariffStore
+
+    runtime = make_runtime(tmp_path)
+    runtime.config.home.timezone = "UTC"
+    tariffs = GasTariffStore(runtime.db, "UTC")
+    start, end = datetime(2026, 1, 26, tzinfo=UTC), datetime(2026, 2, 2, tzinfo=UTC)
+    old_tariffs = [tariff("jan", "8", "RUB", START)] if initially_priced else []
+    old_cost = calculate_gas_cost(start, end, 10, old_tariffs, timezone="UTC")
+    tariffs.save({"price": "8", "currency": "RUB", "effective_month": "2026-01"})
+    tariffs.save({"price": "10", "currency": "RUB", "effective_month": "2026-02"})
+    model = GasModel((.1, .1, .1, .1), EDGES, .1, identifiable=True, has_gas_stove=False)
+    report = Report(
+        id="historical-week", kind="weekly", period_start=start, period_end=end, generated_at=end, timezone="UTC",
+        quality=QualityResult(score=1, coverage_pct=100, max_gap_seconds=0, stuck_pct=0,
+                              implausible_jumps=0, sample_count=2),
+        summary="Archived report", ai_used=True,
+        context={"gas": {"status": "estimated", "volume_m3": 10, "model_version": "archived",
+                         "model": model.to_dict(), "scope": "boiler", "cost": old_cost}},
+    )
+    runtime.db.save_report(report, report.summary)
+    report = runtime.db.report(report.id)
+    assert report is not None
+    service = GasService(runtime.db, runtime.config)
+    windows = []
+
+    def exposure(left, right):
+        windows.append((left, right))
+        duration = (right - left).total_seconds() / 60
+        flame = 40 if right == FEBRUARY else 60
+        return Exposure(duration, (flame, 0, 0, 0), 0, duration, flame, 0, flame)
+
+    monkeypatch.setattr(service, "window", exposure)
+    monkeypatch.setattr(service, "_exposure", lambda value: value)
+    monkeypatch.setattr(service, "model", lambda: pytest.fail("tariff correction refitted the gas model"))
+
+    refreshed = service.refresh_cost(report)
+
+    assert windows == [(start, FEBRUARY), (FEBRUARY, end)]
+    gas = refreshed.context["gas"]
+    assert gas["cost"]["amounts"] == [{"currency": "RUB", "amount": "92"}]
+    assert [item["volume_m3"] for item in gas["cost"]["slices"]] == [4, 6]
+    assert gas["volume_m3"] == 10 and gas["model_version"] == "archived"
+    assert refreshed.summary == report.summary and refreshed.ai_used is True
+    repeated = GasService(runtime.db, runtime.config)
+    monkeypatch.setattr(repeated, "window", lambda *_: pytest.fail("saved tariff weights were ignored"))
+    assert repeated.refresh_cost(refreshed).context == refreshed.context

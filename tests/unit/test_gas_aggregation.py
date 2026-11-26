@@ -15,6 +15,7 @@ from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.config import AppConfig
 from zont_analyzer.domain import QualityResult, Report
 from zont_analyzer.domain.periods import Period, calendar_period, midnight
+from zont_analyzer.reports.presentation import gas_purpose_text
 
 JANUARY = {"id": "jan", "effective_from": "2026-01-01T00:00:00+00:00", "currency": "RUB", "price": "8"}
 FEBRUARY = {"id": "feb", "effective_from": "2026-02-01T00:00:00+00:00", "currency": "USD", "price": "2"}
@@ -118,6 +119,32 @@ def test_dst_duration_and_mixed_scope_subtotals() -> None:
     assert [(row["scope"], row["volume_m3"]) for row in gas["aggregation"]["scope_totals"]] == [
         ("boiler", 2), ("whole_meter", 4),
     ]
+
+
+def test_purpose_share_requires_a_model_total_for_every_contributing_day() -> None:
+    period = calendar_period("weekly", date(2026, 1, 26), "UTC")
+    aggregation = DailyGasAggregation(period)
+    known = _day(date(2026, 1, 26), 2)
+    partial = _day(date(2026, 1, 27), None)
+    partial.context["gas"]["purpose_split"] = {
+        "scope": "modelled_boiler", "status": "partial", "total_modelled_m3": None,
+        "allocated_observed_m3": 3, "components": {"heating": {"volume_m3": 3}},
+    }
+    aggregation.include(known)
+    aggregation.include(partial)
+
+    gas, _savings = aggregation.contexts()
+    split = gas["purpose_split"]
+    assert split["status"] == "partial"
+    assert split["total_modelled_m3"] is None
+    assert split["components"]["heating"]["volume_m3"] == 4.5
+    report = known.model_copy(update={"context": {"gas": gas}})
+    lines = gas_purpose_text(report)
+    assert "Отопление: 4,50 м³" in lines
+    assert all("%" not in line for line in lines)
+    # Archived snapshots can still contain an older, inconsistent subtotal.
+    split["total_modelled_m3"] = 2
+    assert gas_purpose_text(report) == lines
 
 
 @pytest.mark.ydb

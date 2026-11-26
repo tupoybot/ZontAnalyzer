@@ -254,7 +254,9 @@ def _purpose_split(daily: list[dict[str, Any]], *, period_hours: float, timezone
         "included_days": count,
         "expected_days": len(daily),
         "components": components,
-        "total_modelled_m3": _sum_known((split for split, _day in source), "total_modelled_m3"),
+        "total_modelled_m3": _sum_known(
+            (split for split, _day in source), "total_modelled_m3", require_all=True,
+        ),
         "allocated_observed_m3": _sum_known((split for split, _day in source), "allocated_observed_m3"),
         "unallocated_m3": _sum_known((split for split, _day in source), "unallocated_m3"),
         "reasons": [] if complete else ["incomplete_gas_days"],

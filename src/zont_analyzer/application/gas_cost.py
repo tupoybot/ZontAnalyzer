@@ -136,6 +136,10 @@ def calculate_gas_cost(
 
     boundaries = [row["effective_datetime"] for row in history if left < row["effective_datetime"] < right]
     active_at_start = _active_tariff(history, left)
+    if active_at_start is None and not boundaries and volume_slices is None:
+        return _unknown_cost(
+            timezone=timezone, limitation="tariff_unavailable", unpriced_volume_m3=float(total_volume),
+        )
     needs_split = active_at_start is None or bool(boundaries)
     if needs_split and volume_slices is None:
         return _unknown_cost(
@@ -306,13 +310,17 @@ def value_volume_by_period_tariffs(volume_m3: Any, evaluated_cost: Mapping[str, 
     }
 
 
-def subtract_costs(after: Mapping[str, Any], before: Mapping[str, Any]) -> dict[str, Any]:
-    """Return an actual cost change only for one identical comparable currency."""
+def subtract_costs(
+    after: Mapping[str, Any], before: Mapping[str, Any], *, scopes_match: bool = True,
+) -> dict[str, Any]:
+    """Return an actual cost change for matching gas scopes and one comparable currency."""
     timezone = str(after.get("timezone", before.get("timezone", "UTC")))
     left = before.get("amounts")
     right = after.get("amounts")
     if before.get("status") != "available" or after.get("status") != "available":
         return _unknown_cost(timezone=timezone, limitation="actual_cost_incomplete")
+    if not scopes_match:
+        return _unknown_cost(timezone=timezone, limitation="gas_scopes_not_comparable")
     if not isinstance(left, list) or not isinstance(right, list) or len(left) != 1 or len(right) != 1:
         return _unknown_cost(timezone=timezone, limitation="currencies_not_comparable")
     if left[0].get("currency") != right[0].get("currency"):

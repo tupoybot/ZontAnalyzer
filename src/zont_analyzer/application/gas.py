@@ -298,18 +298,30 @@ class GasService:
         purpose: str | None = None,
         can_allocate: bool = True,
     ) -> dict[str, Any]:
+        return self._price_saved_volume(
+            start, end, volume_m3, None, model=model if can_allocate else None, purpose=purpose,
+        )
+
+    def _price_saved_volume(
+        self, start: datetime, end: datetime, volume: Any, old_cost: Any,
+        *, model: GasModel | None = None, purpose: str | None = None,
+    ) -> dict[str, Any]:
         from zont_analyzer.application.gas_cost import calculate_gas_cost
 
-        initial = calculate_gas_cost(start, end, volume_m3, self.tariffs, timezone=self.timezone)
-        if (
-            'volume_distribution_unavailable' not in initial.get('limitations', ())
-            or model is None
-            or not can_allocate
-        ):
+        tariffs = self.tariffs if volume is not None else []
+        slices = old_cost.get('slices') if isinstance(old_cost, dict) else None
+        if slices:
+            saved = calculate_gas_cost(start, end, volume, tariffs, timezone=self.timezone, volume_slices=slices)
+            if saved['slices']:
+                return saved
+        initial = calculate_gas_cost(start, end, volume, tariffs, timezone=self.timezone)
+        if 'volume_distribution_unavailable' not in initial['limitations'] or model is None:
             return initial
+        # A new boundary can invalidate a saved single-rate slice. Derive its
+        # weights with the supplied model and keep the report's saved total.
         total, components = self._monthly_cost_slices(start, end, model)
         raw_slices = components.get(purpose, []) if purpose else total
-        expected = float(volume_m3) if isinstance(volume_m3, (int, float)) else None
+        expected = float(volume) if isinstance(volume, (int, float)) else None
         numeric_volumes: list[float] = []
         for item in raw_slices:
             value = item.get('volume_m3')
@@ -331,7 +343,7 @@ class GasService:
             for item in raw_slices
         ]
         return calculate_gas_cost(
-            start, end, volume_m3, self.tariffs, timezone=self.timezone, volume_slices=slices,
+            start, end, volume, tariffs, timezone=self.timezone, volume_slices=slices,
         )
 
     @_validated
@@ -800,22 +812,26 @@ class GasService:
             cursor = after
         return result
 
-    def _price_saved_volume(
-        self, start: datetime, end: datetime, volume: Any, old_cost: Any,
-    ) -> dict[str, Any]:
-        from zont_analyzer.application.gas_cost import calculate_gas_cost
-
-        slices = old_cost.get('slices') if isinstance(old_cost, dict) else None
-        return calculate_gas_cost(
-            start, end, volume, self.tariffs if volume is not None else [],
-            timezone=self.timezone, volume_slices=slices or None,
-        )
+    @staticmethod
+    def _model_from_context(gas: dict[str, Any]) -> GasModel | None:
+        payload = gas.get('model')
+        if not isinstance(payload, dict):
+            return None
+        try:
+            return _MODEL_ADAPTER.validate_json(_json(payload), strict=True)
+        except ValidationError:
+            return None
 
     def _refresh_gas_costs(self, gas: dict[str, Any], start: datetime, end: datetime) -> None:
         if gas.get('algorithm_version') == AGGREGATION_VERSION:
             reprice_aggregate(gas, self.tariffs, timezone=self.timezone)
             return
-        gas['cost'] = self._price_saved_volume(start, end, gas.get('volume_m3'), gas.get('cost'))
+        model = self._model_from_context(gas)
+        meter_model = model if model is not None and model.has_gas_stove is False else None
+        gas['cost'] = self._price_saved_volume(
+            start, end, gas.get('volume_m3'), gas.get('cost'),
+            model=meter_model if gas.get('scope') == 'whole_meter' else model,
+        )
         days = (end - start).total_seconds() / 86400
         from zont_analyzer.application.gas_cost import scale_cost
 
@@ -829,16 +845,18 @@ class GasService:
         if isinstance(purpose, dict):
             components = purpose.get('components')
             if isinstance(components, dict):
-                for component in components.values():
+                for name, component in components.items():
                     if isinstance(component, dict):
                         component['cost'] = self._price_saved_volume(
-                            start, end, component.get('volume_m3'), component.get('cost'),
+                            start, end, component.get('volume_m3'), component.get('cost'), model=model, purpose=name,
                         )
             purpose['cost'] = self._price_saved_volume(
                 start, end, purpose.get('total_modelled_m3'), purpose.get('cost'),
+                model=model, purpose='total_modelled',
             )
             purpose['unallocated_cost'] = self._price_saved_volume(
                 start, end, purpose.get('unallocated_m3'), purpose.get('unallocated_cost'),
+                model=model, purpose='unallocated',
             )
         measured = gas.get('measured_intervals')
         if isinstance(measured, list):
@@ -851,7 +869,7 @@ class GasService:
                 except (KeyError, ValueError):
                     continue
                 interval['cost'] = self._price_saved_volume(
-                    left, right, interval.get('volume_m3'), interval.get('cost'),
+                    left, right, interval.get('volume_m3'), interval.get('cost'), model=meter_model,
                 )
 
     @staticmethod
@@ -920,9 +938,9 @@ class GasService:
             before = self._price_saved_volume(before_start, before_end, None, None)
         if not isinstance(after, dict):
             after = self._price_saved_volume(after_start, after_end, None, None)
-        change = subtract_costs(after, before)
-        effect = self._cost_for_volume(after_start, after_end, None, None)
         scopes_match = bool(before_gas and after_gas and before_gas.get('scope') == after_gas.get('scope'))
+        change = subtract_costs(after, before, scopes_match=scopes_match)
+        effect = self._price_saved_volume(after_start, after_end, None, None)
         if (
             comparable
             and scopes_match
