@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from bisect import bisect_left
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -10,6 +11,9 @@ import ydb  # type: ignore[import-untyped]
 from .database import Transaction, YdbDatabase
 from .regulation_events import EventProjectionRepository, projection_states
 from .telemetry import _record_publication_change, encode, utc_seconds
+
+HOUR_FENCE_LIMIT = 10_000
+HOUR_FENCE_SPAN = timedelta(hours=HOUR_FENCE_LIMIT)
 
 
 class RegulationRepository:
@@ -144,7 +148,7 @@ class RegulationRepository:
 
     @staticmethod
     def _read_fence(database: Transaction | YdbDatabase, keys: list[str]) -> dict[str, int | str]:
-        hours = {}
+        hours: dict[str, tuple[datetime, datetime]] = {}
         for key in keys:
             if key.startswith("meta:telemetry-hours:"):
                 left, separator, right = key.removeprefix("meta:telemetry-hours:").partition("/")
@@ -156,40 +160,64 @@ class RegulationRepository:
                 if (not separator or start >= end or left != start.strftime("%Y-%m-%dT%H")
                         or right != end.strftime("%Y-%m-%dT%H")):
                     raise ValueError("invalid regulation telemetry hour range")
-                hours[key] = (left, right, start, end)
+                if end - start > HOUR_FENCE_SPAN:
+                    raise ValueError(f"regulation telemetry hour range exceeds {HOUR_FENCE_LIMIT} hours")
+                hours[key] = (start, end)
+
+        # Retained boundary lineage can extend before the report period or have
+        # gaps. Bound each scan without limiting the age of otherwise valid keys.
+        batches: list[tuple[datetime, datetime, list[str]]] = []
+        for key, (start, end) in sorted(hours.items(), key=lambda item: item[1]):
+            if batches:
+                first, last, batch_keys = batches[-1]
+                if start <= last and end - first <= HOUR_FENCE_SPAN:
+                    batch_keys.append(key)
+                    batches[-1] = first, max(last, end), batch_keys
+                    continue
+            batches.append((start, end, [key]))
+
         metadata = [key.removeprefix("meta:") for key in keys
                     if key.startswith("meta:") and key not in hours]
         revisions = [key.removeprefix("revision:") for key in keys if key.startswith("revision:")]
-        query = "DECLARE $metadata AS List<Utf8>; DECLARE $revisions AS List<Utf8>; "
-        parameters: dict[str, Any] = {
-            "$metadata": ydb.TypedValue(metadata, ydb.ListType(ydb.PrimitiveType.Utf8)),
-            "$revisions": ydb.TypedValue(revisions, ydb.ListType(ydb.PrimitiveType.Utf8)),
-        }
-        if hours:
-            first, last = min(value[2] for value in hours.values()), max(value[3] for value in hours.values())
-            if last - first > timedelta(hours=10000):
-                raise ValueError("regulation telemetry hour range exceeds 10000 hours")
-            query += "DECLARE $first AS Utf8; DECLARE $last AS Utf8; "
-            parameters.update({"$first": first.strftime("%Y-%m-%dT%H"),
-                               "$last": last.strftime("%Y-%m-%dT%H")})
-        query += (
+        metadata_declarations = "DECLARE $metadata AS List<Utf8>; DECLARE $revisions AS List<Utf8>; "
+        hour_declarations = "DECLARE $first AS Utf8; DECLARE $last AS Utf8; "
+        metadata_query = (
             "SELECT key,value FROM app_meta WHERE key IN $metadata; "
-            "SELECT scope,revision FROM revisions WHERE scope IN $revisions;"
+            "SELECT scope,revision FROM revisions WHERE scope IN $revisions; "
         )
-        if hours:
-            query += (
-                " SELECT identifier,revision FROM publication_changes WHERE scope='telemetry' "
-                "AND identifier >= $first AND identifier < $last ORDER BY identifier LIMIT 10001;"
-            )
-        result = database.execute(query, parameters)
-        actual: dict[str, int | str] = {"meta:" + key: "" for key in metadata}
-        actual.update({"revision:" + key: 0 for key in revisions})
-        actual.update({"meta:" + row.key: row.value for row in result[0].rows})
-        actual.update({"revision:" + row.scope: int(row.revision) for row in result[1].rows})
-        if hours:
-            rows = result[2].rows
-            if len(rows) > 10000:
-                raise ValueError("regulation telemetry hour selection is truncated")
-            for key, (left, right, _start, _end) in hours.items():
-                actual[key] = max((int(row.revision) for row in rows if left <= row.identifier < right), default=0)
-        return actual
+        hour_query = (
+            "SELECT identifier,revision FROM publication_changes WHERE scope='telemetry' "
+            f"AND identifier >= $first AND identifier < $last ORDER BY identifier LIMIT {HOUR_FENCE_LIMIT + 1};"
+        )
+
+        def read(session: Transaction | YdbDatabase) -> dict[str, int | str]:
+            parameters: dict[str, Any] = {
+                "$metadata": ydb.TypedValue(metadata, ydb.ListType(ydb.PrimitiveType.Utf8)),
+                "$revisions": ydb.TypedValue(revisions, ydb.ListType(ydb.PrimitiveType.Utf8)),
+            }
+            query = metadata_declarations + metadata_query
+            if batches:
+                first, last, _ = batches[0]
+                parameters.update({"$first": first.strftime("%Y-%m-%dT%H"), "$last": last.strftime("%Y-%m-%dT%H")})
+                query = metadata_declarations + hour_declarations + metadata_query + hour_query
+            result = session.execute(query, parameters)
+            actual: dict[str, int | str] = {"meta:" + key: "" for key in metadata}
+            actual.update({"revision:" + key: 0 for key in revisions})
+            actual.update({"meta:" + row.key: row.value for row in result[0].rows})
+            actual.update({"revision:" + row.scope: int(row.revision) for row in result[1].rows})
+            for index, (first, last, batch_keys) in enumerate(batches):
+                rows = result[2].rows if index == 0 else session.execute(hour_declarations + hour_query, {
+                    "$first": first.strftime("%Y-%m-%dT%H"), "$last": last.strftime("%Y-%m-%dT%H"),
+                })[0].rows
+                if len(rows) > HOUR_FENCE_LIMIT:
+                    raise ValueError("regulation telemetry hour selection is truncated")
+                identifiers = [row.identifier for row in rows]
+                for key in batch_keys:
+                    left, right = key.removeprefix("meta:telemetry-hours:").split("/")
+                    start, end = bisect_left(identifiers, left), bisect_left(identifiers, right)
+                    actual[key] = max((int(row.revision) for row in rows[start:end]), default=0)
+            return actual
+
+        if len(batches) > 1 and isinstance(database, YdbDatabase):
+            return database.transaction(read)
+        return read(database)

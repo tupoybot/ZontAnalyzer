@@ -32,6 +32,7 @@ from zont_analyzer.reports.presentation import (
     gas_scope_totals,
     number,
     period_target,
+    regulation_interpretation_stale,
     target_band_note,
     timezone_note,
     zont_connection_label,
@@ -930,8 +931,9 @@ def _settings_observation_present(statement: str, prose: str) -> bool:
 
 
 def _display_observations(report: Report) -> list[ObservedPattern]:
-    """Use the interpretation once; derive current observations when it is unavailable."""
-    if report.ai_used and report.observed_patterns:
+    """Keep the saved interpretation visible alongside changed observations."""
+    stale = regulation_interpretation_stale(report)
+    if report.ai_used and report.observed_patterns and not stale:
         # The model can omit a supplied quantity. Supplement only that topic,
         # not the room/cycle/exclusion narrative it has already selected.
         prose = " ".join([report.summary, *(item.statement for item in report.observed_patterns)]).lower()
@@ -948,6 +950,12 @@ def _display_observations(report: Report) -> list[ObservedPattern]:
         return [*report.observed_patterns, *(item for item in additions
                 if not item.id.endswith(":settings") or not _settings_observation_present(item.statement, prose))]
     current = regulation_observations(report)
+    if stale:
+        if not current:
+            return report.observed_patterns
+        current_statements = {item.statement for item in current}
+        return [*current, *(item.model_copy(update={"statement": "Из сохранённого анализа ИИ. " + item.statement})
+                            for item in report.observed_patterns if item.statement not in current_statements)]
     if report.ai_used:
         return current
     # Legacy/local observations may cover other topics. Never mutate the saved report.

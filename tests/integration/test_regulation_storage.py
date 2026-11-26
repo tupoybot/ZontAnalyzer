@@ -132,6 +132,43 @@ def test_many_hour_fences_share_one_bounded_range_read_and_preserve_legacy_marke
         repository.read_fence(["meta:telemetry-hours:2020-01-01T00/2025-01-01T00"])
 
 
+def test_sparse_hour_lineage_checks_both_ranges_on_save(tmp_path: Path) -> None:
+    db = make_database(tmp_path)
+    store = RegulationFactStore(db)
+    early = "meta:telemetry-hours:2024-01-01T00/2024-01-01T02"
+    recent = "meta:telemetry-hours:2025-06-01T00/2025-06-01T02"
+    db.storage.execute(
+        "UPSERT INTO publication_changes(scope,identifier,revision) VALUES "
+        "('telemetry','2024-01-01T01',7),('telemetry','2025-01-01T00',19);"
+    )
+    fence = store.repository.read_fence([recent, early])
+    assert fence == {early: 7, recent: 0}
+    facts = build_regulation_facts(start=START, end=START + timedelta(hours=1), inputs=inputs())
+    assert store.save(facts, "source", source_fence=fence)
+    db.storage.execute(
+        "UPSERT INTO publication_changes(scope,identifier,revision) VALUES ('telemetry','2025-06-01T00',20);"
+    )
+    with pytest.raises(ValueError, match="source changed"):
+        store.save(facts, "changed", source_fence=fence)
+
+
+def test_long_hour_lineage_keeps_overlapping_ranges_complete(tmp_path: Path) -> None:
+    db = make_database(tmp_path)
+    repository = RegulationFactStore(db).repository
+    starts = [START + timedelta(days=day) for day in range(420)]
+    keys = [f"meta:telemetry-hours:{start:%Y-%m-%dT%H}/{start + timedelta(hours=31):%Y-%m-%dT%H}"
+            for start in starts]
+    db.storage.execute(
+        "DECLARE $overlap AS Utf8; DECLARE $later AS Utf8; "
+        "UPSERT INTO publication_changes(scope,identifier,revision) VALUES "
+        "('telemetry',$overlap,11),('telemetry',$later,21);",
+        {"$overlap": f"{starts[416]:%Y-%m-%d}T01", "$later": f"{starts[417]:%Y-%m-%d}T01"},
+    )
+    fence = repository.read_fence(keys)
+    assert [fence[key] for key in keys[414:]] == [0, 11, 21, 21, 0, 0]
+    assert len(fence) == len(keys)
+
+
 def test_saved_legacy_days_remain_valid_without_rewrite_after_hour_fence_upgrade(tmp_path, monkeypatch):
     from tests.unit.test_regulation_report_cache import CacheWorld
     from zont_analyzer.adapters.ydb.regulation import RegulationRepository
