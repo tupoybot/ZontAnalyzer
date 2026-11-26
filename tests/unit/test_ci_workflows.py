@@ -22,7 +22,7 @@ def test_release_calls_complete_ci_before_publishing() -> None:
     assert "push" not in ci["on"]
     assert ci["on"]["workflow_call"]["inputs"]["build_release_candidate"]["type"] == "boolean"
     assert ci["permissions"] == {"contents": "read"}
-    assert ci["jobs"]["test"]["runs-on"] == "ubuntu-latest"
+    assert ci["jobs"]["test"]["runs-on"] == "ubuntu-24.04"
     assert ci["jobs"]["test"]["steps"][0]["with"]["ref"] == "${{ github.sha }}"
     ci_commands = "\n".join(step.get("run", "") for step in ci["jobs"]["test"]["steps"])
     for check in (
