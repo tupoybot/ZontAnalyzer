@@ -46,6 +46,8 @@ EXPOSURE_CACHE_VERSION = "gas-context-v3"
 EXPOSURE_ALGORITHM_VERSION = "gas-model-v3"
 EDGES = (0.0, 25.0, 50.0, 75.0, 100.0)
 FRESHNESS = timedelta(minutes=15)
+_MODELLED_SCOPES = ('boiler', 'shared_meter')
+_COMPARABLE_SCOPES = (*_MODELLED_SCOPES, 'whole_meter')
 P = ParamSpec('P')
 R = TypeVar('R')
 Service = TypeVar('Service', bound='GasService')
@@ -828,9 +830,10 @@ class GasService:
             return
         model = self._model_from_context(gas)
         meter_model = model if model is not None and model.has_gas_stove is False else None
+        scope = gas.get('scope')
+        period_model = model if scope in _MODELLED_SCOPES else meter_model if scope == 'whole_meter' else None
         gas['cost'] = self._price_saved_volume(
-            start, end, gas.get('volume_m3'), gas.get('cost'),
-            model=meter_model if gas.get('scope') == 'whole_meter' else model,
+            start, end, gas.get('volume_m3'), gas.get('cost'), model=period_model,
         )
         days = (end - start).total_seconds() / 86400
         from zont_analyzer.application.gas_cost import scale_cost
@@ -843,20 +846,22 @@ class GasService:
         )
         purpose = gas.get('purpose_split')
         if isinstance(purpose, dict):
+            purpose_model = model if purpose.get('scope') in ('modelled_boiler', 'shared_meter_model') else None
             components = purpose.get('components')
             if isinstance(components, dict):
                 for name, component in components.items():
                     if isinstance(component, dict):
                         component['cost'] = self._price_saved_volume(
-                            start, end, component.get('volume_m3'), component.get('cost'), model=model, purpose=name,
+                            start, end, component.get('volume_m3'), component.get('cost'),
+                            model=purpose_model, purpose=name,
                         )
             purpose['cost'] = self._price_saved_volume(
                 start, end, purpose.get('total_modelled_m3'), purpose.get('cost'),
-                model=model, purpose='total_modelled',
+                model=purpose_model, purpose='total_modelled',
             )
             purpose['unallocated_cost'] = self._price_saved_volume(
                 start, end, purpose.get('unallocated_m3'), purpose.get('unallocated_cost'),
-                model=model, purpose='unallocated',
+                model=purpose_model, purpose='unallocated',
             )
         measured = gas.get('measured_intervals')
         if isinstance(measured, list):
@@ -869,7 +874,8 @@ class GasService:
                 except (KeyError, ValueError):
                     continue
                 interval['cost'] = self._price_saved_volume(
-                    left, right, interval.get('volume_m3'), interval.get('cost'), model=meter_model,
+                    left, right, interval.get('volume_m3'), interval.get('cost'),
+                    model=meter_model if interval.get('scope') == 'whole_meter' else None,
                 )
 
     @staticmethod
@@ -938,7 +944,9 @@ class GasService:
             before = self._price_saved_volume(before_start, before_end, None, None)
         if not isinstance(after, dict):
             after = self._price_saved_volume(after_start, after_end, None, None)
-        scopes_match = bool(before_gas and after_gas and before_gas.get('scope') == after_gas.get('scope'))
+        before_scope = before_gas.get('scope') if before_gas else None
+        after_scope = after_gas.get('scope') if after_gas else None
+        scopes_match = before_scope in _COMPARABLE_SCOPES and before_scope == after_scope
         change = subtract_costs(after, before, scopes_match=scopes_match)
         effect = self._price_saved_volume(after_start, after_end, None, None)
         if (
