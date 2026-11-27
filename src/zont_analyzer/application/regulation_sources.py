@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from zont_analyzer.adapters.ydb.regulation import RegulationRepository
 from zont_analyzer.adapters.ydb.regulation_markers import EVENT_FAMILIES
+from zont_analyzer.adapters.ydb.telemetry_fences import LOOKAHEAD_SECONDS
 from zont_analyzer.analytics.dhw import parse_opentherm_flags
 from zont_analyzer.analytics.evidence import NumericSample, SignalMetadata, SignalSeries, StateSample
 from zont_analyzer.analytics.regulation import RegulationInputs
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
     from zont_analyzer.adapters.ydb.application import Database
 
 SELECTION_VERSION = "regulation-sources-v2-family-projection"
-SOURCE_LOOKAHEAD_SECONDS = 61
+SOURCE_LOOKAHEAD_SECONDS = LOOKAHEAD_SECONDS
 
 
 @dataclass(frozen=True)

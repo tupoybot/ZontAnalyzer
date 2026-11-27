@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from bisect import bisect_right
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -18,6 +19,7 @@ from .database import Transaction, YdbDatabase
 from .regulation_events import advance_projection
 from .regulation_markers import observe_first_inputs
 from .sample_bounds import extend
+from .telemetry_fences import PART_EDGES, PARTS_FIELD, part_revisions
 
 CoverageState = Literal["complete", "empty", "failed", "unavailable"]
 
@@ -108,6 +110,33 @@ def _record_publication_change(
         "VALUES ($scope,$identifier,$revision,$payload);",
         {"$scope": scope, "$identifier": identifier, "$revision": publication_revision,
          "$payload": payload},
+    )
+
+
+def _record_telemetry_hour_change(tx: Transaction, hour: str, changed_parts: set[int]) -> None:
+    # Fetch the existing precision in the same call as the global revision read.
+    # The transaction still publishes one hourly change and no extra work item.
+    publication, previous = tx.execute(
+        "DECLARE $hour AS Utf8; "
+        "SELECT revision FROM revisions WHERE scope='publication'; "
+        "SELECT revision,payload FROM publication_changes WHERE scope='telemetry' AND identifier=$hour;",
+        {"$hour": hour},
+    )
+    revision = int(publication.rows[0].revision) + 1 if publication.rows else 1
+    previous_revision = int(previous.rows[0].revision) if previous.rows else 0
+    try:
+        previous_payload = json.loads(previous.rows[0].payload) if previous.rows else None
+    except (TypeError, ValueError):
+        previous_payload = None
+    parts = part_revisions(previous_payload, previous_revision)
+    for index in changed_parts:
+        parts[index] = revision
+    tx.execute(
+        "DECLARE $hour AS Utf8; DECLARE $revision AS Int64; DECLARE $payload AS Utf8; "
+        "UPSERT INTO revisions (scope,revision) VALUES ('publication',$revision); "
+        "UPSERT INTO publication_changes (scope,identifier,revision,payload) "
+        "VALUES ('telemetry',$hour,$revision,$payload);",
+        {"$hour": hour, "$revision": revision, "$payload": encode({PARTS_FIELD: parts})},
     )
 
 
@@ -512,9 +541,13 @@ class TelemetryRepository:
                 revision = bump_revision(tx, "telemetry:" + device_id, publish=False)
                 advance_projection(tx, device_id, revision - 1, revision, previous_changed_events, changed_events)
                 extend(tx, [int(row["timestamp_utc"]) for row in rows], device_id, revision)
-                hours = {datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H") for at in changed_times}
-                for hour in sorted(hours):
-                    _record_publication_change(tx, "telemetry", hour)
+                parts_by_hour: dict[str, set[int]] = {}
+                for at in changed_times:
+                    hour = datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H")
+                    part = bisect_right(PART_EDGES, at % 3600) - 1
+                    parts_by_hour.setdefault(hour, set()).add(part)
+                for hour, parts in sorted(parts_by_hour.items()):
+                    _record_telemetry_hour_change(tx, hour, parts)
                 for day in {datetime.fromtimestamp(at, UTC).date().isoformat() for at in changed_times}:
                     tx.execute(
                         "DECLARE $key AS Utf8; DECLARE $value AS Utf8; "
