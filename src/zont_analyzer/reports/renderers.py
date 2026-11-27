@@ -39,7 +39,7 @@ from zont_analyzer.reports.presentation import (
 from zont_analyzer.reports.regulation import regulation_observations
 from zont_analyzer.reports.wording import normalize_report_for_display
 
-VIEW_VERSION = "report-presentation-v4-observations"
+VIEW_VERSION = "report-presentation-v5-analysis-visible"
 
 METRIC_LABELS = {
     "mean_temperature_c": "Средняя температура помещения",
@@ -930,8 +930,9 @@ def _settings_observation_present(statement: str, prose: str) -> bool:
 
 
 def _display_observations(report: Report) -> list[ObservedPattern]:
-    """Use the interpretation once; derive current observations when it is unavailable."""
-    if report.ai_used and report.observed_patterns and not regulation_interpretation_stale(report):
+    """Keep the saved interpretation visible alongside changed observations."""
+    stale = regulation_interpretation_stale(report)
+    if report.ai_used and report.observed_patterns and not stale:
         # The model can omit a supplied quantity. Supplement only that topic,
         # not the room/cycle/exclusion narrative it has already selected.
         prose = " ".join([report.summary, *(item.statement for item in report.observed_patterns)]).lower()
@@ -948,6 +949,12 @@ def _display_observations(report: Report) -> list[ObservedPattern]:
         return [*report.observed_patterns, *(item for item in additions
                 if not item.id.endswith(":settings") or not _settings_observation_present(item.statement, prose))]
     current = regulation_observations(report)
+    if stale:
+        if not current:
+            return report.observed_patterns
+        current_statements = {item.statement for item in current}
+        return [*current, *(item.model_copy(update={"statement": "Из сохранённого анализа ИИ. " + item.statement})
+                            for item in report.observed_patterns if item.statement not in current_statements)]
     if report.ai_used:
         return current
     # Legacy/local observations may cover other topics. Never mutate the saved report.
@@ -959,11 +966,8 @@ def _display_observations(report: Report) -> list[ObservedPattern]:
 
 def render_text(report: Report, *, current_comfort_band_c: float | None = None) -> str:
     report = normalize_report_for_display(report)
-    stale = regulation_interpretation_stale(report)
     report = report.model_copy(update={
         "observed_patterns": _display_observations(report),
-        **({"hypotheses": [], "predictions": [], "unknowns": [], "recommended_experiment": None,
-            "recommendations": []} if stale else {}),
     })
     lines = [
         f"ZontAnalyzer — {report.kind}",
@@ -984,7 +988,7 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
     lines.extend(
         [
             f"Качество данных: {report.quality.score:.0%} (покрытие {report.quality.coverage_pct:.1f}%)",
-            *([report.summary] if not stale else []),
+            report.summary,
         ]
     )
     gas = report.context.get("gas")
@@ -1358,9 +1362,7 @@ def render_html(
         )
         return f"<section><h2>Наблюдения</h2>{cards}</section>"
 
-    stale = regulation_interpretation_stale(report)
-    reasoning_parts: list[str] = [observations_html(
-        report.observed_patterns if stale else _display_observations(report))]
+    reasoning_parts: list[str] = [observations_html(_display_observations(report))]
     if report.hypotheses:
         cards = "".join(
             '<article class="reasoning-item hypothesis">'
@@ -1423,12 +1425,6 @@ def render_html(
             "</article></section>"
         )
     reasoning = "".join(reasoning_parts)
-    if stale:
-        previous = (('<details class="previous-ai-reasoning"><summary>'
-                     'Прежнее объяснение ИИ</summary>' + reasoning + '</details>')
-                    if reasoning else "")
-        reasoning = observations_html(_display_observations(report)) + previous
-
     feedback_by_id = recommendation_feedback or {}
     status_labels = {
         "new": "Новая",
@@ -1489,11 +1485,6 @@ def render_html(
         )
     recommendations = "".join(recommendation_cards[:1])
     other_recommendations = "".join(recommendation_cards[1:])
-    if stale and recommendation_cards:
-        recommendations = ('<details class="previous-ai-recommendations"><summary>'
-                           'Прежние рекомендации ИИ — требуют проверки</summary>'
-                           + "".join(recommendation_cards) + '</details>')
-        other_recommendations = ""
     by_name = {m.name: m.value for m in report.metrics}
     pauses = by_name.get("dhw_confirmed_heating_pause_count")
     pause_minutes = by_name.get("dhw_mean_confirmed_heating_pause_minutes")
@@ -1566,9 +1557,9 @@ data-report-start="{archive_start}" data-report-end="{archive_end}" aria-label="
 <div class="overview">{ui.hero(report)}{ui.kpis(report)}
 {band_note_html}
 {render_charts(report, chart_data, panel_ids=("climate",))}</div>
-<aside class="actions"><span class="eyebrow">СЛЕДУЮЩИЙ ШАГ</span><h2>Что делать</h2>
+<div class="action-column"><aside class="actions"><span class="eyebrow">СЛЕДУЮЩИЙ ШАГ</span><h2>Что делать</h2>
 {recommendations or '<p>Рекомендаций за этот период нет.</p>'}</aside>
-{owner_experiment_journal(report.id, report.timezone)}
+{owner_experiment_journal(report.id, report.timezone)}</div>
 
 {season_comparisons}
 {gas_cost_comparisons if seasonal else ''}

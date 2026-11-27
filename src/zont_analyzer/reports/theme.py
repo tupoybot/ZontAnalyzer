@@ -72,7 +72,9 @@ font-weight:700}
 .report-layout{display:grid;
 grid-template-columns:minmax(0,1fr) minmax(300px,360px);
 gap:24px}
-.overview,.actions{min-width:0}
+.overview,.actions,.action-column{min-width:0}
+.action-column{display:flex;flex-direction:column;gap:24px;align-self:start}
+.action-column>.actions{width:100%}
 .full-width{grid-column:1/-1}
 .hero{padding:30px;
 background:var(--surface);
@@ -263,6 +265,18 @@ border-radius:7px;background:var(--surface);color:var(--text);overflow-wrap:anyw
 .feedback-experiment input,.feedback-experiment select{display:block;width:100%;min-width:0;
 box-sizing:border-box;padding:8px;border:1px solid var(--border);border-radius:6px;
 background:var(--surface);color:var(--text)}
+.owner-experiment-journal{min-width:0;padding:20px;border:1px solid var(--border);
+border-radius:12px;background:var(--surface);overflow-wrap:anywhere}
+.owner-experiment-journal label{display:block;margin:12px 0;font-size:14px}
+.owner-experiment-journal input,.owner-experiment-journal select,.owner-experiment-journal textarea{
+display:block;width:100%;min-width:0;max-width:100%;padding:8px;border:1px solid var(--border);
+border-radius:6px;background:var(--surface);color:var(--text)}
+.owner-experiment-journal textarea{min-height:76px;resize:vertical}
+.owner-experiment-journal fieldset{min-width:0;margin:12px 0;padding:12px;
+border:1px solid var(--border);border-radius:6px}
+.owner-experiment-journal button{max-width:100%;white-space:normal;margin:4px 0}
+.owner-experiment-journal pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
+.owner-experiment-journal article{margin-top:18px;padding-top:18px;border-top:1px solid var(--border)}
 .archive-navigation{margin-top:18px}
 .archive-controls{display:flex;
 flex-wrap:wrap;
@@ -334,6 +348,7 @@ font-size:14px}
 flex-direction:column;
 gap:18px}
 .actions{width:100%}
+.action-column{width:100%;gap:18px}
 .hero{padding:22px}
 h1{font-size:28px}
 .kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}

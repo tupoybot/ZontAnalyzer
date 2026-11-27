@@ -6,7 +6,7 @@ from typing import Any
 
 from zont_analyzer.domain import Report
 
-from .reasoning_context import report_facts_fingerprint
+from .reasoning_context import reconcile_ai_evidence, report_facts_fingerprint
 
 
 def ensure_settings_history(
@@ -47,7 +47,7 @@ def refresh_settings_history(db: Any, report: Report) -> Report:
             return report
     current = db.control_settings_history(device_id, circuit_id, report.period_start, report.period_end)
     if current == history or (current.get("fingerprint") and current.get("fingerprint") == history.get("fingerprint")):
-        return report
+        return reconcile_ai_evidence(report)
     result = report.model_copy(deep=True)
     result.context["control_settings_history"] = current
     if report.ai_used:
@@ -60,7 +60,7 @@ def refresh_settings_history(db: Any, report: Report) -> Report:
             result.context["ai_facts_fingerprint"] = baseline
         if baseline is None or report_facts_fingerprint(result) != baseline:
             result.context["control_settings_interpretation_stale"] = True
-    return result
+    return reconcile_ai_evidence(result)
 
 
 def report_depends_on_device(report: Report, device_id: str, circuit_ids: list[str] | None = None) -> bool:

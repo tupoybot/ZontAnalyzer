@@ -47,49 +47,42 @@ def target_band_note(report: Report, current_comfort_band_c: float | None = None
 
 
 def regulation_interpretation_stale(report: Report) -> bool:
-    return report.ai_used and (regulation_interpretation_legacy(report) or any(report.context.get(key) for key in (
+    return report.ai_used and any(report.context.get(key) for key in (
         "regulation_interpretation_stale", "control_settings_interpretation_stale",
-    )))
-
-
-def regulation_interpretation_legacy(report: Report) -> bool:
-    """Old prompts did not apply the current selection policy; facts may be unchanged."""
-    provenance = report.context.get("ai_provenance")
-    facts = report.context.get("regulation_facts")
-    comparisons = report.context.get("regulation_comparisons")
-    history = report.context.get("control_settings_history")
-    relevant = (
-        isinstance(facts, dict) and bool(facts.get("circuits"))
-        or isinstance(comparisons, dict) and bool(comparisons.get("results"))
-        or isinstance(history, dict) and any(isinstance(version, dict) and version.get("kind") == "change"
-                                            for version in history.get("versions", []))
-    )
-    if not report.ai_used or not relevant:
-        return False
-    version = str(provenance.get("prompt_version", "")) if isinstance(provenance, dict) else ""
-    parts = version.removeprefix("analyst-v").split(".")
-    if not version.startswith("analyst-v") or len(parts) != 2 or not all(part.isdigit() for part in parts):
-        return True
-    return (int(parts[0]), int(parts[1])) < (8, 14)
+    ))
 
 
 def ai_freshness_notice(report: Report) -> str:
-    """Explain automatic reuse separately from a changed gas calculation."""
+    """Explain recorded fact changes without discarding the saved analysis."""
     if regulation_interpretation_stale(report):
         gas = report.context.get("gas")
         gas_note = (" Расход газа также пересчитан." if report.context.get("gas_interpretation_stale")
                     or isinstance(gas, dict) and gas.get("ai_stale") else "")
-        if regulation_interpretation_legacy(report) and not any(report.context.get(key) for key in (
-            "regulation_interpretation_stale", "control_settings_interpretation_stale",
-        )):
-            provenance = report.context.get("ai_provenance")
-            origin = ("Объяснение ИИ сохранено из предыдущей версии анализа. "
-                      if isinstance(provenance, dict) and provenance.get("prompt_version") else
-                      "Версия сохранённого объяснения ИИ неизвестна. ")
-            return (origin +
-                    "Текущие расчётные факты приведены в наблюдениях; новый запрос ИИ не выполнялся." + gas_note)
-        return ("AI-интерпретация устарела после обновления данных отопления. "
-                "Актуальные расчётные факты приведены в наблюдениях; прежнее объяснение сохранено отдельно." + gas_note)
+        provenance = report.context.get("ai_provenance")
+        source = provenance.get("generated_at") if isinstance(provenance, dict) else None
+        if not source:
+            for key in ("pilot_ai_reuse", "ai_interpretation_reuse"):
+                reuse = report.context.get(key)
+                if isinstance(reuse, dict) and reuse.get("source_generated_at"):
+                    source = reuse["source_generated_at"]
+                    break
+        stamp = ""
+        if isinstance(source, str):
+            try:
+                moment = datetime.fromisoformat(source)
+                if moment.tzinfo is not None:
+                    stamp = " от " + moment.astimezone(ZoneInfo(report.timezone)).strftime("%d.%m.%Y %H:%M")
+            except (ValueError, ZoneInfoNotFoundError):
+                pass
+        facts = report.context.get("regulation_facts")
+        if not isinstance(facts, dict) or not facts.get("circuits") or facts.get("incomplete"):
+            return ("Расчётные наблюдения отопления требуют обновления. "
+                    f"Сохранённый анализ ИИ{stamp} относится к данным исходного ответа; "
+                    "новый запрос ИИ не выполнялся." + gas_note)
+        changed = ("История настроек отопления обновлена" if report.context.get("control_settings_interpretation_stale")
+                   else "Расчётные наблюдения отопления обновлены")
+        return (changed + f" после ответа ИИ. Сохранённый анализ ИИ{stamp} "
+                "может не учитывать эти изменения; новый запрос ИИ не выполнялся." + gas_note)
     gas = report.context.get("gas")
     pilot_reuse = report.context.get("pilot_ai_reuse")
     baseline = report.context.get("ai_facts_fingerprint")
@@ -184,16 +177,13 @@ def hero(report: Report) -> str:
         if not stale and any(phrase in report.summary.lower() for phrase in normal):
             title, state = "Система работает штатно", "success"
     summary = report.summary
+    notice = ai_freshness_notice(report)
     correction = (
         '<p class="chart-note">Расчёты уставок обновлены. Текст AI сохранён из предыдущей версии отчёта.</p>'
-        if report.ai_used and report.context.get("setpoint_recalculation") else ""
+        if report.ai_used and report.context.get("setpoint_recalculation") and not notice else ""
     )
-    notice = ai_freshness_notice(report)
     freshness = f'<p class="gas-period-stale" role="status">{esc(notice)}</p>' if notice else ""
-    summary_html = (
-        '<details class="previous-ai-summary"><summary>Прежняя сводка ИИ</summary>'
-        f'<p>{esc(summary)}</p></details>' if stale else f'<p class="lead">{esc(summary)}</p>'
-    )
+    summary_html = f'<p class="lead">{esc(summary)}</p>'
     return (
         f'<section class="hero {state}"><span class="eyebrow">СОСТОЯНИЕ СИСТЕМЫ</span>'
         f'<h1>{esc(title)}</h1>{freshness}{summary_html}{correction}</section>'

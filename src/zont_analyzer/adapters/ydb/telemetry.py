@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from bisect import bisect_right
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -18,6 +19,7 @@ from .database import Transaction, YdbDatabase
 from .regulation_events import advance_projection
 from .regulation_markers import observe_first_inputs
 from .sample_bounds import extend
+from .telemetry_fences import PART_EDGES, PARTS_FIELD, part_revisions
 
 CoverageState = Literal["complete", "empty", "failed", "unavailable"]
 
@@ -61,8 +63,10 @@ def bump_revision(
 
 
 def _record_publication_change(
-    tx: Transaction, scope: str, identifier: str, *, payload: str = "{}",
+    tx: Transaction, scope: str, identifier: str, *, payload: str = "{}", hour_parts: set[int] | None = None,
 ) -> None:
+    old: Any = None
+    old_revision = 0
     if payload != "{}":
         previous, checkpoint = tx.execute(
             "DECLARE $scope AS Utf8; DECLARE $identifier AS Utf8; "
@@ -71,11 +75,13 @@ def _record_publication_change(
             {"$scope": scope, "$identifier": identifier},
         )
         acknowledged = int(checkpoint.rows[0].value) if checkpoint.rows else 0
-        if previous.rows and int(previous.rows[0].revision) > acknowledged:
+        if previous.rows:
+            old_revision = int(previous.rows[0].revision)
             try:
                 old = json.loads(previous.rows[0].payload)
             except (TypeError, ValueError):
                 old = None
+        if old_revision > acknowledged:
             if scope in {"telemetry-gas", "control-settings", "regulation-facts", "regulation-manual"}:
                 try:
                     new = json.loads(payload)
@@ -106,6 +112,13 @@ def _record_publication_change(
                 # Do not narrow an unconsumed marker written by an older release.
                 payload = "{}"
     publication_revision = bump_revision(tx, "publication")
+    if hour_parts is not None:
+        # Cache fences can outlive the publisher's checkpoint. Keep the last
+        # revision of untouched parts even after the hourly change was consumed.
+        parts = part_revisions(old, old_revision)
+        for index in hour_parts:
+            parts[index] = publication_revision
+        payload = encode({**json.loads(payload), PARTS_FIELD: parts})
     tx.execute(
         "DECLARE $scope AS Utf8; DECLARE $identifier AS Utf8; DECLARE $revision AS Int64; "
         "DECLARE $payload AS Utf8; "
@@ -529,9 +542,13 @@ class TelemetryRepository:
                 # write in the same hour must not overwrite an unconsumed boiler
                 # change. Existing hourly records without this payload remain
                 # conservative when read by the new publisher.
-                hours = {datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H") for at in changed_times}
-                for hour in sorted(hours):
-                    _record_publication_change(tx, "telemetry", hour, payload='{"calibration":false}')
+                parts_by_hour: dict[str, set[int]] = {}
+                for at in changed_times:
+                    hour = datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H")
+                    part = bisect_right(PART_EDGES, at % 3600) - 1
+                    parts_by_hour.setdefault(hour, set()).add(part)
+                for hour, parts in sorted(parts_by_hour.items()):
+                    _record_publication_change(tx, "telemetry", hour, payload='{"calibration":false}', hour_parts=parts)
                 by_hour: dict[str, list[int]] = {}
                 for at in calibration_times:
                     hour = datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H")

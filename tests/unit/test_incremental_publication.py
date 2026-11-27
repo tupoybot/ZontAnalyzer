@@ -152,6 +152,7 @@ def test_noop_does_not_recalculate_or_walk_database(tmp_path: Path, monkeypatch:
 def test_view_update_republishes_in_batches_without_calibration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, view: str,
 ) -> None:
+    from zont_analyzer.application import regulation_refresh
     from zont_analyzer.reports import gas_validation, renderers
 
     runtime = _runtime(tmp_path)
@@ -162,6 +163,8 @@ def test_view_update_republishes_in_batches_without_calibration(
                         "VIEW_VERSION", "test-view-update")
     monkeypatch.setattr(GasService, "refresh", lambda *args: pytest.fail("view update recalibrated gas"))
     monkeypatch.setattr(GasService, "refresh_cost", lambda *args: pytest.fail("view update recalculated cost"))
+    monkeypatch.setattr(regulation_refresh, "_build_context",
+                        lambda *args: pytest.fail("view update read regulation history"))
 
     results = [publication.publish_reports(runtime, batch_size=1) for _ in range(3)]
 

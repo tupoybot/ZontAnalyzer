@@ -24,7 +24,8 @@ if TYPE_CHECKING:
     from zont_analyzer.runtime import Runtime
 
 VERSION = "publication-v2"
-RENDER, GAS, COST, SETTINGS = 1, 2, 4, 8
+DIRTY_SEMANTICS = "regulation-v1"
+RENDER, GAS, COST, SETTINGS, REGULATION = 1, 2, 4, 8, 16
 AUDIT_SIZE = 16
 LEASE_SECONDS = 240
 
@@ -150,7 +151,7 @@ def _remember(items: dict[str, dict[str, Any]], output: Path, report: Report,
         "start": int(report.period_start.timestamp()), "end": int(report.period_end.timestamp()),
         "generated": _micros(report.generated_at), "digest": digest, "lo": lo, "hi": hi,
         "comparisons": _has_dependencies(report),
-        "dirty": (previous["dirty"] if previous else 0) | RENDER | GAS,
+        "dirty": (previous["dirty"] if previous else 0) | RENDER | GAS | REGULATION,
         "queued": previous["queued"] if previous and previous["dirty"] else _micros(now),
         "entry": previous["entry"] if previous else None,
         "json_stamp": previous["json_stamp"] if previous else ("" if cloud else _stamp(json_path)),
@@ -176,7 +177,7 @@ def _dependents(items: dict[str, dict[str, Any]], report: Report, now: datetime,
         flags = COST if candidate.context.get("period_comparisons") and gas[0] < end and gas[1] > start else 0
         if (include_regulation and regulation and regulation[0] < end and regulation[1] > start
                 and (not scopes or any(report_depends_on_regulation_scope(candidate, scope) for scope in scopes))):
-            flags |= RENDER
+            flags |= REGULATION
         if flags:
             newly_dirty.update(_enqueue({item["href"]: item}, flags, now))
     return newly_dirty
@@ -238,7 +239,6 @@ def _telemetry(items: dict[str, dict[str, Any]], changes: list[dict[str, Any]], 
         return
     if broad_calibration:
         _enqueue(items, GAS, now)
-        return
     for hour in sorted({str(change["identifier"]) for change in changes}):
         start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
         end = start + 3600
@@ -249,8 +249,9 @@ def _telemetry(items: dict[str, dict[str, Any]], changes: list[dict[str, Any]], 
             if report is None:
                 continue
             gas, regulation = _gas_windows(report), _regulation_windows(report)
-            flags = GAS if gas[0] < end and gas[1] > start else RENDER if (
-                regulation and regulation[0] < end and regulation[1] > start) else 0
+            flags = GAS if gas[0] < end and gas[1] > start else 0
+            if regulation and regulation[0] < end and regulation[1] > start:
+                flags |= REGULATION
             if flags:
                 _enqueue({item["href"]: item}, flags, now)
 
@@ -274,7 +275,7 @@ def _regulation_change(items: dict[str, dict[str, Any]], change: dict[str, Any],
         and report_depends_on_regulation_scope(report, scope)
         and (bounds := _regulation_windows(report)) is not None and bounds[0] <= right and bounds[1] > left
     }
-    _enqueue(items, RENDER, now, lambda item: item["report_id"] in dependent)
+    _enqueue(items, REGULATION, now, lambda item: item["report_id"] in dependent)
 
 
 def _queue(items: dict[str, dict[str, Any]], latest_href: str, batch_size: int) -> list[dict[str, Any]]:
@@ -353,6 +354,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         and meta_hint.get("ai_review") == review_digest and "count" in meta_hint
         and meta_hint.get("gas_validation_view") == gas_validation_view
         and meta_hint.get("report_view") == report_view
+        and meta_hint.get("dirty_semantics") == DIRTY_SEMANTICS
         and "unpublished_count" in meta_hint
         and meta_hint.get("unpublished_basis") == _unpublished_basis(meta_hint)
         and manifest_current
@@ -433,6 +435,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         and meta_hint.get("ai_review") == review_digest and "count" in meta_hint
         and meta_hint.get("gas_validation_view") == gas_validation_view
         and meta_hint.get("report_view") == report_view
+        and meta_hint.get("dirty_semantics") == DIRTY_SEMANTICS
         and "unpublished_count" in meta_hint
         and meta_hint.get("unpublished_basis") == _unpublished_basis(meta_hint)
         and manifest_current and (repository.has_dirty() or hourly_changes)
@@ -450,6 +453,12 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         for href, affected in repository.affected_items(hourly_hours).items():
             items.setdefault(href, affected)
     previous, old_meta = deepcopy(items), dict(meta)
+    if meta.get("dirty_semantics") != DIRTY_SEMANTICS:
+        # Older pending RENDER flags could represent either view changes or
+        # regulation changes. Preserve that unknown work once, before current
+        # view invalidations are queued; clean archive items need no migration.
+        _enqueue(items, REGULATION, now, lambda item: bool(item["dirty"]))
+        meta["dirty_semantics"] = DIRTY_SEMANTICS
     remember_model(meta)
     if broad_calibration:
         meta["gas_model_previous_version"] = meta_hint.get("gas_model_version", "")
@@ -492,7 +501,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                     and (candidate := runtime.db.report(item["report_id"])) is not None
                     and report_depends_on_device(candidate, identifier, bounds.get("circuit_ids"))
                 }
-                _enqueue(items, SETTINGS, now,
+                _enqueue(items, SETTINGS | REGULATION, now,
                          lambda item: item["report_id"] in dependent_ids)  # noqa: B023
                 # A setting can also be the baseline of a later comparison.
                 # Its own report period need not overlap the changed boundary.
@@ -509,12 +518,14 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                          lambda item: item["lo"] + 900 < end and item["hi"] - 900 > start)  # noqa: B023
             elif scope.startswith("tariff:"):
                 _enqueue(items, COST, now)
-            elif scope.startswith(("owner-profile:", "owner-gas:", "series:")):
+            elif scope.startswith(("owner-profile:", "series:")):
+                _enqueue(items, GAS | REGULATION, now)
+            elif scope.startswith("owner-gas:"):
                 _enqueue(items, GAS, now)
             elif scope.startswith("telemetry:"):
                 # A legacy per-device revision has no hour to target. Modern
                 # hourly publication markers use scope="telemetry" below.
-                _enqueue(items, GAS, now)
+                _enqueue(items, GAS | REGULATION, now)
             # Raw device snapshots also change on ordinary discovery (timestamps,
             # online state). Equipment facts and device membership are covered by
             # the profile digest below; effective timezone is in the config digest.
@@ -532,10 +543,10 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                 _enqueue(items, GAS, now, lambda row: row["href"] == item["href"])  # noqa: B023
                 item["entry"] = None
     if not partial and meta.get("profiles") != profile_digest:
-        _enqueue(items, GAS, now)
+        _enqueue(items, GAS | REGULATION, now)
     meta["profiles"] = profile_digest
     if not partial and meta.get("config") != config_digest:
-        _enqueue(items, GAS, now)
+        _enqueue(items, GAS | REGULATION, now)
     meta["config"] = config_digest
     if not partial and meta.get("ai_review") != review_digest:
         _enqueue(items, RENDER, now)
@@ -655,7 +666,12 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                     remember_model(meta)
             from .regulation_refresh import refresh_regulation_context, regulation_context_fingerprint
 
-            refreshed = refresh_regulation_context(runtime.db, report)
+            # View/template changes use the saved evidence. Only source
+            # invalidations may reread the bounded regulation history. SETTINGS
+            # also covers settings work queued before REGULATION was introduced.
+            refreshed = refresh_regulation_context(runtime.db, report) if item["dirty"] & (
+                REGULATION | SETTINGS
+            ) else report
             if refreshed is not report:
                 if not runtime.db.reports.replace_context(
                     report, refreshed, f"regulation-report-revision:{report.id}",

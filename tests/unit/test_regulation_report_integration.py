@@ -3,7 +3,10 @@
 from copy import deepcopy
 from datetime import UTC, datetime
 
-from zont_analyzer.domain import ObservedPattern, QualityResult, Report
+import pytest
+
+from zont_analyzer.domain import ObservedPattern, QualityResult, Recommendation, Report
+from zont_analyzer.domain.reasoning import Hypothesis, Prediction
 from zont_analyzer.reports import render_html, render_text
 
 
@@ -169,28 +172,74 @@ def test_fresh_ai_unrelated_findings_keep_flow_and_latest_change_visible() -> No
     assert "абсолютное отклонение комнаты" not in area
 
 
-def test_stale_ai_is_archived_in_html_and_current_observation_is_visible() -> None:
+@pytest.mark.parametrize("prompt", ["analyst-v8.14", "analyst-v8.13", None])
+def test_stale_ai_remains_visible_with_one_notice_and_current_supplements(prompt: str | None) -> None:
     old_statement = "Старый вывод ИИ: <script>alert(1)</script>"
     context = _dense_context()
     context["control_settings_interpretation_stale"] = True
+    context["ai_provenance"] = {"prompt_version": prompt}
+    context["setpoint_recalculation"] = {"version": "setpoints-v1"}
     report = _report(context=context, ai_used=True,
                      patterns=[ObservedPattern(id="old-ai-pattern", statement=old_statement,
                                                epistemic_level="observed")])
+    report = report.model_copy(update={
+        "recommendations": [Recommendation(
+            title="Сохранённая рекомендация", category="observe_only", priority="high",
+            confidence=0.8, hypothesis="Проверить устойчивость", suggested_manual_action="Наблюдать",
+            expected_effect="Проверка устойчивости", observation_period_days=3)],
+        "hypotheses": [Hypothesis(id="saved-hypothesis", statement="Сохранённая гипотеза",
+            confidence=0.7, confidence_basis="Наблюдения периода", rationale="Сопоставление")],
+        "predictions": [Prediction(id="saved-prediction", scenario="Сохранённый прогноз",
+            expected_effect="Ровнее температура", confidence=0.6,
+            confidence_basis="Наблюдения периода", verification="Сравнить через три дня")],
+    })
     saved = deepcopy(report.model_dump())
     plain = render_text(report)
     rendered = render_html(report)
     area = _observation_area(rendered)
 
     assert report.model_dump() == saved
-    assert "AI-интерпретация устарела" in plain + rendered
-    assert '<details class="previous-ai-reasoning">' in area
-    assert "Прежнее объяснение ИИ" in area
+    assert "История настроек отопления обновлена" in plain + rendered
+    assert rendered.count('class="gas-period-stale"') == 1
+    assert 'class="previous-ai-' not in rendered
+    assert "Прежнее объяснение ИИ" not in rendered
+    for value in (report.summary, "Сохранённая гипотеза", "Сохранённый прогноз", "Сохранённая рекомендация"):
+        assert value in plain and value in rendered
+    hero = rendered.split('<section class="hero', 1)[1].split('</section>', 1)[0]
+    assert '<h1>Сохранённая рекомендация</h1>' not in hero
+    assert "абсолютное отклонение комнаты" in area
     assert "06.09.2026 12:00" in plain and "06.09.2026 12:00" in area
-    assert old_statement not in plain
+    assert old_statement in plain
     assert "<script>alert(1)</script>" not in rendered
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in area
-    assert area.index("Наблюдения") < area.index('class="previous-ai-reasoning"')
+    assert area.count("&lt;script&gt;alert(1)&lt;/script&gt;") == 1
     assert 'class="regulation-result' not in rendered
+
+
+def test_stale_ai_cannot_hide_changed_values_in_topics_it_already_covered() -> None:
+    context = _dense_context()
+    context["regulation_interpretation_stale"] = True
+    context["control_settings_history"]["versions"].pop()  # Use the available comparison for the latest change.
+    saved = (
+        "Размах измеренной температуры подачи составлял 12 °C. "
+        "Настройки изменены с 10:00 до 12:00, P 5 → 6. Наблюдается ухудшение."
+    )
+    unchanged = (
+        "За период учтено 2 полных циклов запроса отопления; "
+        "среднее наибольшее превышение комнатой точной цели 0,8 °C в полном цикле."
+    )
+    report = _report(context=context, ai_used=True, patterns=[
+        ObservedPattern(id="saved", statement=saved, epistemic_level="derived"),
+        ObservedPattern(id="unchanged", statement=unchanged, epistemic_level="derived"),
+    ])
+
+    plain, rendered = render_text(report), render_html(report)
+    for output in (plain, _observation_area(rendered)):
+        assert "Из сохранённого анализа ИИ. " + saved in output
+        assert "наблюдается улучшение" in output
+        assert "измеренной температуры подачи 8,2 °C" in output
+        assert output.count(unchanged) == 1
+    assert rendered.count('class="gas-period-stale"') == 1
 
 
 def test_fallback_preserves_unrelated_existing_observation() -> None:
@@ -207,28 +256,56 @@ def test_fallback_preserves_unrelated_existing_observation() -> None:
     assert area.count('class="reasoning-item observed"') >= 2
 
 
-def test_previous_prompt_does_not_hide_new_observation_logic_or_claim_changed_data() -> None:
+@pytest.mark.parametrize("prompt", ["analyst-v8.13", "analyst-v7.0", "unknown", None])
+def test_prompt_age_or_unknown_provenance_never_marks_analysis_stale(prompt: str | None) -> None:
     context = _dense_context()
-    context["ai_provenance"] = {"prompt_version": "analyst-v8.13"}
+    context["ai_provenance"] = {"prompt_version": prompt}
     report = _report(context=context, ai_used=True, patterns=[ObservedPattern(
-        id="previous", statement="Прежнее объяснение периода.", epistemic_level="derived")])
+        id="previous", statement="Сохранённое объяснение периода.", epistemic_level="derived")])
+    if prompt is None:
+        report.context.pop("ai_provenance")
+    saved = deepcopy(report.model_dump())
     plain, rendered = render_text(report), render_html(report)
-    assert "предыдущей версии анализа" in plain
-    assert "после обновления данных" not in plain
-    assert report.summary not in plain
-    assert "Прежняя сводка ИИ" in rendered and report.summary in rendered
+    assert report.model_dump() == saved
+    assert report.summary in plain and report.summary in rendered
+    assert "Сохранённое объяснение периода." in plain + rendered
     assert "I 2 → 3" in plain
-    assert 'class="previous-ai-reasoning"' in rendered
+    assert 'class="gas-period-stale"' not in rendered
+    assert 'class="previous-ai-' not in rendered
+    assert "предыдущей версии анализа" not in plain + rendered
 
 
-def test_unknown_prompt_provenance_does_not_hide_current_facts() -> None:
+def test_unknown_prompt_preserves_gas_freshness_notice() -> None:
     report = _report(context=_dense_context(), ai_used=True, patterns=[ObservedPattern(
-        id="previous", statement="Прежнее объяснение периода.", epistemic_level="derived")])
+        id="previous", statement="Сохранённое объяснение периода.", epistemic_level="derived")])
     report.context.pop("ai_provenance")
     report.context["gas"] = {"ai_stale": True}
     text = render_text(report)
     assert "I 2 → 3" in text
-    assert "Расход газа также пересчитан" in text
+    assert "Расчёт расхода газа обновлён после AI-ответа" in text
+
+
+@pytest.mark.parametrize("facts", [None, {"circuits": [], "incomplete": True},
+                                    {"circuits": [{"metrics": {}}], "incomplete": True}])
+def test_missing_current_facts_keep_original_analysis_visible(facts: dict | None) -> None:
+    context = {"regulation_interpretation_stale": True,
+               "ai_provenance": {"prompt_version": "analyst-v8.14",
+                                 "generated_at": "2026-09-08T10:30:00+00:00"}}
+    if facts is not None:
+        context["regulation_facts"] = facts
+    statement = "Полезное наблюдение исходного анализа."
+    report = _report(context=context, ai_used=True, patterns=[ObservedPattern(
+        id="saved-ai", statement=statement, epistemic_level="observed")])
+    saved = deepcopy(report.model_dump())
+    plain, rendered = render_text(report), render_html(report)
+    assert report.model_dump() == saved
+    for value in (report.summary, statement, "Расчётные наблюдения отопления требуют обновления",
+                  "Сохранённый анализ ИИ от 08.09.2026 10:30"):
+        assert value in plain and value in rendered
+    assert rendered.count('class="gas-period-stale"') == 1
+    assert 'class="previous-ai-' not in rendered
+    assert "после обновления данных" not in plain + rendered
+    assert "Актуальные расчётные факты" not in plain + rendered
 
 
 def test_empty_regulation_envelopes_do_not_archive_a_fresh_explanation() -> None:

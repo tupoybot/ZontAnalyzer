@@ -15,6 +15,56 @@ def report_facts_fingerprint(report: Report) -> str:
     return "facts-v2:" + _facts_digest(report, include_ai_provenance=False)
 
 
+def _matches_ai_baseline(report: Report, baseline: str) -> bool:
+    return (report_facts_fingerprint(report) == baseline if baseline.startswith("facts-v2:") else
+            _facts_digest(report, include_ai_provenance=True) == baseline)
+
+
+def reconcile_ai_evidence(report: Report, *, previous: Report | None = None) -> Report:
+    """Clear invalidation only when the original AI evidence matches exactly.
+
+    A missing or incompatible historical digest never becomes today's baseline.
+    Returning to the original facts can repair an earlier invalidation without
+    another model request, including after a temporary compact-cache miss.
+    A refresh may migrate root dependency bounds only if restoring the previous
+    bounds proves an exact match with the saved original AI baseline.
+    """
+    baseline = report.context.get("ai_facts_fingerprint")
+    if not report.ai_used or not isinstance(baseline, str):
+        return report
+    fingerprint = report_facts_fingerprint(report)
+    matched = _matches_ai_baseline(report, baseline)
+    if (not matched and previous is not None and previous.ai_used
+            and (previous.context.get("ai_facts_fingerprint") == baseline or (
+                previous.context.get("ai_facts_fingerprint") is None and _matches_ai_baseline(previous, baseline)
+            ))):
+        old = previous.context.get("regulation_facts")
+        current = report.context.get("regulation_facts")
+        bounds = ("dependency_start", "dependency_end")
+        if (isinstance(old, dict) and isinstance(current, dict)
+                and any(old.get(key) != current.get(key) or (key in old) != (key in current) for key in bounds)
+                and all(isinstance(block[key], str) for block in (old, current) for key in bounds if key in block)):
+            proof = report.model_copy(deep=True)
+            for key in bounds:
+                if key in old:
+                    proof.context["regulation_facts"][key] = old[key]
+                else:
+                    proof.context["regulation_facts"].pop(key, None)
+            matched = _matches_ai_baseline(proof, baseline)
+    if not matched:
+        return report
+    context = dict(report.context)
+    context["ai_facts_fingerprint"] = fingerprint
+    for key in ("regulation_interpretation_stale", "control_settings_interpretation_stale",
+                "gas_interpretation_stale"):
+        context.pop(key, None)
+    if isinstance(context.get("gas"), dict) and context["gas"].get("ai_stale"):
+        context["gas"] = {**context["gas"], "ai_stale": False}
+    if isinstance(context.get("pilot_ai_reuse"), dict):
+        context["pilot_ai_reuse"] = {**context["pilot_ai_reuse"], "facts_changed": False}
+    return report.model_copy(update={"context": context}) if context != report.context else report
+
+
 def _facts_digest(report: Report, *, include_ai_provenance: bool) -> str:
     payload = report.model_dump(mode="json", include={
         "kind", "period_start", "period_end", "timezone", "quality", "metrics", "events", "context",
@@ -91,15 +141,20 @@ def reuse_ai_interpretation(previous: Report, current: Report) -> Report:
         context["gas_interpretation_stale"] = True
     else:
         context.pop("gas_interpretation_stale", None)
+    from zont_analyzer.analytics.settings_history import semantic_history
+
     prior_history = previous.context.get("control_settings_history", {})
     current_history = current.context.get("control_settings_history", {})
-    if (prior_history.get("fingerprint") != current_history.get("fingerprint")
-            if prior_history.get("fingerprint") and current_history.get("fingerprint")
-            else prior_history != current_history):
+    if changed is False:
+        context.pop("control_settings_interpretation_stale", None)
+    elif (semantic_history(prior_history) != semantic_history(current_history)
+          or previous.context.get("control_settings_interpretation_stale")):
         context["control_settings_interpretation_stale"] = True
     from .regulation_refresh import regulation_context_fingerprint
 
-    if (regulation_context_fingerprint(previous.context) != regulation_context_fingerprint(current.context)
+    if changed is False:
+        context.pop("regulation_interpretation_stale", None)
+    elif (regulation_context_fingerprint(previous.context) != regulation_context_fingerprint(current.context)
             or previous.context.get("regulation_interpretation_stale")):
         context["regulation_interpretation_stale"] = True
     return current.model_copy(update={
