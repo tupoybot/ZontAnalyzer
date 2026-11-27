@@ -8,6 +8,7 @@ import pytest
 from tests.unit.test_incremental_publication import _daily_reports, _runtime
 from zont_analyzer.adapters.ydb.publication import PublicationRepository
 from zont_analyzer.application import publication
+from zont_analyzer.application.gas import GasService
 from zont_analyzer.application.owner_context import OwnerContextStore
 from zont_analyzer.domain import SourceEvent, TelemetryPoint
 
@@ -95,7 +96,7 @@ def test_real_calibration_temperature_only_refreshes_dependent_report(tmp_path) 
     _write_point(runtime, outside_hour, 17.0)
     publication.publish_reports(runtime)
 
-    # Temperature affects local gas/savings context, but not the meter fit.
+    # Late temperature is a local telemetry invalidation.
     calibration_hour = reports[0].period_start + timedelta(hours=12)
     _write_point(runtime, calibration_hour, 18.0)
     result = publication.publish_reports(runtime, batch_size=1)
@@ -104,11 +105,10 @@ def test_real_calibration_temperature_only_refreshes_dependent_report(tmp_path) 
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
 
 
-@pytest.mark.parametrize("metric,new_value,model_changes", [("s", None, True), ("rml", 80.0, True),
-                                                        ("rml", 40.0, False)])
+@pytest.mark.parametrize("metric,new_value", [("s", None), ("rml", 80.0)])
 @pytest.mark.ydb
-def test_calibration_boiler_change_survives_same_hour_temperature_and_replay(
-    tmp_path, metric, new_value, model_changes,
+def test_late_calibration_telemetry_preserves_published_gas(
+    tmp_path, monkeypatch, metric, new_value,
 ) -> None:
     runtime = _runtime(tmp_path)
     runtime.config.analysis.modulation_capability_profile = "flame_zero_is_minimum"
@@ -135,7 +135,8 @@ def test_calibration_boiler_change_survives_same_hour_temperature_and_replay(
                                       end=at + timedelta(hours=1), points=points)
     _write_point(runtime, at, 18.0)
     publication.publish_reports(runtime)
-    previous_model = PublicationRepository(runtime.db.storage).load_meta()["gas_model_version"]
+    before = {report.id: runtime.db.report(report.id).context["gas"] for report in reports}
+    monkeypatch.setattr(GasService, "__init__", lambda *args: pytest.fail("late telemetry recalculated gas"))
 
     changed = point.model_copy(update={"value_text": "[]"} if metric == "s" else {"value_num": new_value})
     runtime.db.telemetry.write_window(device_id="device", data_type="history", start=at,
@@ -143,17 +144,8 @@ def test_calibration_boiler_change_survives_same_hour_temperature_and_replay(
     _write_point(runtime, at, 19.0)
     result = publication.publish_reports(runtime, batch_size=1)
     assert result["rendered_reports"] == 1
-    assert result["pending_reports"] == (len(reports) - 1 if model_changes else 0)
-    meta = PublicationRepository(runtime.db.storage).load_meta()
-    if model_changes:
-        assert meta["gas_model_version"] != previous_model
-        assert meta["gas_model_previous_version"] == previous_model
-        assert meta["gas_model_refresh_reason"] == "calibration_model_changed"
-    else:
-        # Both modulation values occupy the same fitted bin. The complete
-        # effective calibration intervals and model version remain identical.
-        assert meta["gas_model_version"] == previous_model
-    assert publication.publish_reports(runtime, batch_size=8)["pending_reports"] == 0
+    assert result["pending_reports"] == 0
+    assert {report.id: runtime.db.report(report.id).context["gas"] for report in reports} == before
     runtime.db.telemetry.write_window(device_id="device", data_type="history", start=at,
                                       end=at + timedelta(hours=1), points=[changed])
     assert publication.publish_reports(runtime)["rendered_reports"] == 0
@@ -177,7 +169,7 @@ def test_raw_event_inside_calibration_only_refreshes_dependent_report(tmp_path) 
 
 
 @pytest.mark.ydb
-def test_unconsumed_legacy_calibration_marker_is_not_narrowed_by_temperature(tmp_path) -> None:
+def test_legacy_telemetry_marker_does_not_broaden_local_publication(tmp_path) -> None:
     from tests.unit.test_incremental_publication import _record_change
 
     runtime = _runtime(tmp_path)
@@ -191,7 +183,8 @@ def test_unconsumed_legacy_calibration_marker_is_not_narrowed_by_temperature(tmp
 
     _record_change(runtime.db, "telemetry", at.strftime("%Y-%m-%dT%H"))
     _write_point(runtime, at, 19.0)
-    assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 3
-    assert publication.publish_reports(runtime, batch_size=8)["pending_reports"] == 0
+    result = publication.publish_reports(runtime, batch_size=1)
+    assert result["rendered_reports"] == 1
+    assert result["pending_reports"] == 0
     _write_point(runtime, at, 20.0)
     assert publication.publish_reports(runtime)["rendered_reports"] == 1

@@ -7,10 +7,11 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from zont_analyzer.application.gas_aggregation import expected_days
 from zont_analyzer.domain.periods import SEASONS, Period, active_season, calendar_period, midnight
 
 if TYPE_CHECKING:
@@ -135,8 +136,21 @@ def seasonal_daily_signature(analysis: AnalysisService, period: Period) -> str |
     from zont_analyzer.application.reasoning_context import report_facts_fingerprint
 
     inputs = [(report.id, report_facts_fingerprint(report))
-              for report in analysis.db.daily_reports(period.start, period.observed_end)]
+              for report in analysis.db.daily_reports(period.start, period.observed_end, timezone=period.timezone)]
     return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+
+
+def daily_inputs_pending(
+    analysis: AnalysisService, period: Period, first: date, *, deferred_starts: frozenset[datetime] = frozenset(),
+) -> bool:
+    """Let the daily catch-up supply reports still eligible for automatic creation."""
+    expected = {start for day, start, _end in expected_days(period) if day >= first} - deferred_starts
+    if not expected:
+        return False
+    available = {start for _identifier, start in analysis.db.daily_report_catalogue(
+        min(expected), period.observed_end, timezone=period.timezone,
+    )}
+    return not expected <= available
 
 
 def run_period_schedule(

@@ -29,8 +29,10 @@ from zont_analyzer.reports.presentation import (
     gas_cost_lines,
     gas_purpose_text,
     gas_savings_text,
+    gas_scope_totals,
     number,
     period_target,
+    regulation_interpretation_stale,
     target_band_note,
     timezone_note,
     zont_connection_label,
@@ -929,8 +931,9 @@ def _settings_observation_present(statement: str, prose: str) -> bool:
 
 
 def _display_observations(report: Report) -> list[ObservedPattern]:
-    """Use the interpretation once; derive current observations when it is unavailable."""
-    if report.ai_used and report.observed_patterns:
+    """Keep the saved interpretation visible alongside changed observations."""
+    stale = regulation_interpretation_stale(report)
+    if report.ai_used and report.observed_patterns and not stale:
         # The model can omit a supplied quantity. Supplement only that topic,
         # not the room/cycle/exclusion narrative it has already selected.
         prose = " ".join([report.summary, *(item.statement for item in report.observed_patterns)]).lower()
@@ -947,6 +950,12 @@ def _display_observations(report: Report) -> list[ObservedPattern]:
         return [*report.observed_patterns, *(item for item in additions
                 if not item.id.endswith(":settings") or not _settings_observation_present(item.statement, prose))]
     current = regulation_observations(report)
+    if stale:
+        if not current:
+            return report.observed_patterns
+        current_statements = {item.statement for item in current}
+        return [*current, *(item.model_copy(update={"statement": "Из сохранённого анализа ИИ. " + item.statement})
+                            for item in report.observed_patterns if item.statement not in current_statements)]
     if report.ai_used:
         return current
     # Legacy/local observations may cover other topics. Never mutate the saved report.
@@ -987,7 +996,7 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
     if isinstance(gas, dict):
         status = str(gas.get("status") or "unknown")
         labels = {"unknown": "нет данных", "measured": "измерено", "estimated": "оценено",
-                  "extrapolated": "экстраполировано"}
+                  "extrapolated": "экстраполировано", "partial": "сумма известных дней"}
         lines.append(
             f"Расход газа за период: "
             f"{_volume_and_cost(gas.get('volume_m3'), gas.get('cost')) if status != 'unknown' else 'Нет данных'} "
@@ -1001,9 +1010,11 @@ def render_text(report: Report, *, current_comfort_band_c: float | None = None) 
                 lines.append(f"{label}: {_volume_and_cost(gas[key], gas.get(cost_key), unit)}")
         lines.extend(f"{label}: {value}" for label, value in burner_usage_rows(report))
         lines.extend(validation_lines(gas))
+        lines.extend(gas_scope_totals(gas))
         lines.append(f"Диапазон: {_gas_value(gas.get('lower_m3'), 'м³')} — "
                      f"{_gas_value(gas.get('upper_m3'), 'м³')}; покрытие {_gas_value(gas.get('coverage_pct'), '%')}")
-        lines.append(f"Версия расчёта: {gas.get('model_version', 'неизвестна')}")
+        if gas.get("model_version"):
+            lines.append(f"Версия расчёта: {gas['model_version']}")
         lines.append(str(gas.get('source', '')))
         lines.extend(gas_cost_lines(gas.get("cost")))
         intervals = gas.get("measured_intervals")

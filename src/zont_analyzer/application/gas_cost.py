@@ -136,6 +136,10 @@ def calculate_gas_cost(
 
     boundaries = [row["effective_datetime"] for row in history if left < row["effective_datetime"] < right]
     active_at_start = _active_tariff(history, left)
+    if active_at_start is None and not boundaries and volume_slices is None:
+        return _unknown_cost(
+            timezone=timezone, limitation="tariff_unavailable", unpriced_volume_m3=float(total_volume),
+        )
     needs_split = active_at_start is None or bool(boundaries)
     if needs_split and volume_slices is None:
         return _unknown_cost(
@@ -306,13 +310,17 @@ def value_volume_by_period_tariffs(volume_m3: Any, evaluated_cost: Mapping[str, 
     }
 
 
-def subtract_costs(after: Mapping[str, Any], before: Mapping[str, Any]) -> dict[str, Any]:
-    """Return an actual cost change only for one identical comparable currency."""
+def subtract_costs(
+    after: Mapping[str, Any], before: Mapping[str, Any], *, scopes_match: bool = True,
+) -> dict[str, Any]:
+    """Return an actual cost change for matching gas scopes and one comparable currency."""
     timezone = str(after.get("timezone", before.get("timezone", "UTC")))
     left = before.get("amounts")
     right = after.get("amounts")
     if before.get("status") != "available" or after.get("status") != "available":
         return _unknown_cost(timezone=timezone, limitation="actual_cost_incomplete")
+    if not scopes_match:
+        return _unknown_cost(timezone=timezone, limitation="gas_scopes_not_comparable")
     if not isinstance(left, list) or not isinstance(right, list) or len(left) != 1 or len(right) != 1:
         return _unknown_cost(timezone=timezone, limitation="currencies_not_comparable")
     if left[0].get("currency") != right[0].get("currency"):
@@ -409,3 +417,108 @@ __all__ = [
     "subtract_costs",
     "value_volume_by_period_tariffs",
 ]
+
+
+def sum_daily_gas_costs(
+    days: Iterable[Mapping[str, Any]], *, period_hours: float, timezone: str,
+    limitation: str = "incomplete_gas_days",
+) -> dict[str, Any]:
+    """Sum saved daily costs by currency and measure coverage against the observed period."""
+    amounts: dict[str, Decimal] = {}
+    priced_volume = Decimal(0)
+    unpriced_volume = Decimal(0)
+    covered_seconds = 0.0
+    missing_unpriced_volume = False
+    slices: list[dict[str, Any]] = []
+    limitations: list[str] = []
+    for day in days:
+        volume = _decimal(day.get("volume_m3"))
+        if volume is None:
+            continue
+        cost = day.get("cost")
+        if not isinstance(cost, Mapping) or cost.get("status") not in {"available", "partial"}:
+            unpriced_volume = _add(unpriced_volume, volume)
+            limitations.append("saved_daily_cost_unavailable")
+            continue
+        values = cost.get("amounts")
+        daily_amounts = {
+            value["currency"]: amount
+            for value in (values if isinstance(values, list) else ())
+            if isinstance(value, Mapping) and isinstance(value.get("currency"), str)
+            and (amount := _decimal(value.get("amount"))) is not None
+        }
+        if not daily_amounts:
+            unpriced_volume = _add(unpriced_volume, volume)
+            limitations.append("saved_daily_cost_unavailable")
+            continue
+        if cost["status"] == "partial" or day.get("status") == "partial":
+            limitations.append("saved_daily_cost_partial")
+        for currency, amount in daily_amounts.items():
+            amounts[currency] = _add(amounts.get(currency, Decimal(0)), amount)
+        coverage = _decimal(cost.get("coverage_pct")) or Decimal(0)
+        duration = (_utc(day["end"]) - _utc(day["start"])).total_seconds()
+        covered_seconds += duration * float(max(Decimal(0), min(coverage, Decimal(100)))) / 100
+        priced = _decimal(cost.get("priced_volume_m3"))
+        unpriced = _decimal(cost.get("unpriced_volume_m3"))
+        if cost["status"] == "available":
+            priced = volume if priced is None else priced
+            unpriced = Decimal(0) if unpriced is None else unpriced
+        elif unpriced is None:
+            missing_unpriced_volume = True
+        priced_volume = _add(priced_volume, priced or Decimal(0))
+        unpriced_volume = _add(unpriced_volume, unpriced or Decimal(0))
+        source_slices = cost.get("slices")
+        if isinstance(source_slices, list):
+            slices.extend(dict(item) for item in source_slices if isinstance(item, Mapping))
+
+    coverage_pct = min(100.0, covered_seconds / (period_hours * 3600) * 100)
+    if coverage_pct < 99.999999:
+        limitations.append(limitation)
+    values = [{"currency": currency, "amount": _canonical(amount)} for currency, amount in sorted(amounts.items())]
+    status = "available" if values and not limitations else "partial" if values else "unknown"
+    return {
+        "status": status,
+        "amounts": values,
+        "coverage_pct": coverage_pct,
+        "priced_volume_m3": float(priced_volume) if values else None,
+        "unpriced_volume_m3": None if missing_unpriced_volume or not amounts else float(unpriced_volume),
+        "currency_status": "mixed" if len(values) > 1 else "single" if values else "none",
+        "basis": "saved_daily_costs",
+        "timezone": timezone,
+        "slices": _monthly_tariff_subtotals(slices, timezone),
+        "limitations": list(dict.fromkeys(limitations)),
+    }
+
+
+def _monthly_tariff_subtotals(slices: list[dict[str, Any]], timezone: str) -> list[dict[str, Any]]:
+    """Combine compatible adjacent slices while retaining tariff weights."""
+    zone = ZoneInfo(timezone)
+    groups: list[dict[str, Any]] = []
+    for item in slices:
+        item_volume, item_amount = _decimal(item.get("volume_m3")), _decimal(item.get("amount"))
+        if item_volume is None or item_amount is None:
+            continue
+        try:
+            left, right = _utc(item["start"]), _utc(item["end"])
+        except (AttributeError, KeyError, TypeError, ValueError):
+            continue
+        if right <= left:
+            continue
+        previous = groups[-1] if groups else None
+        month = left.astimezone(zone).strftime("%Y-%m")
+        if (
+            previous and previous["end"] == left.isoformat()
+            and _utc(previous["start"]).astimezone(zone).strftime("%Y-%m") == month
+            and all(previous.get(key) == item.get(key) for key in ("tariff_id", "currency", "price_per_m3"))
+        ):
+            before_volume = _decimal(previous["volume_m3"])
+            before_amount = _decimal(previous["amount"])
+            assert before_volume is not None and before_amount is not None
+            previous.update(
+                end=right.isoformat(), volume_m3=_canonical(_add(before_volume, item_volume)),
+                amount=_canonical(_add(before_amount, item_amount)),
+            )
+        else:
+            groups.append({**item, "start": left.isoformat(), "end": right.isoformat(),
+                           "allocation": "sum_of_saved_daily_costs"})
+    return [{**item, "volume_m3": float(item["volume_m3"])} for item in groups]

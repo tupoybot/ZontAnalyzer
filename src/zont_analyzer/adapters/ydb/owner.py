@@ -12,7 +12,7 @@ import ydb  # type: ignore[import-untyped]
 
 from .database import Transaction, YdbDatabase
 from .owner_data import OwnerDataMixin
-from .telemetry import bump_revision, encode, next_id
+from .telemetry import _record_publication_change, bump_revision, encode, next_id
 
 
 def _micros(value: datetime | None = None) -> int:
@@ -247,7 +247,7 @@ class OwnerRepository(OwnerDataMixin):
                     "$payload": audit_payload,
                 },
             )
-            bump_revision(tx, "owner-gas:" + device_id)
+            bump_revision(tx, "owner-gas:" + device_id, identifier=day)
             return item
 
         return self.db.transaction(write)
@@ -304,7 +304,9 @@ class OwnerRepository(OwnerDataMixin):
                         "$payload": encode(audit_item),
                     },
                 )
-            bump_revision(tx, "owner-gas:" + device_id)
+            scope = "owner-gas:" + device_id
+            bump_revision(tx, scope, identifier=target)
+            _record_publication_change(tx, scope, source)
             return moved
 
         return self.db.transaction(write)
@@ -447,7 +449,7 @@ class OwnerRepository(OwnerDataMixin):
                     "$payload": encode(item),
                 },
             )
-            bump_revision(tx, "owner-gas:" + device_id)
+            bump_revision(tx, "owner-gas:" + device_id, identifier=day)
             return item
 
         return self.db.transaction(write)

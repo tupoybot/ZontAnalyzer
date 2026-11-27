@@ -512,6 +512,34 @@ def test_missing_daily_report_runs_before_other_report_lanes(tmp_path: Path, mon
 
 
 @pytest.mark.ydb
+@pytest.mark.parametrize("lane", ["weekly", "monthly"])
+def test_calendar_rollup_waits_for_eligible_daily_reports(tmp_path: Path, monkeypatch, lane) -> None:
+    db, runner, _client = _runner(tmp_path)
+    runtime = runner.runtime
+    runtime.config.pilot.max_catchup_days = 2
+    now = datetime(2026, 2, 2, 2, tzinfo=UTC)
+    first = now.replace(hour=0) - timedelta(days=2)
+    monkeypatch.setattr(db, "earliest_sample_time", lambda: first)
+    fake_runner = Mock()
+    fake_runner.run_scheduled.return_value = {"status": "pending"}
+    service = scheduler.ProductionScheduler(runtime, runner=fake_runner, monotonic=lambda: 0)
+    state = {"last_sync": now.isoformat()}
+    assert service._reports(lane, state, now, 180, lambda: None) is None
+    fake_runner.run_scheduled.assert_not_called()
+
+    analysis = runtime.analysis(no_ai=True)
+    analysis.analyze_daily(first.date(), use_ai=False)
+    if lane == "weekly":
+        assert service._reports(lane, state, now, 180, lambda: None) is None
+        # A day awaiting provider reconciliation remains a reported gap.
+        blocked = calendar_period("daily", first.date() + timedelta(days=1), "UTC")
+        state["daily_deferred"] = [{"period": blocked.model_dump(mode="json")}]
+    assert service._reports(lane, state, now, 180, lambda: None)["status"] == "pending"
+    period = fake_runner.run_scheduled.call_args.args[0]
+    assert period.kind == lane and period.start.date() < first.date()
+
+
+@pytest.mark.ydb
 def test_long_season_waits_for_daily_inputs_but_does_not_recheck_completed_boundary(tmp_path: Path) -> None:
     db, runner, _client = _runner(tmp_path)
     runtime = runner.runtime

@@ -29,6 +29,13 @@ def _number(value: float, places: int = 1) -> str:
 
 
 def validation_summary(gas: Mapping[str, Any]) -> str:
+    aggregation = gas.get("aggregation")
+    if isinstance(aggregation, Mapping):
+        available = _count(aggregation.get("available_days"))
+        expected = _count(aggregation.get("expected_days"))
+        if available is not None and expected is not None:
+            return f"по дневным отчётам, дней с оценкой: {available} из {expected}"
+        return "по дневным отчётам"
     model = gas.get("model")
     if isinstance(model, Mapping):
         error = _nonnegative(model.get("validation_relative_error"))
@@ -52,6 +59,13 @@ VALIDATION_NOTE = (
 
 def validation_lines(gas: Mapping[str, Any]) -> list[str]:
     summary = validation_summary(gas)
+    aggregation = gas.get("aggregation")
+    if isinstance(aggregation, Mapping):
+        lines = [summary.capitalize() + "."]
+        versions = aggregation.get("model_versions")
+        if isinstance(versions, list) and len(versions) > 1:
+            lines.append("В разные дни использовались разные версии калибровки.")
+        return lines
     lines = [summary if summary.startswith("Проверка") else "Проверка модели: " + summary]
     model = gas.get("model")
     if isinstance(model, Mapping):

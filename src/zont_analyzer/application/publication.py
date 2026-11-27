@@ -1,4 +1,4 @@
-"""Publish reports with current local gas estimates; no AI or external API calls."""
+"""Publish saved reports and current form data."""
 from __future__ import annotations
 
 import fcntl
@@ -234,12 +234,9 @@ def _publish_locked(
     if overrides:
         # Regeneration owns the candidate DB commit. Publish only its artifacts;
         # the durable report change schedules dependent worker work afterwards.
-        from zont_analyzer.application.gas import GasService
-
-        service = GasService(runtime.db, runtime.config)
         result: dict[str, Any] = {}
         for candidate in overrides:
-            result = _publish_report_locked(runtime, output_dir, service.refresh(candidate), now)
+            result = _publish_report_locked(runtime, output_dir, candidate, now)
         return result
 
     from zont_analyzer.application.owner_context import OwnerContextStore
@@ -280,26 +277,6 @@ def _publish_locked(
         previous = reports.get(str(html_path))
         if previous is None or report.generated_at >= previous.generated_at:
             reports[str(html_path)] = report
-    for report in overrides or []:
-        if report.period_end > now:
-            raise ValueError("Cannot publish a future observation interval")
-        html_path, _ = archive_paths(output_dir, report)
-        reports[str(html_path)] = report
-
-    from zont_analyzer.application.gas import GasService
-
-    gas_service = GasService(runtime.db, runtime.config)
-    candidate_ids = {report.id for report in overrides or []}
-    for report_path, report in list(reports.items()):
-        refreshed = gas_service.refresh(report)
-        # Regeneration owns the candidate commit after publication succeeds.
-        if report.id in candidate_ids or gas_service.persist_refresh(report, refreshed):
-            reports[report_path] = refreshed
-        else:
-            # A concurrent regeneration won the optimistic guard. Never publish
-            # or store our older AI/context over that revision.
-            reports[report_path] = runtime.db.report(report.id) or report
-
     entries: list[dict[str, Any]] = []
     latest: Report | None = None
     for report in sorted(reports.values(), key=lambda item: (item.kind, item.period_start)):

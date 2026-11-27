@@ -10,7 +10,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from copy import deepcopy
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -25,7 +25,9 @@ if TYPE_CHECKING:
 
 VERSION = "publication-v2"
 DIRTY_SEMANTICS = "regulation-v1"
-RENDER, GAS, COST, SETTINGS, REGULATION = 1, 2, 4, 8, 16
+# Value 2 was the gas recalculation flag. Existing queue items also have
+# RENDER and can be drained normally without assigning a new meaning to 2.
+RENDER, COST, SETTINGS, REGULATION = 1, 4, 8, 16
 AUDIT_SIZE = 16
 LEASE_SECONDS = 240
 
@@ -96,12 +98,12 @@ def _regulation_windows(report: Report) -> tuple[float, float] | None:
 
 def _windows(report: Report) -> tuple[float, float]:
     """Candidate index union; each invalidation still checks its own dependency."""
-    gas, regulation = _gas_windows(report), _regulation_windows(report)
-    return (min(gas[0], regulation[0]), max(gas[1], regulation[1])) if regulation else gas
+    tariff, regulation = _gas_windows(report), _regulation_windows(report)
+    return (min(tariff[0], regulation[0]), max(tariff[1], regulation[1])) if regulation else tariff
 
 
 def _has_dependencies(report: Report) -> bool:
-    return bool(report.context.get("period_comparisons")) or _regulation_windows(report) is not None
+    return _regulation_windows(report) is not None
 
 
 def _entry(output: Path, report: Report) -> dict[str, Any]:
@@ -122,15 +124,12 @@ def _entry(output: Path, report: Report) -> dict[str, Any]:
 
 
 def _enqueue(items: dict[str, dict[str, Any]], flags: int, now: datetime,
-             predicate: Callable[[dict[str, Any]], bool] = lambda _: True) -> set[str]:
-    newly_dirty = set()
+             predicate: Callable[[dict[str, Any]], bool] = lambda _: True) -> None:
     for item in items.values():
         if predicate(item):
             if not item["dirty"]:
                 item["queued"] = _micros(now)
-                newly_dirty.add(item["href"])
             item["dirty"] |= flags | RENDER
-    return newly_dirty
 
 
 def _remember(items: dict[str, dict[str, Any]], output: Path, report: Report,
@@ -151,7 +150,7 @@ def _remember(items: dict[str, dict[str, Any]], output: Path, report: Report,
         "start": int(report.period_start.timestamp()), "end": int(report.period_end.timestamp()),
         "generated": _micros(report.generated_at), "digest": digest, "lo": lo, "hi": hi,
         "comparisons": _has_dependencies(report),
-        "dirty": (previous["dirty"] if previous else 0) | RENDER | GAS | REGULATION,
+        "dirty": (previous["dirty"] if previous else 0) | RENDER | REGULATION,
         "queued": previous["queued"] if previous and previous["dirty"] else _micros(now),
         "entry": previous["entry"] if previous else None,
         "json_stamp": previous["json_stamp"] if previous else ("" if cloud else _stamp(json_path)),
@@ -160,98 +159,35 @@ def _remember(items: dict[str, dict[str, Any]], output: Path, report: Report,
     return True
 
 
-def _dependents(items: dict[str, dict[str, Any]], report: Report, now: datetime, *, db: Any,
-                include_regulation: bool = True) -> set[str]:
+def _dependents(items: dict[str, dict[str, Any]], report: Report, now: datetime, *, db: Any) -> None:
     from .regulation_refresh import regulation_context_scopes, report_depends_on_regulation_scope
 
     end, start = report.period_end.timestamp(), report.period_start.timestamp()
     scopes = regulation_context_scopes(report.context)
-    newly_dirty: set[str] = set()
     for item in items.values():
         if not (item["comparisons"] and item["report_id"] != report.id and item["lo"] < end and item["hi"] > start):
             continue
         candidate = db.report(item["report_id"])
         if candidate is None:
             continue
-        gas, regulation = _gas_windows(candidate), _regulation_windows(candidate)
-        flags = COST if candidate.context.get("period_comparisons") and gas[0] < end and gas[1] > start else 0
-        if (include_regulation and regulation and regulation[0] < end and regulation[1] > start
+        regulation = _regulation_windows(candidate)
+        if (regulation and regulation[0] < end and regulation[1] > start
                 and (not scopes or any(report_depends_on_regulation_scope(candidate, scope) for scope in scopes))):
-            flags |= REGULATION
-        if flags:
-            newly_dirty.update(_enqueue({item["href"]: item}, flags, now))
-    return newly_dirty
+            _enqueue({item["href"]: item}, REGULATION, now)
 
 
-def _calibration_bounds(repository: PublicationRepository, runtime: Runtime) -> tuple[float, float] | None:
-    earliest, latest = repository.reading_span()
-    if earliest and latest and earliest != latest:
-        zone = ZoneInfo(runtime.config.home.effective_timezone)
-        # GasService's last boundary exposure ends at this local midnight.
-        # Its post-end cache-read padding cannot contribute integration time.
-        return (
-            datetime.fromisoformat(earliest).replace(tzinfo=zone).timestamp() - 900,
-            (datetime.fromisoformat(latest).replace(tzinfo=zone) + timedelta(days=1)).timestamp(),
-        )
-    return None
-
-
-def _hour_overlaps(hour: str, bounds: tuple[float, float]) -> bool:
-    start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
-    return start < bounds[1] and start + 3600 > bounds[0]
-
-
-def _is_calibration_change(change: dict[str, Any]) -> bool:
-    if change["scope"] == "telemetry-gas":
-        return True
-    try:
-        return json.loads(change["payload"]).get("calibration") is not False
-    except (TypeError, ValueError, AttributeError):
-        return True  # Unknown legacy payloads must remain conservative.
-
-
-def _exact_change_range(change: dict[str, Any]) -> tuple[int, int] | None:
-    hour = str(change["identifier"])
-    hour_start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
-    try:
-        payload = json.loads(change["payload"])
-        start, end = payload["change_start"], payload["change_end"]
-        if (payload.get("calibration") is True
-                and type(start) is int and type(end) is int
-                and hour_start <= start <= end < hour_start + 3600):
-            return start, end
-    except (TypeError, ValueError, KeyError):
-        pass
-    return None
-
-
-def _calibration_change_overlaps(change: dict[str, Any], bounds: tuple[float, float]) -> bool:
-    """Use exact changed seconds when available; old markers only identify an hour."""
-    changed = _exact_change_range(change)
-    if changed is not None:
-        return changed[0] < bounds[1] and changed[1] >= bounds[0]
-    return _hour_overlaps(str(change["identifier"]), bounds)
-
-
-def _telemetry(items: dict[str, dict[str, Any]], changes: list[dict[str, Any]], now: datetime,
-               *, broad_calibration: bool, db: Any) -> None:
-    if not changes:
-        return
-    if broad_calibration:
-        _enqueue(items, GAS, now)
-    for hour in sorted({str(change["identifier"]) for change in changes}):
+def _telemetry(items: dict[str, dict[str, Any]], hours: list[str], now: datetime, *, db: Any) -> None:
+    for hour in hours:
         start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
         end = start + 3600
         for item in items.values():
             if not (item["lo"] < end and item["hi"] > start):
                 continue
-            report = db.report(item["report_id"])
-            if report is None:
-                continue
-            gas, regulation = _gas_windows(report), _regulation_windows(report)
-            flags = GAS if gas[0] < end and gas[1] > start else 0
-            if regulation and regulation[0] < end and regulation[1] > start:
-                flags |= REGULATION
+            flags = RENDER if item["start"] - 900 < end and item["end"] + 900 > start else 0
+            if item["comparisons"] and (report := db.report(item["report_id"])):
+                regulation = _regulation_windows(report)
+                if regulation and regulation[0] < end and regulation[1] > start:
+                    flags |= REGULATION
             if flags:
                 _enqueue({item["href"]: item}, flags, now)
 
@@ -385,51 +321,21 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                         "latest_report_id": latest_hint["report_id"] if latest_hint else None}
 
     changes_hint = repository.changes_since(checkpoint, upper) if upper > checkpoint else []
-    service: GasService | None = None
-    model_version: str | None = None
-    model_at_upper = False
-
-    def capture_model() -> str:
-        nonlocal service, model_version, model_at_upper
-        if model_version is None:
-            if service is None:
-                service = GasService(runtime.db, runtime.config)
-            model_version = str(service.model()[0])
-            # A model loaded from inputs newer than the journal high-water mark
-            # must not become the baseline that narrows those unconsumed changes.
-            model_at_upper = runtime.db.source_revision() == upper
-        return model_version
-
-    def remember_model(meta: dict[str, str]) -> None:
-        if model_version is not None and model_at_upper:
-            meta["gas_model_version"] = model_version
-
-    telemetry_changes = [change for change in changes_hint if change["scope"] in {"telemetry", "telemetry-gas"}]
-    calibration_changes = [change for change in telemetry_changes if _is_calibration_change(change)]
-    calibration = _calibration_bounds(repository, runtime) if calibration_changes else None
-    overlaps = [change for change in calibration_changes
-                if calibration and _calibration_change_overlaps(change, calibration)]
-    broad_calibration = False
-    refresh_reason = ""
-    if overlaps:
-        if any(_exact_change_range(change) is None for change in overlaps):
-            broad_calibration, refresh_reason = True, "legacy_calibration_marker"
-        else:
-            current_model = capture_model()
-            previous_model = meta_hint.get("gas_model_version")
-            if not previous_model:
-                broad_calibration, refresh_reason = True, "calibration_model_checkpoint_missing"
-            elif previous_model != current_model:
-                broad_calibration, refresh_reason = True, "calibration_model_changed"
-    hourly_changes = bool(changes_hint) and len(changes_hint) <= 16 and all(
-        change["scope"] in {"telemetry", "telemetry-gas"} for change in changes_hint
-    ) and not broad_calibration
-    hourly_hours = sorted({str(change["identifier"]) for change in changes_hint}) if hourly_changes else []
+    hours = sorted({str(change["identifier"]) for change in changes_hint if change["scope"] == "telemetry"})
+    meter_days = {str(change["identifier"]) for change in changes_hint
+                  if str(change["scope"]).startswith("owner-gas:")}
+    form_hrefs = {f"daily/{day}.html" for day in meter_days if day}
+    scoped_changes = bool(changes_hint) and len(hours) <= 16 and all(
+        change["scope"] in {"telemetry", "telemetry-gas"}
+        or str(change["scope"]).startswith("owner-gas:")
+        or (change["scope"], change["identifier"]) == ("global", "gas")
+        for change in changes_hint
+    )
 
     # A stable backlog needs only one bounded queue batch. Broad invalidations
     # and recovery still load the index so their dirty flags remain durable.
     partial = (
-        not rebuild and (upper == checkpoint or hourly_changes)
+        not rebuild and (upper == checkpoint or scoped_changes)
         and meta_hint.get("identity") == runtime.db.identity
         and meta_hint.get("profiles") == profile_digest and meta_hint.get("config") == config_digest
         and meta_hint.get("ai_review") == review_digest and "count" in meta_hint
@@ -438,7 +344,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         and meta_hint.get("dirty_semantics") == DIRTY_SEMANTICS
         and "unpublished_count" in meta_hint
         and meta_hint.get("unpublished_basis") == _unpublished_basis(meta_hint)
-        and manifest_current and (repository.has_dirty() or hourly_changes)
+        and manifest_current and (scoped_changes or repository.has_dirty())
     )
     latest_hint = repository.latest_daily() if partial else None
     if partial:
@@ -449,8 +355,10 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                         batch_size, str(latest_hint["href"]) if latest_hint else "",
                         include_unpublished=int(meta_hint["unpublished_count"]) > 0),
                     dict(meta_hint)) if partial else repository.load())
-    if partial and hourly_changes:
-        for href, affected in repository.affected_items(hourly_hours).items():
+    if partial:
+        if latest_hint and meter_days:
+            form_hrefs.add(str(latest_hint["href"]))
+        for href, affected in (repository.affected_items(hours) | repository.items_by_href(form_hrefs)).items():
             items.setdefault(href, affected)
     previous, old_meta = deepcopy(items), dict(meta)
     if meta.get("dirty_semantics") != DIRTY_SEMANTICS:
@@ -459,10 +367,6 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         # view invalidations are queued; clean archive items need no migration.
         _enqueue(items, REGULATION, now, lambda item: bool(item["dirty"]))
         meta["dirty_semantics"] = DIRTY_SEMANTICS
-    remember_model(meta)
-    if broad_calibration:
-        meta["gas_model_previous_version"] = meta_hint.get("gas_model_version", "")
-        meta["gas_model_refresh_reason"] = refresh_reason
     checkpoint = int(meta.get("checkpoint", "0"))
     # Keep the captured high-water mark. A source write during rendering must
     # remain newer than this checkpoint and be observed by the next run.
@@ -475,11 +379,17 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
         items.clear()
         for canonical_report in repository.canonical_reports(now):
             _remember(items, output, canonical_report, now, cloud=cloud is not None)
+        if meta.get("identity") == identity:
+            for href, item in items.items():
+                prior = previous.get(href)
+                if prior and prior["dirty"] and prior["report_id"] == item["report_id"]:
+                    item["dirty"] |= prior["dirty"] & (COST | SETTINGS | REGULATION)
+                    item["queued"] = prior["queued"]
         meta["identity"] = identity
-    elif not partial:
+    if not partial:
         for change in changes:
             scope, identifier = str(change["scope"]), str(change["identifier"])
-            if scope == "report":
+            if scope == "report" and not recovering:
                 report = runtime.db.report(identifier)
                 if report is not None and _remember(items, output, report, now, cloud=cloud is not None):
                     _dependents(items, report, now, db=runtime.db)
@@ -507,8 +417,8 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                 # Its own report period need not overlap the changed boundary.
                 for circuit in bounds.get("circuit_ids") or ["*"]:
                     _regulation_change(items, {**change, "identifier": f"{identifier}/{circuit}"}, runtime.db, now)
-            elif scope == "global":
-                _enqueue(items, {"gas": GAS, "cost": COST}.get(identifier, RENDER), now)
+            elif scope == "global" and identifier != "gas":
+                _enqueue(items, COST if identifier == "cost" else RENDER, now)
             elif scope == "tariff" and identifier:
                 start = datetime.fromisoformat(identifier.replace("Z", "+00:00")).timestamp()
                 following = repository.next_tariff_start(identifier)
@@ -519,34 +429,29 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
             elif scope.startswith("tariff:"):
                 _enqueue(items, COST, now)
             elif scope.startswith(("owner-profile:", "series:")):
-                _enqueue(items, GAS | REGULATION, now)
-            elif scope.startswith("owner-gas:"):
-                _enqueue(items, GAS, now)
+                _enqueue(items, REGULATION, now)
             elif scope.startswith("telemetry:"):
                 # A legacy per-device revision has no hour to target. Modern
                 # hourly publication markers use scope="telemetry" below.
-                _enqueue(items, GAS | REGULATION, now)
+                _enqueue(items, REGULATION, now)
             # Raw device snapshots also change on ordinary discovery (timestamps,
             # online state). Equipment facts and device membership are covered by
             # the profile digest below; effective timezone is in the config digest.
-        # Old releases wrote no dependency information. Retain their broad
-        # calibration invalidation until their journal entries are consumed.
-        _telemetry(items, telemetry_changes, now, broad_calibration=broad_calibration, db=runtime.db)
-    elif hourly_changes:
-        _telemetry(items, changes_hint, now, broad_calibration=broad_calibration, db=runtime.db)
+    if not recovering:
+        _telemetry(items, hours, now, db=runtime.db)
 
     # A lost local publication directory is reconciled from canonical YDB.
     # Ordinary polls examine only sixteen paths and do no full archive walk.
     if not partial and cloud is None and not manifest_path.exists():
         for item in items.values():
             if not (output / item["href"]).is_file() or not (output / item["href"]).with_suffix(".json").is_file():
-                _enqueue(items, GAS, now, lambda row: row["href"] == item["href"])  # noqa: B023
+                _enqueue({item["href"]: item}, RENDER, now)
                 item["entry"] = None
     if not partial and meta.get("profiles") != profile_digest:
-        _enqueue(items, GAS | REGULATION, now)
+        _enqueue(items, REGULATION, now)
     meta["profiles"] = profile_digest
     if not partial and meta.get("config") != config_digest:
-        _enqueue(items, GAS | REGULATION, now)
+        _enqueue(items, REGULATION, now)
     meta["config"] = config_digest
     if not partial and meta.get("ai_review") != review_digest:
         _enqueue(items, RENDER, now)
@@ -574,18 +479,22 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                 damaged = (item["json_stamp"] != _stamp(path.with_suffix(".json"))
                            or item["html_stamp"] != _stamp(path))
             if damaged:
-                _enqueue(items, GAS, now, lambda row: row["href"] == href)  # noqa: B023
+                _enqueue({href: item}, RENDER, now)
         meta["audit"] = audit[-1] if len(audit) == AUDIT_SIZE else ""
 
     latest = (latest_hint if partial else
               max((item for item in items.values() if item["kind"] == "daily"),
                   key=lambda item: (item["start"], item["href"]), default=None))
     latest_href = latest["href"] if latest else ""
+    if latest_href and meter_days:
+        form_hrefs.add(latest_href)
+    if form_hrefs:
+        _enqueue(items, RENDER, now, lambda item: item["href"] in form_hrefs)
     latest_missing = not _cloud_object_current(cloud, meta, "latest") if cloud else (
         meta.get("latest_stamp") != _stamp(output / "latest.html"))
     if latest and latest_missing:
         _enqueue(items, RENDER, now, lambda item: item["href"] == latest_href)
-    if partial and not items:
+    if partial and not any(item["dirty"] for item in items.values()):
         pending, _ = repository.pending_count()
         if pending == 0:
             meta["checkpoint"] = str(upper)
@@ -606,8 +515,7 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                 if item["dirty"] and href in previous and not previous[href]["dirty"]}
     completed: set[str] = set()
     queue = _queue(items, latest_href, batch_size)
-    if service is None and any(item["dirty"] & (GAS | COST) for item in queue):
-        service = GasService(runtime.db, runtime.config)
+    service = GasService(runtime.db, runtime.config) if any(item["dirty"] & COST for item in queue) else None
     tariffs = GasTariffStore(runtime.db).history() if queue else []
 
     def render(report: Report, *, is_latest: bool = False) -> str:
@@ -644,26 +552,12 @@ def _run(repository: PublicationRepository, runtime: Runtime, output: Path, now:
                     report = refreshed
                 else:
                     raise RuntimeError("report changed during settings refresh; retry publication")
-            if service is not None and item["dirty"] & (GAS | COST):
-                refreshed = service.refresh(report) if item["dirty"] & GAS else service.refresh_cost(report)
+            if service is not None and item["dirty"] & COST:
+                refreshed = service.refresh_cost(report)
                 if service.persist_refresh(report, refreshed):
-                    if item["dirty"] & GAS and report.context.get("gas") != refreshed.context.get("gas"):
-                        if partial:
-                            for href, dependent in repository.dependent_items(
-                                report.period_start.timestamp(), report.period_end.timestamp(), report.id,
-                            ).items():
-                                items.setdefault(href, dependent)
-                                previous.setdefault(href, deepcopy(dependent))
-                        for href in _dependents(items, refreshed, now, db=runtime.db, include_regulation=False):
-                            # A dependency can reactivate an item completed
-                            # earlier in this same bounded batch.
-                            requeued[href] = requeued.get(href, 0) + 1
                     report = refreshed
                 else:
-                    report = runtime.db.report(report.id) or report
-                if item["dirty"] & GAS:
-                    capture_model()
-                    remember_model(meta)
+                    raise RuntimeError("report changed during tariff refresh; retry publication")
             from .regulation_refresh import refresh_regulation_context, regulation_context_fingerprint
 
             # View/template changes use the saved evidence. Only source

@@ -18,7 +18,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.application.analysis import AnalysisService
-from zont_analyzer.application.period_schedule import scheduled_periods
+from zont_analyzer.application.period_schedule import daily_inputs_pending, scheduled_periods
 from zont_analyzer.cloud.heavy_work import HeavyWorkLease
 from zont_analyzer.cloud.limits import DEFAULT_LONG_JOB_SECONDS, MAX_LONG_JOB_SECONDS
 from zont_analyzer.cloud.report_jobs import MIN_COLLECTION_SECONDS, ReportJobRunner
@@ -312,6 +312,9 @@ class ProductionScheduler:
             # rotates through history instead of delaying tomorrow's daily
             # report until a possibly years-long archive scan wraps around.
             cursor = max(1, int(state.get(lane + "_cursor", 1)))
+            deferred_daily = frozenset(
+                Period.model_validate(item["period"]).start for item in state.get("daily_deferred", [])
+            )
             indices = [0]
             if len(periods) > 1:
                 indices.extend(1 + ((cursor - 1 + offset) % (len(periods) - 1))
@@ -330,19 +333,10 @@ class ProductionScheduler:
                           if lane == "daily" else period_needs_report(analysis, selected_period))
                 if not needed:
                     continue
-                if (selected_period.kind == "seasonal"
-                        and selected_period.observed_end - selected_period.start > timedelta(days=31)):
-                    # Long seasons consume daily facts. Do not freeze a partial
-                    # aggregate while the automatic daily catch-up is pending.
-                    start_day = max(first, selected_period.start.astimezone(ZoneInfo(timezone)).date())
-                    end_day = selected_period.observed_end.astimezone(ZoneInfo(timezone)).date()
-                    available = {report.period_start.astimezone(ZoneInfo(timezone)).date()
-                                 for report in self.runtime.db.daily_reports(
-                                     selected_period.start, selected_period.observed_end,
-                                 ) if report.generated_at >= report.period_end}
-                    if any(start_day + timedelta(days=offset) not in available
-                           for offset in range((end_day - start_day).days)):
-                        continue
+                if lane != "daily" and daily_inputs_pending(
+                    analysis, selected_period, first, deferred_starts=deferred_daily,
+                ):
+                    continue
                 period = selected_period
                 break
             if period is None:

@@ -7,10 +7,12 @@ import math
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import ydb  # type: ignore[import-untyped]
 
 from zont_analyzer.domain import Report, SourceEvent
+from zont_analyzer.domain.periods import midnight
 
 from .ai_usage import AiUsageRepository
 from .database import Transaction, YdbConfig, YdbDatabase
@@ -384,20 +386,29 @@ class Database:
         )[0].rows
         return hashlib.sha256(encode([[row.scope, row.revision] for row in rows]).encode()).hexdigest()
 
-    def daily_report_catalogue(self, start: datetime, end: datetime) -> Iterator[tuple[str, datetime]]:
+    def daily_report_catalogue(
+        self, start: datetime, end: datetime, *, timezone: str | None = None,
+    ) -> Iterator[tuple[str, datetime]]:
         """Read small selection metadata before loading bounded historical context."""
+        zone = ZoneInfo(timezone) if timezone else None
         for row in self._daily_report_rows(start, end, include_payload=False):
-            yield str(row.id), datetime.fromtimestamp(row.period_start, UTC)
+            left = datetime.fromtimestamp(row.period_start, UTC)
+            if zone and timezone:
+                day = left.astimezone(zone).date()
+                if (left != midnight(day, timezone)
+                        or utc_seconds(midnight(day + timedelta(days=1), timezone)) != row.period_end):
+                    continue
+            yield str(row.id), left
 
     def _daily_report_rows(self, start: datetime, end: datetime, *, include_payload: bool) -> Iterator[Any]:
         after, after_id = utc_seconds(start) - 1, ""
-        columns = "id,period_start,payload" if include_payload else "id,period_start"
+        columns = "id,period_start,payload" if include_payload else "id,period_start,period_end"
         while True:
             rows = self.storage.execute(
                 "DECLARE $start AS Int64; DECLARE $end AS Int64; DECLARE $after AS Int64; "
                 f"DECLARE $id AS Utf8; SELECT {columns} FROM reports WHERE kind='daily' "
-                "AND period_start >= $start AND period_end <= $end AND (period_start > $after OR "
-                "(period_start=$after AND id > $id)) ORDER BY period_start,id LIMIT 100;",
+                "AND period_start >= $start AND period_start < $end AND period_end <= $end "
+                "AND (period_start > $after OR (period_start=$after AND id > $id)) ORDER BY period_start,id LIMIT 100;",
                 {"$start": utc_seconds(start), "$end": utc_seconds(end), "$after": after, "$id": after_id},
             )[0].rows
             yield from rows
@@ -405,11 +416,18 @@ class Database:
                 return
             after, after_id = rows[-1].period_start, rows[-1].id
 
-    def daily_reports(self, start: datetime, end: datetime) -> Iterator[Report]:
-        """Stream complete days in order, choosing the latest generated version."""
+    def daily_reports(self, start: datetime, end: datetime, *, timezone: str | None = None) -> Iterator[Report]:
+        """Stream daily reports, optionally choosing only completed exact local days."""
+        zone = ZoneInfo(timezone) if timezone else None
         pending: list[Report] = []
         for row in self._daily_report_rows(start, end, include_payload=True):
             report = Report.model_validate(json.loads(row.payload)["report"])
+            if zone and timezone:
+                day = report.period_start.astimezone(zone).date()
+                if (report.period_start != midnight(day, timezone)
+                        or report.period_end != midnight(day + timedelta(days=1), timezone)
+                        or report.generated_at < report.period_end):
+                    continue
             if pending and pending[0].period_start != report.period_start:
                 yield max(pending, key=lambda item: item.generated_at)
                 pending.clear()

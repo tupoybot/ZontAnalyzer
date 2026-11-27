@@ -66,7 +66,7 @@ def test_unpublished_counter_skips_archive_scan_and_recovers_when_missing(tmp_pa
         result = publication.publish_reports(runtime, batch_size=2)
     assert repository.load_meta()["unpublished_count"] == "0"
 
-    _record_change(runtime.db, "global", "gas")
+    _record_change(runtime.db, "global", "render")
     assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 5
     original_execute = runtime.db.storage.execute
 
@@ -143,7 +143,7 @@ def test_repeated_invalidation_coalesces_and_new_source_change_survives_batch(tm
     for day in range(4):
         reports.analyze_daily(date(2026, 8, 1) + timedelta(days=day), use_ai=False)
     publication.publish_reports(runtime)
-    _record_change(runtime.db, "global", "gas")
+    _record_change(runtime.db, "global", "render")
     assert publication.publish_reports(runtime, batch_size=1)["pending_reports"] == 3
 
     owner = OwnerContextStore(runtime.db)

@@ -347,6 +347,12 @@ def gas_purpose_text(report: Report) -> list[str]:
         return _volume_and_cost(value, cost) if valid(value) else "Нет данных"
 
     total = split.get("total_modelled_m3")
+    gap = split.get("unallocated_m3")
+    partial_aggregate = split.get("status") == "partial" and isinstance(gas.get("aggregation"), dict)
+    if partial_aggregate and valid(total):
+        allocated = split.get("allocated_observed_m3")
+        if not (valid(allocated) and valid(gap) and math.isclose(allocated + gap, total, rel_tol=1e-6)):
+            total = None
     lines = ["Распределение газа по назначению — оценка по работе горелки."]
     if gas.get("status") == "measured":
         lines.append("Показание общего счётчика и оценка распределения рассчитаны отдельно; их итоги могут отличаться.")
@@ -355,7 +361,12 @@ def gas_purpose_text(report: Report) -> list[str]:
     if split.get("status") == "unknown":
         lines.append("Для распределения недостаточно данных.")
         return lines
-    lines.append("Расход по модели за период: " + volume(total, split.get("cost")))
+    total_label = (
+        "Расход по модели за дни с распределением"
+        if partial_aggregate
+        else "Расход по модели за период"
+    )
+    lines.append(f"{total_label}: " + volume(total, split.get("cost")))
     if not valid(total):
         lines.append("Известна только наблюдаемая часть; доли от всего периода не определены.")
     components = split.get("components")
@@ -369,11 +380,32 @@ def gas_purpose_text(report: Report) -> list[str]:
                  if valid(value) and valid(total) and total > 0 else "")
         cost = item.get("cost") if isinstance(item, dict) else None
         lines.append(f"{label}: {volume(value, cost)}{share}")
-    gap = split.get("unallocated_m3")
     if valid(gap) and gap > 0:
         lines.append("Не распределено из-за пропусков телеметрии: " + volume(gap, split.get("unallocated_cost")))
     if valid(total) and total > 0:
         lines.append("Проценты рассчитаны от расхода по модели, с учётом нераспределённой части.")
+    return lines
+
+
+_GAS_SCOPES = {
+    "boiler": "котёл", "shared_meter": "оценка по общему счётчику",
+    "whole_meter": "весь счётчик", "unknown": "охват неизвестен", "mixed": "разный охват по дням",
+}
+
+
+def gas_scope_totals(gas: dict[str, Any]) -> list[str]:
+    aggregation = gas.get("aggregation")
+    if gas.get("scope") != "mixed" or not isinstance(aggregation, dict):
+        return []
+    rows = aggregation.get("scope_totals")
+    if not isinstance(rows, list):
+        return []
+    lines = ["Дневные отчёты охватывают разных потребителей газа. Суммы показаны отдельно."]
+    for row in rows:
+        if isinstance(row, dict):
+            scope = _GAS_SCOPES.get(str(row.get("scope")), "охват неизвестен")
+            amount = _volume_and_cost(row.get("volume_m3"), row.get("cost"))
+            lines.append(f"{scope.capitalize()} · дней: {row.get('days')} · {amount}")
     return lines
 
 
@@ -385,7 +417,7 @@ def gas_period_card(report: Report) -> str:
     status = str(gas.get("status") or "unknown")
     status_labels = {
         "unknown": "нет данных", "measured": "измерено", "estimated": "оценено",
-        "extrapolated": "экстраполировано",
+        "extrapolated": "экстраполировано", "partial": "сумма известных дней",
     }
     status_label = status_labels.get(status, "нет данных")
     volume = (
@@ -398,12 +430,14 @@ def gas_period_card(report: Report) -> str:
         bounds.append(f"от {_gas_value(lower, 'м³')}")
     if isinstance(upper, (int, float)) and not isinstance(upper, bool):
         bounds.append(f"до {_gas_value(upper, 'м³')}")
-    details: list[str] = [f"Расход газа за период: {volume}", f"Статус: {status_label}"]
+    volume_label = "Расход за дни с оценкой" if status == "partial" else "Расход газа за период"
+    details: list[str] = [f"{volume_label}: {volume}", f"Статус: {status_label}"]
     if bounds:
         details.append("Диапазон: " + " — ".join(bounds))
     if status == "unknown" and isinstance(gas.get("observed_volume_m3"), (int, float)):
         details.append("Оценка только наблюдаемой части: " + _gas_value(gas["observed_volume_m3"], "м³"))
     details.extend(validation_lines(gas))
+    details.extend(gas_scope_totals(gas))
     coverage = gas.get("coverage_pct")
     if isinstance(coverage, (int, float)) and not isinstance(coverage, bool):
         details.append(f"Покрытие: {_gas_value(coverage, '%')}")
@@ -420,7 +454,7 @@ def gas_period_card(report: Report) -> str:
         if isinstance(gas.get(key), (int, float)) and not isinstance(gas.get(key), bool):
             details.append(f"{label}: {_volume_and_cost(gas[key], gas.get(cost_key), unit)}")
     if gas.get("complete") is False:
-        details.append("Период неполный; итог не представляет полный сезон")
+        details.append("Период неполный.")
     for key in ("source", "uncertainty_method"):
         if gas.get(key):
             details.append(str(gas[key]))
@@ -432,10 +466,7 @@ def gas_period_card(report: Report) -> str:
         details.append("Ограничения: " + "; ".join(_GAS_REASONS.get(str(item), str(item)) for item in reasons))
     scope = gas.get("scope")
     if scope:
-        details.append("Охват: " + {
-            "boiler": "котёл", "shared_meter": "приближение по общему счётчику",
-            "whole_meter": "весь счётчик",
-        }.get(str(scope), str(scope)))
+        details.append("Охват: " + _GAS_SCOPES.get(str(scope), str(scope)))
     intervals = gas.get("measured_intervals")
     interval_rows = []
     if isinstance(intervals, list):
@@ -678,6 +709,9 @@ def gas_distribution_card(gas: dict[str, Any]) -> str:
         "Проверка модели приведена в подробностях о газе."
         if status == "measured" else VALIDATION_NOTE
     )
+    if isinstance(gas.get("aggregation"), dict):
+        validation_label = validation_summary(gas)
+        validation_tooltip = "Сумма сохранённых дневных оценок. Дни без оценки указаны как пропуски."
     money = _cost_value(gas.get("cost")) if status != "unknown" else None
     money_html = (
         f'<span class="gas-kpi-value gas-kpi-money">· {esc(money)}</span>'

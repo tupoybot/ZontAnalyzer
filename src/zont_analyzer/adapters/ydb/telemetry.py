@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from bisect import bisect_right
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -18,6 +19,7 @@ from .database import Transaction, YdbDatabase
 from .regulation_events import advance_projection
 from .regulation_markers import observe_first_inputs
 from .sample_bounds import extend
+from .telemetry_fences import PART_EDGES, PARTS_FIELD, part_revisions
 
 CoverageState = Literal["complete", "empty", "failed", "unavailable"]
 
@@ -76,15 +78,14 @@ def _record_publication_change(
                 old = json.loads(previous.rows[0].payload)
             except (TypeError, ValueError):
                 old = None
-            if scope in {"telemetry-gas", "control-settings", "regulation-facts", "regulation-manual"}:
+            if scope in {"control-settings", "regulation-facts", "regulation-manual"}:
                 try:
                     new = json.loads(payload)
                 except (TypeError, ValueError):
                     new = None
 
                 def bounds(value: Any) -> tuple[int, int] | None:
-                    if (not isinstance(value, dict)
-                            or (scope == "telemetry-gas" and value.get("calibration") is not True)):
+                    if not isinstance(value, dict):
                         return None
                     first, last = value.get("change_start"), value.get("change_end")
                     if type(first) is not int or type(last) is not int or first > last:
@@ -93,18 +94,14 @@ def _record_publication_change(
 
                 prior, current = bounds(old), bounds(new)
                 if prior is None or current is None:
-                    # Unknown unconsumed history must retain broad calibration.
+                    # Unknown unconsumed history must retain its full scope.
                     payload = "{}"
                 else:
-                    payload = encode({**({"calibration": True} if scope == "telemetry-gas" else {}),
-                                      **({"circuit_ids": sorted(set(old["circuit_ids"]) | set(new["circuit_ids"]))}
+                    payload = encode({**({"circuit_ids": sorted(set(old["circuit_ids"]) | set(new["circuit_ids"]))}
                                          if scope == "control-settings" and isinstance(old.get("circuit_ids"), list)
                                          and isinstance(new.get("circuit_ids"), list) else {}),
                                       "change_start": min(prior[0], current[0]),
                                       "change_end": max(prior[1], current[1])})
-            elif not isinstance(old, dict) or old.get("calibration") is not False:
-                # Do not narrow an unconsumed marker written by an older release.
-                payload = "{}"
     publication_revision = bump_revision(tx, "publication")
     tx.execute(
         "DECLARE $scope AS Utf8; DECLARE $identifier AS Utf8; DECLARE $revision AS Int64; "
@@ -113,6 +110,33 @@ def _record_publication_change(
         "VALUES ($scope,$identifier,$revision,$payload);",
         {"$scope": scope, "$identifier": identifier, "$revision": publication_revision,
          "$payload": payload},
+    )
+
+
+def _record_telemetry_hour_change(tx: Transaction, hour: str, changed_parts: set[int]) -> None:
+    # Fetch the existing precision in the same call as the global revision read.
+    # The transaction still publishes one hourly change and no extra work item.
+    publication, previous = tx.execute(
+        "DECLARE $hour AS Utf8; "
+        "SELECT revision FROM revisions WHERE scope='publication'; "
+        "SELECT revision,payload FROM publication_changes WHERE scope='telemetry' AND identifier=$hour;",
+        {"$hour": hour},
+    )
+    revision = int(publication.rows[0].revision) + 1 if publication.rows else 1
+    previous_revision = int(previous.rows[0].revision) if previous.rows else 0
+    try:
+        previous_payload = json.loads(previous.rows[0].payload) if previous.rows else None
+    except (TypeError, ValueError):
+        previous_payload = None
+    parts = part_revisions(previous_payload, previous_revision)
+    for index in changed_parts:
+        parts[index] = revision
+    tx.execute(
+        "DECLARE $hour AS Utf8; DECLARE $revision AS Int64; DECLARE $payload AS Utf8; "
+        "UPSERT INTO revisions (scope,revision) VALUES ('publication',$revision); "
+        "UPSERT INTO publication_changes (scope,identifier,revision,payload) "
+        "VALUES ('telemetry',$hour,$revision,$payload);",
+        {"$hour": hour, "$revision": revision, "$payload": encode({PARTS_FIELD: parts})},
     )
 
 
@@ -346,7 +370,6 @@ class TelemetryRepository:
             rows: list[dict[str, Any]] = []
             changed = False
             series_cache: dict[tuple[str, str, str], int] = {}
-            calibration_keys: set[tuple[int, int]] = set()
             setpoint_ids: set[int] = set()
             for point in samples:
                 key = (point.source_type, point.entity_id, point.metric_key)
@@ -357,11 +380,6 @@ class TelemetryRepository:
                              "quality": point.quality, "ingested_at": checked})
                 if is_setpoint_series(point.source_type, point.metric_key):
                     setpoint_ids.add(series_cache[key])
-                # GasService fits the meter model from boiler flags and
-                # modulation only. Temperatures and raw events do not change
-                # that fit, even when their timestamps fall inside calibration.
-                if point.source_type == "z3k_boiler_adapter" and point.metric_key in {"s", "rml", "modulation"}:
-                    calibration_keys.add((series_cache[key], utc_seconds(point.timestamp_utc)))
             if rows:
                 key_type = (ydb.TupleType().add_element(ydb.PrimitiveType.Int64)
                             .add_element(ydb.PrimitiveType.Int64))
@@ -389,8 +407,6 @@ class TelemetryRepository:
                 tx.execute("UPSERT INTO telemetry_samples SELECT * FROM AS_TABLE($rows);",
                            {"$rows": ydb.TypedValue(rows, ydb.ListType(row_type))})
             changed_times = {int(row["timestamp_utc"]) for row in rows}
-            calibration_times = {int(row["timestamp_utc"]) for row in rows
-                                 if (row["series_id"], row["timestamp_utc"]) in calibration_keys}
             first_setpoints: dict[int, int] = {}
             for row in rows:
                 identifier, at = int(row["series_id"]), int(row["timestamp_utc"])
@@ -525,22 +541,13 @@ class TelemetryRepository:
                 revision = bump_revision(tx, "telemetry:" + device_id, publish=False)
                 advance_projection(tx, device_id, revision - 1, revision, previous_changed_events, changed_events)
                 extend(tx, [int(row["timestamp_utc"]) for row in rows], device_id, revision)
-                # Keep calibration markers independent: a later temperature
-                # write in the same hour must not overwrite an unconsumed boiler
-                # change. Existing hourly records without this payload remain
-                # conservative when read by the new publisher.
-                hours = {datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H") for at in changed_times}
-                for hour in sorted(hours):
-                    _record_publication_change(tx, "telemetry", hour, payload='{"calibration":false}')
-                by_hour: dict[str, list[int]] = {}
-                for at in calibration_times:
+                parts_by_hour: dict[str, set[int]] = {}
+                for at in changed_times:
                     hour = datetime.fromtimestamp(at, UTC).strftime("%Y-%m-%dT%H")
-                    by_hour.setdefault(hour, []).append(at)
-                for hour, timestamps in sorted(by_hour.items()):
-                    _record_publication_change(tx, "telemetry-gas", hour, payload=encode({
-                        "calibration": True, "change_start": min(timestamps),
-                        "change_end": max(timestamps),
-                    }))
+                    part = bisect_right(PART_EDGES, at % 3600) - 1
+                    parts_by_hour.setdefault(hour, set()).add(part)
+                for hour, parts in sorted(parts_by_hour.items()):
+                    _record_telemetry_hour_change(tx, hour, parts)
                 for day in {datetime.fromtimestamp(at, UTC).date().isoformat() for at in changed_times}:
                     tx.execute(
                         "DECLARE $key AS Utf8; DECLARE $value AS Utf8; "

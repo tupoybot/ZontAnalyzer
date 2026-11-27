@@ -133,24 +133,18 @@ class PublicationRepository:
             after = min(int(row["dirty"]) for row in rows)
         return items
 
-    def dependent_items(self, start: float, end: float, report_id: str) -> dict[str, dict[str, Any]]:
+    def items_by_href(self, hrefs: set[str]) -> dict[str, dict[str, Any]]:
         items: dict[str, dict[str, Any]] = {}
-        after = ""
-        while True:
+        ordered = sorted(hrefs)
+        for offset in range(0, len(ordered), 100):
             rows = self.db.execute(
-                "DECLARE $start AS Double; DECLARE $end AS Double; DECLARE $report_id AS Utf8; "
-                "DECLARE $after AS Utf8; DECLARE $limit AS Uint64; "
-                "SELECT * FROM publication_items WHERE href>$after AND comparisons=true "
-                "AND report_id!=$report_id AND lo<$end AND hi>$start ORDER BY href LIMIT $limit;",
-                {"$start": start, "$end": end, "$report_id": report_id,
-                 "$after": after, "$limit": _limit()},
+                "DECLARE $hrefs AS List<Utf8>; SELECT * FROM publication_items WHERE href IN $hrefs;",
+                {"$hrefs": ydb.TypedValue(ordered[offset:offset + 100], ydb.ListType(ydb.PrimitiveType.Utf8))},
             )[0].rows
             for row in rows:
                 item = self._item(row)
                 items[str(item["href"])] = item
-            if len(rows) < 1000:
-                return items
-            after = str(rows[-1].href)
+        return items
 
     def affected_items(self, hours: list[str]) -> dict[str, dict[str, Any]]:
         """Read only reports whose recorded source windows meet changed UTC hours."""
@@ -230,11 +224,6 @@ class PublicationRepository:
                 break
             after = int(rows[-1].revision)
         return changes
-
-    def reading_span(self) -> tuple[str | None, str | None]:
-        rows = self.db.execute("SELECT MIN(reading_day) AS lo,MAX(reading_day) AS hi FROM gas_readings;")[0].rows
-        return (str(rows[0].lo) if rows[0].lo is not None else None,
-                str(rows[0].hi) if rows[0].hi is not None else None) if rows else (None, None)
 
     def next_tariff_start(self, start: str) -> str | None:
         # Effective times are UTC ISO strings in the canonical tariff payload.

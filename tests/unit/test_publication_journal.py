@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -174,7 +175,8 @@ def test_representative_writes_mark_report_feedback_gas_device_and_telemetry(tmp
     assert high > baseline
     scopes = {(str(item["scope"]), str(item["identifier"])) for item in changes}
     assert ("render", report.id) in scopes
-    assert ("owner-gas:installation", "") in scopes
+    local_day = report.period_start.astimezone(ZoneInfo(report.timezone)).date().isoformat()
+    assert ("owner-gas:installation", local_day) in scopes
     assert ("device:device", "") in scopes
     assert ("telemetry", report.period_start.astimezone(UTC).strftime("%Y-%m-%dT%H")) in scopes
     assert ("telemetry:device", "") not in scopes

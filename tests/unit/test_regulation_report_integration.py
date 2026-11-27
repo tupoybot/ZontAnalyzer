@@ -207,13 +207,39 @@ def test_stale_ai_remains_visible_with_one_notice_and_current_supplements(prompt
         assert value in plain and value in rendered
     hero = rendered.split('<section class="hero', 1)[1].split('</section>', 1)[0]
     assert '<h1>Сохранённая рекомендация</h1>' not in hero
-    assert "абсолютное отклонение комнаты" not in area
+    assert "абсолютное отклонение комнаты" in area
     assert "06.09.2026 12:00" in plain and "06.09.2026 12:00" in area
     assert old_statement in plain
     assert "<script>alert(1)</script>" not in rendered
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in area
     assert area.count("&lt;script&gt;alert(1)&lt;/script&gt;") == 1
     assert 'class="regulation-result' not in rendered
+
+
+def test_stale_ai_cannot_hide_changed_values_in_topics_it_already_covered() -> None:
+    context = _dense_context()
+    context["regulation_interpretation_stale"] = True
+    context["control_settings_history"]["versions"].pop()  # Use the available comparison for the latest change.
+    saved = (
+        "Размах измеренной температуры подачи составлял 12 °C. "
+        "Настройки изменены с 10:00 до 12:00, P 5 → 6. Наблюдается ухудшение."
+    )
+    unchanged = (
+        "За период учтено 2 полных циклов запроса отопления; "
+        "среднее наибольшее превышение комнатой точной цели 0,8 °C в полном цикле."
+    )
+    report = _report(context=context, ai_used=True, patterns=[
+        ObservedPattern(id="saved", statement=saved, epistemic_level="derived"),
+        ObservedPattern(id="unchanged", statement=unchanged, epistemic_level="derived"),
+    ])
+
+    plain, rendered = render_text(report), render_html(report)
+    for output in (plain, _observation_area(rendered)):
+        assert "Из сохранённого анализа ИИ. " + saved in output
+        assert "наблюдается улучшение" in output
+        assert "измеренной температуры подачи 8,2 °C" in output
+        assert output.count(unchanged) == 1
+    assert rendered.count('class="gas-period-stale"') == 1
 
 
 def test_fallback_preserves_unrelated_existing_observation() -> None:

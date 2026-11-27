@@ -33,7 +33,7 @@ def history(tmp_path: Path):
 
 
 @pytest.mark.ydb
-def test_historical_gas_recalibrates_outside_interval_preserves_ai_feedback_and_versions(
+def test_model_upgrade_reuses_exposure_and_meter_edits_preserve_published_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ):
     r, store, reports = history(tmp_path)
@@ -83,22 +83,25 @@ def test_historical_gas_recalibrates_outside_interval_preserves_ai_feedback_and_
     stored = r.db.report(first.id)
     assert stored and stored.summary == first.summary
     version = stored.context['gas']['model_version']
-    store.update_gas(reports[2].id, {'value_m3': 388})
-    publish_reports(r)
-    updated = r.db.report(first.id)
-    assert updated and updated.context['gas']['model_version'] != version
-    assert updated.context['gas']['ai_stale'] is True
-    assert updated.context['gas']['volume_m3'] > first.context['gas']['volume_m3']
-    assert updated.summary == first.summary
-    assert r.db.recommendation('keep-owner-decision') == feedback
+    canonical = stored.model_dump_json()
+    from zont_analyzer.application.publication import archive_paths
+
+    exported = archive_paths(tmp_path/'publish', stored)[1]
+    before = exported.read_bytes()
+    for source, payload in (
+        (reports[2], {'value_m3': 388}),
+        (reports[1], {'value_m3': 244}),
+        (reports[1], {'delete': True}),
+    ):
+        store.update_gas(source.id, payload)
+        result = publish_reports(r)
+        assert result['rendered_reports'] == 2
+        assert result['pending_reports'] == 0
+        assert r.db.report(first.id).model_dump_json() == canonical
+        assert exported.read_bytes() == before
+        assert r.db.recommendation('keep-owner-decision') == feedback
     assert r.db.get_app_meta('gas-model:'+version)
-    canonical = updated.model_dump_json()
-    publish_reports(r)
-    assert r.db.report(first.id).model_dump_json() == canonical
-    # Inserting an old reading splits calibration but cannot invent new meter rows.
-    store.update_gas(reports[1].id, {'value_m3': 244})
-    publish_reports(r)
-    assert len(GasService(r.db, r.config).readings) == 3
+    assert len(GasService(r.db, r.config).readings) == 2
 
 
 @pytest.mark.ydb
@@ -214,17 +217,20 @@ def test_frozen_calibration_version_does_not_depend_on_subsequent_meter_readings
 
 
 @pytest.mark.ydb
-def test_new_regeneration_candidate_is_published_before_database_commit(tmp_path: Path):
+def test_new_regeneration_candidate_is_published_before_database_commit(tmp_path: Path, monkeypatch):
     from zont_analyzer.application.publication import _publish_locked, archive_paths
     r, _store, reports = history(tmp_path)
     old = reports[-1]
     candidate = old.model_copy(update={'summary': 'Новый ответ о газе', 'generated_at': datetime.now(UTC)})
     output = tmp_path/'publish'
     output.mkdir()
+    monkeypatch.setattr(GasService, '__init__', lambda *args: pytest.fail('publish recalculated candidate gas'))
     _publish_locked(r, output, datetime.now(UTC), overrides=[candidate])
     html, canonical = archive_paths(output, candidate)
     assert 'Новый ответ о газе' in html.read_text()
-    assert 'Новый ответ о газе' in canonical.read_text()
+    saved = json.loads(canonical.read_text())
+    assert saved['summary'] == 'Новый ответ о газе'
+    assert saved['context']['gas'] == candidate.context['gas']
     assert r.db.report(old.id).summary == old.summary
 
 

@@ -9,6 +9,7 @@ import pytest
 
 from tests.unit.test_regulation import START, inputs
 from zont_analyzer.adapters.ydb.regulation import RegulationRepository
+from zont_analyzer.adapters.ydb.telemetry_fences import WINDOW_PREFIX
 from zont_analyzer.analytics.evidence import ExclusionWindow
 from zont_analyzer.analytics.settings_history import settings_timeline
 from zont_analyzer.application import regulation_reports as reports
@@ -36,7 +37,7 @@ class CacheWorld:
         for window in windows:
             keys = RegulationRepository._fence_keys(*window, device_ids=device_ids)
             if self.legacy_fences:
-                keys = [key for key in keys if not key.startswith("meta:telemetry-hours:")]
+                keys = [key for key in keys if not key.startswith(("meta:telemetry-hours:", WINDOW_PREFIX))]
                 day = window[0].date()
                 while day <= (window[1] - timedelta(microseconds=1)).date():
                     keys.append("meta:telemetry-day:" + day.isoformat())
@@ -51,8 +52,8 @@ class CacheWorld:
     def read_fence(self, keys: list[str]) -> dict[str, int | str]:
         result = {}
         for key in keys:
-            if key.startswith("meta:telemetry-hours:"):
-                left, right = key.removeprefix("meta:telemetry-hours:").split("/")
+            if key.startswith(("meta:telemetry-hours:", WINDOW_PREFIX)):
+                left, right = key.split(":", 2)[2].split("/")
                 # Synthetic changes identify a day; the real repository tests
                 # below exercise the finer hour boundaries against native YDB.
                 result[key] = max((value for marker, value in self.markers.items()

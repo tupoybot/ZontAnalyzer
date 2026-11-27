@@ -345,13 +345,13 @@ try {
   await mockGasPut(200, JSON.stringify({selected_day: "2026-08-04", reading: { id: "mock-reading", day: "2026-08-04", value_m3: "13" }, readings: [], audit: [] }), "application/json");
   await mockedGas.locator("[data-gas-save]").click();
   await mockedGas.locator("[data-gas-message]").filter({ hasText: "Показание сохранено" }).waitFor();
-  assert.match(await mockedGas.locator("[data-gas-message]").textContent(), /Показание сохранено.*Отчёты обновятся/);
+  assert.match(await mockedGas.locator("[data-gas-message]").textContent(), /Показание сохранено.*Новые расчёты учтут изменение/);
   await finishMockGasPut();
   await mockedGas.locator("#gas-editor").evaluate(editor => { editor.open = true; });
   await mockGasPut(200, JSON.stringify({ reading: null, audit: [] }), "application/json");
   await mockedGas.locator("[data-gas-delete]").click();
   await mockedGas.locator("[data-gas-message]").filter({ hasText: "Показание удалено" }).waitFor();
-  assert.match(await mockedGas.locator("[data-gas-message]").textContent(), /Показание удалено.*Отчёты обновятся/);
+  assert.match(await mockedGas.locator("[data-gas-message]").textContent(), /Показание удалено.*Новые расчёты учтут изменение/);
   await finishMockGasPut();
 
   await page.goto(`${baseURL}/latest.html`, { waitUntil: "networkidle" });
