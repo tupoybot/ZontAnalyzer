@@ -10,6 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from zont_analyzer.adapters.ydb.application import Database
+from zont_analyzer.adapters.ydb.telemetry_fences import WINDOW_PREFIX, hour_bounds, window_bounds
 from zont_analyzer.analytics.regulation import (
     ALGORITHM_VERSION,
     RegulationInputs,
@@ -60,7 +61,12 @@ def _markers(fence: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in fence.items() if key.startswith("meta:")}
 
 
-def _marker_bounds(key: str) -> tuple[datetime, datetime] | None:
+def _marker_bounds(key: str, *, rounded: bool = False) -> tuple[datetime, datetime] | None:
+    if key.startswith(WINDOW_PREFIX):
+        bounds = window_bounds(key)
+        # Reports publish conservative dependency bounds. Keep them stable
+        # when a cache row is freshly recorded with a more precise fence.
+        return hour_bounds(*bounds) if rounded else bounds
     if key.startswith("meta:telemetry-day:"):
         left = datetime.fromisoformat(key.removeprefix("meta:telemetry-day:")).replace(tzinfo=UTC)
         return left, left + timedelta(days=1)
@@ -88,7 +94,7 @@ def _dependency_bounds(facts: list[dict[str, Any]], start: datetime, end: dateti
     for fact in facts:
         dependency = fact.get("cache_dependency", {})
         for key in dependency.get("markers", {}):
-            if (bounds := _marker_bounds(key)) is not None:
+            if (bounds := _marker_bounds(key, rounded=True)) is not None:
                 lower, upper = min(lower, bounds[0]), max(upper, bounds[1])
         for left, setting in dependency.get("settings", {}).items():
             lower, upper = min(lower, datetime.fromisoformat(left)), max(upper, datetime.fromisoformat(setting["end"]))

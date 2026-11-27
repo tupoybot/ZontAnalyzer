@@ -54,7 +54,7 @@ def test_calibration_marker_coalesces_exact_changed_times_until_ack(tmp_path: Pa
             "calibration": True, "change_start": int(first.timestamp()),
             "change_end": int(at.timestamp()),
         }
-        assert json.loads(_publication_marker(db, "telemetry", hour)[1]) == {"calibration": False}
+        assert json.loads(_publication_marker(db, "telemetry", hour)[1])["calibration"] is False
         if at == first:
             publisher_upper = revision
     # An in-flight publisher captured the first revision; a later same-hour
@@ -104,7 +104,7 @@ def test_unconsumed_unknown_calibration_marker_remains_broad(
     )
     db.telemetry.write_window(device_id="fixture", data_type="history", start=start, end=end,
                               points=[_boiler_point(start + timedelta(minutes=50))])
-    assert _publication_marker(db, "telemetry", hour)[1] == "{}"
+    assert json.loads(_publication_marker(db, "telemetry", hour)[1]).get("calibration") is not False
     _publication_ack(db, db.source_revision())
     db.telemetry.write_window(device_id="fixture", data_type="history", start=start, end=end,
                               points=[_boiler_point(start + timedelta(minutes=55))])

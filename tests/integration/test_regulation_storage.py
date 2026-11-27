@@ -12,6 +12,7 @@ from tests.regulation_projection_support import initialize_projection
 from tests.unit.test_regulation import START, inputs
 from tests.ydb_support import make_database
 from zont_analyzer.adapters.ydb.telemetry import bump_revision, encode
+from zont_analyzer.adapters.ydb.telemetry_fences import WINDOW_PREFIX, hour_bounds
 from zont_analyzer.analytics.regulation import build_regulation_facts
 from zont_analyzer.application.regulation_context import RegulationFactStore
 from zont_analyzer.application.regulation_reliability import apply_reliability_context
@@ -69,9 +70,11 @@ def test_compact_upload_is_fenced_and_idempotent(tmp_path: Path) -> None:
         store.save(first, "changed", source_fence=revised_fence)
 
 
-def test_hour_fence_ignores_following_ingestion_but_detects_late_and_endpoint_inputs(tmp_path: Path) -> None:
+@pytest.mark.parametrize("minute", [0, 15, 30, 45])
+def test_fence_ignores_adjoining_sync_but_detects_exact_late_inputs(tmp_path: Path, minute: int) -> None:
     db = make_database(tmp_path)
-    repository = RegulationFactStore(db).repository
+    store = RegulationFactStore(db)
+    repository = store.repository
 
     def write(at: datetime, value: float = 20) -> None:
         db.telemetry.write_window(
@@ -81,26 +84,86 @@ def test_hour_fence_ignores_following_ingestion_but_detects_late_and_endpoint_in
         )
 
     # Local UTC+4 day: six-hour predecessor and 61-second endpoint lookahead.
-    left = START + timedelta(hours=14)
-    right = START + timedelta(days=1, hours=20, seconds=61)
+    left = START + timedelta(hours=14, minutes=minute)
+    midnight = START + timedelta(days=1, hours=20, minutes=minute)
+    right = midnight + timedelta(seconds=61)
     write(START + timedelta(hours=1))  # Establish the series before taking fences.
     fence = repository.source_fence(start=left, end=right, device_ids=("device",))
-    hour_key, = [key for key in fence if key.startswith("meta:telemetry-hours:")]
-    assert hour_key.endswith("2025-01-01T14/2025-01-02T21")
-    assert fence[hour_key] == 0
-    write(START + timedelta(days=1, hours=21))
+    window_key, = [key for key in fence if key.startswith(WINDOW_PREFIX)]
+    assert fence[window_key] == 0
+    write(right)  # +61s is exactly the half-open endpoint.
+    write(midnight + timedelta(minutes=4))  # Normal ingestion in the same UTC hour.
+    write(left - timedelta(seconds=1))
     assert repository.read_fence(list(fence)) == fence
+    facts = build_regulation_facts(start=START, end=START + timedelta(hours=1), inputs=inputs())
+    assert store.save(facts, "outside-window", source_fence=fence)
     write(left + timedelta(hours=2))
     inside = repository.read_fence(list(fence))
-    assert inside[hour_key] > fence[hour_key]
+    assert inside[window_key] > fence[window_key]
     write(left)  # First late arrival in an earlier, previously absent hour.
     late = repository.read_fence(list(fence))
-    assert late[hour_key] > inside[hour_key]
-    write(right - timedelta(seconds=30))
+    assert late[window_key] > inside[window_key]
+    write(midnight + timedelta(seconds=60))
     endpoint = repository.read_fence(list(fence))
-    assert endpoint[hour_key] > late[hour_key]
+    assert endpoint[window_key] > late[window_key]
+    with pytest.raises(ValueError, match="source changed"):
+        store.save(facts, "edited-boundary", source_fence=late)
+    db.storage.execute(
+        "DECLARE $value AS Utf8; UPSERT INTO metadata(name,value) VALUES ('publication:checkpoint',$value);",
+        {"$value": str(db.source_revision())},
+    )
+    write(right, 21)
+    assert repository.read_fence(list(fence)) == endpoint
     write(left, 21)  # An old hour's newer global revision must become the max.
-    assert repository.read_fence(list(fence))[hour_key] > endpoint[hour_key]
+    assert repository.read_fence(list(fence))[window_key] > endpoint[window_key]
+
+
+def test_precise_fence_checks_old_and_new_timestamps_when_events_move_across_end(tmp_path: Path) -> None:
+    db = make_database(tmp_path)
+    repository = RegulationFactStore(db).repository
+    end = START + timedelta(hours=1, seconds=61)
+
+    def event(at: datetime) -> None:
+        db.telemetry.write_window(
+            device_id="device", data_type="event", start=START, end=end + timedelta(minutes=5),
+            events=[SourceEvent(id="fixture-event", device_id="device", event_type="PowerOn", timestamp_utc=at)],
+        )
+
+    fence = repository.source_fence(start=START, end=end)
+    event(end + timedelta(seconds=1))
+    assert repository.read_fence(list(fence)) == fence
+    event(end - timedelta(seconds=1))
+    inside = repository.read_fence(list(fence))
+    assert inside != fence
+    event(end)  # Removing the prior timestamp still changes the interior.
+    moved = repository.read_fence(list(fence))
+    assert moved != inside
+    event(end + timedelta(minutes=1))
+    assert repository.read_fence(list(fence)) == moved
+
+
+def test_new_precise_fence_retains_legacy_boundary_revision(tmp_path: Path) -> None:
+    db = make_database(tmp_path)
+    repository = RegulationFactStore(db).repository
+    edge = START + timedelta(hours=1)
+    # Old writers only stored the latest full-hour revision.
+    db.storage.execute(
+        "UPSERT INTO revisions(scope,revision) VALUES ('publication',7);"
+        "UPSERT INTO publication_changes(scope,identifier,revision,payload) VALUES "
+        "('telemetry','2025-01-01T01',7,'{}');",
+    )
+    precise = repository.source_fence(start=START, end=edge + timedelta(seconds=61))
+    coarse = repository.source_fence(start=START + timedelta(minutes=7), end=edge + timedelta(seconds=61))
+    assert next(iter(precise)).startswith(WINDOW_PREFIX) and list(precise.values()) == [7]
+    assert next(iter(coarse)).startswith("meta:telemetry-hours:") and list(coarse.values()) == [7]
+    at = edge + timedelta(minutes=4)
+    db.telemetry.write_window(
+        device_id="device", data_type="history", start=at, end=at + timedelta(minutes=1),
+        points=[TelemetryPoint(device_id="device", source_type="z3k_heating_circuit", entity_id="circuit",
+                               metric_key="target_temp", timestamp_utc=at, value_num=20)],
+    )
+    assert repository.read_fence(list(precise)) == precise
+    assert next(iter(repository.read_fence(list(coarse)).values())) > 7
 
 
 def test_many_hour_fences_share_one_bounded_range_read_and_preserve_legacy_markers(tmp_path, monkeypatch):
@@ -169,7 +232,8 @@ def test_long_hour_lineage_keeps_overlapping_ranges_complete(tmp_path: Path) -> 
     assert len(fence) == len(keys)
 
 
-def test_saved_legacy_days_remain_valid_without_rewrite_after_hour_fence_upgrade(tmp_path, monkeypatch):
+@pytest.mark.parametrize("marker", ["precise", "hour", "day"])
+def test_saved_regulation_days_keep_legacy_or_precise_dependencies(tmp_path, monkeypatch, marker):
     from tests.unit.test_regulation_report_cache import CacheWorld
     from zont_analyzer.adapters.ydb.regulation import RegulationRepository
     from zont_analyzer.application import regulation_reports as reports
@@ -182,7 +246,10 @@ def test_saved_legacy_days_remain_valid_without_rewrite_after_hour_fence_upgrade
 
     def legacy_keys(start, end, *, device_ids):
         keys = [key for key in original_keys(start, end, device_ids=device_ids)
-                if not key.startswith("meta:telemetry-hours:")]
+                if not key.startswith(("meta:telemetry-hours:", WINDOW_PREFIX))]
+        if marker == "hour":
+            left, right = hour_bounds(start, end)
+            return [*keys, f"meta:telemetry-hours:{left:%Y-%m-%dT%H}/{right:%Y-%m-%dT%H}"]
         day = start.astimezone(UTC).date()
         while day <= (end - timedelta(microseconds=1)).astimezone(UTC).date():
             keys.append("meta:telemetry-day:" + day.isoformat())
@@ -193,23 +260,35 @@ def test_saved_legacy_days_remain_valid_without_rewrite_after_hour_fence_upgrade
         data, selection, fence = world.prepare(*args, **kwargs)
         return replace(data, reliability_context={}), selection, fence
 
+    def sync(at: datetime) -> None:
+        db.telemetry.write_window(
+            device_id="device", data_type="history", start=at, end=at + timedelta(minutes=1),
+            points=[TelemetryPoint(device_id="device", source_type="z3k_heating_circuit", entity_id="circuit",
+                                   metric_key="target_temp", timestamp_utc=at, value_num=20)],
+        )
+
     monkeypatch.setattr(reports, "regulation_scopes", lambda *_: [("device", "circuit")])
     monkeypatch.setattr(reports, "regulation_source_selections", lambda *_: {
         "device/circuit": {"version": "synthetic-selection"}})
     monkeypatch.setattr(reports, "prepare_regulation_day", prepare)
-    monkeypatch.setattr(RegulationRepository, "_fence_keys", staticmethod(legacy_keys))
+    if marker != "precise":
+        monkeypatch.setattr(RegulationRepository, "_fence_keys", staticmethod(legacy_keys))
     left, right = START + timedelta(days=2), START + timedelta(days=3)
     first = reports.validated_regulation_days(selected, left, right, timezone="UTC", calculate_daily=True)
     assert first["built_days"] == 2
     store = RegulationFactStore(selected)
     saved = store.read("device/circuit", left - timedelta(days=1), right)
     monkeypatch.setattr(RegulationRepository, "_fence_keys", staticmethod(original_keys))
+    if marker == "precise":
+        sync(right + timedelta(minutes=5))
     repeated = reports.validated_regulation_days(selected, left, right, timezone="UTC")
     assert repeated["hit_days"] == 2 and repeated["built_days"] == 0
+    assert repeated["dependency_end"] == first["dependency_end"]  # Keep evidence bounds stable.
     assert store.read("device/circuit", left - timedelta(days=1), right) == saved
     assert len(world.raw_reads) == 2
-    db.storage.execute("UPSERT INTO app_meta(key,value) VALUES ('telemetry-day:2025-01-03','late');")
-    assert reports.validated_regulation_days(selected, left, right, timezone="UTC")["circuits"][0]["facts"] == []
+    sync(right + timedelta(seconds=60))
+    stale = reports.validated_regulation_days(selected, left, right, timezone="UTC")
+    assert stale["circuits"][0]["facts"] == [] and stale["built_days"] == 0
 
 
 def test_sixty_day_repeat_uses_one_compact_range_query_without_telemetry_replay(
