@@ -1,5 +1,6 @@
 locals {
   name                 = "zont-${var.environment}"
+  monium_project       = "folder__${var.folder_id}"
   application_database = var.enable_production_database ? yandex_ydb_database_serverless.production[0] : yandex_ydb_database_serverless.probe[0]
 }
 
@@ -19,10 +20,11 @@ resource "yandex_container_registry_iam_binding" "pull" {
   members     = ["serviceAccount:${var.runtime_service_account_id}"]
 }
 
-resource "yandex_logging_group" "runtime" {
-  folder_id        = data.yandex_resourcemanager_folder.project.id
-  name             = "${local.name}-runtime"
-  retention_period = "168h"
+removed {
+  from = yandex_logging_group.runtime
+  lifecycle {
+    destroy = false
+  }
 }
 
 resource "yandex_lockbox_secret" "probe" {
@@ -90,6 +92,10 @@ resource "yandex_serverless_container" "probe" {
   concurrency        = 1
   execution_timeout  = "30s"
   service_account_id = var.runtime_service_account_id
+  metadata_options {
+    gce_http_endpoint    = 1
+    aws_v1_http_endpoint = 2
+  }
   runtime {
     type = "http"
   }
@@ -100,6 +106,7 @@ resource "yandex_serverless_container" "probe" {
       ZONT_ENVIRONMENT = var.environment
       ZONT_PROBE_ONLY  = "true"
       PROBE_SMOKE_URL  = var.smoke_url
+      MONIUM_PROJECT   = local.monium_project
     }
   }
   secrets {
@@ -132,9 +139,7 @@ resource "yandex_serverless_container" "probe" {
     }
   }
   log_options {
-    disabled     = !var.cloud_logging_enabled
-    log_group_id = var.cloud_logging_enabled ? yandex_logging_group.runtime.id : null
-    min_level    = var.cloud_logging_enabled ? "INFO" : null
+    disabled = true
   }
   depends_on = [
     yandex_container_registry_iam_binding.pull,

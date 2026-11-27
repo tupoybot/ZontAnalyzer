@@ -110,11 +110,6 @@ run "reject_wrong_cloud" {
 
 run "isolated_defaults" {
   command = plan
-  override_resource {
-    target          = yandex_logging_group.runtime
-    override_during = plan
-    values          = { id = "test-log-group" }
-  }
 
   assert {
     condition     = var.publication_versioning_enabled && one(yandex_storage_bucket.publication.versioning).enabled && var.publication_bucket_max_size_bytes == null
@@ -122,8 +117,16 @@ run "isolated_defaults" {
   }
 
   assert {
-    condition     = var.cloud_logging_enabled && !one(yandex_serverless_container.application.log_options).disabled && one(yandex_serverless_container.application.log_options).log_group_id == yandex_logging_group.runtime.id && one(yandex_serverless_container.application.log_options).min_level == "INFO" && !one(yandex_serverless_container.probe.log_options).disabled && one(yandex_serverless_container.probe.log_options).log_group_id == yandex_logging_group.runtime.id && one(yandex_serverless_container.probe.log_options).min_level == "INFO" && !one(yandex_api_gateway.probe.log_options).disabled && one(yandex_api_gateway.probe.log_options).log_group_id == yandex_logging_group.runtime.id && one(yandex_api_gateway.probe.log_options).min_level == "WARN"
-    error_message = "Cloud logs must remain enabled with the runtime log group and configured levels by default."
+    condition = alltrue([
+      for options in [yandex_serverless_container.application.log_options, yandex_serverless_container.probe.log_options, yandex_api_gateway.probe.log_options] :
+      one(options).disabled && one(options).log_group_id == null && one(options).folder_id == null
+    ])
+    error_message = "The containers and gateway must disable legacy Cloud Logging without a log destination."
+  }
+
+  assert {
+    condition     = yandex_serverless_container.application.image[0].environment.MONIUM_PROJECT == "folder__test-folder" && yandex_serverless_container.probe.image[0].environment.MONIUM_PROJECT == "folder__test-folder"
+    error_message = "The application and probe must export logs to the configured folder's Monium project."
   }
 
   assert {
@@ -160,6 +163,11 @@ run "isolated_defaults" {
     condition     = yandex_serverless_container.application.metadata_options[0].gce_http_endpoint == 1 && yandex_serverless_container.application.metadata_options[0].aws_v1_http_endpoint == 2
     error_message = "YDB credentials require the GCE metadata endpoint; AWS IMDSv1 must remain disabled."
   }
+
+  assert {
+    condition     = yandex_serverless_container.probe.metadata_options[0].gce_http_endpoint == 1 && yandex_serverless_container.probe.metadata_options[0].aws_v1_http_endpoint == 2
+    error_message = "Monium credentials require the GCE metadata endpoint for the probe; AWS IMDSv1 must remain disabled."
+  }
   assert {
     condition     = !var.openai_access_confirmed && yandex_serverless_container.application.image[0].environment.CLOUD_OPENAI_ACCESS_CONFIRMED == "false" && yandex_serverless_container.application.image[0].environment.CLOUD_JOB_TIMEOUT_SECONDS == "15"
     error_message = "OpenAI access must remain disabled by default and jobs must be bounded."
@@ -182,27 +190,16 @@ run "isolated_defaults" {
   }
 }
 
-run "publication_versioning_and_cloud_logging_can_be_disabled" {
+run "publication_versioning_can_be_disabled" {
   command = plan
   variables {
     publication_versioning_enabled    = false
     publication_bucket_max_size_bytes = 1073741824
-    cloud_logging_enabled             = false
-  }
-  override_resource {
-    target          = yandex_logging_group.runtime
-    override_during = plan
-    values          = { id = "test-log-group" }
   }
 
   assert {
     condition     = !one(yandex_storage_bucket.publication.versioning).enabled && yandex_storage_bucket.publication.max_size == 1073741824 && var.publication_bucket_max_size_bytes == 1073741824
     error_message = "The accepted private configuration must be able to suspend publication versioning and set a bucket size input."
-  }
-
-  assert {
-    condition     = one(yandex_serverless_container.application.log_options).disabled && one(yandex_serverless_container.application.log_options).log_group_id == null && one(yandex_serverless_container.application.log_options).min_level == null && one(yandex_serverless_container.probe.log_options).disabled && one(yandex_serverless_container.probe.log_options).log_group_id == null && one(yandex_serverless_container.probe.log_options).min_level == null && one(yandex_api_gateway.probe.log_options).disabled && one(yandex_api_gateway.probe.log_options).log_group_id == null && one(yandex_api_gateway.probe.log_options).min_level == null
-    error_message = "Disabling cloud logging must disable logs on probe, application and gateway."
   }
 }
 

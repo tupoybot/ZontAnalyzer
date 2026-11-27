@@ -11,12 +11,15 @@ def check(scope_path, inputs_path, backend_path=None):
         plan = inputs
         inputs = {key: value["value"] for key, value in plan["variables"].items()}
         for resource in plan.get("resource_changes", []):
-            if (resource.get("address", "").startswith("yandex_function.auth[")
-                    and "delete" in resource.get("change", {}).get("actions", [])):
-                change = resource["change"]
+            address = resource.get("address", "")
+            change = resource.get("change", {})
+            actions = change.get("actions", [])
+            if address == "yandex_logging_group.runtime" and actions != ["forget"]:
+                raise ValueError("only removing the legacy log group from state is allowed")
+            if address.startswith("yandex_function.auth[") and "delete" in actions:
                 retired = scope.get("allowed_auth_function_retirement", {}).get(inputs.get("environment"))
                 identity = inputs.get("identity")
-                if (not retired or change.get("actions") != ["delete"]
+                if (not retired or actions != ["delete"]
                         or (change.get("before") or {}).get("id") != retired
                         or not isinstance(identity, dict) or identity.get("mode") != "spa"):
                     raise ValueError("removing deployed identity is outside ordinary deployment scope")

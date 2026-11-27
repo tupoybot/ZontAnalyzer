@@ -1,13 +1,23 @@
 """Small OTLP metric export without a resident collector or background thread."""
 import base64
 import json
+import os
+import re
 import time
 from urllib.parse import urlsplit
 
+from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
+    ExportLogsServiceRequest,
+    ExportLogsServiceResponse,
+)
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
     ExportMetricsServiceRequest,
     ExportMetricsServiceResponse,
 )
+
+MONIUM_HOST = "ingest.monium.yandex.cloud"
+MONIUM_PATH = "/otlp/v1/logs"
+PROBE_SERVICE = "zont-infrastructure-probe"
 
 
 class Telemetry:
@@ -36,7 +46,7 @@ class Telemetry:
     def payload(self, success, duration):
         request = ExportMetricsServiceRequest()
         resource = request.resource_metrics.add()
-        resource.resource.attributes.add(key="service.name").value.string_value = "zont-infrastructure-probe"
+        resource.resource.attributes.add(key="service.name").value.string_value = PROBE_SERVICE
         resource.resource.attributes.add(key="deployment.environment.name").value.string_value = self.environment
         scope = resource.scope_metrics.add()
         scope.scope.name = "zont-m1-probe"
@@ -57,3 +67,45 @@ class Telemetry:
         response.ParseFromString(body)
         if response.partial_success.rejected_data_points:
             raise RuntimeError("Grafana rejected metric points")
+
+
+class MoniumLogs:
+    def __init__(self, project, environment, revision):
+        self.project = project
+        self.environment = environment
+        self.revision = revision
+
+    @classmethod
+    def from_environment(cls) -> "MoniumLogs | None":
+        project = os.environ.get("MONIUM_PROJECT", "")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,256}", project):
+            return None
+        return cls(project, os.environ.get("ZONT_ENVIRONMENT", ""), os.environ.get("PROBE_REVISION", ""))
+
+    def send(self, client, token, events):
+        request = ExportLogsServiceRequest()
+        resource = request.resource_logs.add()
+        resource.resource.attributes.add(key="service.name").value.string_value = PROBE_SERVICE
+        if self.environment in ("dev", "pilot"):
+            resource.resource.attributes.add(key="deployment.environment.name").value.string_value = self.environment
+        if re.fullmatch(r"[0-9a-f]{40}", self.revision):
+            resource.resource.attributes.add(key="service.version").value.string_value = self.revision
+        scope = resource.scope_logs.add()
+        scope.scope.name = "zont-m1-probe"
+        for event in events:
+            level = event["level"]
+            record = scope.log_records.add(time_unix_nano=time.time_ns(), severity_text=level,
+                                           severity_number=9 if level == "INFO" else 17)
+            record.body.string_value = event["message"]
+            for key in ("event", "smoke_id", "phase", "status", "error_type"):
+                if key in event:
+                    record.attributes.add(key=key).value.string_value = event[key]
+        body = client.request(f"https://{MONIUM_HOST}{MONIUM_PATH}", "POST", request.SerializeToString(), {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/x-protobuf",
+            "x-monium-project": self.project,
+            "x-monium-service": PROBE_SERVICE,
+        }, timeout=2, max_bytes=16384)
+        response = ExportLogsServiceResponse.FromString(body)
+        if response.partial_success.rejected_log_records:
+            raise RuntimeError("Monium rejected log records")

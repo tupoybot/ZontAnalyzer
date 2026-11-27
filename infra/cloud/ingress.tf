@@ -245,9 +245,7 @@ resource "yandex_api_gateway" "probe" {
     }
   }
   log_options {
-    disabled     = !var.cloud_logging_enabled
-    log_group_id = var.cloud_logging_enabled ? yandex_logging_group.runtime.id : null
-    min_level    = var.cloud_logging_enabled ? "WARN" : null
+    disabled = true
   }
   depends_on = [
     yandex_serverless_container_iam_binding.timer,

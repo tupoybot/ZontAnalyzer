@@ -50,6 +50,18 @@ class ScopeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "removing deployed identity"):
             self.check(plan)
 
+    def test_legacy_log_group_can_only_be_removed_from_state(self):
+        change = {"actions": ["forget"]}
+        plan = {"format_version": "1.2", "variables": {
+            key: {"value": value} for key, value in self.inputs.items()
+        }, "resource_changes": [{"address": "yandex_logging_group.runtime", "change": change}]}
+        self.check(plan)
+        for actions in (["delete"], ["create"], ["delete", "create"], ["update"], ["no-op"]):
+            with self.subTest(actions=actions):
+                change["actions"] = actions
+                with self.assertRaisesRegex(ValueError, "removing the legacy log group from state"):
+                    self.check(plan)
+
     def test_missing_and_wrong_scope_values(self):
         for key in self.inputs:
             for replacement in (None, "other"):

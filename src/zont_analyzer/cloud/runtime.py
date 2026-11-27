@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 from zont_analyzer.cloud import auth
 from zont_analyzer.cloud.limits import DEFAULT_LONG_JOB_SECONDS, MAX_LONG_JOB_SECONDS
+from zont_analyzer.cloud.monium import MoniumLogs
 
 MAX_BODY_BYTES = 65_536
 MAX_RESULT_BYTES = 1_048_576
@@ -37,6 +38,19 @@ logger = logging.getLogger(__name__)
 # Schema readiness is process-local; requests still open and close their own YDB driver.
 _web_schema_lock = threading.Lock()
 _web_schema_ready: set[tuple[str, str, str, bool]] = set()
+
+
+def _emit_event(monium: MoniumLogs | None, payload: dict[str, str], *, log_level: int = logging.INFO) -> bool:
+    logger.log(log_level, json.dumps(payload, separators=(",", ":")))
+    if monium is None:
+        return False
+    try:
+        if monium.send(payload):
+            return True
+    except Exception:  # noqa: BLE001 - export is best-effort and error details can contain credentials
+        pass
+    logger.warning("Monium log export failed")
+    return False
 
 
 class JobTimeoutError(RuntimeError):
@@ -352,12 +366,13 @@ class CloudServer(ThreadingHTTPServer):
 
     def __init__(
         self, address: tuple[str, int], config: RuntimeConfig, tunnel: Any, telemetry: Any = None,
-        runtime_factory: Callable[[], Any] | None = None,
+        runtime_factory: Callable[[], Any] | None = None, *, monium: MoniumLogs | None = None,
     ) -> None:
         super().__init__(address, CloudHandler)
         self.config = config
         self.tunnel = tunnel
         self.telemetry = telemetry
+        self.monium = monium
         self.boot_id = str(uuid.uuid4())
         self.counters = Counters()
         self.active_job = threading.BoundedSemaphore(1)
@@ -462,6 +477,14 @@ class CloudHandler(BaseHTTPRequestHandler):
             return
         if self.command == "GET" and self.path == "/diagnostics":
             self._finish_input()
+            headers = {}
+            if self.server.monium is not None and self.headers.get_all("X-Zont-Monium-Smoke") == ["1"]:
+                smoke_id = str(uuid.uuid4())
+                if _emit_event(self.server.monium, {
+                    "level": "INFO", "message": "cloud logging smoke", "event": "cloud_logging_smoke",
+                    "smoke_id": smoke_id, "status": "ok",
+                }):
+                    headers["X-Zont-Monium-Accepted"] = smoke_id
             self._reply(200, {
                 "environment": self.server.config.environment,
                 "revision": self.server.config.revision,
@@ -469,7 +492,7 @@ class CloudHandler(BaseHTTPRequestHandler):
                 "xray_ready": self.server.tunnel.ready(),
                 "writes_enabled": self.server.config.writes_enabled,
                 "counters": self.server.counters.snapshot(),
-            })
+            }, extra_headers=headers)
             return
         if path.startswith(("/api/", "/za/api/")):
             if self.command != "GET" and not self.server.config.writes_enabled:
@@ -487,11 +510,11 @@ class CloudHandler(BaseHTTPRequestHandler):
                     return
             except Exception as exc:  # noqa: BLE001 - keep private DB/provider errors out of responses
                 error_type = type(exc).__name__
-                logger.error(json.dumps(
-                    {"level": "ERROR", "message": "cloud API failed", "event": "cloud_api",
-                     "error_type": error_type}, separators=(",", ":"),
-                ))
                 self._finish_input()
+                _emit_event(self.server.monium, {
+                    "level": "ERROR", "message": "cloud API failed", "event": "cloud_api",
+                    "error_type": error_type,
+                }, log_level=logging.ERROR)
                 self._reply(502, {"error": "api_unavailable", "error_type": error_type})
                 return
             finally:
@@ -510,11 +533,11 @@ class CloudHandler(BaseHTTPRequestHandler):
                 self._reply_bytes(status, body, content_type)
             except Exception as exc:  # noqa: BLE001 - site errors are redacted
                 error_type = type(exc).__name__
-                logger.error(json.dumps(
-                    {"level": "ERROR", "message": "cloud site failed", "event": "cloud_site",
-                     "error_type": error_type}, separators=(",", ":"),
-                ))
                 self._finish_input()
+                _emit_event(self.server.monium, {
+                    "level": "ERROR", "message": "cloud site failed", "event": "cloud_site",
+                    "error_type": error_type,
+                }, log_level=logging.ERROR)
                 self._reply(502, {"error": "site_unavailable", "error_type": error_type})
             finally:
                 if runtime is not None:
@@ -734,10 +757,11 @@ class CloudHandler(BaseHTTPRequestHandler):
         self._finish_input()
         return value
 
-    def _reply(self, status: int, payload: dict[str, Any], *, basic_challenge: bool = False) -> None:
+    def _reply(self, status: int, payload: dict[str, Any], *, basic_challenge: bool = False,
+               extra_headers: dict[str, str] | None = None) -> None:
         encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         self._reply_bytes(status, encoded, "application/json; charset=utf-8",
-                          basic_challenge=basic_challenge)
+                          basic_challenge=basic_challenge, extra_headers=extra_headers)
 
     def _reply_bytes(self, status: int, encoded: bytes, content_type: str, *,
                      basic_challenge: bool = False, extra_headers: dict[str, str] | None = None) -> None:
@@ -771,7 +795,7 @@ class CloudHandler(BaseHTTPRequestHandler):
             payload["error_type"] = error_type
         if original_error_type is not None:
             payload["original_error_type"] = original_error_type
-        logger.info(json.dumps(payload, separators=(",", ":")))
+        _emit_event(self.server.monium, payload)
 
     def _send_telemetry(self, success: bool, duration: float) -> None:
         if self.server.telemetry is None:
@@ -779,24 +803,20 @@ class CloudHandler(BaseHTTPRequestHandler):
         try:
             self.server.telemetry.send(success, duration)
         except Exception as exc:  # noqa: BLE001 - telemetry cannot alter a completed job response
-            logger.info(json.dumps(
-                {
-                    "level": "ERROR",
-                    "message": "telemetry export failed",
-                    "event": "telemetry",
-                    "status": "failed",
-                    "error_type": type(exc).__name__,
-                },
-                separators=(",", ":"),
-            ))
+            _emit_event(self.server.monium, {
+                "level": "ERROR",
+                "message": "telemetry export failed",
+                "event": "telemetry",
+                "status": "failed",
+                "error_type": type(exc).__name__,
+            })
 
     def log_message(self, _format: str, *_args: Any) -> None:
         return
 
 
-def main() -> None:
+def _serve(monium: MoniumLogs | None) -> None:
     """Start the HTTP server after Xray has become ready on loopback."""
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
     config = RuntimeConfig.from_environment()
     raw_xray = os.environ.pop("XRAY_CONFIG", None)
     if not raw_xray:
@@ -813,7 +833,7 @@ def main() -> None:
             from zont_analyzer.cloud.telemetry import Telemetry
 
             telemetry = Telemetry(telemetry_raw, config.environment)
-        server = CloudServer(("0.0.0.0", config.port), config, tunnel, telemetry)
+        server = CloudServer(("0.0.0.0", config.port), config, tunnel, telemetry, monium=monium)
         def stop_server(*_args: Any) -> None:
             server.stopping.set()
             threading.Thread(target=server.shutdown, daemon=True).start()
@@ -828,12 +848,18 @@ def main() -> None:
             tunnel.close()
 
 
-if __name__ == "__main__":
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    monium = None
     try:
-        main()
+        monium = MoniumLogs.from_environment()
+        _serve(monium)
     except Exception:  # noqa: BLE001 - startup values can contain secret configuration
-        logger.error(json.dumps(
-            {"level": "ERROR", "message": "cloud runtime startup failed", "event": "cloud_runtime_startup"},
-            separators=(",", ":"),
-        ))
+        _emit_event(monium, {
+            "level": "ERROR", "message": "cloud runtime startup failed", "event": "cloud_runtime_startup",
+        }, log_level=logging.ERROR)
         raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()

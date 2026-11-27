@@ -94,7 +94,7 @@ jobs:
           mkdir -p "$private/cloud-work"
           printf '%s' "$SCOPE" > "$private/scope.json"
           printf '%s' "$BACKEND" > "$private/cloud.tfbackend.json"
-          printf '%s' "$CONFIG" | jq 'del(.application_image, .application_revision)' \
+          printf '%s' "$CONFIG" | jq 'del(.application_image, .application_revision, .cloud_logging_enabled)' \
             > "$private/cloud-work/inputs.tfvars.json"
           printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' \
             "$STATE_ACCESS_KEY" "$STATE_SECRET_KEY" > "$private/state.env"

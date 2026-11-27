@@ -302,6 +302,7 @@ def test_telemetry_failure_does_not_replace_completed_result(server: Any, caplog
 
     instance, credentials = server
     instance.telemetry = FailingTelemetry()
+    instance.monium = Mock()
     with caplog.at_level("INFO"):
         status, body = _request(instance, credentials, "POST", "/jobs/analytics", _payload())
 
@@ -324,6 +325,7 @@ def test_telemetry_failure_does_not_replace_completed_result(server: Any, caplog
         "status": "failed",
         "error_type": "RuntimeError",
     } in entries
+    assert [call.args[0] for call in instance.monium.send.call_args_list] == entries
 
 
 @pytest.mark.parametrize(
@@ -339,6 +341,7 @@ def test_bounded_failure_log_has_operation_and_only_safe_original_class(
     message: str, expected_original_type: str | None,
 ) -> None:
     instance, credentials = server
+    instance.monium = Mock()
 
     def fail(*_args: Any) -> None:
         raise JobFailureError(message)
@@ -352,6 +355,8 @@ def test_bounded_failure_log_has_operation_and_only_safe_original_class(
     assert body["error_type"] == "JobFailureError"
     entry = next(json.loads(record.message) for record in caplog.records
                  if '"event":"cloud_job"' in record.message)
+    instance.monium.send.assert_called_once_with(entry)
+    assert entry["job_id"] == body["job_id"]
     assert entry["operation"] == "reports"
     assert entry["status"] == "failed"
     assert entry["error_type"] == "JobFailureError"
@@ -369,6 +374,41 @@ def test_unready_xray_blocks_jobs_but_not_diagnostics(server: Any) -> None:
     status, body = _request(instance, credentials, "GET", "/diagnostics")
     assert status == 200
     assert body["xray_ready"] is False
+
+
+def test_monium_diagnostic_acceptance_requires_auth_opt_in_and_valid_export(
+    server: Any, caplog: pytest.LogCaptureFixture,
+) -> None:
+    instance, credentials = server
+    sent: list[dict[str, str]] = []
+
+    class Exporter:
+        def send(self, event: dict[str, str]) -> bool:
+            sent.append(event)
+            if len(sent) > 1:
+                raise RuntimeError("private token details")
+            return True
+
+    instance.monium = Exporter()
+    authorization = "Basic " + base64.b64encode(credentials.encode()).decode()
+    for headers, expected_status, accepted in (
+        ({"X-Zont-Monium-Smoke": "1"}, 401, False),
+        ({"Authorization": authorization}, 200, False),
+        ({"Authorization": authorization, "X-Zont-Monium-Smoke": "1"}, 200, True),
+        ({"Authorization": authorization, "X-Zont-Monium-Smoke": "1"}, 200, False),
+    ):
+        connection = http.client.HTTPConnection("127.0.0.1", instance.server_address[1], timeout=5)
+        try:
+            connection.request("GET", "/diagnostics", headers=headers)
+            response = connection.getresponse()
+            assert response.status == expected_status
+            assert response.getheader("X-Zont-Monium-Accepted") == (sent[-1]["smoke_id"] if accepted else None)
+            response.read()
+        finally:
+            connection.close()
+    assert len(sent) == 2
+    assert all(event["event"] == "cloud_logging_smoke" for event in sent)
+    assert "private token details" not in caplog.text
 
 
 def test_reports_route_uses_separate_bounded_budget_and_authorization(
@@ -603,6 +643,7 @@ def test_http_failure_exposes_only_error_type(
         raise RuntimeError(private_message)
 
     instance.runtime_factory = broken_runtime
+    instance.monium = Mock()
     with caplog.at_level("ERROR", logger="zont_analyzer.cloud.runtime"):
         status, body = _request(instance, credentials, "GET", path)
 
@@ -611,8 +652,24 @@ def test_http_failure_exposes_only_error_type(
     assert entries == [{
         "level": "ERROR", "message": message, "event": event, "error_type": "RuntimeError",
     }]
+    instance.monium.send.assert_called_once_with(entries[0])
     assert private_message not in caplog.text
     assert private_message not in json.dumps(body)
+
+
+def test_startup_failure_exports_only_fixed_event(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    exporter = Mock()
+    monkeypatch.setattr(runtime_module.MoniumLogs, "from_environment", lambda: exporter)
+    monkeypatch.setenv("CLOUD_ENVIRONMENT", "private config detail")
+    with pytest.raises(SystemExit) as stopped:
+        runtime_module.main()
+
+    assert stopped.value.code == 1
+    event = {"level": "ERROR", "message": "cloud runtime startup failed", "event": "cloud_runtime_startup"}
+    assert [json.loads(record.message) for record in caplog.records] == [event]
+    exporter.send.assert_called_once_with(event)
 
 
 def _web_runtime_harness(monkeypatch: pytest.MonkeyPatch) -> Any:

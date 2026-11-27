@@ -96,7 +96,7 @@
 [API Gateway](https://yandex.cloud/en/docs/api-gateway/pricing),
 [YDB в бессерверном режиме](https://yandex.cloud/en/docs/ydb/pricing/serverless),
 [Object Storage](https://yandex.cloud/en/docs/storage/pricing),
-[Cloud Logging](https://yandex.cloud/en/docs/logging/pricing) и
+[Monium Logs](https://yandex.cloud/ru/docs/monium/pricing) и
 [Virtual Private Cloud](https://yandex.cloud/en/docs/vpc/pricing). Учитывайте
 назначение ресурсов, регион, применимую валюту и действующие бесплатные объёмы.
 

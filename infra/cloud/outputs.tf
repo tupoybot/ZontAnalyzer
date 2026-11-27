@@ -30,11 +30,6 @@ output "deployment_selection" {
   sensitive = true
 }
 
-output "log_group_id" {
-  value     = yandex_logging_group.runtime.id
-  sensitive = true
-}
-
 output "container_id" {
   value     = yandex_serverless_container.probe.id
   sensitive = true

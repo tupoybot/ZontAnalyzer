@@ -7,17 +7,19 @@ import hmac
 import http.client
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from telemetry import Telemetry
+from telemetry import MONIUM_HOST, MONIUM_PATH, MoniumLogs, Telemetry
 
 MAX_BYTES = 65536
 CONNECTIONS = threading.BoundedSemaphore(4)
@@ -50,6 +52,10 @@ class PolicyClient:
         host = target.hostname
         if host not in self.proxy_hosts | self.direct_hosts:
             raise ValueError("destination denied")
+        if host == MONIUM_HOST and (
+            host not in self.direct_hosts or method != "POST" or target.path != MONIUM_PATH or target.query
+        ):
+            raise ValueError("Monium destination denied")
         if method not in ("GET", "POST") or len(body or b"") > max_bytes:
             raise ValueError("request denied")
         if not 0 < timeout <= 20 or not 0 < max_bytes <= MAX_BYTES:
@@ -91,7 +97,7 @@ class PolicyClient:
             request_headers["Connection"] = "close"
             conn.request(method, path, body=body, headers=request_headers)
             response = conn.getresponse()
-            if not 200 <= response.status < 300:
+            if not 200 <= response.status < 300 or (host == MONIUM_HOST and response.status != 200):
                 raise UpstreamStatusError(response.status)
             chunks: list[bytes] = []
             remaining = max_bytes - len(body or b"")
@@ -176,7 +182,7 @@ class Tunnel:
         Path(self.path).unlink(missing_ok=True)
 
 
-def identity_token():
+def identity_token() -> str:
     # Only this fixed metadata path is permitted over HTTP.
     conn = http.client.HTTPConnection(METADATA_HOST, timeout=2)
     try:
@@ -188,39 +194,56 @@ def identity_token():
         data = response.read(16385)
         if len(data) > 16384:
             raise ValueError("metadata size exceeded")
-        return json.loads(data)["access_token"]
+        token = json.loads(data)["access_token"]
+        if not isinstance(token, str) or not re.fullmatch(r"[!-~]{1,8192}", token):
+            raise ValueError("invalid metadata token")
+        return token
     finally:
         conn.close()
 
 
-def smoke(server):
-    def phase(name, operation):
-        server.last_phase = name
-        try:
-            result = operation()
-        except Exception as error:
-            print(json.dumps({"level": "INFO", "message": "m1-smoke", "phase": name,
-                              "status": "failed", "error_type": type(error).__name__}), flush=True)
-            raise
-        print(json.dumps({"level": "INFO", "message": "m1-smoke", "phase": name, "status": "ok"}), flush=True)
-        return result
+def export_monium_logs(
+    monium: MoniumLogs, client: PolicyClient, events: list[dict[str, str]], token: str | None = None,
+) -> bool:
+    try:
+        monium.send(client, token or identity_token(), events)
+    except Exception:  # noqa: BLE001 - telemetry errors may include request details
+        print("Monium log export failed", flush=True)
+        return False
+    return True
 
-    server.last_phase = "tunnel"
+
+def smoke(server, phases: list[dict[str, str]]) -> str:
+    def phase(name, operation):
+        event = {"level": "INFO", "message": "m1-smoke", "phase": name, "status": "ok"}
+        phases.append(event)
+        try:
+            return operation()
+        except Exception as error:
+            event.update(level="ERROR", status="failed", error_type=type(error).__name__)
+            raise
+        finally:
+            print(json.dumps(event), flush=True)
+
+    def check_storage():
+        if Path("/publication/probe.txt").read_bytes() != b"m1-private-object\n":
+            raise RuntimeError("private object mismatch")
+
     if not server.tunnel.ready():
         raise RuntimeError("tunnel unavailable")
     phase("egress", lambda: server.client.request(server.smoke_url))
-    phase("identity", identity_token)
-    if phase("storage", lambda: Path("/publication/probe.txt").read_bytes()) != b"m1-private-object\n":
-        raise RuntimeError("private object mismatch")
+    token = phase("identity", identity_token)
+    phase("storage", check_storage)
+    return token
 
 
 class ProbeServer(ThreadingHTTPServer):
     telemetry: Telemetry | None = None
+    monium: MoniumLogs | None = None
     tunnel: Tunnel
     client: PolicyClient
     smoke_url: str
     web_authorization: str
-    last_phase: str = "not-started"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -243,22 +266,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/ready":
             self.reply(200 if self.server.tunnel.ready() else 503)
         elif self.path == "/smoke" and self.command == "POST":
-            started = time.monotonic()
-            try:
-                smoke(self.server)
-                if self.server.telemetry is not None:
-                    self.server.last_phase = "grafana"
-                    self.server.telemetry.send(self.server.client, True, time.monotonic() - started)
-                self.reply(200)
-            except Exception as error:  # noqa: BLE001 - expose only phase and error class
-                if self.server.telemetry is not None and self.server.last_phase != "grafana":
-                    try:
-                        self.server.telemetry.send(self.server.client, False, time.monotonic() - started)
-                    except Exception:  # noqa: BLE001 - retain original failure, never log secrets
-                        print("Grafana failure metric export failed", flush=True)
-                errno = getattr(error, "errno", None)
-                status = getattr(error, "status", None)
-                self.reply(502, f"failed:{self.server.last_phase}:{type(error).__name__}:{errno}:{status}\n".encode())
+            self.handle_smoke()
         elif self.path in ("/api/probe", "/private/probe.txt"):
             # Tests whether Basic Authorization survives the selected gateway.
             expected = self.server.web_authorization
@@ -277,13 +285,61 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.reply(404)
 
-    def reply(self, status, body=None):
+    def handle_smoke(self) -> None:
+        started = time.monotonic()
+        phases: list[dict[str, str]] = []
+        token = None
+        error_phase = None
+        error_type = None
+        body = None
+        try:
+            token = smoke(self.server, phases)
+            if self.server.telemetry is not None:
+                error_phase = "grafana"
+                self.server.telemetry.send(self.server.client, True, time.monotonic() - started)
+                error_phase = None
+        except Exception as error:  # noqa: BLE001 - expose only phase and error class
+            if self.server.telemetry is not None and error_phase != "grafana":
+                try:
+                    self.server.telemetry.send(self.server.client, False, time.monotonic() - started)
+                except Exception:  # noqa: BLE001 - retain original failure, never log secrets
+                    print("Grafana failure metric export failed", flush=True)
+            error_phase = error_phase or (phases[-1]["phase"] if phases else "tunnel")
+            error_type = type(error).__name__
+            errno = getattr(error, "errno", None)
+            status = getattr(error, "status", None)
+            body = f"failed:{error_phase}:{error_type}:{errno}:{status}\n".encode()
+        accepted = self.export_smoke_log(phases, token, error_phase, error_type)
+        self.reply(502 if error_type else 200, body, accepted=accepted)
+
+    def export_smoke_log(
+        self, phases: list[dict[str, str]], token: str | None, error_phase: str | None, error_type: str | None,
+    ) -> str | None:
+        if self.server.monium is None:
+            return None
+        smoke_id = str(uuid.uuid4())
+        summary = {
+            "level": "ERROR" if error_type else "INFO",
+            "message": "m1-smoke",
+            "phase": error_phase or "complete",
+            "status": "failed" if error_type else "ok",
+        }
+        if error_type:
+            summary["error_type"] = error_type
+        phases.append(summary)
+        for event in phases:
+            event.update(event="probe_smoke", smoke_id=smoke_id)
+        return smoke_id if export_monium_logs(self.server.monium, self.server.client, phases, token) else None
+
+    def reply(self, status, body=None, *, accepted=None):
         if body is None:
             body = b"ok\n" if status == 200 else b"failed\n"
         self.send_response(status)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Content-Type", "text/plain")
         self.send_header("Connection", "close")
+        if accepted is not None:
+            self.send_header("X-Zont-Monium-Accepted", accepted)
         if status == 401:
             self.send_header("WWW-Authenticate", 'Basic realm="M1 probe"')
         self.end_headers()
@@ -297,7 +353,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def main():
+def serve(monium: MoniumLogs | None) -> None:
     if os.environ.get("ZONT_PROBE_ONLY") != "true":
         raise RuntimeError("probe mode required")
     smoke_url = os.environ["PROBE_SMOKE_URL"]
@@ -315,6 +371,9 @@ def main():
         direct_hosts = set()
         if server.telemetry is not None:
             direct_hosts.add(server.telemetry.host)
+        server.monium = monium
+        if monium is not None:
+            direct_hosts.add(MONIUM_HOST)
         server.client = PolicyClient({smoke_host}, direct_hosts, port)
         credentials = os.environ.pop("PROBE_WEB_CREDENTIALS")
         server.web_authorization = "Basic " + base64.b64encode(credentials.encode()).decode()
@@ -328,10 +387,20 @@ def main():
         tunnel.close()
 
 
-if __name__ == "__main__":
+def main() -> None:
+    monium = None
     try:
-        main()
+        monium = MoniumLogs.from_environment()
+        serve(monium)
     except Exception:  # noqa: BLE001 - startup diagnostics must not expose secrets
-        # Configuration errors can contain private hostnames or credentials.
-        print("M1 probe startup failed", flush=True)
+        message = "M1 probe startup failed"
+        print(message, flush=True)
+        if monium is not None:
+            export_monium_logs(monium, PolicyClient((), {MONIUM_HOST}), [{
+                "level": "ERROR", "message": message, "event": "probe_startup", "status": "failed",
+            }])
         raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()

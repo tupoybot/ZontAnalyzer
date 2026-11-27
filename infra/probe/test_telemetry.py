@@ -2,11 +2,15 @@ import json
 import unittest
 from unittest.mock import Mock
 
+from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
+    ExportLogsServiceRequest,
+    ExportLogsServiceResponse,
+)
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
     ExportMetricsServiceRequest,
     ExportMetricsServiceResponse,
 )
-from telemetry import Telemetry
+from telemetry import MoniumLogs, Telemetry
 
 
 class TelemetryTest(unittest.TestCase):
@@ -53,6 +57,36 @@ class TelemetryTest(unittest.TestCase):
                 Telemetry(self.config(endpoint), "dev")
         with self.assertRaises(ValueError):
             Telemetry(self.config(), "prod")
+
+
+class MoniumLogsTest(unittest.TestCase):
+    def test_bounded_smoke_record_and_iam_authorization(self):
+        client = Mock()
+        client.request.return_value = b""
+        MoniumLogs("fixture-project", "dev", "a" * 40).send(client, "fixture-token", [{
+            "event": "probe_smoke", "phase": "complete", "level": "INFO", "status": "ok",
+            "message": "m1-smoke", "smoke_id": "fixture-id", "unlisted": "private details",
+        }])
+        url, method, payload, headers = client.request.call_args.args
+        self.assertEqual((url, method), ("https://ingest.monium.yandex.cloud/otlp/v1/logs", "POST"))
+        self.assertEqual(headers, {
+            "Authorization": "Bearer fixture-token", "Content-Type": "application/x-protobuf",
+            "x-monium-project": "fixture-project", "x-monium-service": "zont-infrastructure-probe",
+        })
+        resource = ExportLogsServiceRequest.FromString(payload).resource_logs[0]
+        record = resource.scope_logs[0].log_records[0]
+        self.assertEqual(record.body.string_value, "m1-smoke")
+        self.assertEqual({attr.key: attr.value.string_value for attr in record.attributes}, {
+            "event": "probe_smoke", "phase": "complete", "smoke_id": "fixture-id", "status": "ok",
+        })
+
+    def test_partial_rejection_fails_export(self):
+        client = Mock()
+        response = ExportLogsServiceResponse()
+        response.partial_success.rejected_log_records = 1
+        client.request.return_value = response.SerializeToString()
+        with self.assertRaises(RuntimeError):
+            MoniumLogs("fixture-project", "dev", "").send(client, "fixture-token", [])
 
 
 if __name__ == "__main__":
